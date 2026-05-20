@@ -1,4 +1,4 @@
-import { BookPlus, Check, Plus, Save, Trash2, X } from "lucide-react";
+import { Check, Plus, Save, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
@@ -196,7 +196,22 @@ export function LorePage() {
   return (
     <>
     <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
-      <Panel title={<HelpLabel label={t("nav.lore")} description={t("help.lorebook")} />} action={<BookPlus size={18} className="text-ember-400" />}>
+      <Panel
+        title={<HelpLabel label={t("nav.lore")} description={t("help.lorebook")} />}
+        action={
+          <Button
+            onClick={() => {
+              setSelectedId(null);
+              setSelected(null);
+              setBookName("");
+              setBookDescription("");
+            }}
+          >
+            <Plus size={16} />
+            {t("common.new")}
+          </Button>
+        }
+      >
         <div className="space-y-2">
           {lorebooks.length === 0 ? (
             <EmptyState>{t("lore.noLorebooks")}</EmptyState>
@@ -221,10 +236,7 @@ export function LorePage() {
       </Panel>
 
       <div className="space-y-4">
-        <Panel
-          title={selected ? t("lore.edit") : t("lore.create")}
-          action={<Button variant="ghost" onClick={() => { setSelectedId(null); setSelected(null); setBookName(""); setBookDescription(""); }}><Plus size={16} />{t("common.new")}</Button>}
-        >
+        <Panel title={selected ? t("lore.edit") : t("lore.create")}>
           <div className="space-y-3">
             <ErrorNotice message={error} />
             <Field label={t("common.name")}><TextInput value={bookName} onChange={(event) => setBookName(event.target.value)} /></Field>
@@ -271,7 +283,6 @@ export function LorePage() {
                         </div>
                       </div>
                       <p className="mt-3 whitespace-pre-wrap text-slate-200">{entry.content}</p>
-                      <p className="mt-2 text-xs text-slate-500">{t("lore.keysDisplay", { keys: joinTags(entry.keys) })}</p>
                     </article>
                   ))
                 )}
