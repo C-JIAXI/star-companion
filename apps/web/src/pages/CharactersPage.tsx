@@ -163,30 +163,38 @@ export function CharactersPage() {
   };
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
-      <Panel title={t("nav.characters")} action={<Button onClick={resetForm}><Plus size={16} />{t("common.new")}</Button>}>
-        <div className="space-y-2">
+    <div className="grid gap-6 lg:grid-cols-[340px_1fr]">
+      <Panel
+        title={t("nav.characters")}
+        action={
+          <Button variant="secondary" onClick={resetForm} className="h-8 px-3 text-xs">
+            <Plus size={14} />
+            {t("common.new")}
+          </Button>
+        }
+      >
+        <div className="space-y-2.5">
           {characters.length === 0 ? (
             <EmptyState>{t("characters.noCharacters")}</EmptyState>
           ) : (
             characters.map((character) => (
               <button
-                className={`w-full rounded-md border p-3 text-left text-sm transition ${
+                className={`group w-full rounded-xl border p-3.5 text-left text-sm transition-all duration-200 ${
                   selectedId === character.id
-                    ? "border-ember-500 bg-ember-500/10"
-                    : "border-white/10 bg-white/5 hover:bg-white/10"
+                    ? "border-ember-500/50 bg-ember-500/10 shadow-md shadow-ember-500/5"
+                    : "border-white/5 bg-white/5 hover:border-white/10 hover:bg-white/10"
                 }`}
                 key={character.id}
                 type="button"
                 onClick={() => selectCharacter(character)}
               >
-                <div className="flex items-start gap-3">
-                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-ink-800 text-sm font-semibold">
-                    {character.avatar ? <img alt="" className="h-full w-full rounded-md object-cover" src={character.avatar} /> : character.name.slice(0, 2)}
+                <div className="flex items-start gap-3.5">
+                  <div className={`grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-ink-800 text-sm font-semibold transition-all duration-200 ${selectedId === character.id ? 'ring-2 ring-ember-500/50 ring-offset-2 ring-offset-ink-900' : 'group-hover:scale-105'}`}>
+                    {character.avatar ? <img alt="" className="h-full w-full rounded-lg object-cover" src={character.avatar} /> : character.name.slice(0, 2)}
                   </div>
-                  <div className="min-w-0">
-                    <p className="truncate font-medium text-slate-100">{character.name}</p>
-                    <p className="line-clamp-2 text-xs text-slate-400">{character.description || t("common.noDescription")}</p>
+                  <div className="min-w-0 pt-0.5">
+                    <p className={`truncate font-medium transition-colors ${selectedId === character.id ? 'text-ember-100' : 'text-slate-100 group-hover:text-white'}`}>{character.name}</p>
+                    <p className="mt-1 line-clamp-2 text-xs text-slate-400">{character.description || t("common.noDescription")}</p>
                   </div>
                 </div>
               </button>
@@ -199,32 +207,52 @@ export function CharactersPage() {
         title={selected ? t("characters.edit") : t("characters.create")}
         action={
           <div className="flex flex-wrap gap-2">
-            <label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-md bg-white/5 px-3 text-sm font-medium text-slate-200 hover:bg-white/10">
-              <FileUp size={16} />
+            <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg bg-white/5 px-3 text-xs font-medium text-slate-200 transition-colors hover:bg-white/10 focus-within:ring-2 focus-within:ring-white/20">
+              <FileUp size={14} />
               {t("common.import")}
-              <input className="hidden" type="file" accept="application/json" onChange={(event) => void importCharacter(event.target.files?.[0])} />
+              <input className="sr-only" type="file" accept="application/json" onChange={(event) => void importCharacter(event.target.files?.[0])} />
             </label>
-            <Button disabled={!selected} variant="ghost" onClick={exportCharacter}><Download size={16} />{t("common.export")}</Button>
+            <Button disabled={!selected} variant="ghost" onClick={exportCharacter} className="h-9 px-3 text-xs">
+              <Download size={14} />
+              {t("common.export")}
+            </Button>
           </div>
         }
       >
-        <div className="space-y-4">
+        <div className="space-y-6">
           <ErrorNotice message={error} />
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-5 md:grid-cols-2">
             <Field label={t("common.name")}><TextInput value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
             <Field label={t("characters.avatarUrl")}><TextInput value={form.avatar} onChange={(event) => setForm({ ...form, avatar: event.target.value })} /></Field>
           </div>
-          <Field label={<HelpLabel label={t("characters.tags")} description={t("help.tags")} />}><TextInput placeholder={t("characters.tagsPlaceholder")} value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} /></Field>
-          <div className="flex flex-wrap gap-2">{splitTags(form.tags).map((tag) => <Badge key={tag}>{tag}</Badge>)}</div>
-          <Field label={t("common.description")}><TextArea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></Field>
-          <Field label={t("characters.personality")}><TextArea value={form.personality} onChange={(event) => setForm({ ...form, personality: event.target.value })} /></Field>
-          <Field label={<HelpLabel label={t("characters.scenario")} description={t("help.scenario")} />}><TextArea value={form.scenario} onChange={(event) => setForm({ ...form, scenario: event.target.value })} /></Field>
-          <Field label={<HelpLabel label={t("characters.firstMessage")} description={t("help.firstMessage")} />}><TextArea value={form.firstMessage} onChange={(event) => setForm({ ...form, firstMessage: event.target.value })} /></Field>
-          <Field label={<HelpLabel label={t("characters.exampleDialog")} description={t("help.exampleDialog")} />}><TextArea value={form.exampleDialog} onChange={(event) => setForm({ ...form, exampleDialog: event.target.value })} /></Field>
-          <Field label={<HelpLabel label={t("characters.systemPrompt")} description={t("help.systemPrompt")} />}><TextArea value={form.systemPrompt} onChange={(event) => setForm({ ...form, systemPrompt: event.target.value })} /></Field>
-          <div className="flex flex-wrap gap-2">
-            <Button disabled={loading || !form.name.trim()} onClick={() => void saveCharacter()}><Save size={16} />{t("common.save")}</Button>
-            <Button disabled={loading || !selected} variant="danger" onClick={() => setDeleteConfirmOpen(true)}><Trash2 size={16} />{t("common.delete")}</Button>
+          
+          <div className="space-y-3">
+            <Field label={<HelpLabel label={t("characters.tags")} description={t("help.tags")} />}>
+              <TextInput placeholder={t("characters.tagsPlaceholder")} value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} />
+            </Field>
+            {form.tags && (
+              <div className="flex flex-wrap gap-2 animate-fade-in">
+                {splitTags(form.tags).map((tag) => <Badge key={tag}>{tag}</Badge>)}
+              </div>
+            )}
+          </div>
+
+          <Field label={t("common.description")}><TextArea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} className="min-h-[80px]" /></Field>
+          <Field label={t("characters.personality")}><TextArea value={form.personality} onChange={(event) => setForm({ ...form, personality: event.target.value })} className="min-h-[80px]" /></Field>
+          <Field label={<HelpLabel label={t("characters.scenario")} description={t("help.scenario")} />}><TextArea value={form.scenario} onChange={(event) => setForm({ ...form, scenario: event.target.value })} className="min-h-[80px]" /></Field>
+          <Field label={<HelpLabel label={t("characters.firstMessage")} description={t("help.firstMessage")} />}><TextArea value={form.firstMessage} onChange={(event) => setForm({ ...form, firstMessage: event.target.value })} className="min-h-[120px]" /></Field>
+          <Field label={<HelpLabel label={t("characters.exampleDialog")} description={t("help.exampleDialog")} />}><TextArea value={form.exampleDialog} onChange={(event) => setForm({ ...form, exampleDialog: event.target.value })} className="min-h-[120px]" /></Field>
+          <Field label={<HelpLabel label={t("characters.systemPrompt")} description={t("help.systemPrompt")} />}><TextArea value={form.systemPrompt} onChange={(event) => setForm({ ...form, systemPrompt: event.target.value })} className="min-h-[120px]" /></Field>
+          
+          <div className="flex flex-wrap justify-end gap-3 pt-4 border-t border-white/5">
+            <Button disabled={loading || !selected} variant="danger" onClick={() => setDeleteConfirmOpen(true)}>
+              <Trash2 size={16} />
+              {t("common.delete")}
+            </Button>
+            <Button disabled={loading || !form.name.trim()} onClick={() => void saveCharacter()}>
+              <Save size={16} />
+              {t("common.save")}
+            </Button>
           </div>
         </div>
       </Panel>

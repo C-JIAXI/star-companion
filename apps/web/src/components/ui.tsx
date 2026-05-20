@@ -3,9 +3,9 @@ import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTML
 
 export function Panel({ title, action, children }: { title: ReactNode; action?: ReactNode; children: ReactNode }) {
   return (
-    <section className="rounded-lg border border-white/10 bg-ink-900 p-4 shadow-xl shadow-black/20">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-slate-100">{title}</h3>
+    <section className="animate-fade-in rounded-xl border border-white/5 bg-ink-900/80 backdrop-blur-sm p-5 shadow-lg shadow-black/20 transition-all">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold tracking-wide text-slate-100">{title}</h3>
         {action}
       </div>
       {children}
@@ -17,16 +17,17 @@ export function Button({
   variant = "primary",
   className = "",
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "ghost" | "danger" }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "ghost" | "danger" | "secondary" }) {
   const variants = {
-    primary: "bg-ember-500 text-ink-950 hover:bg-ember-400",
-    ghost: "bg-white/5 text-slate-200 hover:bg-white/10",
-    danger: "bg-rose-500/90 text-white hover:bg-rose-500"
+    primary: "bg-ember-500 text-ink-950 hover:bg-ember-400 focus:ring-ember-500/50 shadow-md shadow-ember-500/20",
+    secondary: "bg-ink-800 text-slate-200 hover:bg-ink-700 border border-white/5 focus:ring-ink-600/50",
+    ghost: "bg-transparent text-slate-300 hover:bg-white/10 hover:text-slate-100 focus:ring-white/20",
+    danger: "bg-rose-500/90 text-white hover:bg-rose-500 focus:ring-rose-500/50 shadow-md shadow-rose-500/20"
   };
 
   return (
     <button
-      className={`inline-flex min-h-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md px-3 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${variants[variant]} ${className}`}
+      className={`inline-flex min-h-[40px] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg px-4 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-ink-950 active:scale-95 disabled:pointer-events-none disabled:opacity-50 ${variants[variant]} ${className}`}
       type="button"
       {...props}
     />
@@ -35,8 +36,8 @@ export function Button({
 
 export function Field({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
-    <label className="grid min-w-0 gap-1 text-sm">
-      <span className="text-slate-300">{label}</span>
+    <label className="grid min-w-0 gap-1.5 text-sm">
+      <span className="font-medium text-slate-300">{label}</span>
       {children}
     </label>
   );
@@ -49,14 +50,14 @@ export function HelpLabel({ label, description }: { label: ReactNode; descriptio
       <span className="group relative inline-flex">
         <span
           aria-label={typeof label === "string" ? `${label} help` : "Field help"}
-          className="inline-grid h-4 w-4 cursor-help place-items-center rounded-full text-slate-500 outline-none transition hover:text-ember-300 focus:text-ember-300"
+          className="inline-grid h-4 w-4 cursor-help place-items-center rounded-full text-slate-500 outline-none transition-colors hover:text-ember-400 focus:text-ember-400"
           role="img"
           tabIndex={0}
         >
           <HelpCircle size={14} />
         </span>
         <span
-          className="pointer-events-none absolute left-0 top-5 z-30 hidden w-64 rounded-md border border-white/10 bg-ink-950 px-3 py-2 text-xs leading-5 text-slate-200 shadow-xl shadow-black/30 group-hover:block group-focus-within:block"
+          className="animate-fade-in pointer-events-none absolute left-0 top-6 z-30 hidden w-64 rounded-lg border border-white/10 bg-ink-800/95 backdrop-blur-md px-3 py-2.5 text-xs leading-relaxed text-slate-200 shadow-xl shadow-black/40 group-hover:block group-focus-within:block"
           role="tooltip"
         >
           {description}
@@ -69,7 +70,7 @@ export function HelpLabel({ label, description }: { label: ReactNode; descriptio
 export function TextInput({ className = "", ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
-      className={`min-h-10 w-full min-w-0 rounded-md border border-white/10 bg-ink-950 px-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-ember-500 ${className}`}
+      className={`min-h-[40px] w-full min-w-0 rounded-lg border border-white/10 bg-ink-950/50 px-3 text-sm text-slate-100 outline-none transition-all placeholder:text-slate-500 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50 ${className}`}
       {...props}
     />
   );
@@ -78,7 +79,7 @@ export function TextInput({ className = "", ...props }: InputHTMLAttributes<HTML
 export function TextArea({ className = "", ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
-      className={`min-h-24 w-full min-w-0 rounded-md border border-white/10 bg-ink-950 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-ember-500 ${className}`}
+      className={`min-h-[100px] w-full min-w-0 rounded-lg border border-white/10 bg-ink-950/50 px-3 py-2.5 text-sm text-slate-100 outline-none transition-all placeholder:text-slate-500 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50 resize-y ${className}`}
       {...props}
     />
   );
@@ -86,7 +87,7 @@ export function TextArea({ className = "", ...props }: TextareaHTMLAttributes<HT
 
 export function EmptyState({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-md border border-dashed border-white/15 p-4 text-sm text-slate-400">
+    <div className="flex min-h-[120px] flex-col items-center justify-center rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-6 text-center text-sm text-slate-400 transition-colors hover:bg-white/[0.04]">
       {children}
     </div>
   );
@@ -97,11 +98,20 @@ export function ErrorNotice({ message }: { message: string | null }) {
     return null;
   }
 
-  return <div className="rounded-md border border-rose-400/30 bg-rose-500/10 p-3 text-sm text-rose-100">{message}</div>;
+  return (
+    <div className="animate-fade-in rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-200 shadow-sm flex items-start gap-2">
+      <AlertTriangle size={16} className="mt-0.5 shrink-0 text-rose-400" />
+      <span>{message}</span>
+    </div>
+  );
 }
 
 export function Badge({ children }: { children: ReactNode }) {
-  return <span className="rounded bg-white/10 px-2 py-1 text-xs text-slate-300">{children}</span>;
+  return (
+    <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-xs font-medium text-slate-300 transition-colors hover:bg-white/10">
+      {children}
+    </span>
+  );
 }
 
 export function ConfirmDialog({
@@ -124,25 +134,25 @@ export function ConfirmDialog({
   onConfirm: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4">
+    <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm p-4">
       <section
         aria-labelledby="confirm-dialog-title"
-        className="w-full max-w-md rounded-lg border border-white/10 bg-ink-900 p-4 shadow-2xl shadow-black/40"
+        className="animate-scale-in w-full max-w-md rounded-2xl border border-white/10 bg-ink-900 p-6 shadow-2xl shadow-black/50"
         role="dialog"
       >
-        <div className="flex gap-3">
-          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-rose-500/15 text-rose-200">
-            <AlertTriangle size={18} />
+        <div className="flex gap-4">
+          <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-rose-500/15 text-rose-400 ring-4 ring-rose-500/5">
+            <AlertTriangle size={20} />
           </div>
-          <div className="min-w-0">
-            <h3 className="text-base font-semibold text-slate-100" id="confirm-dialog-title">
+          <div className="min-w-0 pt-1">
+            <h3 className="text-lg font-semibold tracking-tight text-slate-100" id="confirm-dialog-title">
               {title}
             </h3>
-            <p className="mt-2 text-sm leading-6 text-slate-300">{message}</p>
+            <p className="mt-2 text-sm leading-relaxed text-slate-300">{message}</p>
           </div>
         </div>
 
-        <div className="mt-5 flex flex-wrap justify-end gap-2">
+        <div className="mt-6 flex flex-wrap justify-end gap-3">
           <Button disabled={loading} variant="ghost" onClick={onCancel}>
             {cancelLabel}
           </Button>

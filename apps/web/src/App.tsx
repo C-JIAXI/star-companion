@@ -73,55 +73,54 @@ export function App() {
   };
 
   return (
-    <div className="min-h-screen bg-ink-950 text-slate-100">
-      <div className="mx-auto flex min-h-screen max-w-[1500px] flex-col lg:flex-row">
-        <aside className="border-b border-white/10 bg-ink-900/95 p-4 lg:sticky lg:top-0 lg:h-screen lg:w-64 lg:border-b-0 lg:border-r">
-          <div className="flex items-center gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-lg bg-ember-500 text-ink-950">
-              <Sparkles size={20} />
+    <div className="min-h-screen bg-ink-950 text-slate-100 selection:bg-ember-500/30">
+      <div className="mx-auto flex min-h-screen max-w-[1600px] flex-col lg:flex-row">
+        <aside className="border-b border-white/5 bg-ink-900/50 backdrop-blur-xl p-5 lg:sticky lg:top-0 lg:h-screen lg:w-72 lg:border-b-0 lg:border-r lg:flex lg:flex-col">
+          <div className="flex items-center gap-4 lg:mb-8">
+            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-ember-400 to-ember-600 text-ink-950 shadow-lg shadow-ember-500/20">
+              <Sparkles size={24} />
             </div>
             <div className="min-w-0">
-              <h1 className="truncate text-base font-semibold">{APP_NAME}</h1>
-              <p className="text-xs text-slate-400">{t("app.tagline")}</p>
+              <h1 className="truncate text-lg font-bold tracking-tight text-white">{APP_NAME}</h1>
+              <p className="text-sm text-slate-400 font-medium">{t("app.tagline")}</p>
             </div>
           </div>
 
-          <nav className="mt-6 grid grid-cols-4 gap-2 lg:grid-cols-1">
+          <nav className="mt-6 lg:mt-0 grid grid-cols-4 gap-2 lg:grid-cols-1 lg:flex-1 lg:gap-1.5">
             {navItems.map((item) => {
               const Icon = item.icon;
               const selected = activeSection === item.id;
 
               return (
                 <button
-                  className={`flex min-h-11 items-center justify-center gap-2 rounded-md px-3 text-sm transition lg:justify-start ${
+                  className={`group flex min-h-[44px] items-center justify-center gap-3 rounded-xl px-4 text-sm font-medium transition-all duration-200 lg:justify-start ${
                     selected
-                      ? "bg-ember-500 text-ink-950"
-                      : "bg-white/5 text-slate-300 hover:bg-white/10"
+                      ? "bg-ember-500 text-ink-950 shadow-md shadow-ember-500/20"
+                      : "bg-transparent text-slate-400 hover:bg-white/5 hover:text-slate-200"
                   }`}
                   key={item.id}
                   type="button"
                   onClick={() => navigate(item.id)}
                 >
-                  <Icon size={18} />
-                  <span className="hidden sm:inline">{t(item.labelKey)}</span>
+                  <Icon size={18} className={selected ? "text-ink-950" : "text-slate-400 group-hover:text-slate-200 transition-colors"} />
+                  <span className="hidden lg:inline">{t(item.labelKey)}</span>
                 </button>
               );
             })}
           </nav>
         </aside>
 
-        <main className="min-w-0 flex-1">
-          <header className="border-b border-white/10 bg-ink-900/70 px-5 py-4">
-            <h2 className="text-2xl font-semibold">{t(active.titleKey)}</h2>
-            <p className="mt-1 max-w-3xl text-sm text-slate-400">{t(active.subtitleKey)}</p>
+        <main className="flex-1 overflow-x-hidden">
+          <header className="border-b border-white/5 bg-ink-950/80 backdrop-blur-md sticky top-0 z-10 px-6 py-5 lg:px-10">
+            <h2 className="text-xl font-bold tracking-tight text-slate-100">{t(active.titleKey)}</h2>
+            <p className="mt-1 text-sm text-slate-400">{t(active.subtitleKey)}</p>
           </header>
-
-          <section className="p-4">
+          <div className="p-6 lg:p-10 animate-fade-in">
             {activeSection === "chat" ? <ChatPage /> : null}
             {activeSection === "characters" ? <CharactersPage /> : null}
             {activeSection === "lore" ? <LorePage /> : null}
             {activeSection === "settings" ? <SettingsPage /> : null}
-          </section>
+          </div>
         </main>
       </div>
     </div>

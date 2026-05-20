@@ -1,4 +1,4 @@
-import { Download, FileUp, PlugZap, Save } from "lucide-react";
+import { Check, Download, FileUp, PlugZap, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 import { languageOptions, useI18n } from "../i18n";
 import { api } from "../lib/api";
@@ -128,21 +128,29 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="max-w-3xl space-y-4">
+    <div className="mx-auto max-w-4xl space-y-6">
       <ErrorNotice message={error} />
-      {status ? <div className="rounded-md border border-emerald-400/30 bg-emerald-500/10 p-3 text-sm text-emerald-100">{status}</div> : null}
+      {status ? (
+        <div className="animate-fade-in rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm font-medium text-emerald-200 shadow-sm flex items-center gap-3">
+          <div className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-emerald-500/20 text-emerald-400">
+            <Check size={14} />
+          </div>
+          {status}
+        </div>
+      ) : null}
 
       <Panel title={t("settings.panelTitle")} action={hasApiKey ? <Badge>{t("common.apiKeyStored")}</Badge> : <Badge>{t("common.noApiKey")}</Badge>}>
-        <div className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-2">
+        <div className="space-y-6">
+          <div className="grid gap-5 md:grid-cols-2">
             <Field label={<HelpLabel label={t("settings.provider")} description={t("help.provider")} />}><TextInput value={form.activeProvider} onChange={(event) => setForm({ ...form, activeProvider: event.target.value })} /></Field>
             <Field label={<HelpLabel label={t("settings.apiBaseUrl")} description={t("help.apiBaseUrl")} />}><TextInput value={form.apiBaseUrl} onChange={(event) => setForm({ ...form, apiBaseUrl: event.target.value })} /></Field>
           </div>
           <Field label={<HelpLabel label={t("settings.apiKey")} description={t("help.apiKey")} />}><TextInput placeholder={hasApiKey ? t("settings.apiKeyPlaceholderStored") : t("settings.apiKeyPlaceholderEmpty")} type="password" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value })} /></Field>
-          <div className="grid gap-3 md:grid-cols-2">
+          
+          <div className="grid gap-5 md:grid-cols-2">
             <Field label={<HelpLabel label={t("settings.model")} description={t("help.model")} />}><TextInput value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })} /></Field>
             <Field label={t("settings.language")}>
-              <select className="min-h-10 w-full rounded-md border border-white/10 bg-ink-950 px-3 text-sm text-slate-100" value={form.language} onChange={(event) => {
+              <select className="min-h-[40px] w-full rounded-lg border border-white/10 bg-ink-950/50 px-3 text-sm text-slate-100 outline-none transition-all hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50" value={form.language} onChange={(event) => {
                 const language = event.target.value as SettingsInput["language"];
                 setForm({ ...form, language });
                 setLanguage(language);
@@ -151,31 +159,43 @@ export function SettingsPage() {
               </select>
             </Field>
           </div>
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-5 md:grid-cols-3">
             <Field label={<HelpLabel label={t("settings.temperature")} description={t("help.temperature")} />}><TextInput step="0.1" type="number" value={form.temperature} onChange={(event) => setForm({ ...form, temperature: Number(event.target.value) })} /></Field>
             <Field label={<HelpLabel label={t("settings.maxTokens")} description={t("help.maxTokens")} />}><TextInput type="number" value={form.maxTokens} onChange={(event) => setForm({ ...form, maxTokens: Number(event.target.value) })} /></Field>
             <Field label={<HelpLabel label={t("settings.topP")} description={t("help.topP")} />}><TextInput step="0.05" type="number" value={form.topP} onChange={(event) => setForm({ ...form, topP: Number(event.target.value) })} /></Field>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Button disabled={loading} onClick={() => void saveSettings()}><Save size={16} />{t("settings.saveSettings")}</Button>
-            <Button disabled={loading} variant="ghost" onClick={() => void testBackend()}><PlugZap size={16} />{t("settings.testModel")}</Button>
+          <div className="flex flex-wrap gap-3 pt-4 border-t border-white/5">
+            <Button disabled={loading} onClick={() => void saveSettings()}>
+              <Save size={16} />
+              {t("settings.saveSettings")}
+            </Button>
+            <Button disabled={loading} variant="secondary" onClick={() => void testBackend()}>
+              <PlugZap size={16} />
+              {t("settings.testModel")}
+            </Button>
           </div>
         </div>
       </Panel>
 
       <Panel title={t("settings.backupPanel")}>
-        <div className="space-y-4">
-          <p className="text-sm leading-6 text-slate-400">{t("settings.backupHelp")}</p>
+        <div className="space-y-6">
+          <p className="text-sm leading-relaxed text-slate-400">{t("settings.backupHelp")}</p>
           <Field label={t("settings.importMode")}>
-            <select className="min-h-10 w-full rounded-md border border-white/10 bg-ink-950 px-3 text-sm text-slate-100" value={importMode} onChange={(event) => setImportMode(event.target.value as "merge" | "replace")}>
+            <select className="min-h-[40px] w-full rounded-lg border border-white/10 bg-ink-950/50 px-3 text-sm text-slate-100 outline-none transition-all hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50" value={importMode} onChange={(event) => setImportMode(event.target.value as "merge" | "replace")}>
               <option value="merge">{t("settings.importModeMerge")}</option>
               <option value="replace">{t("settings.importModeReplace")}</option>
             </select>
           </Field>
-          <div className="flex flex-wrap gap-2">
-            <Button disabled={loading} variant="ghost" onClick={() => void exportBackup()}><Download size={16} />{t("settings.exportBackup")}</Button>
-            <Button disabled={loading} variant="ghost" onClick={() => document.getElementById("backup-import-input")?.click()}><FileUp size={16} />{t("settings.importBackup")}</Button>
-            <input id="backup-import-input" className="hidden" type="file" accept="application/json,.json" onChange={(event) => {
+          <div className="flex flex-wrap gap-3 pt-2">
+            <Button disabled={loading} variant="secondary" onClick={() => void exportBackup()}>
+              <Download size={16} />
+              {t("settings.exportBackup")}
+            </Button>
+            <Button disabled={loading} variant="secondary" onClick={() => document.getElementById("backup-import-input")?.click()}>
+              <FileUp size={16} />
+              {t("settings.importBackup")}
+            </Button>
+            <input id="backup-import-input" className="sr-only" type="file" accept="application/json,.json" onChange={(event) => {
               const file = event.currentTarget.files?.[0];
               event.currentTarget.value = "";
               setPendingImportFile(file ?? null);
