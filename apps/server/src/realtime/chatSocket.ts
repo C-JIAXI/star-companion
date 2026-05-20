@@ -1,3 +1,4 @@
+import type { Chat, Prisma } from "@prisma/client";
 import type { RawData, WebSocket, WebSocketServer } from "ws";
 import { prisma } from "../db.js";
 import {
@@ -8,7 +9,7 @@ import {
 import { serializeMessage } from "../serializers.js";
 import { getOrCreateSettings } from "../routes/settings.js";
 import { streamChatCompletion } from "../services/openaiCompatible.js";
-import { appendVariant, buildPromptContext, resolveChatCharacterId } from "../services/promptBuilder.js";
+import { appendVariant, buildPromptContext } from "../services/promptBuilder.js";
 
 const controllers = new Map<string, AbortController>();
 
@@ -16,6 +17,137 @@ const sendJson = (socket: WebSocket, value: unknown) => {
   if (socket.readyState === socket.OPEN) {
     socket.send(JSON.stringify(value));
   }
+};
+
+const toStringArray = (value: Prisma.JsonValue): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is string => typeof item === "string");
+};
+
+const getReplyCharacterIds = async (chat: Chat, requestedCharacterId?: string | null) => {
+  if (requestedCharacterId) {
+    return [requestedCharacterId];
+  }
+
+  const characterIds = toStringArray(chat.characterIds);
+  if (chat.mode === "group" && characterIds.length > 0) {
+    return characterIds;
+  }
+
+  return [characterIds[0] ?? null];
+};
+
+const streamAssistantReply = async ({
+  socket,
+  requestId,
+  chatId,
+  characterId,
+  abortController,
+  index,
+  total,
+  before,
+  targetMessageId
+}: {
+  socket: WebSocket;
+  requestId: string;
+  chatId: string;
+  characterId: string | null;
+  abortController: AbortController;
+  index: number;
+  total: number;
+  before?: Date;
+  targetMessageId?: string;
+}) => {
+  sendJson(socket, {
+    type: "generation_character_started",
+    requestId,
+    characterId,
+    index,
+    total
+  });
+
+  const settings = await getOrCreateSettings();
+  const context = await buildPromptContext({
+    chatId,
+    characterId,
+    before
+  });
+  sendJson(socket, {
+    type: "lore_matches",
+    requestId,
+    entries: context.matchedLoreEntries
+  });
+
+  let assistantContent = "";
+  let stopped = false;
+
+  try {
+    for await (const token of streamChatCompletion({
+      settings,
+      messages: context.messages,
+      signal: abortController.signal
+    })) {
+      assistantContent += token;
+      sendJson(socket, { type: "token", requestId, content: token });
+    }
+  } catch (error) {
+    if (abortController.signal.aborted) {
+      stopped = true;
+    } else {
+      throw error;
+    }
+  }
+
+  if (assistantContent.trim()) {
+    const message = targetMessageId
+      ? await updateAssistantVariant(targetMessageId, assistantContent)
+      : await createAssistantMessage(chatId, characterId, assistantContent);
+
+    await prisma.chat.update({
+      where: { id: chatId },
+      data: { updatedAt: new Date() }
+    });
+
+    sendJson(socket, {
+      type: "assistant_message",
+      requestId,
+      message: serializeMessage(message)
+    });
+  }
+
+  return stopped;
+};
+
+const createAssistantMessage = (chatId: string, characterId: string | null, content: string) =>
+  prisma.message.create({
+    data: {
+      chatId,
+      role: "assistant",
+      characterId,
+      content,
+      variants: [content],
+      activeVariantIndex: 0
+    }
+  });
+
+const updateAssistantVariant = async (messageId: string, content: string) => {
+  const targetMessage = await prisma.message.findUnique({ where: { id: messageId } });
+  if (!targetMessage) {
+    throw new Error("Assistant message not found");
+  }
+
+  const variants = appendVariant(targetMessage.variants, content);
+  return prisma.message.update({
+    where: { id: messageId },
+    data: {
+      content,
+      variants,
+      activeVariantIndex: variants.length - 1
+    }
+  });
 };
 
 const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
@@ -32,8 +164,8 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
   try {
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
 
-    const chatExists = await prisma.chat.findUnique({ where: { id: request.chatId } });
-    if (!chatExists) {
+    const chat = await prisma.chat.findUnique({ where: { id: request.chatId } });
+    if (!chat) {
       throw new Error("Chat not found");
     }
 
@@ -58,58 +190,23 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
       message: serializeMessage(userMessage)
     });
 
-    const settings = await getOrCreateSettings();
-    const context = await buildPromptContext({
-      chatId: request.chatId,
-      characterId: request.characterId
-    });
-    sendJson(socket, {
-      type: "lore_matches",
-      requestId: request.requestId,
-      entries: context.matchedLoreEntries
-    });
-    let assistantContent = "";
+    const replyCharacterIds = await getReplyCharacterIds(chat, request.characterId);
     let stopped = false;
 
-    try {
-      for await (const token of streamChatCompletion({
-        settings,
-        messages: context.messages,
-        signal: abortController.signal
-      })) {
-        assistantContent += token;
-        sendJson(socket, { type: "token", requestId: request.requestId, content: token });
-      }
-    } catch (error) {
-      if (abortController.signal.aborted) {
-        stopped = true;
-      } else {
-        throw error;
-      }
-    }
-
-    if (assistantContent.trim()) {
-      const assistantMessage = await prisma.message.create({
-        data: {
-          chatId: request.chatId,
-          role: "assistant",
-          characterId: await resolveChatCharacterId(request.chatId, request.characterId),
-          content: assistantContent,
-          variants: [assistantContent],
-          activeVariantIndex: 0
-        }
-      });
-
-      await prisma.chat.update({
-        where: { id: request.chatId },
-        data: { updatedAt: new Date() }
-      });
-
-      sendJson(socket, {
-        type: "assistant_message",
+    for (const [index, characterId] of replyCharacterIds.entries()) {
+      stopped = await streamAssistantReply({
+        socket,
         requestId: request.requestId,
-        message: serializeMessage(assistantMessage)
+        chatId: request.chatId,
+        characterId,
+        abortController,
+        index,
+        total: replyCharacterIds.length
       });
+
+      if (stopped) {
+        break;
+      }
     }
 
     sendJson(socket, {
@@ -143,59 +240,17 @@ const handleRegenerate = async (socket: WebSocket, rawMessage: unknown) => {
       throw new Error("Assistant message not found");
     }
 
-    const settings = await getOrCreateSettings();
-    const context = await buildPromptContext({
+    const stopped = await streamAssistantReply({
+      socket,
+      requestId: request.requestId,
       chatId: targetMessage.chatId,
       characterId: targetMessage.characterId,
-      before: targetMessage.createdAt
+      abortController,
+      index: 0,
+      total: 1,
+      before: targetMessage.createdAt,
+      targetMessageId: targetMessage.id
     });
-    sendJson(socket, {
-      type: "lore_matches",
-      requestId: request.requestId,
-      entries: context.matchedLoreEntries
-    });
-    let assistantContent = "";
-    let stopped = false;
-
-    try {
-      for await (const token of streamChatCompletion({
-        settings,
-        messages: context.messages,
-        signal: abortController.signal
-      })) {
-        assistantContent += token;
-        sendJson(socket, { type: "token", requestId: request.requestId, content: token });
-      }
-    } catch (error) {
-      if (abortController.signal.aborted) {
-        stopped = true;
-      } else {
-        throw error;
-      }
-    }
-
-    if (assistantContent.trim()) {
-      const variants = appendVariant(targetMessage.variants, assistantContent);
-      const updatedMessage = await prisma.message.update({
-        where: { id: targetMessage.id },
-        data: {
-          content: assistantContent,
-          variants,
-          activeVariantIndex: variants.length - 1
-        }
-      });
-
-      await prisma.chat.update({
-        where: { id: targetMessage.chatId },
-        data: { updatedAt: new Date() }
-      });
-
-      sendJson(socket, {
-        type: "assistant_message",
-        requestId: request.requestId,
-        message: serializeMessage(updatedMessage)
-      });
-    }
 
     sendJson(socket, {
       type: stopped ? "generation_stopped" : "generation_done",

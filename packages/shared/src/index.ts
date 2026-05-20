@@ -122,6 +122,13 @@ export type GenerationServerMessage =
       entries: LoreEntryDTO[];
     }
   | {
+      type: "generation_character_started";
+      requestId: string;
+      characterId: string | null;
+      index: number;
+      total: number;
+    }
+  | {
       type: "token";
       requestId: string;
       content: string;

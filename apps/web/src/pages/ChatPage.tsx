@@ -35,6 +35,7 @@ export function ChatPage() {
   const [characterIds, setCharacterIds] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
+  const [streamingCharacterId, setStreamingCharacterId] = useState<string | null>(null);
   const [matchedLoreEntries, setMatchedLoreEntries] = useState<LoreEntryDTO[]>([]);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +46,9 @@ export function ChatPage() {
     () => new Map(characters.map((character) => [character.id, character])),
     [characters]
   );
+
+  const getModeLabel = (chatMode: ChatMode) =>
+    chatMode === "group" ? t("chat.mode.group") : t("chat.mode.single");
 
   const loadBase = async () => {
     const [characterData, chatData] = await Promise.all([api.characters.list(), api.chats.list()]);
@@ -180,6 +184,12 @@ export function ChatPage() {
           return;
         }
 
+        if (message.type === "generation_character_started") {
+          setStreamingCharacterId(message.characterId);
+          setStreamingContent("");
+          return;
+        }
+
         if (message.type === "lore_matches") {
           setMatchedLoreEntries(message.entries);
           return;
@@ -188,6 +198,7 @@ export function ChatPage() {
         if (message.type === "assistant_message") {
           upsertMessage(message.message);
           setStreamingContent("");
+          setStreamingCharacterId(null);
           return;
         }
 
@@ -195,6 +206,7 @@ export function ChatPage() {
           setLoading(false);
           setActiveRequestId(null);
           setStreamingContent("");
+          setStreamingCharacterId(null);
           void loadChat(selectedChatId);
           void loadBase();
           return;
@@ -205,6 +217,7 @@ export function ChatPage() {
           setLoading(false);
           setActiveRequestId(null);
           setStreamingContent("");
+          setStreamingCharacterId(null);
         }
       };
     });
@@ -228,6 +241,7 @@ export function ChatPage() {
       };
       setActiveRequestId(requestId);
       setStreamingContent("");
+      setStreamingCharacterId(null);
       setDraft("");
       socket.send(JSON.stringify(payload));
     } catch (caught) {
@@ -268,6 +282,7 @@ export function ChatPage() {
       };
       setActiveRequestId(requestId);
       setStreamingContent("");
+      setStreamingCharacterId(message.characterId);
       socket.send(JSON.stringify(payload));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedRegenerate"));
@@ -336,7 +351,7 @@ export function ChatPage() {
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <p className="font-medium text-slate-100">{chat.title}</p>
-                    <p className="mt-1 text-xs text-slate-400">{chat.mode} · {t("chat.boundCharacters", { count: chat.characterIds.length })}</p>
+                    <p className="mt-1 text-xs text-slate-400">{getModeLabel(chat.mode)} · {t("chat.boundCharacters", { count: chat.characterIds.length })}</p>
                   </div>
                   <Button className="min-h-8 px-2" variant="ghost" onClick={(event) => { event.stopPropagation(); void deleteChat(chat); }}>
                     <Trash2 size={14} />
@@ -354,7 +369,7 @@ export function ChatPage() {
         ) : (
           <div className="flex min-h-[520px] flex-col">
             <div className="flex flex-wrap gap-2 pb-3">
-              <Badge>{activeChat.mode}</Badge>
+              <Badge>{getModeLabel(activeChat.mode)}</Badge>
               {activeChat.characterIds.map((id) => (
                 <Badge key={id}>{characterMap.get(id)?.name ?? t("common.unknown")}</Badge>
               ))}
@@ -419,7 +434,13 @@ export function ChatPage() {
               )}
               {streamingContent ? (
                 <article className="mr-auto max-w-[85%] rounded-md bg-white/10 p-3 text-sm text-slate-100">
-                  <div className="mb-2 text-xs font-semibold opacity-80">{t("chat.streaming")}</div>
+                  <div className="mb-2 text-xs font-semibold opacity-80">
+                    {streamingCharacterId
+                      ? t("chat.streamingAs", {
+                          name: characterMap.get(streamingCharacterId)?.name ?? t("common.unknown")
+                        })
+                      : t("chat.streaming")}
+                  </div>
                   <p className="whitespace-pre-wrap">{streamingContent}</p>
                 </article>
               ) : null}
@@ -451,8 +472,8 @@ export function ChatPage() {
           <Field label={t("chat.title")}><TextInput value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
           <Field label={t("chat.mode")}>
             <select className="min-h-10 rounded-md border border-white/10 bg-ink-950 px-3 text-sm" value={mode} onChange={(event) => setMode(event.target.value as ChatMode)}>
-              <option value="single">single</option>
-              <option value="group">group</option>
+              <option value="single">{t("chat.mode.single")}</option>
+              <option value="group">{t("chat.mode.group")}</option>
             </select>
           </Field>
           <div className="space-y-2">
