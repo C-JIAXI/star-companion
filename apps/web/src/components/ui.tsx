@@ -35,7 +35,7 @@ export function Button({
 
 export function Field({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
-    <label className="grid gap-1 text-sm">
+    <label className="grid min-w-0 gap-1 text-sm">
       <span className="text-slate-300">{label}</span>
       {children}
     </label>
@@ -69,7 +69,7 @@ export function HelpLabel({ label, description }: { label: ReactNode; descriptio
 export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
-      className="min-h-10 rounded-md border border-white/10 bg-ink-950 px-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-ember-500"
+      className="min-h-10 w-full min-w-0 rounded-md border border-white/10 bg-ink-950 px-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-ember-500"
       {...props}
     />
   );
@@ -78,7 +78,7 @@ export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
 export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
-      className="min-h-24 rounded-md border border-white/10 bg-ink-950 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-ember-500"
+      className="min-h-24 w-full min-w-0 rounded-md border border-white/10 bg-ink-950 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-ember-500"
       {...props}
     />
   );

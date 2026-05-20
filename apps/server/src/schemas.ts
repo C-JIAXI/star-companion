@@ -74,6 +74,12 @@ export const generationRequestSchema = z.object({
   characterId: idSchema.nullable().optional()
 });
 
+export const regenerateRequestSchema = z.object({
+  type: z.literal("regenerate"),
+  requestId: z.string().min(1),
+  messageId: idSchema
+});
+
 export const stopGenerationRequestSchema = z.object({
   type: z.literal("stop"),
   requestId: z.string().min(1)

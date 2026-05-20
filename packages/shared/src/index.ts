@@ -93,6 +93,11 @@ export type GenerationClientMessage =
       characterId?: string | null;
     }
   | {
+      type: "regenerate";
+      requestId: string;
+      messageId: string;
+    }
+  | {
       type: "stop";
       requestId: string;
     };
@@ -110,6 +115,11 @@ export type GenerationServerMessage =
       type: "user_message";
       requestId: string;
       message: MessageDTO;
+    }
+  | {
+      type: "lore_matches";
+      requestId: string;
+      entries: LoreEntryDTO[];
     }
   | {
       type: "token";

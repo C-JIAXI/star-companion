@@ -1,4 +1,14 @@
-import { MessageSquarePlus, RefreshCw, Send, StopCircle, Trash2 } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  MessageSquarePlus,
+  RefreshCw,
+  RotateCcw,
+  Send,
+  StopCircle,
+  Trash2
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
@@ -9,6 +19,7 @@ import type {
   ChatWithMessagesDTO,
   GenerationClientMessage,
   GenerationServerMessage,
+  LoreEntryDTO,
   MessageDTO
 } from "../types";
 import { Badge, Button, EmptyState, ErrorNotice, Field, Panel, TextArea, TextInput } from "../components/ui";
@@ -24,6 +35,7 @@ export function ChatPage() {
   const [characterIds, setCharacterIds] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
+  const [matchedLoreEntries, setMatchedLoreEntries] = useState<LoreEntryDTO[]>([]);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -79,6 +91,7 @@ export function ChatPage() {
   const createChat = async () => {
     setLoading(true);
     setError(null);
+    setMatchedLoreEntries([]);
     try {
       const chat = await api.chats.create({
         title: title.trim(),
@@ -115,14 +128,17 @@ export function ChatPage() {
     }
   };
 
-  const appendMessage = (message: MessageDTO) => {
+  const upsertMessage = (message: MessageDTO) => {
     setActiveChat((current) => {
       if (!current || current.id !== message.chatId) {
         return current;
       }
 
       if (current.messages.some((item) => item.id === message.id)) {
-        return current;
+        return {
+          ...current,
+          messages: current.messages.map((item) => (item.id === message.id ? message : item))
+        };
       }
 
       return {
@@ -155,7 +171,7 @@ export function ChatPage() {
         }
 
         if (message.type === "user_message") {
-          appendMessage(message.message);
+          upsertMessage(message.message);
           return;
         }
 
@@ -164,8 +180,13 @@ export function ChatPage() {
           return;
         }
 
+        if (message.type === "lore_matches") {
+          setMatchedLoreEntries(message.entries);
+          return;
+        }
+
         if (message.type === "assistant_message") {
-          appendMessage(message.message);
+          upsertMessage(message.message);
           setStreamingContent("");
           return;
         }
@@ -195,6 +216,7 @@ export function ChatPage() {
 
     setLoading(true);
     setError(null);
+    setMatchedLoreEntries([]);
     try {
       const socket = await getSocket();
       const requestId = crypto.randomUUID();
@@ -227,6 +249,50 @@ export function ChatPage() {
       requestId: activeRequestId
     };
     socketRef.current.send(JSON.stringify(payload));
+  };
+
+  const regenerateMessage = async (message: MessageDTO) => {
+    if (message.role !== "assistant") {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      const socket = await getSocket();
+      const requestId = crypto.randomUUID();
+      const payload: GenerationClientMessage = {
+        type: "regenerate",
+        requestId,
+        messageId: message.id
+      };
+      setActiveRequestId(requestId);
+      setStreamingContent("");
+      socket.send(JSON.stringify(payload));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedRegenerate"));
+      setLoading(false);
+      setActiveRequestId(null);
+    }
+  };
+
+  const copyMessage = async (message: MessageDTO) => {
+    await navigator.clipboard.writeText(message.content);
+  };
+
+  const switchVariant = async (message: MessageDTO, direction: -1 | 1) => {
+    if (message.variants.length <= 1) {
+      return;
+    }
+
+    const nextIndex =
+      (message.activeVariantIndex + direction + message.variants.length) % message.variants.length;
+    const content = message.variants[nextIndex] ?? message.content;
+    const updated = await api.messages.update(message.id, {
+      content,
+      activeVariantIndex: nextIndex
+    });
+    upsertMessage(updated);
   };
 
   const updateMessage = async (message: MessageDTO) => {
@@ -294,6 +360,28 @@ export function ChatPage() {
               ))}
             </div>
 
+            {matchedLoreEntries.length > 0 ? (
+              <div className="mb-3 rounded-md border border-ember-500/30 bg-ember-500/10 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-ember-100">{t("chat.loreMatches")}</p>
+                  <Badge>{matchedLoreEntries.length}</Badge>
+                </div>
+                <div className="space-y-2">
+                  {matchedLoreEntries.map((entry) => (
+                    <article className="rounded-md bg-ink-950/80 p-2 text-xs text-slate-300" key={entry.id}>
+                      <div className="mb-1 flex flex-wrap gap-1">
+                        {entry.keys.map((key) => (
+                          <Badge key={key}>{key}</Badge>
+                        ))}
+                        <Badge>{t("common.priority")} {entry.priority}</Badge>
+                      </div>
+                      <p className="line-clamp-2 whitespace-pre-wrap">{entry.content}</p>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             <div className="flex-1 space-y-3 overflow-y-auto rounded-md bg-ink-950 p-3">
               {activeChat.messages.length === 0 ? (
                 <EmptyState>{t("chat.noMessages")}</EmptyState>
@@ -309,7 +397,18 @@ export function ChatPage() {
                       <span className="text-xs font-semibold opacity-80">
                         {message.characterId ? characterMap.get(message.characterId)?.name : message.role}
                       </span>
-                      <span className="flex gap-1">
+                      <span className="flex flex-wrap justify-end gap-1">
+                        {message.role === "assistant" && message.variants.length > 1 ? (
+                          <span className="mr-1 inline-flex items-center gap-1 text-xs opacity-80">
+                            <button className="rounded bg-white/10 p-0.5" type="button" onClick={() => void switchVariant(message, -1)}><ChevronLeft size={13} /></button>
+                            {message.activeVariantIndex + 1}/{message.variants.length}
+                            <button className="rounded bg-white/10 p-0.5" type="button" onClick={() => void switchVariant(message, 1)}><ChevronRight size={13} /></button>
+                          </span>
+                        ) : null}
+                        <button className="inline-flex items-center gap-1 text-xs underline opacity-80" type="button" onClick={() => void copyMessage(message)}><Copy size={12} />{t("common.copy")}</button>
+                        {message.role === "assistant" ? (
+                          <button disabled={Boolean(activeRequestId)} className="inline-flex items-center gap-1 text-xs underline opacity-80 disabled:opacity-40" type="button" onClick={() => void regenerateMessage(message)}><RotateCcw size={12} />{t("chat.regenerate")}</button>
+                        ) : null}
                         <button className="text-xs underline opacity-80" type="button" onClick={() => void updateMessage(message)}>{t("common.edit")}</button>
                         <button className="text-xs underline opacity-80" type="button" onClick={() => void deleteMessage(message)}>{t("common.delete")}</button>
                       </span>

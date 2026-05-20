@@ -1,10 +1,14 @@
-import type { Chat, Prisma } from "@prisma/client";
 import type { RawData, WebSocket, WebSocketServer } from "ws";
 import { prisma } from "../db.js";
-import { generationRequestSchema, stopGenerationRequestSchema } from "../schemas.js";
+import {
+  generationRequestSchema,
+  regenerateRequestSchema,
+  stopGenerationRequestSchema
+} from "../schemas.js";
 import { serializeMessage } from "../serializers.js";
 import { getOrCreateSettings } from "../routes/settings.js";
-import { streamChatCompletion, type ChatCompletionMessage } from "../services/openaiCompatible.js";
+import { streamChatCompletion } from "../services/openaiCompatible.js";
+import { appendVariant, buildPromptContext, resolveChatCharacterId } from "../services/promptBuilder.js";
 
 const controllers = new Map<string, AbortController>();
 
@@ -12,35 +16,6 @@ const sendJson = (socket: WebSocket, value: unknown) => {
   if (socket.readyState === socket.OPEN) {
     socket.send(JSON.stringify(value));
   }
-};
-
-const toStringArray = (value: Prisma.JsonValue): string[] => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.filter((item): item is string => typeof item === "string");
-};
-
-const getAssistantCharacterId = (chat: Chat, requestedCharacterId?: string | null) => {
-  if (requestedCharacterId) {
-    return requestedCharacterId;
-  }
-
-  return toStringArray(chat.characterIds)[0] ?? null;
-};
-
-const buildMessages = async (chatId: string): Promise<ChatCompletionMessage[]> => {
-  const messages = await prisma.message.findMany({
-    where: { chatId },
-    orderBy: { createdAt: "asc" },
-    take: 24
-  });
-
-  return messages.map((message) => ({
-    role: message.role === "assistant" || message.role === "system" ? message.role : "user",
-    content: message.content
-  }));
 };
 
 const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
@@ -57,8 +32,8 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
   try {
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
 
-    const chat = await prisma.chat.findUnique({ where: { id: request.chatId } });
-    if (!chat) {
+    const chatExists = await prisma.chat.findUnique({ where: { id: request.chatId } });
+    if (!chatExists) {
       throw new Error("Chat not found");
     }
 
@@ -84,14 +59,22 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
     });
 
     const settings = await getOrCreateSettings();
-    const messages = await buildMessages(request.chatId);
+    const context = await buildPromptContext({
+      chatId: request.chatId,
+      characterId: request.characterId
+    });
+    sendJson(socket, {
+      type: "lore_matches",
+      requestId: request.requestId,
+      entries: context.matchedLoreEntries
+    });
     let assistantContent = "";
     let stopped = false;
 
     try {
       for await (const token of streamChatCompletion({
         settings,
-        messages,
+        messages: context.messages,
         signal: abortController.signal
       })) {
         assistantContent += token;
@@ -110,7 +93,7 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
         data: {
           chatId: request.chatId,
           role: "assistant",
-          characterId: getAssistantCharacterId(chat, request.characterId),
+          characterId: await resolveChatCharacterId(request.chatId, request.characterId),
           content: assistantContent,
           variants: [assistantContent],
           activeVariantIndex: 0
@@ -135,6 +118,91 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Generation failed";
+    sendJson(socket, { type: "error", requestId: request.requestId, error: message });
+  } finally {
+    controllers.delete(request.requestId);
+  }
+};
+
+const handleRegenerate = async (socket: WebSocket, rawMessage: unknown) => {
+  const parsed = regenerateRequestSchema.safeParse(rawMessage);
+  if (!parsed.success) {
+    sendJson(socket, { type: "error", error: "Invalid regenerate request" });
+    return;
+  }
+
+  const request = parsed.data;
+  const abortController = new AbortController();
+  controllers.set(request.requestId, abortController);
+
+  try {
+    sendJson(socket, { type: "generation_started", requestId: request.requestId });
+
+    const targetMessage = await prisma.message.findUnique({ where: { id: request.messageId } });
+    if (!targetMessage || targetMessage.role !== "assistant") {
+      throw new Error("Assistant message not found");
+    }
+
+    const settings = await getOrCreateSettings();
+    const context = await buildPromptContext({
+      chatId: targetMessage.chatId,
+      characterId: targetMessage.characterId,
+      before: targetMessage.createdAt
+    });
+    sendJson(socket, {
+      type: "lore_matches",
+      requestId: request.requestId,
+      entries: context.matchedLoreEntries
+    });
+    let assistantContent = "";
+    let stopped = false;
+
+    try {
+      for await (const token of streamChatCompletion({
+        settings,
+        messages: context.messages,
+        signal: abortController.signal
+      })) {
+        assistantContent += token;
+        sendJson(socket, { type: "token", requestId: request.requestId, content: token });
+      }
+    } catch (error) {
+      if (abortController.signal.aborted) {
+        stopped = true;
+      } else {
+        throw error;
+      }
+    }
+
+    if (assistantContent.trim()) {
+      const variants = appendVariant(targetMessage.variants, assistantContent);
+      const updatedMessage = await prisma.message.update({
+        where: { id: targetMessage.id },
+        data: {
+          content: assistantContent,
+          variants,
+          activeVariantIndex: variants.length - 1
+        }
+      });
+
+      await prisma.chat.update({
+        where: { id: targetMessage.chatId },
+        data: { updatedAt: new Date() }
+      });
+
+      sendJson(socket, {
+        type: "assistant_message",
+        requestId: request.requestId,
+        message: serializeMessage(updatedMessage)
+      });
+    }
+
+    sendJson(socket, {
+      type: stopped ? "generation_stopped" : "generation_done",
+      requestId: request.requestId
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Regeneration failed";
     sendJson(socket, { type: "error", requestId: request.requestId, error: message });
   } finally {
     controllers.delete(request.requestId);
@@ -172,6 +240,11 @@ export const attachChatSocket = (wsServer: WebSocketServer, appName: string) => 
 
         if (messageType === "generate") {
           void handleGenerate(socket, parsed);
+          return;
+        }
+
+        if (messageType === "regenerate") {
+          void handleRegenerate(socket, parsed);
           return;
         }
 
