@@ -201,7 +201,7 @@ export function LorePage() {
         action={
           <Button
             variant="secondary"
-            className="h-8 px-3 text-xs"
+            className="!min-h-[32px] !h-8 !px-3 text-xs"
             onClick={() => {
               setSelectedId(null);
               setSelected(null);
@@ -282,10 +282,10 @@ export function LorePage() {
                           <Badge>{t("common.priority")} {entry.priority}</Badge>
                           <Badge>{entry.enabled ? t("common.enabled") : t("common.disabled")}</Badge>
                         </div>
-                        <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Button className="h-8 px-3 text-xs" variant="secondary" onClick={() => void toggleEntry(entry.id, entry.enabled)}>{entry.enabled ? t("lore.disable") : t("lore.enable")}</Button>
-                          <Button className="h-8 px-3 text-xs" variant="secondary" onClick={() => startEditingEntry(entry)}>{t("common.edit")}</Button>
-                          <Button className="h-8 w-8 p-0" variant="danger" onClick={() => setPendingDeleteEntryId(entry.id)}><Trash2 size={14} /></Button>
+                        <div className="flex gap-2 transition-opacity">
+                          <Button className="!min-h-[32px] !h-8 !px-3 text-xs" variant="secondary" onClick={() => void toggleEntry(entry.id, entry.enabled)}>{entry.enabled ? t("lore.disable") : t("lore.enable")}</Button>
+                          <Button className="!min-h-[32px] !h-8 !px-3 text-xs" variant="secondary" onClick={() => startEditingEntry(entry)}>{t("common.edit")}</Button>
+                          <Button className="!min-h-[32px] !h-8 !w-8 !p-0" variant="danger" onClick={() => setPendingDeleteEntryId(entry.id)}><Trash2 size={14} /></Button>
                         </div>
                       </div>
                       <p className="whitespace-pre-wrap leading-relaxed text-slate-200">{entry.content}</p>

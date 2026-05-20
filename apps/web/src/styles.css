@@ -36,6 +36,17 @@
     background: #485369;
   }
 
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-resizer {
+    background: transparent;
+    border-style: solid;
+    border-width: 8px;
+    border-color: transparent #313847 #313847 transparent;
+  }
+
   button,
   input,
   textarea,

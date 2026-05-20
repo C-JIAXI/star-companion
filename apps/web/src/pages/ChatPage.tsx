@@ -373,24 +373,24 @@ export function ChatPage() {
 
   return (
     <>
-    <div className="grid gap-6 lg:grid-cols-[320px_1fr_320px] h-[calc(100vh-140px)]">
+    <div className="grid min-w-0 gap-6 lg:h-[calc(100vh-112px)] lg:min-h-0 lg:grid-cols-[340px_minmax(0,1fr)_300px]">
       <Panel
         title={t("chat.chats")}
         action={
-          <Button variant="secondary" onClick={() => void loadBase()} className="h-8 px-3 text-xs">
+          <Button variant="secondary" onClick={() => void loadBase()} className="!min-h-[32px] !h-8 !px-3 text-xs">
             <RefreshCw size={14} />
             {t("common.refresh")}
           </Button>
         }
       >
-        <div className="space-y-2.5 overflow-y-auto h-[calc(100%-40px)] pr-1">
+        <div className="h-[calc(100%-40px)] space-y-2 overflow-y-auto pr-1">
           <ErrorNotice message={error} />
           {chats.length === 0 ? (
             <EmptyState>{t("chat.noChats")}</EmptyState>
           ) : (
             chats.map((chat) => (
               <button
-                className={`group w-full rounded-xl border p-3.5 text-left text-sm transition-all duration-200 ${
+                className={`group w-full rounded-lg border p-3 text-left text-sm transition-all duration-200 ${
                   selectedChatId === chat.id
                     ? "border-ember-500/50 bg-ember-500/10 shadow-md shadow-ember-500/5"
                     : "border-white/5 bg-white/5 hover:border-white/10 hover:bg-white/10"
@@ -400,14 +400,14 @@ export function ChatPage() {
                 onClick={() => setSelectedChatId(chat.id)}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <p className={`truncate font-medium transition-colors ${selectedChatId === chat.id ? 'text-ember-100' : 'text-slate-100 group-hover:text-white'}`}>{chat.title}</p>
                     <p className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-400">
                       <span className={`inline-block h-1.5 w-1.5 rounded-full ${chat.mode === 'group' ? 'bg-indigo-400' : 'bg-emerald-400'}`}></span>
                       {getModeLabel(chat.mode)} <span className="opacity-50">·</span> {t("chat.boundCharacters", { count: chat.characterIds.length })}
                     </p>
                   </div>
-                  <Button className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity" variant="ghost" onClick={(event) => { event.stopPropagation(); setPendingDeleteChat(chat); }}>
+                  <Button className="!h-8 !min-h-8 !w-8 !p-0 opacity-0 transition-opacity group-hover:opacity-100" variant="ghost" onClick={(event) => { event.stopPropagation(); setPendingDeleteChat(chat); }}>
                     <Trash2 size={14} className="text-rose-400" />
                   </Button>
                 </div>
@@ -421,8 +421,8 @@ export function ChatPage() {
         {!activeChat ? (
           <EmptyState>{t("chat.selectOrCreate")}</EmptyState>
         ) : (
-          <div className="flex h-full flex-col">
-            <div className="flex flex-wrap gap-2 pb-4 border-b border-white/5 mb-4">
+          <div className="flex h-[calc(100%-40px)] min-h-0 flex-col">
+            <div className="mb-4 flex shrink-0 flex-wrap gap-2 border-b border-white/5 pb-4">
               <Badge>{getModeLabel(activeChat.mode)}</Badge>
               {activeChat.characterIds.map((id) => (
                 <Badge key={id}>{characterMap.get(id)?.name ?? t("common.unknown")}</Badge>
@@ -430,7 +430,7 @@ export function ChatPage() {
             </div>
 
             {matchedLoreEntries.length > 0 ? (
-              <div className="mb-4 animate-fade-in rounded-xl border border-ember-500/20 bg-ember-500/5 p-4 shadow-inner">
+              <div className="mb-4 shrink-0 animate-fade-in rounded-xl border border-ember-500/20 bg-ember-500/5 p-4 shadow-inner">
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <p className="text-sm font-semibold text-ember-200 flex items-center gap-2">
                     <Sparkles size={14} />
@@ -454,7 +454,7 @@ export function ChatPage() {
               </div>
             ) : null}
 
-            <div className="flex-1 space-y-4 overflow-y-auto rounded-xl bg-ink-950/30 border border-white/5 p-4 custom-scrollbar">
+            <div className="custom-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto rounded-xl border border-white/5 bg-ink-950/30 p-4">
               {activeChat.messages.length === 0 ? (
                 <div className="h-full flex items-center justify-center">
                   <EmptyState>{t("chat.noMessages")}</EmptyState>
@@ -516,8 +516,9 @@ export function ChatPage() {
               ) : null}
             </div>
 
-            <div className="mt-4 flex gap-3 bg-ink-900/50 p-2 rounded-xl border border-white/5 backdrop-blur-sm">
+            <div className="mt-3 grid min-w-0 shrink-0 grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-lg border border-white/5 bg-ink-950/40 p-1.5 backdrop-blur-sm">
               <TextInput
+                className="min-w-0 border-0 bg-transparent focus:bg-transparent focus:ring-0"
                 placeholder={t("chat.writeMessage")}
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
@@ -528,9 +529,9 @@ export function ChatPage() {
                 }}
               />
               {activeRequestId ? (
-                <Button variant="danger" onClick={stopGeneration}><StopCircle size={16} />{t("chat.stop")}</Button>
+                <Button className="!min-h-[38px]" variant="danger" onClick={stopGeneration}><StopCircle size={16} />{t("chat.stop")}</Button>
               ) : (
-                <Button disabled={loading || !draft.trim()} onClick={() => void sendMessage()}><Send size={16} />{t("chat.send")}</Button>
+                <Button className="!min-h-[38px]" disabled={loading || !draft.trim()} onClick={() => void sendMessage()}><Send size={16} />{t("chat.send")}</Button>
               )}
             </div>
           </div>
@@ -541,7 +542,7 @@ export function ChatPage() {
         title={t("chat.createChat")}
         action={<MessageSquarePlus size={16} className="text-slate-400" />}
       >
-        <div className="space-y-4">
+        <div className="space-y-3">
           <Field label={t("chat.title")}><TextInput value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
           <Field label={t("chat.mode")}>
             <select className="min-h-[40px] w-full rounded-lg border border-white/10 bg-ink-950/50 px-3 text-sm text-slate-100 outline-none transition-all hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50" value={mode} onChange={(event) => setMode(event.target.value as ChatMode)}>

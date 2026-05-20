@@ -167,7 +167,7 @@ export function CharactersPage() {
       <Panel
         title={t("nav.characters")}
         action={
-          <Button variant="secondary" onClick={resetForm} className="h-8 px-3 text-xs">
+          <Button variant="secondary" onClick={resetForm} className="!min-h-[32px] !h-8 !px-3 text-xs">
             <Plus size={14} />
             {t("common.new")}
           </Button>
@@ -212,7 +212,7 @@ export function CharactersPage() {
               {t("common.import")}
               <input className="sr-only" type="file" accept="application/json" onChange={(event) => void importCharacter(event.target.files?.[0])} />
             </label>
-            <Button disabled={!selected} variant="ghost" onClick={exportCharacter} className="h-9 px-3 text-xs">
+            <Button disabled={!selected} variant="ghost" onClick={exportCharacter} className="!min-h-[36px] !h-9 !px-3 text-xs">
               <Download size={14} />
               {t("common.export")}
             </Button>
