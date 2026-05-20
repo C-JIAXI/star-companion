@@ -1,12 +1,13 @@
 import { Router } from "express";
 import { prisma } from "../db.js";
 import { asyncHandler, parseBody } from "../lib/http.js";
+import { testModelConnection } from "../services/openaiCompatible.js";
 import { settingsUpdateSchema } from "../schemas.js";
 import { serializeSettings } from "../serializers.js";
 
 export const settingsRouter = Router();
 
-const getOrCreateSettings = async () => {
+export const getOrCreateSettings = async () => {
   const existing = await prisma.userSettings.findFirst({
     orderBy: { createdAt: "asc" }
   });
@@ -29,6 +30,19 @@ settingsRouter.get(
         ...serializeSettings(settings),
         hasApiKey: Boolean(settings.apiKey)
       }
+    });
+  })
+);
+
+settingsRouter.post(
+  "/test",
+  asyncHandler(async (_request, response) => {
+    const settings = await getOrCreateSettings();
+    const result = await testModelConnection(settings);
+
+    response.json({
+      ok: true,
+      data: result
     });
   })
 );

@@ -66,6 +66,19 @@ export const settingsUpdateSchema = z.object({
   language: z.enum(["zh-CN", "en"]).default("zh-CN")
 });
 
+export const generationRequestSchema = z.object({
+  type: z.literal("generate"),
+  requestId: z.string().min(1),
+  chatId: idSchema,
+  content: z.string().trim().min(1),
+  characterId: idSchema.nullable().optional()
+});
+
+export const stopGenerationRequestSchema = z.object({
+  type: z.literal("stop"),
+  requestId: z.string().min(1)
+});
+
 export const lorebookCreateSchema = z.object({
   name: z.string().trim().min(1),
   description: z.string().default("")

@@ -70,11 +70,8 @@ export function SettingsPage() {
     setError(null);
     setStatus(null);
     try {
-      const response = await fetch("/api/health");
-      if (!response.ok) {
-        throw new Error(t("settings.healthFailed", { status: response.status }));
-      }
-      setStatus(t("settings.backendReachable"));
+      const result = await api.settings.test();
+      setStatus(t("settings.modelReachable", { model: result.model }));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("settings.connectionFailed"));
     } finally {
@@ -111,7 +108,7 @@ export function SettingsPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <Button disabled={loading} onClick={() => void saveSettings()}><Save size={16} />{t("settings.saveSettings")}</Button>
-          <Button disabled={loading} variant="ghost" onClick={() => void testBackend()}><PlugZap size={16} />{t("settings.testBackend")}</Button>
+          <Button disabled={loading} variant="ghost" onClick={() => void testBackend()}><PlugZap size={16} />{t("settings.testModel")}</Button>
         </div>
       </div>
     </Panel>

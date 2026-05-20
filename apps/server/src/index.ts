@@ -10,6 +10,7 @@ import { chatsRouter } from "./routes/chats.js";
 import { lorebooksRouter } from "./routes/lorebooks.js";
 import { messagesRouter } from "./routes/messages.js";
 import { settingsRouter } from "./routes/settings.js";
+import { attachChatSocket } from "./realtime/chatSocket.js";
 
 const APP_NAME = "Local Roleplay Platform";
 const app = express();
@@ -46,10 +47,7 @@ app.use(errorMiddleware);
 
 const httpServer = createServer(app);
 const wsServer = new WebSocketServer({ server: httpServer, path: "/ws" });
-
-wsServer.on("connection", (socket) => {
-  socket.send(JSON.stringify({ type: "ready", app: APP_NAME }));
-});
+attachChatSocket(wsServer, APP_NAME);
 
 const start = async () => {
   await connectDatabase();

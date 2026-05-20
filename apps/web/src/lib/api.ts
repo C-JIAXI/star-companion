@@ -71,7 +71,11 @@ export const api = {
   settings: {
     get: () => request<PublicUserSettingsDTO>("/api/settings"),
     update: (input: SettingsInput) =>
-      request<PublicUserSettingsDTO>("/api/settings", { method: "PUT", body: input })
+      request<PublicUserSettingsDTO>("/api/settings", { method: "PUT", body: input }),
+    test: () =>
+      request<{ reachable: true; model: string; checkedAt: string }>("/api/settings/test", {
+        method: "POST"
+      })
   },
   lorebooks: {
     list: () => request<LorebookDTO[]>("/api/lorebooks"),

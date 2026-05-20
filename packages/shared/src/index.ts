@@ -83,3 +83,54 @@ export interface LoreEntryDTO {
 export interface LorebookWithEntriesDTO extends LorebookDTO {
   entries: LoreEntryDTO[];
 }
+
+export type GenerationClientMessage =
+  | {
+      type: "generate";
+      requestId: string;
+      chatId: string;
+      content: string;
+      characterId?: string | null;
+    }
+  | {
+      type: "stop";
+      requestId: string;
+    };
+
+export type GenerationServerMessage =
+  | {
+      type: "ready";
+      app: string;
+    }
+  | {
+      type: "generation_started";
+      requestId: string;
+    }
+  | {
+      type: "user_message";
+      requestId: string;
+      message: MessageDTO;
+    }
+  | {
+      type: "token";
+      requestId: string;
+      content: string;
+    }
+  | {
+      type: "assistant_message";
+      requestId: string;
+      message: MessageDTO;
+    }
+  | {
+      type: "generation_done";
+      requestId: string;
+    }
+  | {
+      type: "generation_stopped";
+      requestId: string;
+    }
+  | {
+      type: "error";
+      requestId?: string;
+      error: string;
+    };

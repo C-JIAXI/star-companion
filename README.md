@@ -29,6 +29,15 @@
 - 世界书页可创建、编辑、删除 lorebook 和 lore entry
 - 设置页可读取、保存本地模型 API 配置，并通过后端 health check 测试代理可达性
 
+阶段 4 已接入 LLM 代理与流式生成：
+
+- 后端通过 OpenAI-compatible `chat/completions` 发起流式请求
+- 前端通过 WebSocket `/ws` 接收 token 并实时显示
+- 支持停止生成，后端使用 `AbortController` 中止请求
+- assistant 回复会保存到 SQLite；停止时若已有部分内容也会保存
+- 设置页的“测试模型连接”会通过后端访问 `GET /models`
+- API Key 仍只保存在本地数据库，前端不会直接调用模型服务
+
 ## 目录结构
 
 ```text
@@ -98,6 +107,7 @@ apps/server/prisma/dev.db
 ```
 
 阶段 3 已在 CRUD API 基础上接入前端页面，后续阶段会继续实现 LLM 代理和流式聊天。
+阶段 4 已在前后端接入 LLM 代理和流式聊天，后续阶段会继续完善角色 prompt 组装、首条消息、重新生成和 variants。
 
 ## 基础 API 测试
 
@@ -144,7 +154,13 @@ curl http://localhost:4000/api/settings
 
 curl -X PUT http://localhost:4000/api/settings \
   -H "Content-Type: application/json" \
-  -d "{\"activeProvider\":\"openai-compatible\",\"apiBaseUrl\":\"https://api.openai.com/v1\",\"apiKey\":\"本地密钥\",\"model\":\"gpt-4o-mini\",\"temperature\":0.8,\"maxTokens\":800,\"topP\":1}"
+  -d "{\"activeProvider\":\"openai-compatible\",\"apiBaseUrl\":\"https://api.openai.com/v1\",\"apiKey\":\"本地密钥\",\"model\":\"gpt-4o-mini\",\"temperature\":0.8,\"maxTokens\":800,\"topP\":1,\"language\":\"zh-CN\"}"
+```
+
+测试模型连接：
+
+```bash
+curl -X POST http://localhost:4000/api/settings/test
 ```
 
 创建世界书和条目：

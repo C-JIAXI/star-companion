@@ -1,8 +1,16 @@
-import { MessageSquarePlus, RefreshCw, Send, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { MessageSquarePlus, RefreshCw, Send, StopCircle, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
-import type { CharacterDTO, ChatDTO, ChatMode, ChatWithMessagesDTO, MessageDTO } from "../types";
+import type {
+  CharacterDTO,
+  ChatDTO,
+  ChatMode,
+  ChatWithMessagesDTO,
+  GenerationClientMessage,
+  GenerationServerMessage,
+  MessageDTO
+} from "../types";
 import { Badge, Button, EmptyState, ErrorNotice, Field, Panel, TextArea, TextInput } from "../components/ui";
 
 export function ChatPage() {
@@ -15,8 +23,11 @@ export function ChatPage() {
   const [mode, setMode] = useState<ChatMode>("single");
   const [characterIds, setCharacterIds] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
+  const [streamingContent, setStreamingContent] = useState("");
+  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const socketRef = useRef<WebSocket | null>(null);
 
   const characterMap = useMemo(
     () => new Map(characters.map((character) => [character.id, character])),
@@ -51,6 +62,13 @@ export function ChatPage() {
       setError(caught instanceof Error ? caught.message : t("chat.failedLoadChat"))
     );
   }, [selectedChatId, t]);
+
+  useEffect(
+    () => () => {
+      socketRef.current?.close();
+    },
+    []
+  );
 
   const toggleCharacter = (id: string) => {
     setCharacterIds((current) =>
@@ -97,6 +115,79 @@ export function ChatPage() {
     }
   };
 
+  const appendMessage = (message: MessageDTO) => {
+    setActiveChat((current) => {
+      if (!current || current.id !== message.chatId) {
+        return current;
+      }
+
+      if (current.messages.some((item) => item.id === message.id)) {
+        return current;
+      }
+
+      return {
+        ...current,
+        messages: [...current.messages, message]
+      };
+    });
+  };
+
+  const getSocket = () =>
+    new Promise<WebSocket>((resolve, reject) => {
+      const existing = socketRef.current;
+      if (existing?.readyState === WebSocket.OPEN) {
+        resolve(existing);
+        return;
+      }
+
+      existing?.close();
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+      socketRef.current = socket;
+
+      socket.onopen = () => resolve(socket);
+      socket.onerror = () => reject(new Error(t("chat.websocketFailed")));
+      socket.onmessage = (event) => {
+        const message = JSON.parse(String(event.data)) as GenerationServerMessage;
+
+        if (message.type === "ready") {
+          return;
+        }
+
+        if (message.type === "user_message") {
+          appendMessage(message.message);
+          return;
+        }
+
+        if (message.type === "token") {
+          setStreamingContent((current) => current + message.content);
+          return;
+        }
+
+        if (message.type === "assistant_message") {
+          appendMessage(message.message);
+          setStreamingContent("");
+          return;
+        }
+
+        if (message.type === "generation_done" || message.type === "generation_stopped") {
+          setLoading(false);
+          setActiveRequestId(null);
+          setStreamingContent("");
+          void loadChat(selectedChatId);
+          void loadBase();
+          return;
+        }
+
+        if (message.type === "error") {
+          setError(message.error);
+          setLoading(false);
+          setActiveRequestId(null);
+          setStreamingContent("");
+        }
+      };
+    });
+
   const sendMessage = async () => {
     if (!activeChat || !draft.trim()) {
       return;
@@ -105,21 +196,37 @@ export function ChatPage() {
     setLoading(true);
     setError(null);
     try {
-      await api.messages.create({
+      const socket = await getSocket();
+      const requestId = crypto.randomUUID();
+      const payload: GenerationClientMessage = {
+        type: "generate",
+        requestId,
         chatId: activeChat.id,
-        role: "user",
-        content: draft.trim(),
-        variants: [],
-        activeVariantIndex: 0
-      });
+        content: draft.trim()
+      };
+      setActiveRequestId(requestId);
+      setStreamingContent("");
       setDraft("");
-      await loadChat(activeChat.id);
-      await loadBase();
+      socket.send(JSON.stringify(payload));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedSend"));
-    } finally {
       setLoading(false);
+      setActiveRequestId(null);
+    } finally {
+      // Loading ends when the WebSocket sends generation_done, generation_stopped, or error.
     }
+  };
+
+  const stopGeneration = () => {
+    if (!activeRequestId || socketRef.current?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    const payload: GenerationClientMessage = {
+      type: "stop",
+      requestId: activeRequestId
+    };
+    socketRef.current.send(JSON.stringify(payload));
   };
 
   const updateMessage = async (message: MessageDTO) => {
@@ -211,6 +318,12 @@ export function ChatPage() {
                   </article>
                 ))
               )}
+              {streamingContent ? (
+                <article className="mr-auto max-w-[85%] rounded-md bg-white/10 p-3 text-sm text-slate-100">
+                  <div className="mb-2 text-xs font-semibold opacity-80">{t("chat.streaming")}</div>
+                  <p className="whitespace-pre-wrap">{streamingContent}</p>
+                </article>
+              ) : null}
             </div>
 
             <div className="mt-3 flex gap-2">
@@ -224,7 +337,11 @@ export function ChatPage() {
                   }
                 }}
               />
-              <Button disabled={loading || !draft.trim()} onClick={() => void sendMessage()}><Send size={16} />{t("chat.send")}</Button>
+              {activeRequestId ? (
+                <Button variant="danger" onClick={stopGeneration}><StopCircle size={16} />{t("chat.stop")}</Button>
+              ) : (
+                <Button disabled={loading || !draft.trim()} onClick={() => void sendMessage()}><Send size={16} />{t("chat.send")}</Button>
+              )}
             </div>
           </div>
         )}
@@ -253,7 +370,7 @@ export function ChatPage() {
             )}
           </div>
           <Button disabled={loading || !title.trim()} onClick={() => void createChat()}><MessageSquarePlus size={16} />{t("chat.createChat")}</Button>
-          <Field label={t("chat.draftNotes")}><TextArea disabled placeholder={t("chat.draftPlaceholder")} /></Field>
+          <Field label={t("chat.draftNotes")}><TextArea disabled placeholder={t("chat.stage4Placeholder")} /></Field>
         </div>
       </Panel>
     </div>
