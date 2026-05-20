@@ -5,6 +5,23 @@ export type ChatCompletionMessage = {
   content: string;
 };
 
+export type TokenUsage = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  estimated: boolean;
+};
+
+export type ChatCompletionStreamEvent =
+  | {
+      type: "token";
+      content: string;
+    }
+  | {
+      type: "usage";
+      usage: TokenUsage;
+    };
+
 export type ConnectionTestResult = {
   reachable: true;
   model: string;
@@ -86,7 +103,8 @@ export async function* streamChatCompletion({
         temperature: settings.temperature,
         max_tokens: settings.maxTokens,
         top_p: settings.topP,
-        stream: true
+        stream: true,
+        stream_options: { include_usage: true }
       })
     });
   } catch (error) {
@@ -131,11 +149,54 @@ export async function* streamChatCompletion({
 
       const parsed = JSON.parse(data) as {
         choices?: Array<{ delta?: { content?: string }; text?: string }>;
+        usage?: {
+          prompt_tokens?: number;
+          completion_tokens?: number;
+          total_tokens?: number;
+        } | null;
       };
+      if (parsed.usage) {
+        const promptTokens = parsed.usage.prompt_tokens ?? 0;
+        const completionTokens = parsed.usage.completion_tokens ?? 0;
+        yield {
+          type: "usage",
+          usage: {
+            promptTokens,
+            completionTokens,
+            totalTokens: parsed.usage.total_tokens ?? promptTokens + completionTokens,
+            estimated: false
+          }
+        } satisfies ChatCompletionStreamEvent;
+      }
+
       const token = parsed.choices?.[0]?.delta?.content ?? parsed.choices?.[0]?.text ?? "";
       if (token) {
-        yield token;
+        yield { type: "token", content: token } satisfies ChatCompletionStreamEvent;
       }
     }
   }
 }
+
+const estimateTokens = (text: string) => {
+  const compact = text.trim();
+  if (!compact) {
+    return 0;
+  }
+
+  return Math.max(1, Math.ceil(compact.length / 2));
+};
+
+export const estimateTokenUsage = (
+  messages: ChatCompletionMessage[],
+  completion: string
+): TokenUsage => {
+  const promptTokens = messages.reduce((total, message) => total + estimateTokens(message.content), 0);
+  const completionTokens = estimateTokens(completion);
+
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+    estimated: true
+  };
+};

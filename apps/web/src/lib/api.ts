@@ -1,5 +1,7 @@
 import type {
   ApiEnvelope,
+  BackupDTO,
+  BackupImportSummaryDTO,
   CharacterDTO,
   CharacterInput,
   ChatDTO,
@@ -94,5 +96,13 @@ export const api = {
       request<LoreEntryDTO>(`/api/lorebooks/entries/${id}`, { method: "PUT", body: input }),
     removeEntry: (id: string) =>
       request<void>(`/api/lorebooks/entries/${id}`, { method: "DELETE" })
+  },
+  backups: {
+    export: () => request<BackupDTO>("/api/backups/export"),
+    import: (backup: unknown, mode: "merge" | "replace") =>
+      request<BackupImportSummaryDTO>("/api/backups/import", {
+        method: "POST",
+        body: { ...(backup && typeof backup === "object" ? backup : {}), mode }
+      })
   }
 };

@@ -1,13 +1,15 @@
 import {
   ChevronLeft,
   ChevronRight,
+  Check,
   Copy,
   MessageSquarePlus,
   RefreshCw,
   RotateCcw,
   Send,
   StopCircle,
-  Trash2
+  Trash2,
+  X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
@@ -20,9 +22,10 @@ import type {
   GenerationClientMessage,
   GenerationServerMessage,
   LoreEntryDTO,
-  MessageDTO
+  MessageDTO,
+  TokenUsageDTO
 } from "../types";
-import { Badge, Button, EmptyState, ErrorNotice, Field, Panel, TextArea, TextInput } from "../components/ui";
+import { Badge, Button, ConfirmDialog, EmptyState, ErrorNotice, Field, Panel, TextArea, TextInput } from "../components/ui";
 
 export function ChatPage() {
   const { t } = useI18n();
@@ -38,6 +41,10 @@ export function ChatPage() {
   const [streamingCharacterId, setStreamingCharacterId] = useState<string | null>(null);
   const [matchedLoreEntries, setMatchedLoreEntries] = useState<LoreEntryDTO[]>([]);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [editingMessage, setEditingMessage] = useState<MessageDTO | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [pendingDeleteChat, setPendingDeleteChat] = useState<ChatDTO | null>(null);
+  const [pendingDeleteMessage, setPendingDeleteMessage] = useState<MessageDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
@@ -49,6 +56,20 @@ export function ChatPage() {
 
   const getModeLabel = (chatMode: ChatMode) =>
     chatMode === "group" ? t("chat.mode.group") : t("chat.mode.single");
+
+  const formatTokenUsage = (usage: TokenUsageDTO | null) => {
+    if (!usage) {
+      return t("chat.tokensUnavailable");
+    }
+
+    const detail = t("chat.tokensUsage", {
+      prompt: usage.promptTokens,
+      completion: usage.completionTokens,
+      total: usage.totalTokens
+    });
+
+    return usage.estimated ? `${detail} · ${t("chat.tokensEstimated")}` : detail;
+  };
 
   const loadBase = async () => {
     const [characterData, chatData] = await Promise.all([api.characters.list(), api.chats.list()]);
@@ -113,15 +134,16 @@ export function ChatPage() {
     }
   };
 
-  const deleteChat = async (chat: ChatDTO) => {
-    if (!window.confirm(t("chat.deleteChatConfirm", { title: chat.title }))) {
+  const deleteChat = async () => {
+    if (!pendingDeleteChat) {
       return;
     }
 
     setLoading(true);
     setError(null);
     try {
-      await api.chats.remove(chat.id);
+      await api.chats.remove(pendingDeleteChat.id);
+      setPendingDeleteChat(null);
       setSelectedChatId(null);
       setActiveChat(null);
       await loadBase();
@@ -310,26 +332,46 @@ export function ChatPage() {
     upsertMessage(updated);
   };
 
-  const updateMessage = async (message: MessageDTO) => {
-    const nextContent = window.prompt(t("chat.editMessagePrompt"), message.content);
-    if (nextContent === null) {
-      return;
-    }
-
-    await api.messages.update(message.id, { content: nextContent });
-    await loadChat(message.chatId);
+  const startEditingMessage = (message: MessageDTO) => {
+    setEditingMessage(message);
+    setEditDraft(message.content);
   };
 
-  const deleteMessage = async (message: MessageDTO) => {
-    if (!window.confirm(t("chat.deleteMessageConfirm"))) {
+  const cancelEditingMessage = () => {
+    setEditingMessage(null);
+    setEditDraft("");
+  };
+
+  const saveEditedMessage = async () => {
+    if (!editingMessage) {
       return;
     }
 
-    await api.messages.remove(message.id);
-    await loadChat(message.chatId);
+    setLoading(true);
+    setError(null);
+    try {
+      const updated = await api.messages.update(editingMessage.id, { content: editDraft });
+      upsertMessage(updated);
+      cancelEditingMessage();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedEdit"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteMessage = async () => {
+    if (!pendingDeleteMessage) {
+      return;
+    }
+
+    await api.messages.remove(pendingDeleteMessage.id);
+    await loadChat(pendingDeleteMessage.chatId);
+    setPendingDeleteMessage(null);
   };
 
   return (
+    <>
     <div className="grid gap-4 lg:grid-cols-[300px_1fr_300px]">
       <Panel title={t("chat.chats")} action={<Button variant="ghost" onClick={() => void loadBase()}><RefreshCw size={16} />{t("common.refresh")}</Button>}>
         <div className="space-y-3">
@@ -353,7 +395,7 @@ export function ChatPage() {
                     <p className="font-medium text-slate-100">{chat.title}</p>
                     <p className="mt-1 text-xs text-slate-400">{getModeLabel(chat.mode)} · {t("chat.boundCharacters", { count: chat.characterIds.length })}</p>
                   </div>
-                  <Button className="min-h-8 px-2" variant="ghost" onClick={(event) => { event.stopPropagation(); void deleteChat(chat); }}>
+                  <Button className="min-h-8 px-2" variant="ghost" onClick={(event) => { event.stopPropagation(); setPendingDeleteChat(chat); }}>
                     <Trash2 size={14} />
                   </Button>
                 </div>
@@ -424,11 +466,16 @@ export function ChatPage() {
                         {message.role === "assistant" ? (
                           <button disabled={Boolean(activeRequestId)} className="inline-flex items-center gap-1 text-xs underline opacity-80 disabled:opacity-40" type="button" onClick={() => void regenerateMessage(message)}><RotateCcw size={12} />{t("chat.regenerate")}</button>
                         ) : null}
-                        <button className="text-xs underline opacity-80" type="button" onClick={() => void updateMessage(message)}>{t("common.edit")}</button>
-                        <button className="text-xs underline opacity-80" type="button" onClick={() => void deleteMessage(message)}>{t("common.delete")}</button>
+                        <button className="text-xs underline opacity-80" type="button" onClick={() => startEditingMessage(message)}>{t("common.edit")}</button>
+                        <button className="text-xs underline opacity-80" type="button" onClick={() => setPendingDeleteMessage(message)}>{t("common.delete")}</button>
                       </span>
                     </div>
                     <p className="whitespace-pre-wrap">{message.content}</p>
+                    {message.role === "assistant" ? (
+                      <p className="mt-3 border-t border-white/10 pt-2 text-xs text-slate-400">
+                        {formatTokenUsage(message.tokenUsage)}
+                      </p>
+                    ) : null}
                   </article>
                 ))
               )}
@@ -490,9 +537,86 @@ export function ChatPage() {
             )}
           </div>
           <Button disabled={loading || !title.trim()} onClick={() => void createChat()}><MessageSquarePlus size={16} />{t("chat.createChat")}</Button>
-          <Field label={t("chat.draftNotes")}><TextArea disabled placeholder={t("chat.stage4Placeholder")} /></Field>
         </div>
       </Panel>
     </div>
+    {editingMessage ? (
+      <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4">
+        <section
+          aria-labelledby="edit-message-title"
+          className="w-full max-w-2xl rounded-lg border border-white/10 bg-ink-900 p-4 shadow-2xl shadow-black/40"
+          role="dialog"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-base font-semibold text-slate-100" id="edit-message-title">
+                {t("chat.editMessageTitle")}
+              </h3>
+              <p className="mt-1 text-xs text-slate-400">{t("chat.editMessageHelp")}</p>
+            </div>
+            <button
+              aria-label={t("common.cancel")}
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-white/5 text-slate-300 hover:bg-white/10"
+              type="button"
+              onClick={cancelEditingMessage}
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          <TextArea
+            autoFocus
+            className="mt-4 min-h-48"
+            placeholder={t("chat.editMessagePlaceholder")}
+            value={editDraft}
+            onChange={(event) => setEditDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                cancelEditingMessage();
+              }
+
+              if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                void saveEditedMessage();
+              }
+            }}
+          />
+
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <Button disabled={loading} variant="ghost" onClick={cancelEditingMessage}>
+              <X size={16} />
+              {t("common.cancel")}
+            </Button>
+            <Button disabled={loading} onClick={() => void saveEditedMessage()}>
+              <Check size={16} />
+              {t("chat.saveEdit")}
+            </Button>
+          </div>
+        </section>
+      </div>
+    ) : null}
+    {pendingDeleteChat ? (
+      <ConfirmDialog
+        cancelLabel={t("common.cancel")}
+        confirmLabel={t("common.delete")}
+        loading={loading}
+        message={t("chat.deleteChatConfirm", { title: pendingDeleteChat.title })}
+        title={t("chat.deleteChatTitle")}
+        onCancel={() => setPendingDeleteChat(null)}
+        onConfirm={() => void deleteChat()}
+      />
+    ) : null}
+    {pendingDeleteMessage ? (
+      <ConfirmDialog
+        cancelLabel={t("common.cancel")}
+        confirmLabel={t("common.delete")}
+        loading={loading}
+        message={t("chat.deleteMessageConfirm")}
+        title={t("chat.deleteMessageTitle")}
+        onCancel={() => setPendingDeleteMessage(null)}
+        onConfirm={() => void deleteMessage()}
+      />
+    ) : null}
+    </>
   );
 }

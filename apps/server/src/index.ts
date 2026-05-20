@@ -5,6 +5,7 @@ import { WebSocketServer } from "ws";
 import { serverConfig } from "./config.js";
 import { connectDatabase, disconnectDatabase, prisma } from "./db.js";
 import { errorMiddleware } from "./lib/http.js";
+import { backupsRouter } from "./routes/backups.js";
 import { charactersRouter } from "./routes/characters.js";
 import { chatsRouter } from "./routes/chats.js";
 import { lorebooksRouter } from "./routes/lorebooks.js";
@@ -21,7 +22,7 @@ app.use(
     credentials: true
   })
 );
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "10mb" }));
 
 app.get("/api/health", async (_request, response, next) => {
   try {
@@ -42,6 +43,7 @@ app.use("/api/chats", chatsRouter);
 app.use("/api/messages", messagesRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/lorebooks", lorebooksRouter);
+app.use("/api/backups", backupsRouter);
 
 app.use(errorMiddleware);
 

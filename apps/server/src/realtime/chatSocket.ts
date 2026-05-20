@@ -8,7 +8,7 @@ import {
 } from "../schemas.js";
 import { serializeMessage } from "../serializers.js";
 import { getOrCreateSettings } from "../routes/settings.js";
-import { streamChatCompletion } from "../services/openaiCompatible.js";
+import { estimateTokenUsage, streamChatCompletion, type TokenUsage } from "../services/openaiCompatible.js";
 import { appendVariant, buildPromptContext } from "../services/promptBuilder.js";
 
 const controllers = new Map<string, AbortController>();
@@ -83,15 +83,21 @@ const streamAssistantReply = async ({
 
   let assistantContent = "";
   let stopped = false;
+  let tokenUsage: TokenUsage | null = null;
 
   try {
-    for await (const token of streamChatCompletion({
+    for await (const event of streamChatCompletion({
       settings,
       messages: context.messages,
       signal: abortController.signal
     })) {
-      assistantContent += token;
-      sendJson(socket, { type: "token", requestId, content: token });
+      if (event.type === "usage") {
+        tokenUsage = event.usage;
+        continue;
+      }
+
+      assistantContent += event.content;
+      sendJson(socket, { type: "token", requestId, content: event.content });
     }
   } catch (error) {
     if (abortController.signal.aborted) {
@@ -102,9 +108,10 @@ const streamAssistantReply = async ({
   }
 
   if (assistantContent.trim()) {
+    tokenUsage ??= estimateTokenUsage(context.messages, assistantContent);
     const message = targetMessageId
-      ? await updateAssistantVariant(targetMessageId, assistantContent)
-      : await createAssistantMessage(chatId, characterId, assistantContent);
+      ? await updateAssistantVariant(targetMessageId, assistantContent, tokenUsage)
+      : await createAssistantMessage(chatId, characterId, assistantContent, tokenUsage);
 
     await prisma.chat.update({
       where: { id: chatId },
@@ -121,7 +128,12 @@ const streamAssistantReply = async ({
   return stopped;
 };
 
-const createAssistantMessage = (chatId: string, characterId: string | null, content: string) =>
+const createAssistantMessage = (
+  chatId: string,
+  characterId: string | null,
+  content: string,
+  tokenUsage: TokenUsage
+) =>
   prisma.message.create({
     data: {
       chatId,
@@ -129,11 +141,12 @@ const createAssistantMessage = (chatId: string, characterId: string | null, cont
       characterId,
       content,
       variants: [content],
-      activeVariantIndex: 0
+      activeVariantIndex: 0,
+      tokenUsage
     }
   });
 
-const updateAssistantVariant = async (messageId: string, content: string) => {
+const updateAssistantVariant = async (messageId: string, content: string, tokenUsage: TokenUsage) => {
   const targetMessage = await prisma.message.findUnique({ where: { id: messageId } });
   if (!targetMessage) {
     throw new Error("Assistant message not found");
@@ -145,7 +158,8 @@ const updateAssistantVariant = async (messageId: string, content: string) => {
     data: {
       content,
       variants,
-      activeVariantIndex: variants.length - 1
+      activeVariantIndex: variants.length - 1,
+      tokenUsage
     }
   });
 };

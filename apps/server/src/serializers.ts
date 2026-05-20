@@ -20,6 +20,32 @@ const toStringArray = (value: Prisma.JsonValue): string[] => {
   return value.filter((item): item is string => typeof item === "string");
 };
 
+const toTokenUsage = (value: Prisma.JsonValue | null) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const usage = value as Record<string, unknown>;
+  const promptTokens = usage.promptTokens;
+  const completionTokens = usage.completionTokens;
+  const totalTokens = usage.totalTokens;
+
+  if (
+    typeof promptTokens !== "number" ||
+    typeof completionTokens !== "number" ||
+    typeof totalTokens !== "number"
+  ) {
+    return null;
+  }
+
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    estimated: usage.estimated === true
+  };
+};
+
 export const serializeSettings = (settings: UserSettings) => ({
   id: settings.id,
   activeProvider: settings.activeProvider,
@@ -65,6 +91,7 @@ export const serializeMessage = (message: Message) => ({
   content: message.content,
   variants: toStringArray(message.variants),
   activeVariantIndex: message.activeVariantIndex,
+  tokenUsage: toTokenUsage(message.tokenUsage),
   createdAt: toIso(message.createdAt),
   updatedAt: toIso(message.updatedAt)
 });

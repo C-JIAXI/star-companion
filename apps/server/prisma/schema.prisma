@@ -61,6 +61,7 @@ model Message {
   content            String
   variants           Json      @default("[]")
   activeVariantIndex Int       @default(0)
+  tokenUsage         Json?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 

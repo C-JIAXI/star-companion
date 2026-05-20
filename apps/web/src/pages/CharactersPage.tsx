@@ -4,7 +4,7 @@ import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { downloadJson, joinTags, readFileText, splitTags } from "../lib/form";
 import type { CharacterDTO, CharacterInput } from "../types";
-import { Badge, Button, EmptyState, ErrorNotice, Field, HelpLabel, Panel, TextArea, TextInput } from "../components/ui";
+import { Badge, Button, ConfirmDialog, EmptyState, ErrorNotice, Field, HelpLabel, Panel, TextArea, TextInput } from "../components/ui";
 
 const blankForm = {
   name: "",
@@ -51,6 +51,7 @@ export function CharactersPage() {
   const [form, setForm] = useState<CharacterForm>(blankForm);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
   const selected = useMemo(
     () => characters.find((character) => character.id === selectedId) ?? null,
@@ -105,7 +106,7 @@ export function CharactersPage() {
   };
 
   const deleteCharacter = async () => {
-    if (!selected || !window.confirm(t("characters.deleteConfirm", { name: selected.name }))) {
+    if (!selected) {
       return;
     }
 
@@ -113,6 +114,7 @@ export function CharactersPage() {
     setError(null);
     try {
       await api.characters.remove(selected.id);
+      setDeleteConfirmOpen(false);
       setSelectedId(null);
       setForm(blankForm);
       await loadCharacters();
@@ -222,10 +224,21 @@ export function CharactersPage() {
           <Field label={<HelpLabel label={t("characters.systemPrompt")} description={t("help.systemPrompt")} />}><TextArea value={form.systemPrompt} onChange={(event) => setForm({ ...form, systemPrompt: event.target.value })} /></Field>
           <div className="flex flex-wrap gap-2">
             <Button disabled={loading || !form.name.trim()} onClick={() => void saveCharacter()}><Save size={16} />{t("common.save")}</Button>
-            <Button disabled={loading || !selected} variant="danger" onClick={() => void deleteCharacter()}><Trash2 size={16} />{t("common.delete")}</Button>
+            <Button disabled={loading || !selected} variant="danger" onClick={() => setDeleteConfirmOpen(true)}><Trash2 size={16} />{t("common.delete")}</Button>
           </div>
         </div>
       </Panel>
+      {deleteConfirmOpen && selected ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={t("common.delete")}
+          loading={loading}
+          message={t("characters.deleteConfirm", { name: selected.name })}
+          title={t("common.delete")}
+          onCancel={() => setDeleteConfirmOpen(false)}
+          onConfirm={() => void deleteCharacter()}
+        />
+      ) : null}
     </div>
   );
 }

@@ -112,8 +112,7 @@ export function App() {
 
         <main className="min-w-0 flex-1">
           <header className="border-b border-white/10 bg-ink-900/70 px-5 py-4">
-            <p className="text-xs uppercase text-ember-400">{t("stage.label")}</p>
-            <h2 className="mt-1 text-2xl font-semibold">{t(active.titleKey)}</h2>
+            <h2 className="text-2xl font-semibold">{t(active.titleKey)}</h2>
             <p className="mt-1 max-w-3xl text-sm text-slate-400">{t(active.subtitleKey)}</p>
           </header>
 

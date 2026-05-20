@@ -57,8 +57,16 @@ export interface MessageDTO {
   content: string;
   variants: string[];
   activeVariantIndex: number;
+  tokenUsage: TokenUsageDTO | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TokenUsageDTO {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  estimated: boolean;
 }
 
 export interface LorebookDTO {
@@ -82,6 +90,26 @@ export interface LoreEntryDTO {
 
 export interface LorebookWithEntriesDTO extends LorebookDTO {
   entries: LoreEntryDTO[];
+}
+
+export interface BackupDTO {
+  schemaVersion: 1;
+  exportedAt: string;
+  settings: UserSettingsDTO | null;
+  characters: CharacterDTO[];
+  chats: ChatDTO[];
+  messages: MessageDTO[];
+  lorebooks: LorebookWithEntriesDTO[];
+}
+
+export interface BackupImportSummaryDTO {
+  mode: "merge" | "replace";
+  characters: number;
+  chats: number;
+  messages: number;
+  lorebooks: number;
+  loreEntries: number;
+  settingsImported: boolean;
 }
 
 export type GenerationClientMessage =

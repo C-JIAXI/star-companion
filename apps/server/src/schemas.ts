@@ -4,6 +4,13 @@ export const idSchema = z.string().min(1);
 
 const stringArraySchema = z.array(z.string().trim().min(1)).default([]);
 
+const tokenUsageSchema = z.object({
+  promptTokens: z.number().int().min(0),
+  completionTokens: z.number().int().min(0),
+  totalTokens: z.number().int().min(0),
+  estimated: z.boolean().default(false)
+});
+
 export const characterCreateSchema = z.object({
   name: z.string().trim().min(1),
   avatar: z.string().trim().nullable().optional(),
@@ -38,7 +45,8 @@ export const messageCreateSchema = z.object({
   characterId: idSchema.nullable().optional(),
   content: z.string(),
   variants: z.array(z.string()).default([]),
-  activeVariantIndex: z.number().int().min(0).default(0)
+  activeVariantIndex: z.number().int().min(0).default(0),
+  tokenUsage: tokenUsageSchema.nullable().optional()
 });
 
 export const messageUpdateSchema = z
@@ -47,7 +55,8 @@ export const messageUpdateSchema = z
     characterId: idSchema.nullable().optional(),
     content: z.string().optional(),
     variants: z.array(z.string()).optional(),
-    activeVariantIndex: z.number().int().min(0).optional()
+    activeVariantIndex: z.number().int().min(0).optional(),
+    tokenUsage: tokenUsageSchema.nullable().optional()
   })
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");
 
@@ -106,3 +115,50 @@ export const loreEntryUpdateSchema = loreEntryCreateSchema.partial().refine(
   (value) => Object.keys(value).length > 0,
   "At least one field is required"
 );
+
+const backupDateSchema = z.string().datetime().optional();
+
+const backupSettingsSchema = settingsUpdateSchema.omit({ apiKey: true }).partial();
+
+const backupCharacterSchema = characterCreateSchema.extend({
+  id: idSchema.optional(),
+  createdAt: backupDateSchema,
+  updatedAt: backupDateSchema
+});
+
+const backupChatSchema = chatCreateSchema.extend({
+  id: idSchema.optional(),
+  createdAt: backupDateSchema,
+  updatedAt: backupDateSchema
+});
+
+const backupMessageSchema = messageCreateSchema.extend({
+  id: idSchema.optional(),
+  createdAt: backupDateSchema,
+  updatedAt: backupDateSchema
+});
+
+const backupLoreEntrySchema = loreEntryCreateSchema.extend({
+  id: idSchema.optional(),
+  lorebookId: idSchema.optional(),
+  createdAt: backupDateSchema,
+  updatedAt: backupDateSchema
+});
+
+const backupLorebookSchema = lorebookCreateSchema.extend({
+  id: idSchema.optional(),
+  entries: z.array(backupLoreEntrySchema).default([]),
+  createdAt: backupDateSchema,
+  updatedAt: backupDateSchema
+});
+
+export const backupImportSchema = z.object({
+  schemaVersion: z.literal(1).default(1),
+  exportedAt: z.string().datetime().optional(),
+  settings: backupSettingsSchema.optional().nullable(),
+  characters: z.array(backupCharacterSchema).default([]),
+  chats: z.array(backupChatSchema).default([]),
+  messages: z.array(backupMessageSchema).default([]),
+  lorebooks: z.array(backupLorebookSchema).default([]),
+  mode: z.enum(["merge", "replace"]).default("merge")
+});

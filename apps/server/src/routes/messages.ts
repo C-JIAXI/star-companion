@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import {
   asyncHandler,
@@ -11,6 +12,18 @@ import { messageCreateSchema, messageListQuerySchema, messageUpdateSchema } from
 import { serializeMessage } from "../serializers.js";
 
 export const messagesRouter = Router();
+
+const normalizeTokenUsage = (
+  tokenUsage:
+    | {
+        promptTokens: number;
+        completionTokens: number;
+        totalTokens: number;
+        estimated: boolean;
+      }
+    | null
+    | undefined
+) => (tokenUsage === null ? Prisma.JsonNull : tokenUsage);
 
 messagesRouter.get(
   "/",
@@ -29,7 +42,11 @@ messagesRouter.post(
   "/",
   asyncHandler(async (request, response) => {
     const body = parseBody(messageCreateSchema, request.body);
-    const message = await prisma.message.create({ data: body });
+    const data: Prisma.MessageUncheckedCreateInput = {
+      ...body,
+      tokenUsage: normalizeTokenUsage(body.tokenUsage)
+    };
+    const message = await prisma.message.create({ data });
 
     await prisma.chat.update({
       where: { id: body.chatId },
@@ -59,10 +76,14 @@ messagesRouter.put(
   asyncHandler(async (request, response) => {
     const id = requireParam(request, "id");
     const body = parseBody(messageUpdateSchema, request.body);
+    const data: Prisma.MessageUncheckedUpdateInput = {
+      ...body,
+      tokenUsage: normalizeTokenUsage(body.tokenUsage)
+    };
 
     const message = await prisma.message.update({
       where: { id },
-      data: body
+      data
     });
 
     await prisma.chat.update({

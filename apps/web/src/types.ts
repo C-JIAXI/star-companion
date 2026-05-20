@@ -6,12 +6,15 @@ import type {
   GenerationClientMessage,
   GenerationServerMessage,
   AppLanguage,
+  BackupDTO,
+  BackupImportSummaryDTO,
   LoreEntryDTO,
   LorebookDTO,
   LorebookWithEntriesDTO,
   MessageDTO,
   MessageRole,
-  PublicUserSettingsDTO
+  PublicUserSettingsDTO,
+  TokenUsageDTO
 } from "@local-roleplay/shared";
 
 export type AppSection = "chat" | "characters" | "lore" | "settings";
@@ -85,9 +88,12 @@ export type {
   GenerationClientMessage,
   GenerationServerMessage,
   AppLanguage,
+  BackupDTO,
+  BackupImportSummaryDTO,
   LoreEntryDTO,
   LorebookDTO,
   LorebookWithEntriesDTO,
   MessageDTO,
-  PublicUserSettingsDTO
+  PublicUserSettingsDTO,
+  TokenUsageDTO
 };

@@ -64,6 +64,16 @@
 - 每个角色回复都会保存为独立 assistant 消息，并带有对应 `characterId`
 - 单聊保持原有行为；后续可在此基础上扩展“自动判断谁该回复”
 
+阶段 8 已完成导入导出和收尾打磨：
+
+- 设置页新增完整备份导出和导入入口
+- 完整备份包含 settings、characters、chats、messages、lorebooks 和 lore entries
+- 导出 settings 时不会包含 API Key
+- 导入备份通过 Zod 校验，支持 `merge` 合并和 `replace` 替换两种模式
+- 替换模式会清空角色、聊天、消息和世界书，但保留本地 API Key
+- 后端新增 `/api/backups/export` 和 `/api/backups/import`
+- 调整 JSON 请求体上限，便于导入较大的本地备份文件
+
 ## 目录结构
 
 ```text
@@ -133,7 +143,7 @@ apps/server/prisma/dev.db
 ```
 
 阶段 3 已在 CRUD API 基础上接入前端页面，后续阶段会继续实现 LLM 代理和流式聊天。
-阶段 7 已实现多角色顺序回复和群聊身份展示。后续阶段会实现导入导出和移动端打磨。
+阶段 8 已实现完整备份导入导出和设置页数据迁移入口。后续可继续做更细的移动端视觉打磨、备份冲突预览和本地 API Key 加密。
 
 ## 基础 API 测试
 
@@ -187,6 +197,20 @@ curl -X PUT http://localhost:4000/api/settings \
 
 ```bash
 curl -X POST http://localhost:4000/api/settings/test
+```
+
+导出完整备份：
+
+```bash
+curl http://localhost:4000/api/backups/export
+```
+
+导入完整备份：
+
+```bash
+curl -X POST http://localhost:4000/api/backups/import \
+  -H "Content-Type: application/json" \
+  -d "{\"schemaVersion\":1,\"mode\":\"merge\",\"characters\":[],\"chats\":[],\"messages\":[],\"lorebooks\":[]}"
 ```
 
 创建世界书和条目：

@@ -1,10 +1,10 @@
-import { BookPlus, Plus, Save, Trash2 } from "lucide-react";
+import { BookPlus, Check, Plus, Save, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { joinTags, splitTags } from "../lib/form";
-import type { LorebookDTO, LorebookWithEntriesDTO } from "../types";
-import { Badge, Button, EmptyState, ErrorNotice, Field, HelpLabel, Panel, TextArea, TextInput } from "../components/ui";
+import type { LoreEntryDTO, LorebookDTO, LorebookWithEntriesDTO } from "../types";
+import { Badge, Button, ConfirmDialog, EmptyState, ErrorNotice, Field, HelpLabel, Panel, TextArea, TextInput } from "../components/ui";
 
 export function LorePage() {
   const { t } = useI18n();
@@ -17,6 +17,13 @@ export function LorePage() {
   const [entryContent, setEntryContent] = useState("");
   const [entryPriority, setEntryPriority] = useState(0);
   const [entryEnabled, setEntryEnabled] = useState(true);
+  const [editingEntry, setEditingEntry] = useState<LoreEntryDTO | null>(null);
+  const [editingEntryContent, setEditingEntryContent] = useState("");
+  const [deleteBookOpen, setDeleteBookOpen] = useState(false);
+  const [pendingDeleteEntryId, setPendingDeleteEntryId] = useState<string | null>(null);
+  const [editingEntryKeys, setEditingEntryKeys] = useState("");
+  const [editingEntryPriority, setEditingEntryPriority] = useState(0);
+  const [editingEntryEnabled, setEditingEntryEnabled] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -86,13 +93,14 @@ export function LorePage() {
   };
 
   const deleteLorebook = async () => {
-    if (!selected || !window.confirm(t("lore.deleteBookConfirm", { name: selected.name }))) {
+    if (!selected) {
       return;
     }
     setLoading(true);
     setError(null);
     try {
       await api.lorebooks.remove(selected.id);
+      setDeleteBookOpen(false);
       setSelectedId(null);
       setSelected(null);
       setBookName("");
@@ -130,13 +138,42 @@ export function LorePage() {
     }
   };
 
-  const editEntry = async (entryId: string, currentContent: string) => {
-    const nextContent = window.prompt(t("lore.editEntryPrompt"), currentContent);
-    if (nextContent === null || !selected) {
+  const startEditingEntry = (entry: LoreEntryDTO) => {
+    setEditingEntry(entry);
+    setEditingEntryContent(entry.content);
+    setEditingEntryKeys(joinTags(entry.keys));
+    setEditingEntryPriority(entry.priority);
+    setEditingEntryEnabled(entry.enabled);
+  };
+
+  const cancelEditingEntry = () => {
+    setEditingEntry(null);
+    setEditingEntryContent("");
+    setEditingEntryKeys("");
+    setEditingEntryPriority(0);
+    setEditingEntryEnabled(true);
+  };
+
+  const saveEditingEntry = async () => {
+    if (!editingEntry || !selected) {
       return;
     }
-    await api.lorebooks.updateEntry(entryId, { content: nextContent });
-    await loadSelected(selected.id);
+    setLoading(true);
+    setError(null);
+    try {
+      await api.lorebooks.updateEntry(editingEntry.id, {
+        keys: splitTags(editingEntryKeys),
+        content: editingEntryContent,
+        priority: editingEntryPriority,
+        enabled: editingEntryEnabled
+      });
+      cancelEditingEntry();
+      await loadSelected(selected.id);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("lore.failedEditEntry"));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const toggleEntry = async (entryId: string, enabled: boolean) => {
@@ -148,14 +185,16 @@ export function LorePage() {
   };
 
   const deleteEntry = async (entryId: string) => {
-    if (!selected || !window.confirm(t("lore.deleteEntryConfirm"))) {
+    if (!selected) {
       return;
     }
     await api.lorebooks.removeEntry(entryId);
+    setPendingDeleteEntryId(null);
     await loadSelected(selected.id);
   };
 
   return (
+    <>
     <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
       <Panel title={<HelpLabel label={t("nav.lore")} description={t("help.lorebook")} />} action={<BookPlus size={18} className="text-ember-400" />}>
         <div className="space-y-2">
@@ -192,7 +231,7 @@ export function LorePage() {
             <Field label={t("common.description")}><TextArea value={bookDescription} onChange={(event) => setBookDescription(event.target.value)} /></Field>
             <div className="flex flex-wrap gap-2">
               <Button disabled={loading || !bookName.trim()} onClick={() => void (selected ? updateLorebook() : createLorebook())}><Save size={16} />{t("common.save")}</Button>
-              <Button disabled={loading || !selected} variant="danger" onClick={() => void deleteLorebook()}><Trash2 size={16} />{t("common.delete")}</Button>
+              <Button disabled={loading || !selected} variant="danger" onClick={() => setDeleteBookOpen(true)}><Trash2 size={16} />{t("common.delete")}</Button>
             </div>
           </div>
         </Panel>
@@ -227,8 +266,8 @@ export function LorePage() {
                         </div>
                         <div className="flex gap-2">
                           <Button className="min-h-8 px-2" variant="ghost" onClick={() => void toggleEntry(entry.id, entry.enabled)}>{entry.enabled ? t("lore.disable") : t("lore.enable")}</Button>
-                          <Button className="min-h-8 px-2" variant="ghost" onClick={() => void editEntry(entry.id, entry.content)}>{t("common.edit")}</Button>
-                          <Button className="min-h-8 px-2" variant="danger" onClick={() => void deleteEntry(entry.id)}><Trash2 size={14} /></Button>
+                          <Button className="min-h-8 px-2" variant="ghost" onClick={() => startEditingEntry(entry)}>{t("common.edit")}</Button>
+                          <Button className="min-h-8 px-2" variant="danger" onClick={() => setPendingDeleteEntryId(entry.id)}><Trash2 size={14} /></Button>
                         </div>
                       </div>
                       <p className="mt-3 whitespace-pre-wrap text-slate-200">{entry.content}</p>
@@ -242,5 +281,105 @@ export function LorePage() {
         </Panel>
       </div>
     </div>
+    {editingEntry ? (
+      <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4">
+        <section
+          aria-labelledby="edit-lore-entry-title"
+          className="w-full max-w-2xl rounded-lg border border-white/10 bg-ink-900 p-4 shadow-2xl shadow-black/40"
+          role="dialog"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-base font-semibold text-slate-100" id="edit-lore-entry-title">
+                {t("lore.editEntryTitle")}
+              </h3>
+              <p className="mt-1 text-xs text-slate-400">{t("lore.editEntryHelp")}</p>
+            </div>
+            <button
+              aria-label={t("common.cancel")}
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-white/5 text-slate-300 hover:bg-white/10"
+              type="button"
+              onClick={cancelEditingEntry}
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <div className="mt-4 space-y-3">
+            <div className="grid gap-3 md:grid-cols-[1fr_140px]">
+              <Field label={<HelpLabel label={t("lore.keys")} description={t("help.loreKeys")} />}>
+                <TextInput
+                  autoFocus
+                  placeholder={t("lore.keysPlaceholder")}
+                  value={editingEntryKeys}
+                  onChange={(event) => setEditingEntryKeys(event.target.value)}
+                />
+              </Field>
+              <Field label={<HelpLabel label={t("common.priority")} description={t("help.lorePriority")} />}>
+                <TextInput
+                  type="number"
+                  value={editingEntryPriority}
+                  onChange={(event) => setEditingEntryPriority(Number(event.target.value))}
+                />
+              </Field>
+            </div>
+            <Field label={<HelpLabel label={t("lore.content")} description={t("help.loreContent")} />}>
+              <TextArea
+                className="min-h-48"
+                placeholder={t("lore.editEntryPlaceholder")}
+                value={editingEntryContent}
+                onChange={(event) => setEditingEntryContent(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    cancelEditingEntry();
+                  }
+
+                  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                    event.preventDefault();
+                    void saveEditingEntry();
+                  }
+                }}
+              />
+            </Field>
+            <label className="flex items-center gap-2 text-sm text-slate-300">
+              <input checked={editingEntryEnabled} type="checkbox" onChange={(event) => setEditingEntryEnabled(event.target.checked)} />
+              {t("common.enabled")}
+            </label>
+          </div>
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <Button disabled={loading} variant="ghost" onClick={cancelEditingEntry}>
+              <X size={16} />
+              {t("common.cancel")}
+            </Button>
+            <Button disabled={loading || !editingEntryContent.trim()} onClick={() => void saveEditingEntry()}>
+              <Check size={16} />
+              {t("lore.saveEntry")}
+            </Button>
+          </div>
+        </section>
+      </div>
+    ) : null}
+    {deleteBookOpen && selected ? (
+      <ConfirmDialog
+        cancelLabel={t("common.cancel")}
+        confirmLabel={t("common.delete")}
+        loading={loading}
+        message={t("lore.deleteBookConfirm", { name: selected.name })}
+        title={t("lore.deleteBookTitle")}
+        onCancel={() => setDeleteBookOpen(false)}
+        onConfirm={() => void deleteLorebook()}
+      />
+    ) : null}
+    {pendingDeleteEntryId ? (
+      <ConfirmDialog
+        cancelLabel={t("common.cancel")}
+        confirmLabel={t("common.delete")}
+        loading={loading}
+        message={t("lore.deleteEntryConfirm")}
+        title={t("lore.deleteEntryTitle")}
+        onCancel={() => setPendingDeleteEntryId(null)}
+        onConfirm={() => void deleteEntry(pendingDeleteEntryId)}
+      />
+    ) : null}
+    </>
   );
 }

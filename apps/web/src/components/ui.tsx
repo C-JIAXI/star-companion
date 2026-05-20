@@ -1,4 +1,4 @@
-import { HelpCircle } from "lucide-react";
+import { AlertTriangle, HelpCircle } from "lucide-react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
 
 export function Panel({ title, action, children }: { title: ReactNode; action?: ReactNode; children: ReactNode }) {
@@ -66,19 +66,19 @@ export function HelpLabel({ label, description }: { label: ReactNode; descriptio
   );
 }
 
-export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
+export function TextInput({ className = "", ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
-      className="min-h-10 w-full min-w-0 rounded-md border border-white/10 bg-ink-950 px-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-ember-500"
+      className={`min-h-10 w-full min-w-0 rounded-md border border-white/10 bg-ink-950 px-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-ember-500 ${className}`}
       {...props}
     />
   );
 }
 
-export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function TextArea({ className = "", ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
-      className="min-h-24 w-full min-w-0 rounded-md border border-white/10 bg-ink-950 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-ember-500"
+      className={`min-h-24 w-full min-w-0 rounded-md border border-white/10 bg-ink-950 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-ember-500 ${className}`}
       {...props}
     />
   );
@@ -102,4 +102,55 @@ export function ErrorNotice({ message }: { message: string | null }) {
 
 export function Badge({ children }: { children: ReactNode }) {
   return <span className="rounded bg-white/10 px-2 py-1 text-xs text-slate-300">{children}</span>;
+}
+
+export function ConfirmDialog({
+  title,
+  message,
+  confirmLabel,
+  cancelLabel,
+  loading = false,
+  variant = "danger",
+  onCancel,
+  onConfirm
+}: {
+  title: ReactNode;
+  message: ReactNode;
+  confirmLabel: ReactNode;
+  cancelLabel: ReactNode;
+  loading?: boolean;
+  variant?: "primary" | "danger";
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4">
+      <section
+        aria-labelledby="confirm-dialog-title"
+        className="w-full max-w-md rounded-lg border border-white/10 bg-ink-900 p-4 shadow-2xl shadow-black/40"
+        role="dialog"
+      >
+        <div className="flex gap-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-rose-500/15 text-rose-200">
+            <AlertTriangle size={18} />
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-slate-100" id="confirm-dialog-title">
+              {title}
+            </h3>
+            <p className="mt-2 text-sm leading-6 text-slate-300">{message}</p>
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <Button disabled={loading} variant="ghost" onClick={onCancel}>
+            {cancelLabel}
+          </Button>
+          <Button disabled={loading} variant={variant} onClick={onConfirm}>
+            {confirmLabel}
+          </Button>
+        </div>
+      </section>
+    </div>
+  );
 }
