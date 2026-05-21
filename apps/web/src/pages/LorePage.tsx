@@ -4,7 +4,7 @@ import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { joinTags, splitTags } from "../lib/form";
 import type { LoreEntryDTO, LorebookDTO, LorebookWithEntriesDTO } from "../types";
-import { Badge, Button, ConfirmDialog, EmptyState, ErrorNotice, Field, HelpLabel, Panel, TextArea, TextInput } from "../components/ui";
+import { Badge, Button, ConfirmDialog, EmptyState, ErrorNotice, Field, HelpLabel, Panel, SuccessNotice, TextArea, TextInput } from "../components/ui";
 
 export function LorePage() {
   const { t } = useI18n();
@@ -25,6 +25,7 @@ export function LorePage() {
   const [editingEntryPriority, setEditingEntryPriority] = useState(0);
   const [editingEntryEnabled, setEditingEntryEnabled] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const loadLorebooks = async () => {
@@ -58,9 +59,19 @@ export function LorePage() {
     );
   }, [selectedId, t]);
 
+  useEffect(() => {
+    if (!status) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setStatus(null), 2200);
+    return () => window.clearTimeout(timeoutId);
+  }, [status]);
+
   const createLorebook = async () => {
     setLoading(true);
     setError(null);
+    setStatus(null);
     try {
       const lorebook = await api.lorebooks.create({
         name: bookName.trim() || t("lore.create"),
@@ -68,6 +79,7 @@ export function LorePage() {
       });
       setSelectedId(lorebook.id);
       await loadLorebooks();
+      setStatus(t("lore.saved"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("lore.failedSave"));
     } finally {
@@ -81,10 +93,12 @@ export function LorePage() {
     }
     setLoading(true);
     setError(null);
+    setStatus(null);
     try {
       await api.lorebooks.update(selected.id, { name: bookName, description: bookDescription });
       await loadLorebooks();
       await loadSelected(selected.id);
+      setStatus(t("lore.saved"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("lore.failedUpdate"));
     } finally {
@@ -98,6 +112,7 @@ export function LorePage() {
     }
     setLoading(true);
     setError(null);
+    setStatus(null);
     try {
       await api.lorebooks.remove(selected.id);
       setDeleteBookOpen(false);
@@ -119,6 +134,7 @@ export function LorePage() {
     }
     setLoading(true);
     setError(null);
+    setStatus(null);
     try {
       await api.lorebooks.createEntry(selected.id, {
         keys: splitTags(entryKeys),
@@ -131,6 +147,7 @@ export function LorePage() {
       setEntryPriority(0);
       setEntryEnabled(true);
       await loadSelected(selected.id);
+      setStatus(t("lore.entrySaved"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("lore.failedCreateEntry"));
     } finally {
@@ -140,6 +157,7 @@ export function LorePage() {
 
   const startEditingEntry = (entry: LoreEntryDTO) => {
     setEditingEntry(entry);
+    setStatus(null);
     setEditingEntryContent(entry.content);
     setEditingEntryKeys(joinTags(entry.keys));
     setEditingEntryPriority(entry.priority);
@@ -160,6 +178,7 @@ export function LorePage() {
     }
     setLoading(true);
     setError(null);
+    setStatus(null);
     try {
       await api.lorebooks.updateEntry(editingEntry.id, {
         keys: splitTags(editingEntryKeys),
@@ -169,6 +188,7 @@ export function LorePage() {
       });
       cancelEditingEntry();
       await loadSelected(selected.id);
+      setStatus(t("lore.entrySaved"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("lore.failedEditEntry"));
     } finally {
@@ -241,6 +261,7 @@ export function LorePage() {
         <Panel title={selected ? t("lore.edit") : t("lore.create")}>
           <div className="space-y-4">
             <ErrorNotice message={error} />
+            <SuccessNotice message={status} />
             <Field label={t("common.name")}><TextInput value={bookName} onChange={(event) => setBookName(event.target.value)} /></Field>
             <Field label={t("common.description")}><TextArea className="min-h-[80px]" value={bookDescription} onChange={(event) => setBookDescription(event.target.value)} /></Field>
             <div className="flex flex-wrap justify-end gap-3 pt-2 border-t border-white/5">

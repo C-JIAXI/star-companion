@@ -6,5 +6,9 @@ dist
 .DS_Store
 .vite
 coverage
+playwright-report
+test-results
+apps/web/playwright-report
+apps/web/test-results
 apps/server/prisma/dev.db
 apps/server/prisma/dev.db-journal

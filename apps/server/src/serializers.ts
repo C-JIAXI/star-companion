@@ -112,13 +112,9 @@ export const serializeCharacter = (character: Character) => ({
   id: character.id,
   name: character.name,
   avatar: character.avatar,
-  description: character.description,
-  personality: character.personality,
-  scenario: character.scenario,
-  firstMessage: character.firstMessage,
-  exampleDialog: character.exampleDialog,
-  systemPrompt: character.systemPrompt,
-  tags: toStringArray(character.tags),
+  prefix: character.prefix,
+  prompt: character.prompt,
+  suffix: character.suffix,
   createdAt: toIso(character.createdAt),
   updatedAt: toIso(character.updatedAt)
 });
@@ -128,6 +124,7 @@ export const serializeChat = (chat: Chat) => ({
   title: chat.title,
   mode: chat.mode === "group" ? "group" : "single",
   characterIds: toStringArray(chat.characterIds),
+  memoryTurns: chat.memoryTurns,
   createdAt: toIso(chat.createdAt),
   updatedAt: toIso(chat.updatedAt)
 });

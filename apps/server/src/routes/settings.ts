@@ -1,9 +1,11 @@
 import { Router } from "express";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { asyncHandler, parseBody } from "../lib/http.js";
 import { testModelConnection } from "../services/openaiCompatible.js";
 import { settingsUpdateSchema } from "../schemas.js";
 import { serializeSettings } from "../serializers.js";
+import { encryptApiKey, hasStoredApiKey } from "../services/apiKeyVault.js";
 
 export const settingsRouter = Router();
 
@@ -28,7 +30,7 @@ settingsRouter.get(
       ok: true,
       data: {
         ...serializeSettings(settings),
-        hasApiKey: Boolean(settings.apiKey)
+        hasApiKey: hasStoredApiKey(settings.apiKey)
       }
     });
   })
@@ -52,17 +54,27 @@ settingsRouter.put(
   asyncHandler(async (request, response) => {
     const body = parseBody(settingsUpdateSchema, request.body);
     const existing = await getOrCreateSettings();
+    const data: Prisma.UserSettingsUpdateInput = {
+      activeProvider: body.activeProvider,
+      apiBaseUrl: body.apiBaseUrl,
+      model: body.model,
+      temperature: body.temperature,
+      maxTokens: body.maxTokens,
+      topP: body.topP,
+      language: body.language,
+      apiKey: "apiKey" in body ? encryptApiKey(body.apiKey) : undefined
+    };
 
     const settings = await prisma.userSettings.update({
       where: { id: existing.id },
-      data: body
+      data
     });
 
     response.json({
       ok: true,
       data: {
         ...serializeSettings(settings),
-        hasApiKey: Boolean(settings.apiKey)
+        hasApiKey: hasStoredApiKey(settings.apiKey)
       }
     });
   })

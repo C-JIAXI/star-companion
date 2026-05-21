@@ -1,11 +1,11 @@
-import { Check, Download, FileUp, PlugZap, Save } from "lucide-react";
+import { Download, FileUp, PlugZap, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 import { languageOptions, useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { downloadJson, readFileText } from "../lib/files";
 import { useAppStore } from "../store/useAppStore";
 import type { SettingsInput } from "../types";
-import { Badge, Button, ConfirmDialog, ErrorNotice, Field, HelpLabel, Panel, TextInput } from "../components/ui";
+import { Badge, Button, ConfirmDialog, ErrorNotice, Field, HelpLabel, Panel, SuccessNotice, TextInput } from "../components/ui";
 
 const defaultForm: SettingsInput = {
   activeProvider: "openai-compatible",
@@ -50,6 +50,15 @@ export function SettingsPage() {
         setError(caught instanceof Error ? caught.message : t("settings.failedLoad"))
       );
   }, [setLanguage]);
+
+  useEffect(() => {
+    if (!status) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setStatus(null), 2200);
+    return () => window.clearTimeout(timeoutId);
+  }, [status]);
 
   const saveSettings = async () => {
     setLoading(true);
@@ -130,14 +139,7 @@ export function SettingsPage() {
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <ErrorNotice message={error} />
-      {status ? (
-        <div className="animate-fade-in rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm font-medium text-emerald-200 shadow-sm flex items-center gap-3">
-          <div className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-emerald-500/20 text-emerald-400">
-            <Check size={14} />
-          </div>
-          {status}
-        </div>
-      ) : null}
+      <SuccessNotice message={status} />
 
       <Panel title={t("settings.panelTitle")} action={hasApiKey ? <Badge>{t("common.apiKeyStored")}</Badge> : <Badge>{t("common.noApiKey")}</Badge>}>
         <div className="space-y-6">

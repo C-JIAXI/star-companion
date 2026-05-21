@@ -33,19 +33,16 @@ export type ApiErrorEnvelope = {
 export type CharacterInput = {
   name: string;
   avatar?: string | null;
-  description?: string;
-  personality?: string;
-  scenario?: string;
-  firstMessage?: string;
-  exampleDialog?: string;
-  systemPrompt?: string;
-  tags?: string[];
+  prefix?: string;
+  prompt?: string;
+  suffix?: string;
 };
 
 export type ChatInput = {
   title: string;
   mode: ChatMode;
   characterIds: string[];
+  memoryTurns?: number;
 };
 
 export type MessageInput = {

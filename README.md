@@ -23,7 +23,7 @@
 
 阶段 3 已接入前端基础 UI：
 
-- Hash 路由：`#/chat`、`#/characters`、`#/lore`、`#/settings`
+- 页面路由：`/`、`/characters`、`/lore`、`/settings`，并保留旧 hash 路由兼容
 - 聊天页可创建聊天、绑定角色、保存/编辑/删除用户消息
 - 角色页可创建、编辑、删除、导入和导出角色 JSON
 - 世界书页可创建、编辑、删除 lorebook 和 lore entry
@@ -40,12 +40,13 @@
 
 阶段 5 已完善角色聊天体验：
 
-- 新建聊天时会按绑定角色写入角色首条消息
-- 后端生成前会组装角色 prompt：全局系统提示、角色 systemPrompt、描述、性格、场景、示例对话和最近聊天记录
+- 角色卡保留头像，并使用前置词、提示词、后置词三段式提示结构
+- 后端生成前会组装角色 prompt：全局系统提示、角色前置词、提示词、后置词和最近聊天记录
 - 支持复制、编辑、删除消息
 - 支持重新生成 assistant 消息
 - 重新生成不会覆盖原始内容，而是追加到 `variants`，并切换到新变体
 - 前端可左右切换 assistant 消息 variants
+- 聊天气泡会显示用户头像占位和角色头像
 
 阶段 6 已接入世界书：
 
@@ -74,6 +75,13 @@
 - 后端新增 `/api/backups/export` 和 `/api/backups/import`
 - 调整 JSON 请求体上限，便于导入较大的本地备份文件
 
+近期收口补充：
+
+- 聊天页移动端改为“聊天列表 / 消息流 / 创建聊天”三段式面板，桌面端仍保持三栏布局。
+- 角色管理支持搜索、复制角色，并在编辑表单中即时预览头像。
+- API Key 在写入 SQLite 前会用 `API_KEY_ENCRYPTION_SECRET` 做本地 AES-256-GCM 加密；旧的明文 Key 仍可兼容读取，下一次保存会转为密文。
+- 新增 Playwright 前端 E2E 测试，覆盖真实路由、角色保存反馈和移动端面板切换。
+
 ## 目录结构
 
 ```text
@@ -100,6 +108,8 @@ Windows PowerShell：
 Copy-Item apps/server/.env.example apps/server/.env
 ```
 
+建议把 `API_KEY_ENCRYPTION_SECRET` 改成一段只保存在本机的长随机字符串。该值用于解密本地数据库中的 API Key；如果更换它，已加密保存的 API Key 需要重新填写。
+
 ## 安装与启动
 
 ```bash
@@ -117,10 +127,12 @@ npm run dev
 
 前端页面：
 
-- Chat：http://localhost:5173/#/chat
-- Characters：http://localhost:5173/#/characters
-- Lorebooks：http://localhost:5173/#/lore
-- Settings：http://localhost:5173/#/settings
+- Chat：http://localhost:5173/
+- Characters：http://localhost:5173/characters
+- Lorebooks：http://localhost:5173/lore
+- Settings：http://localhost:5173/settings
+
+旧的 hash 地址如 `#/characters` 仍可打开，但新开发和文档以真实路径为准。
 
 ## 构建检查
 
@@ -134,6 +146,36 @@ npm run build
 npm run lint
 ```
 
+## API Smoke Test
+
+启动后端后，可以运行一轮非 LLM 的 API 冒烟测试。测试会临时创建角色、聊天、消息和世界书数据，验证 CRUD 与备份导出，然后清理测试数据。
+
+```bash
+npm run test:api
+```
+
+如果后端不在默认端口，可指定：
+
+```bash
+API_BASE_URL=http://localhost:4000 npm run test:api
+```
+
+## 前端 E2E Test
+
+首次运行前安装 Playwright 浏览器：
+
+```bash
+npm exec --prefix apps/web playwright install chromium
+```
+
+运行 E2E：
+
+```bash
+npm run test:e2e
+```
+
+测试会复用已启动的 `http://localhost:5173`；如果没有启动，会自动通过根目录 `npm run dev` 拉起前后端和共享包监听进程。
+
 ## 数据库
 
 SQLite 数据库默认使用：
@@ -142,8 +184,30 @@ SQLite 数据库默认使用：
 apps/server/prisma/dev.db
 ```
 
-阶段 3 已在 CRUD API 基础上接入前端页面，后续阶段会继续实现 LLM 代理和流式聊天。
-阶段 8 已实现完整备份导入导出和设置页数据迁移入口。后续可继续做更细的移动端视觉打磨、备份冲突预览和本地 API Key 加密。
+开发期可以使用：
+
+```bash
+npm run db:generate
+npm run db:migrate
+```
+
+部署或 CI 环境使用：
+
+```bash
+npm run db:migrate:deploy
+```
+
+`npm run db:push` 仍保留给快速本地原型同步使用，但正式协作建议优先使用 migration。
+
+角色表当前字段为 `name`、`avatar`、`prefix`、`prompt`、`suffix`。如果从旧数据结构迁移，建议先导出完整备份；导入旧角色 JSON 时，后端会兼容性地把旧字段映射为：
+
+- `systemPrompt` → `prefix`
+- `description` → `prompt`
+- `scenario` → `suffix`
+
+已提供基线迁移：`apps/server/prisma/migrations/20260521000100_init`。
+
+阶段 8 已实现完整备份导入导出和设置页数据迁移入口，并已补充移动端聊天面板、角色管理搜索/复制、本地 API Key 加密和前端 E2E 测试。后续可继续做备份冲突预览、更完整的消息流 E2E、生产部署路由 fallback 和更多可访问性检查。
 
 ## 基础 API 测试
 
@@ -164,7 +228,7 @@ curl http://localhost:4000/api/health
 ```bash
 curl -X POST http://localhost:4000/api/characters \
   -H "Content-Type: application/json" \
-  -d "{\"name\":\"原创旅人\",\"description\":\"一个用于本地测试的原创角色\",\"tags\":[\"test\"]}"
+  -d "{\"name\":\"原创旅人\",\"avatar\":\"\",\"prefix\":\"你正在扮演原创旅人。\",\"prompt\":\"一个谨慎、好奇、擅长记录线索的旅人。\",\"suffix\":\"保持第一人称角色口吻，回复简洁。\"}"
 ```
 
 创建聊天：
@@ -227,4 +291,4 @@ curl -X POST http://localhost:4000/api/lorebooks/替换为世界书ID/entries \
 
 ## 安全说明
 
-MVP 阶段允许 API Key 暂存在本地 SQLite 配置中。后续会增加本地加密方案。所有 LLM 请求必须从后端代理发起，前端不会直接持有或调用模型 API Key。
+API Key 只通过设置页写入本地 SQLite，前端不会直接调用模型服务，也不会从设置接口读取明文 Key。后端保存前会使用 `API_KEY_ENCRYPTION_SECRET` 做本地加密；请不要把 `.env` 或真实 Key 提交到远程仓库。完整备份导出不会包含 API Key。

@@ -24,18 +24,14 @@ model UserSettings {
 }
 
 model Character {
-  id            String   @id @default(cuid())
-  name          String
-  avatar        String?
-  description   String   @default("")
-  personality   String   @default("")
-  scenario      String   @default("")
-  firstMessage  String   @default("")
-  exampleDialog String   @default("")
-  systemPrompt  String   @default("")
-  tags          Json     @default("[]")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id        String   @id @default(cuid())
+  name      String
+  avatar    String?
+  prefix    String   @default("")
+  prompt    String   @default("")
+  suffix    String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   messages Message[]
 }
@@ -46,6 +42,8 @@ model Chat {
   /// Valid values: "single" or "group".
   mode         String   @default("single")
   characterIds Json    @default("[]")
+  /// Number of recent user/assistant turns carried into prompt context.
+  memoryTurns  Int      @default(12)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

@@ -26,13 +26,9 @@ const loreMatchSchema = z.object({
 export const characterCreateSchema = z.object({
   name: z.string().trim().min(1),
   avatar: z.string().trim().nullable().optional(),
-  description: z.string().default(""),
-  personality: z.string().default(""),
-  scenario: z.string().default(""),
-  firstMessage: z.string().default(""),
-  exampleDialog: z.string().default(""),
-  systemPrompt: z.string().default(""),
-  tags: stringArraySchema
+  prefix: z.string().default(""),
+  prompt: z.string().default(""),
+  suffix: z.string().default("")
 });
 
 export const characterUpdateSchema = characterCreateSchema.partial().refine(
@@ -43,7 +39,8 @@ export const characterUpdateSchema = characterCreateSchema.partial().refine(
 export const chatCreateSchema = z.object({
   title: z.string().trim().min(1),
   mode: z.enum(["single", "group"]).default("single"),
-  characterIds: stringArraySchema
+  characterIds: stringArraySchema,
+  memoryTurns: z.number().int().min(1).max(50).default(12)
 });
 
 export const chatUpdateSchema = chatCreateSchema.partial().refine(
@@ -134,11 +131,26 @@ const backupDateSchema = z.string().datetime().optional();
 
 const backupSettingsSchema = settingsUpdateSchema.omit({ apiKey: true }).partial();
 
-const backupCharacterSchema = characterCreateSchema.extend({
-  id: idSchema.optional(),
-  createdAt: backupDateSchema,
-  updatedAt: backupDateSchema
-});
+const backupCharacterSchema = characterCreateSchema
+  .extend({
+    id: idSchema.optional(),
+    avatar: z.string().trim().nullable().optional(),
+    description: z.string().optional(),
+    scenario: z.string().optional(),
+    systemPrompt: z.string().optional(),
+    createdAt: backupDateSchema,
+    updatedAt: backupDateSchema
+  })
+  .transform((character) => ({
+    id: character.id,
+    name: character.name,
+    avatar: character.avatar ?? null,
+    prefix: character.prefix || character.systemPrompt || "",
+    prompt: character.prompt || character.description || "",
+    suffix: character.suffix || character.scenario || "",
+    createdAt: character.createdAt,
+    updatedAt: character.updatedAt
+  }));
 
 const backupChatSchema = chatCreateSchema.extend({
   id: idSchema.optional(),

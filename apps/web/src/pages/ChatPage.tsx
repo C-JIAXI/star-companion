@@ -7,8 +7,10 @@ import {
   RefreshCw,
   RotateCcw,
   Send,
+  Settings,
   StopCircle,
   Trash2,
+  UserRound,
   X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -24,10 +26,11 @@ import type {
   MessageDTO,
   TokenUsageDTO
 } from "../types";
-import { Badge, Button, ConfirmDialog, EmptyState, ErrorNotice, Field, Panel, TextArea, TextInput } from "../components/ui";
+import { Badge, Button, ConfirmDialog, EmptyState, ErrorNotice, Field, Panel, SuccessNotice, TextArea, TextInput } from "../components/ui";
 
 export function ChatPage() {
   const { t } = useI18n();
+  const [mobilePane, setMobilePane] = useState<"chats" | "messages" | "create">("messages");
   const [characters, setCharacters] = useState<CharacterDTO[]>([]);
   const [chats, setChats] = useState<ChatDTO[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
@@ -41,9 +44,12 @@ export function ChatPage() {
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [editingMessage, setEditingMessage] = useState<MessageDTO | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  const [memorySettingsOpen, setMemorySettingsOpen] = useState(false);
+  const [memoryDraft, setMemoryDraft] = useState("12");
   const [pendingDeleteChat, setPendingDeleteChat] = useState<ChatDTO | null>(null);
   const [pendingDeleteMessage, setPendingDeleteMessage] = useState<MessageDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
 
@@ -94,6 +100,40 @@ export function ChatPage() {
     return Array.from(books.values());
   };
 
+  const getCharacterInitials = (name: string | undefined) => {
+    const trimmed = name?.trim();
+    return trimmed ? trimmed.slice(0, 2) : t("common.unknown").slice(0, 2);
+  };
+
+  const renderMessageAvatar = ({
+    align = "left",
+    avatar,
+    name,
+    user = false
+  }: {
+    align?: "left" | "right";
+    avatar?: string | null;
+    name?: string;
+    user?: boolean;
+  }) => (
+    <div
+      className={`grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl border text-xs font-bold shadow-md ${
+        user
+          ? "border-ember-300/40 bg-ink-950/20 text-ink-950 shadow-ember-500/10"
+          : "border-white/10 bg-ink-800 text-ember-100 shadow-black/20"
+      } ${align === "right" ? "order-2" : "order-1"}`}
+      title={name}
+    >
+      {avatar ? (
+        <img alt="" className="h-full w-full object-cover" src={avatar} />
+      ) : user ? (
+        <UserRound size={18} />
+      ) : (
+        getCharacterInitials(name)
+      )}
+    </div>
+  );
+
   const loadBase = async () => {
     const [characterData, chatData] = await Promise.all([api.characters.list(), api.chats.list()]);
     setCharacters(characterData);
@@ -108,7 +148,9 @@ export function ChatPage() {
       setActiveChat(null);
       return;
     }
-    setActiveChat(await api.chats.get(id));
+    const chat = await api.chats.get(id);
+    setActiveChat(chat);
+    setMemoryDraft(String(chat.memoryTurns));
   };
 
   useEffect(() => {
@@ -130,6 +172,15 @@ export function ChatPage() {
     []
   );
 
+  useEffect(() => {
+    if (!status) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setStatus(null), 2200);
+    return () => window.clearTimeout(timeoutId);
+  }, [status]);
+
   const toggleCharacter = (id: string) => {
     setCharacterIds((current) =>
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
@@ -139,6 +190,7 @@ export function ChatPage() {
   const createChat = async () => {
     setLoading(true);
     setError(null);
+    setStatus(null);
     try {
       const chat = await api.chats.create({
         title: title.trim(),
@@ -148,9 +200,45 @@ export function ChatPage() {
       setTitle("");
       setCharacterIds([]);
       setSelectedChatId(chat.id);
+      setMobilePane("messages");
       await loadBase();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedCreate"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openMemorySettings = () => {
+    if (!activeChat) {
+      return;
+    }
+
+    setMemoryDraft(String(activeChat.memoryTurns));
+    setMemorySettingsOpen((current) => !current);
+  };
+
+  const updateMemory = async () => {
+    if (!activeChat) {
+      return;
+    }
+
+    const parsed = Number(memoryDraft);
+    const memoryTurns = Math.max(1, Math.min(50, Number.isFinite(parsed) ? Math.floor(parsed) : activeChat.memoryTurns));
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const updated = await api.chats.update(activeChat.id, { memoryTurns });
+      setActiveChat((current) => (current ? { ...current, memoryTurns: updated.memoryTurns } : current));
+      setChats((current) =>
+        current.map((chat) => (chat.id === updated.id ? { ...chat, memoryTurns: updated.memoryTurns } : chat))
+      );
+      setMemorySettingsOpen(false);
+      setStatus(t("chat.memorySaved"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdateMemory"));
     } finally {
       setLoading(false);
     }
@@ -163,6 +251,7 @@ export function ChatPage() {
 
     setLoading(true);
     setError(null);
+    setStatus(null);
     try {
       await api.chats.remove(pendingDeleteChat.id);
       setPendingDeleteChat(null);
@@ -272,6 +361,7 @@ export function ChatPage() {
 
     setLoading(true);
     setError(null);
+    setStatus(null);
     try {
       const socket = await getSocket();
       const requestId = crypto.randomUUID();
@@ -373,6 +463,7 @@ export function ChatPage() {
       const updated = await api.messages.update(editingMessage.id, { content: editDraft });
       upsertMessage(updated);
       cancelEditingMessage();
+      setStatus(t("chat.messageSaved"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedEdit"));
     } finally {
@@ -392,7 +483,28 @@ export function ChatPage() {
 
   return (
     <>
+    <div className="mb-4 grid grid-cols-3 gap-1 rounded-xl border border-white/10 bg-ink-900/80 p-1 lg:hidden">
+      {[
+        { key: "chats", label: t("chat.chats") },
+        { key: "messages", label: t("chat.messageStream") },
+        { key: "create", label: t("chat.createChat") }
+      ].map((item) => (
+        <button
+          className={`min-h-10 rounded-lg px-2 text-xs font-medium transition-colors ${
+            mobilePane === item.key
+              ? "bg-ember-500 text-ink-950 shadow-md shadow-ember-500/20"
+              : "text-slate-300 hover:bg-white/10 hover:text-slate-100"
+          }`}
+          key={item.key}
+          type="button"
+          onClick={() => setMobilePane(item.key as "chats" | "messages" | "create")}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
     <div className="grid min-w-0 gap-6 lg:h-[calc(100vh-112px)] lg:min-h-0 lg:grid-cols-[340px_minmax(0,1fr)_300px]">
+      <div className={mobilePane === "chats" ? "block lg:h-full" : "hidden lg:block lg:h-full"}>
       <Panel
         title={t("chat.chats")}
         action={
@@ -402,8 +514,9 @@ export function ChatPage() {
           </Button>
         }
       >
-        <div className="h-[calc(100%-40px)] space-y-2 overflow-y-auto pr-1">
+        <div className="max-h-[calc(100vh-220px)] space-y-2 overflow-y-auto pr-1 lg:h-[calc(100%-40px)] lg:max-h-none">
           <ErrorNotice message={error} />
+          <SuccessNotice message={status} />
           {chats.length === 0 ? (
             <EmptyState>{t("chat.noChats")}</EmptyState>
           ) : (
@@ -416,7 +529,10 @@ export function ChatPage() {
                 }`}
                 key={chat.id}
                 type="button"
-                onClick={() => setSelectedChatId(chat.id)}
+                onClick={() => {
+                  setSelectedChatId(chat.id);
+                  setMobilePane("messages");
+                }}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
@@ -435,12 +551,53 @@ export function ChatPage() {
           )}
         </div>
       </Panel>
+      </div>
 
-      <Panel title={activeChat?.title ?? t("chat.messageStream")}>
+      <div className={mobilePane === "messages" ? "block lg:h-full" : "hidden lg:block lg:h-full"}>
+      <Panel
+        title={activeChat?.title ?? t("chat.messageStream")}
+        action={
+          activeChat ? (
+            <div className="relative">
+              <Button
+                aria-expanded={memorySettingsOpen}
+                aria-label={t("chat.memorySettings")}
+                className="!h-8 !min-h-8 !w-8 !p-0"
+                variant="ghost"
+                onClick={openMemorySettings}
+              >
+                <Settings size={15} />
+              </Button>
+              {memorySettingsOpen ? (
+                <div className="absolute right-0 top-10 z-20 w-56 rounded-lg border border-white/10 bg-ink-900 p-3 shadow-xl shadow-black/30">
+                  <Field label={t("chat.memorySettings")}>
+                    <TextInput
+                      min={1}
+                      max={50}
+                      type="number"
+                      value={memoryDraft}
+                      onChange={(event) => setMemoryDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          void updateMemory();
+                        }
+                      }}
+                    />
+                  </Field>
+                  <p className="mt-2 text-xs leading-relaxed text-slate-500">{t("chat.memoryHelp")}</p>
+                  <Button className="mt-3 w-full !min-h-[34px]" disabled={loading} onClick={() => void updateMemory()}>
+                    {t("common.save")}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          ) : null
+        }
+      >
         {!activeChat ? (
           <EmptyState>{t("chat.selectOrCreate")}</EmptyState>
         ) : (
-          <div className="flex h-[calc(100%-40px)] min-h-0 flex-col">
+          <div className="flex min-h-[calc(100vh-260px)] flex-col lg:h-[calc(100%-40px)] lg:min-h-0">
             <div className="mb-4 flex shrink-0 flex-wrap gap-2 border-b border-white/5 pb-4">
               <Badge>{getModeLabel(activeChat.mode)}</Badge>
               {activeChat.characterIds.map((id) => (
@@ -454,79 +611,110 @@ export function ChatPage() {
                   <EmptyState>{t("chat.noMessages")}</EmptyState>
                 </div>
               ) : (
-                activeChat.messages.map((message) => (
-                  <article
-                    className={`group relative rounded-2xl p-4 text-sm shadow-sm transition-all hover:shadow-md ${
-                      message.role === "user" 
-                        ? "ml-auto max-w-[85%] bg-gradient-to-br from-ember-400 to-ember-500 text-ink-950 rounded-br-sm" 
-                        : "mr-auto max-w-[85%] bg-ink-800/80 border border-white/5 text-slate-100 rounded-bl-sm backdrop-blur-sm"
-                    }`}
-                    key={message.id}
-                  >
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <span className={`text-xs font-bold tracking-wide ${message.role === "user" ? "text-ink-900/70" : "text-ember-400"}`}>
-                        {message.characterId ? characterMap.get(message.characterId)?.name : message.role === "user" ? "You" : message.role}
-                      </span>
-                      <span className="flex flex-wrap justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                        {message.role === "assistant" && message.variants.length > 1 ? (
-                          <span className="mr-2 inline-flex items-center gap-1.5 text-xs bg-ink-950/40 rounded-full px-2 py-0.5">
-                            <button className="rounded-full hover:bg-white/20 p-0.5 transition-colors" type="button" onClick={() => void switchVariant(message, -1)}><ChevronLeft size={13} /></button>
-                            <span className="font-medium">{message.activeVariantIndex + 1}/{message.variants.length}</span>
-                            <button className="rounded-full hover:bg-white/20 p-0.5 transition-colors" type="button" onClick={() => void switchVariant(message, 1)}><ChevronRight size={13} /></button>
+                activeChat.messages.map((message) => {
+                  const isUser = message.role === "user";
+                  const character = message.characterId ? characterMap.get(message.characterId) : undefined;
+                  const senderName = character?.name ?? (isUser ? "You" : message.role);
+
+                  return (
+                    <div
+                      className={`group flex items-start gap-3 ${isUser ? "justify-end" : "justify-start"}`}
+                      key={message.id}
+                    >
+                      {!isUser
+                        ? renderMessageAvatar({
+                            avatar: character?.avatar,
+                            name: senderName
+                          })
+                        : null}
+                      <article
+                        className={`order-1 relative max-w-[calc(100%-3.25rem)] rounded-2xl p-4 text-sm shadow-sm transition-all hover:shadow-md sm:max-w-[85%] ${
+                          isUser
+                            ? "bg-gradient-to-br from-ember-400 to-ember-500 text-ink-950 rounded-br-sm"
+                            : "bg-ink-800/80 border border-white/5 text-slate-100 rounded-bl-sm backdrop-blur-sm"
+                        }`}
+                      >
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <span className={`text-xs font-bold tracking-wide ${isUser ? "text-ink-900/70" : "text-ember-400"}`}>
+                            {senderName}
                           </span>
-                        ) : null}
-                        <button className={`inline-flex items-center gap-1 text-xs font-medium hover:underline ${message.role === "user" ? "text-ink-900/70" : "text-slate-400 hover:text-slate-200"}`} type="button" onClick={() => void copyMessage(message)}><Copy size={12} />{t("common.copy")}</button>
-                        {message.role === "assistant" ? (
-                          <button disabled={Boolean(activeRequestId)} className="inline-flex items-center gap-1 text-xs font-medium text-slate-400 hover:text-slate-200 hover:underline disabled:opacity-40" type="button" onClick={() => void regenerateMessage(message)}><RotateCcw size={12} />{t("chat.regenerate")}</button>
-                        ) : null}
-                        <button className={`text-xs font-medium hover:underline ${message.role === "user" ? "text-ink-900/70" : "text-slate-400 hover:text-slate-200"}`} type="button" onClick={() => startEditingMessage(message)}>{t("common.edit")}</button>
-                        <button className={`text-xs font-medium hover:underline ${message.role === "user" ? "text-ink-900/70" : "text-rose-400 hover:text-rose-300"}`} type="button" onClick={() => setPendingDeleteMessage(message)}>{t("common.delete")}</button>
-                      </span>
-                    </div>
-                    <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
-                    {message.role === "assistant" ? (
-                      <div className="mt-3 border-t border-white/5 pt-2">
-                        <p className="text-[11px] font-medium text-slate-500">
-                          {formatTokenUsage(message.tokenUsage)}
-                        </p>
-                        {message.loreMatches.length > 0 ? (
-                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                            <span className="text-[11px] font-medium text-slate-500">{t("chat.triggeredLore")}</span>
-                            {getTriggeredLorebooks(message).map((book) => (
-                              <span
-                                className="inline-flex max-w-full items-center rounded-full border border-ember-500/20 bg-ember-500/10 px-2 py-0.5 text-[11px] font-medium text-ember-200"
-                                key={book.id}
-                              >
-                                <span className="truncate">{book.name}</span>
-                                {book.count > 1 ? <span className="ml-1 text-ember-200/70">x{book.count}</span> : null}
+                          <span className="flex flex-wrap justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                            {message.role === "assistant" && message.variants.length > 1 ? (
+                              <span className="mr-2 inline-flex items-center gap-1.5 text-xs bg-ink-950/40 rounded-full px-2 py-0.5">
+                                <button className="rounded-full hover:bg-white/20 p-0.5 transition-colors" type="button" onClick={() => void switchVariant(message, -1)}><ChevronLeft size={13} /></button>
+                                <span className="font-medium">{message.activeVariantIndex + 1}/{message.variants.length}</span>
+                                <button className="rounded-full hover:bg-white/20 p-0.5 transition-colors" type="button" onClick={() => void switchVariant(message, 1)}><ChevronRight size={13} /></button>
                               </span>
-                            ))}
+                            ) : null}
+                            <button className={`inline-flex items-center gap-1 text-xs font-medium hover:underline ${isUser ? "text-ink-900/70" : "text-slate-400 hover:text-slate-200"}`} type="button" onClick={() => void copyMessage(message)}><Copy size={12} />{t("common.copy")}</button>
+                            {message.role === "assistant" ? (
+                              <button disabled={Boolean(activeRequestId)} className="inline-flex items-center gap-1 text-xs font-medium text-slate-400 hover:text-slate-200 hover:underline disabled:opacity-40" type="button" onClick={() => void regenerateMessage(message)}><RotateCcw size={12} />{t("chat.regenerate")}</button>
+                            ) : null}
+                            <button className={`text-xs font-medium hover:underline ${isUser ? "text-ink-900/70" : "text-slate-400 hover:text-slate-200"}`} type="button" onClick={() => startEditingMessage(message)}>{t("common.edit")}</button>
+                            <button className={`text-xs font-medium hover:underline ${isUser ? "text-ink-900/70" : "text-rose-400 hover:text-rose-300"}`} type="button" onClick={() => setPendingDeleteMessage(message)}>{t("common.delete")}</button>
+                          </span>
+                        </div>
+                        <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+                        {message.role === "assistant" ? (
+                          <div className="mt-3 border-t border-white/5 pt-2">
+                            <p className="text-[11px] font-medium text-slate-500">
+                              {formatTokenUsage(message.tokenUsage)}
+                            </p>
+                            {message.loreMatches.length > 0 ? (
+                              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                <span className="text-[11px] font-medium text-slate-500">{t("chat.triggeredLore")}</span>
+                                {getTriggeredLorebooks(message).map((book) => (
+                                  <span
+                                    className="inline-flex max-w-full items-center rounded-full border border-ember-500/20 bg-ember-500/10 px-2 py-0.5 text-[11px] font-medium text-ember-200"
+                                    key={book.id}
+                                  >
+                                    <span className="truncate">{book.name}</span>
+                                    {book.count > 1 ? <span className="ml-1 text-ember-200/70">x{book.count}</span> : null}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
                           </div>
                         ) : null}
-                      </div>
-                    ) : null}
-                  </article>
-                ))
+                      </article>
+                      {isUser
+                        ? renderMessageAvatar({
+                            align: "right",
+                            name: senderName,
+                            user: true
+                          })
+                        : null}
+                    </div>
+                  );
+                })
               )}
               {streamingContent ? (
-                <article className="mr-auto max-w-[85%] rounded-2xl rounded-bl-sm border border-ember-500/20 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-md animate-fade-in backdrop-blur-sm">
-                  <div className="mb-2 text-xs font-bold tracking-wide text-ember-400 flex items-center gap-2">
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-ember-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-ember-500"></span>
-                    </span>
-                    {streamingCharacterId
-                      ? t("chat.streamingAs", {
-                          name: characterMap.get(streamingCharacterId)?.name ?? t("common.unknown")
-                        })
-                      : t("chat.streaming")}
-                  </div>
-                  <p className="whitespace-pre-wrap leading-relaxed">{streamingContent}</p>
-                </article>
+                <div className="flex items-start justify-start gap-3">
+                  {renderMessageAvatar({
+                    avatar: streamingCharacterId ? characterMap.get(streamingCharacterId)?.avatar : null,
+                    name: streamingCharacterId
+                      ? characterMap.get(streamingCharacterId)?.name ?? t("common.unknown")
+                      : t("chat.streaming")
+                  })}
+                  <article className="max-w-[calc(100%-3.25rem)] rounded-2xl rounded-bl-sm border border-ember-500/20 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-md animate-fade-in backdrop-blur-sm sm:max-w-[85%]">
+                    <div className="mb-2 text-xs font-bold tracking-wide text-ember-400 flex items-center gap-2">
+                      <span className="relative flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-ember-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-ember-500"></span>
+                      </span>
+                      {streamingCharacterId
+                        ? t("chat.streamingAs", {
+                            name: characterMap.get(streamingCharacterId)?.name ?? t("common.unknown")
+                          })
+                        : t("chat.streaming")}
+                    </div>
+                    <p className="whitespace-pre-wrap leading-relaxed">{streamingContent}</p>
+                  </article>
+                </div>
               ) : null}
             </div>
 
-            <div className="mt-3 grid min-w-0 shrink-0 grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-lg border border-white/5 bg-ink-950/40 p-1.5 backdrop-blur-sm">
+            <div className="sticky bottom-3 mt-3 grid min-w-0 shrink-0 grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-lg border border-white/5 bg-ink-950/95 p-1.5 shadow-xl shadow-black/30 backdrop-blur-sm lg:static lg:bg-ink-950/40 lg:shadow-none">
               <TextInput
                 className="min-w-0 border-0 bg-transparent focus:bg-transparent focus:ring-0"
                 placeholder={t("chat.writeMessage")}
@@ -547,7 +735,9 @@ export function ChatPage() {
           </div>
         )}
       </Panel>
+      </div>
 
+      <div className={mobilePane === "create" ? "block lg:h-full" : "hidden lg:block lg:h-full"}>
       <Panel
         title={t("chat.createChat")}
         action={<MessageSquarePlus size={16} className="text-slate-400" />}
@@ -581,6 +771,7 @@ export function ChatPage() {
           </Button>
         </div>
       </Panel>
+      </div>
     </div>
     {editingMessage ? (
       <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm p-4">

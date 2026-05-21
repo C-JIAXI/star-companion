@@ -1,9 +1,11 @@
-import { AlertTriangle, HelpCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle, HelpCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
 
 export function Panel({ title, action, children }: { title: ReactNode; action?: ReactNode; children: ReactNode }) {
   return (
-    <section className="animate-fade-in min-w-0 rounded-xl border border-white/5 bg-ink-900/80 p-4 shadow-lg shadow-black/20 backdrop-blur-sm transition-all">
+    <section className="animate-fade-in h-full min-w-0 rounded-xl border border-white/5 bg-ink-900/80 p-4 shadow-lg shadow-black/20 backdrop-blur-sm transition-all">
       <div className="mb-3 flex items-center justify-between gap-3">
         <h3 className="text-sm font-semibold tracking-wide text-slate-100">{title}</h3>
         {action}
@@ -104,6 +106,42 @@ export function ErrorNotice({ message }: { message: string | null }) {
       <AlertTriangle size={16} className="mt-0.5 shrink-0 text-rose-400" />
       <span>{message}</span>
     </div>
+  );
+}
+
+export function SuccessNotice({ message }: { message: string | null }) {
+  const [mounted, setMounted] = useState(false);
+  const [visible, setVisible] = useState(Boolean(message));
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!message) {
+      setVisible(false);
+      return;
+    }
+
+    setVisible(true);
+    const timer = window.setTimeout(() => setVisible(false), 2400);
+    return () => window.clearTimeout(timer);
+  }, [message]);
+
+  if (!mounted || !message || !visible) {
+    return null;
+  }
+
+  return createPortal(
+    <div
+      aria-live="polite"
+      className="animate-fade-in pointer-events-none fixed right-4 top-4 z-[70] flex min-h-[44px] w-[calc(100vw-2rem)] max-w-sm items-start gap-3 rounded-xl border border-emerald-500/25 bg-ink-900/95 px-4 py-3 text-sm font-medium text-slate-100 shadow-2xl shadow-black/40 backdrop-blur-md sm:w-auto sm:min-w-[300px]"
+      role="status"
+    >
+      <CheckCircle size={18} className="mt-0.5 shrink-0 text-emerald-400" />
+      <span className="leading-5">{message}</span>
+    </div>,
+    document.body
   );
 }
 

@@ -81,13 +81,9 @@ backupsRouter.post(
         const data = {
           name: character.name,
           avatar: character.avatar ?? null,
-          description: character.description,
-          personality: character.personality,
-          scenario: character.scenario,
-          firstMessage: character.firstMessage,
-          exampleDialog: character.exampleDialog,
-          systemPrompt: character.systemPrompt,
-          tags: character.tags,
+          prefix: character.prefix,
+          prompt: character.prompt,
+          suffix: character.suffix,
           ...importedDates(character)
         };
 
@@ -107,6 +103,7 @@ backupsRouter.post(
           title: chat.title,
           mode: chat.mode,
           characterIds: chat.characterIds,
+          memoryTurns: chat.memoryTurns,
           ...importedDates(chat)
         };
 

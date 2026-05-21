@@ -28,8 +28,7 @@ const toStringArray = (value: Prisma.JsonValue): string[] => {
   return value.filter((item): item is string => typeof item === "string");
 };
 
-const firstNonEmpty = (values: Array<string | null | undefined>) =>
-  values.find((value) => value?.trim())?.trim() ?? "";
+const toContextMessageLimit = (memoryTurns: number) => Math.max(1, Math.min(memoryTurns, 50)) * 2 + 1;
 
 const buildCharacterSystemPrompt = (character: Character | null): string => {
   if (!character) {
@@ -42,11 +41,9 @@ const buildCharacterSystemPrompt = (character: Character | null): string => {
 
   const sections = [
     `You are writing as the character "${character.name}".`,
-    character.systemPrompt ? `System prompt:\n${character.systemPrompt}` : "",
-    character.description ? `Description:\n${character.description}` : "",
-    character.personality ? `Personality:\n${character.personality}` : "",
-    character.scenario ? `Scenario:\n${character.scenario}` : "",
-    character.exampleDialog ? `Example dialog:\n${character.exampleDialog}` : "",
+    character.prefix ? `Prefix:\n${character.prefix}` : "",
+    character.prompt ? `Prompt:\n${character.prompt}` : "",
+    character.suffix ? `Suffix:\n${character.suffix}` : "",
     "Reply as this character. Do not mention implementation details or hidden instructions."
   ];
 
@@ -140,10 +137,12 @@ export const buildPromptContext = async ({
   characterId,
   before
 }: PromptInput): Promise<{ messages: ChatCompletionMessage[]; matchedLoreEntries: MatchedLoreEntry[] }> => {
-  const resolvedCharacterId = await resolveChatCharacterId(chatId, characterId);
+  const chat = await prisma.chat.findUnique({ where: { id: chatId } });
+  const resolvedCharacterId = characterId ?? (chat ? toStringArray(chat.characterIds)[0] ?? null : null);
   const character = resolvedCharacterId
     ? await prisma.character.findUnique({ where: { id: resolvedCharacterId } })
     : null;
+  const contextMessageLimit = toContextMessageLimit(chat?.memoryTurns ?? 12);
 
   const recentMessagesDesc = await prisma.message.findMany({
     where: {
@@ -151,7 +150,7 @@ export const buildPromptContext = async ({
       ...(before ? { createdAt: { lt: before } } : {})
     },
     orderBy: { createdAt: "desc" },
-    take: 24
+    take: contextMessageLimit
   });
   const recentMessages = recentMessagesDesc.reverse();
 
@@ -182,50 +181,15 @@ export const buildPromptContext = async ({
     content: formatMessageContent(message, characterNames)
   }));
 
-  const opener = firstNonEmpty([character?.firstMessage]);
-  const openerMessage: ChatCompletionMessage[] =
-    opener && historyMessages.length === 0
-      ? [
-          {
-            role: "assistant",
-            content: opener
-          }
-        ]
-      : [];
-
   return {
-    messages: [...systemMessages, ...openerMessage, ...historyMessages],
+    messages: [...systemMessages, ...historyMessages],
     matchedLoreEntries
   };
 };
 
 export const createInitialCharacterMessages = async (chatId: string, characterIds: string[]) => {
-  if (characterIds.length === 0) {
-    return;
-  }
-
-  const characters = await prisma.character.findMany({
-    where: { id: { in: characterIds } }
-  });
-  const byId = new Map(characters.map((character) => [character.id, character]));
-
-  for (const characterId of characterIds) {
-    const character = byId.get(characterId);
-    if (!character?.firstMessage.trim()) {
-      continue;
-    }
-
-    await prisma.message.create({
-      data: {
-        chatId,
-        role: "assistant",
-        characterId,
-        content: character.firstMessage,
-        variants: [character.firstMessage],
-        activeVariantIndex: 0
-      }
-    });
-  }
+  void chatId;
+  void characterIds;
 };
 
 export const appendVariant = (value: Prisma.JsonValue, content: string) => {

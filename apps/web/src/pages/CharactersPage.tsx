@@ -1,21 +1,17 @@
-import { Download, FileUp, Plus, Save, Trash2 } from "lucide-react";
+import { Copy, Download, FileUp, Plus, Save, Search, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
-import { downloadJson, joinTags, readFileText, splitTags } from "../lib/form";
+import { downloadJson, readFileText } from "../lib/form";
 import type { CharacterDTO, CharacterInput } from "../types";
-import { Badge, Button, ConfirmDialog, EmptyState, ErrorNotice, Field, HelpLabel, Panel, TextArea, TextInput } from "../components/ui";
+import { Button, ConfirmDialog, EmptyState, ErrorNotice, Field, HelpLabel, Panel, SuccessNotice, TextArea, TextInput } from "../components/ui";
 
 const blankForm = {
   name: "",
   avatar: "",
-  description: "",
-  personality: "",
-  scenario: "",
-  firstMessage: "",
-  exampleDialog: "",
-  systemPrompt: "",
-  tags: ""
+  prefix: "",
+  prompt: "",
+  suffix: ""
 };
 
 type CharacterForm = typeof blankForm;
@@ -23,33 +19,34 @@ type CharacterForm = typeof blankForm;
 const toForm = (character: CharacterDTO): CharacterForm => ({
   name: character.name,
   avatar: character.avatar ?? "",
-  description: character.description,
-  personality: character.personality,
-  scenario: character.scenario,
-  firstMessage: character.firstMessage,
-  exampleDialog: character.exampleDialog,
-  systemPrompt: character.systemPrompt,
-  tags: joinTags(character.tags)
+  prefix: character.prefix,
+  prompt: character.prompt,
+  suffix: character.suffix
 });
 
 const toInput = (form: CharacterForm): CharacterInput => ({
   name: form.name,
   avatar: form.avatar || null,
-  description: form.description,
-  personality: form.personality,
-  scenario: form.scenario,
-  firstMessage: form.firstMessage,
-  exampleDialog: form.exampleDialog,
-  systemPrompt: form.systemPrompt,
-  tags: splitTags(form.tags)
+  prefix: form.prefix,
+  prompt: form.prompt,
+  suffix: form.suffix
 });
+
+type ImportedCharacter = Partial<CharacterInput> & {
+  description?: string;
+  scenario?: string;
+  systemPrompt?: string;
+  avatar?: string | null;
+};
 
 export function CharactersPage() {
   const { t } = useI18n();
   const [characters, setCharacters] = useState<CharacterDTO[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState<CharacterForm>(blankForm);
+  const [searchQuery, setSearchQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
@@ -57,6 +54,20 @@ export function CharactersPage() {
     () => characters.find((character) => character.id === selectedId) ?? null,
     [characters, selectedId]
   );
+
+  const filteredCharacters = useMemo(() => {
+    const keyword = searchQuery.trim().toLowerCase();
+    if (!keyword) {
+      return characters;
+    }
+
+    return characters.filter((character) =>
+      [character.name, character.avatar ?? "", character.prefix, character.prompt, character.suffix]
+        .join("\n")
+        .toLowerCase()
+        .includes(keyword)
+    );
+  }, [characters, searchQuery]);
 
   const loadCharacters = async () => {
     const data = await api.characters.list();
@@ -73,21 +84,33 @@ export function CharactersPage() {
     );
   }, [t]);
 
+  useEffect(() => {
+    if (!status) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setStatus(null), 2200);
+    return () => window.clearTimeout(timeoutId);
+  }, [status]);
+
   const selectCharacter = (character: CharacterDTO) => {
     setSelectedId(character.id);
     setForm(toForm(character));
     setError(null);
+    setStatus(null);
   };
 
   const resetForm = () => {
     setSelectedId(null);
     setForm(blankForm);
     setError(null);
+    setStatus(null);
   };
 
   const saveCharacter = async () => {
     setLoading(true);
     setError(null);
+    setStatus(null);
     try {
       if (selected) {
         await api.characters.update(selected.id, toInput(form));
@@ -98,6 +121,7 @@ export function CharactersPage() {
       if (!selected) {
         setForm(blankForm);
       }
+      setStatus(t("characters.saved"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("characters.failedSave"));
     } finally {
@@ -112,6 +136,7 @@ export function CharactersPage() {
 
     setLoading(true);
     setError(null);
+    setStatus(null);
     try {
       await api.characters.remove(selected.id);
       setDeleteConfirmOpen(false);
@@ -120,6 +145,30 @@ export function CharactersPage() {
       await loadCharacters();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("characters.failedDelete"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const duplicateCharacter = async () => {
+    if (!selected) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const duplicated = await api.characters.create({
+        ...toInput(toForm(selected)),
+        name: `${selected.name} ${t("characters.copySuffix")}`
+      });
+      await loadCharacters();
+      setSelectedId(duplicated.id);
+      setForm(toForm(duplicated));
+      setStatus(t("characters.duplicated"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("characters.failedSave"));
     } finally {
       setLoading(false);
     }
@@ -138,21 +187,18 @@ export function CharactersPage() {
 
     setLoading(true);
     setError(null);
+    setStatus(null);
     try {
-      const parsed = JSON.parse(await readFileText(file)) as Partial<CharacterInput>;
+      const parsed = JSON.parse(await readFileText(file)) as ImportedCharacter;
       if (!parsed.name) {
         throw new Error(t("characters.importMissingName"));
       }
       await api.characters.create({
         name: parsed.name,
         avatar: parsed.avatar ?? null,
-        description: parsed.description ?? "",
-        personality: parsed.personality ?? "",
-        scenario: parsed.scenario ?? "",
-        firstMessage: parsed.firstMessage ?? "",
-        exampleDialog: parsed.exampleDialog ?? "",
-        systemPrompt: parsed.systemPrompt ?? "",
-        tags: Array.isArray(parsed.tags) ? parsed.tags : []
+        prefix: parsed.prefix ?? parsed.systemPrompt ?? "",
+        prompt: parsed.prompt ?? parsed.description ?? "",
+        suffix: parsed.suffix ?? parsed.scenario ?? ""
       });
       await loadCharacters();
     } catch (caught) {
@@ -174,10 +220,21 @@ export function CharactersPage() {
         }
       >
         <div className="space-y-2.5">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+            <TextInput
+              className="pl-9"
+              placeholder={t("characters.searchPlaceholder")}
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+            />
+          </div>
           {characters.length === 0 ? (
             <EmptyState>{t("characters.noCharacters")}</EmptyState>
+          ) : filteredCharacters.length === 0 ? (
+            <EmptyState>{t("characters.noSearchResults")}</EmptyState>
           ) : (
-            characters.map((character) => (
+            filteredCharacters.map((character) => (
               <button
                 className={`group w-full rounded-xl border p-3.5 text-left text-sm transition-all duration-200 ${
                   selectedId === character.id
@@ -194,7 +251,7 @@ export function CharactersPage() {
                   </div>
                   <div className="min-w-0 pt-0.5">
                     <p className={`truncate font-medium transition-colors ${selectedId === character.id ? 'text-ember-100' : 'text-slate-100 group-hover:text-white'}`}>{character.name}</p>
-                    <p className="mt-1 line-clamp-2 text-xs text-slate-400">{character.description || t("common.noDescription")}</p>
+                    <p className="mt-1 line-clamp-2 text-xs text-slate-400">{character.prompt || character.prefix || t("common.noDescription")}</p>
                   </div>
                 </div>
               </button>
@@ -221,30 +278,32 @@ export function CharactersPage() {
       >
         <div className="space-y-6">
           <ErrorNotice message={error} />
-          <div className="grid gap-5 md:grid-cols-2">
+          <SuccessNotice message={status} />
+          <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_120px]">
+            <div className="grid gap-5">
             <Field label={t("common.name")}><TextInput value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
             <Field label={t("characters.avatarUrl")}><TextInput value={form.avatar} onChange={(event) => setForm({ ...form, avatar: event.target.value })} /></Field>
-          </div>
-          
-          <div className="space-y-3">
-            <Field label={<HelpLabel label={t("characters.tags")} description={t("help.tags")} />}>
-              <TextInput placeholder={t("characters.tagsPlaceholder")} value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} />
-            </Field>
-            {form.tags && (
-              <div className="flex flex-wrap gap-2 animate-fade-in">
-                {splitTags(form.tags).map((tag) => <Badge key={tag}>{tag}</Badge>)}
+            </div>
+            <div className="grid min-h-[120px] place-items-center rounded-xl border border-white/5 bg-ink-950/40 p-3">
+              <div className="grid h-20 w-20 place-items-center overflow-hidden rounded-xl bg-ink-800 text-lg font-semibold text-slate-300 ring-1 ring-white/10">
+                {form.avatar ? (
+                  <img alt="" className="h-full w-full object-cover" src={form.avatar} />
+                ) : (
+                  (form.name || t("common.unknown")).slice(0, 2)
+                )}
               </div>
-            )}
+            </div>
           </div>
 
-          <Field label={t("common.description")}><TextArea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} className="min-h-[80px]" /></Field>
-          <Field label={t("characters.personality")}><TextArea value={form.personality} onChange={(event) => setForm({ ...form, personality: event.target.value })} className="min-h-[80px]" /></Field>
-          <Field label={<HelpLabel label={t("characters.scenario")} description={t("help.scenario")} />}><TextArea value={form.scenario} onChange={(event) => setForm({ ...form, scenario: event.target.value })} className="min-h-[80px]" /></Field>
-          <Field label={<HelpLabel label={t("characters.firstMessage")} description={t("help.firstMessage")} />}><TextArea value={form.firstMessage} onChange={(event) => setForm({ ...form, firstMessage: event.target.value })} className="min-h-[120px]" /></Field>
-          <Field label={<HelpLabel label={t("characters.exampleDialog")} description={t("help.exampleDialog")} />}><TextArea value={form.exampleDialog} onChange={(event) => setForm({ ...form, exampleDialog: event.target.value })} className="min-h-[120px]" /></Field>
-          <Field label={<HelpLabel label={t("characters.systemPrompt")} description={t("help.systemPrompt")} />}><TextArea value={form.systemPrompt} onChange={(event) => setForm({ ...form, systemPrompt: event.target.value })} className="min-h-[120px]" /></Field>
+          <Field label={<HelpLabel label={t("characters.prefix")} description={t("help.characterPrefix")} />}><TextArea value={form.prefix} onChange={(event) => setForm({ ...form, prefix: event.target.value })} className="min-h-[120px]" /></Field>
+          <Field label={<HelpLabel label={t("characters.prompt")} description={t("help.characterPrompt")} />}><TextArea value={form.prompt} onChange={(event) => setForm({ ...form, prompt: event.target.value })} className="min-h-[180px]" /></Field>
+          <Field label={<HelpLabel label={t("characters.suffix")} description={t("help.characterSuffix")} />}><TextArea value={form.suffix} onChange={(event) => setForm({ ...form, suffix: event.target.value })} className="min-h-[120px]" /></Field>
           
           <div className="flex flex-wrap justify-end gap-3 pt-4 border-t border-white/5">
+            <Button disabled={loading || !selected} variant="secondary" onClick={() => void duplicateCharacter()}>
+              <Copy size={16} />
+              {t("characters.duplicate")}
+            </Button>
             <Button disabled={loading || !selected} variant="danger" onClick={() => setDeleteConfirmOpen(true)}>
               <Trash2 size={16} />
               {t("common.delete")}

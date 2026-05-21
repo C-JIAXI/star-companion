@@ -25,13 +25,9 @@ export interface CharacterDTO {
   id: string;
   name: string;
   avatar: string | null;
-  description: string;
-  personality: string;
-  scenario: string;
-  firstMessage: string;
-  exampleDialog: string;
-  systemPrompt: string;
-  tags: string[];
+  prefix: string;
+  prompt: string;
+  suffix: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -41,6 +37,7 @@ export interface ChatDTO {
   title: string;
   mode: ChatMode;
   characterIds: string[];
+  memoryTurns: number;
   createdAt: string;
   updatedAt: string;
 }

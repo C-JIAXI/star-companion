@@ -1,4 +1,5 @@
 import type { UserSettings } from "@prisma/client";
+import { decryptApiKey } from "./apiKeyVault.js";
 
 export type ChatCompletionMessage = {
   role: "system" | "user" | "assistant";
@@ -32,12 +33,13 @@ const joinApiPath = (baseUrl: string, path: string) =>
   `${baseUrl.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
 
 const authHeaders = (settings: UserSettings) => {
+  const apiKey = decryptApiKey(settings.apiKey);
   const headers: Record<string, string> = {
     "Content-Type": "application/json"
   };
 
-  if (settings.apiKey) {
-    headers.Authorization = `Bearer ${settings.apiKey}`;
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
   }
 
   return headers;

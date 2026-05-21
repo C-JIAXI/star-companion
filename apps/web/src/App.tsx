@@ -39,22 +39,47 @@ const sectionMeta = {
 const isSection = (value: string): value is AppSection =>
   value === "chat" || value === "characters" || value === "lore" || value === "settings";
 
+const sectionPaths: Record<AppSection, string> = {
+  chat: "/",
+  characters: "/characters",
+  lore: "/lore",
+  settings: "/settings"
+};
+
+const sectionFromLocation = () => {
+  const hashSection = window.location.hash.replace(/^#\/?/, "");
+  if (isSection(hashSection)) {
+    return hashSection;
+  }
+
+  const [pathSection = ""] = window.location.pathname.replace(/^\/+|\/+$/g, "").split("/");
+  if (!pathSection) {
+    return "chat";
+  }
+
+  return isSection(pathSection) ? pathSection : null;
+};
+
 export function App() {
   const { activeSection, setActiveSection, setLanguage } = useAppStore();
   const { t } = useI18n();
   const active = sectionMeta[activeSection];
 
   useEffect(() => {
-    const syncFromHash = () => {
-      const next = window.location.hash.replace(/^#\/?/, "");
-      if (isSection(next)) {
+    const syncFromLocation = () => {
+      const next = sectionFromLocation();
+      if (next) {
         setActiveSection(next);
       }
     };
 
-    syncFromHash();
-    window.addEventListener("hashchange", syncFromHash);
-    return () => window.removeEventListener("hashchange", syncFromHash);
+    syncFromLocation();
+    window.addEventListener("hashchange", syncFromLocation);
+    window.addEventListener("popstate", syncFromLocation);
+    return () => {
+      window.removeEventListener("hashchange", syncFromLocation);
+      window.removeEventListener("popstate", syncFromLocation);
+    };
   }, [setActiveSection]);
 
   useEffect(() => {
@@ -69,7 +94,7 @@ export function App() {
 
   const navigate = (section: AppSection) => {
     setActiveSection(section);
-    window.location.hash = section;
+    window.history.pushState({}, "", sectionPaths[section]);
   };
 
   return (
