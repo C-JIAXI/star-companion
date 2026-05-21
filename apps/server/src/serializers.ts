@@ -46,6 +46,55 @@ const toTokenUsage = (value: Prisma.JsonValue | null) => {
   };
 };
 
+const toLoreMatches = (value: Prisma.JsonValue | null) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+
+      const entry = item as Record<string, unknown>;
+      const id = entry.id;
+      const lorebookId = entry.lorebookId;
+      const keys = entry.keys;
+      const content = entry.content;
+      const priority = entry.priority;
+      const enabled = entry.enabled;
+      const createdAt = entry.createdAt;
+      const updatedAt = entry.updatedAt;
+
+      if (
+        typeof id !== "string" ||
+        typeof lorebookId !== "string" ||
+        !Array.isArray(keys) ||
+        typeof content !== "string" ||
+        typeof priority !== "number" ||
+        typeof enabled !== "boolean" ||
+        typeof createdAt !== "string" ||
+        typeof updatedAt !== "string"
+      ) {
+        return null;
+      }
+
+      return {
+        id,
+        lorebookId,
+        lorebookName: typeof entry.lorebookName === "string" ? entry.lorebookName : undefined,
+        keys: keys.filter((key): key is string => typeof key === "string"),
+        content,
+        priority,
+        enabled,
+        createdAt,
+        updatedAt
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+};
+
 export const serializeSettings = (settings: UserSettings) => ({
   id: settings.id,
   activeProvider: settings.activeProvider,
@@ -92,6 +141,7 @@ export const serializeMessage = (message: Message) => ({
   variants: toStringArray(message.variants),
   activeVariantIndex: message.activeVariantIndex,
   tokenUsage: toTokenUsage(message.tokenUsage),
+  loreMatches: toLoreMatches(message.loreMatches),
   createdAt: toIso(message.createdAt),
   updatedAt: toIso(message.updatedAt)
 });

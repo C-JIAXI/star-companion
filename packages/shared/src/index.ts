@@ -58,6 +58,7 @@ export interface MessageDTO {
   variants: string[];
   activeVariantIndex: number;
   tokenUsage: TokenUsageDTO | null;
+  loreMatches: LoreEntryDTO[];
   createdAt: string;
   updatedAt: string;
 }
@@ -80,6 +81,7 @@ export interface LorebookDTO {
 export interface LoreEntryDTO {
   id: string;
   lorebookId: string;
+  lorebookName?: string;
   keys: string[];
   content: string;
   priority: number;

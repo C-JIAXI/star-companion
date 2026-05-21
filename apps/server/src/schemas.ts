@@ -11,6 +11,18 @@ const tokenUsageSchema = z.object({
   estimated: z.boolean().default(false)
 });
 
+const loreMatchSchema = z.object({
+  id: idSchema,
+  lorebookId: idSchema,
+  lorebookName: z.string().optional(),
+  keys: stringArraySchema,
+  content: z.string(),
+  priority: z.number().int(),
+  enabled: z.boolean(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
 export const characterCreateSchema = z.object({
   name: z.string().trim().min(1),
   avatar: z.string().trim().nullable().optional(),
@@ -46,7 +58,8 @@ export const messageCreateSchema = z.object({
   content: z.string(),
   variants: z.array(z.string()).default([]),
   activeVariantIndex: z.number().int().min(0).default(0),
-  tokenUsage: tokenUsageSchema.nullable().optional()
+  tokenUsage: tokenUsageSchema.nullable().optional(),
+  loreMatches: z.array(loreMatchSchema).nullable().optional()
 });
 
 export const messageUpdateSchema = z
@@ -56,7 +69,8 @@ export const messageUpdateSchema = z
     content: z.string().optional(),
     variants: z.array(z.string()).optional(),
     activeVariantIndex: z.number().int().min(0).optional(),
-    tokenUsage: tokenUsageSchema.nullable().optional()
+    tokenUsage: tokenUsageSchema.nullable().optional(),
+    loreMatches: z.array(loreMatchSchema).nullable().optional()
   })
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");
 

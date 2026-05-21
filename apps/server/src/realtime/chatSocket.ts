@@ -9,7 +9,7 @@ import {
 import { serializeMessage } from "../serializers.js";
 import { getOrCreateSettings } from "../routes/settings.js";
 import { estimateTokenUsage, streamChatCompletion, type TokenUsage } from "../services/openaiCompatible.js";
-import { appendVariant, buildPromptContext } from "../services/promptBuilder.js";
+import { appendVariant, buildPromptContext, type MatchedLoreEntry } from "../services/promptBuilder.js";
 
 const controllers = new Map<string, AbortController>();
 
@@ -110,8 +110,14 @@ const streamAssistantReply = async ({
   if (assistantContent.trim()) {
     tokenUsage ??= estimateTokenUsage(context.messages, assistantContent);
     const message = targetMessageId
-      ? await updateAssistantVariant(targetMessageId, assistantContent, tokenUsage)
-      : await createAssistantMessage(chatId, characterId, assistantContent, tokenUsage);
+      ? await updateAssistantVariant(targetMessageId, assistantContent, tokenUsage, context.matchedLoreEntries)
+      : await createAssistantMessage(
+          chatId,
+          characterId,
+          assistantContent,
+          tokenUsage,
+          context.matchedLoreEntries
+        );
 
     await prisma.chat.update({
       where: { id: chatId },
@@ -132,7 +138,8 @@ const createAssistantMessage = (
   chatId: string,
   characterId: string | null,
   content: string,
-  tokenUsage: TokenUsage
+  tokenUsage: TokenUsage,
+  loreMatches: MatchedLoreEntry[]
 ) =>
   prisma.message.create({
     data: {
@@ -142,11 +149,17 @@ const createAssistantMessage = (
       content,
       variants: [content],
       activeVariantIndex: 0,
-      tokenUsage
+      tokenUsage,
+      loreMatches
     }
   });
 
-const updateAssistantVariant = async (messageId: string, content: string, tokenUsage: TokenUsage) => {
+const updateAssistantVariant = async (
+  messageId: string,
+  content: string,
+  tokenUsage: TokenUsage,
+  loreMatches: MatchedLoreEntry[]
+) => {
   const targetMessage = await prisma.message.findUnique({ where: { id: messageId } });
   if (!targetMessage) {
     throw new Error("Assistant message not found");
@@ -159,7 +172,8 @@ const updateAssistantVariant = async (messageId: string, content: string, tokenU
       content,
       variants,
       activeVariantIndex: variants.length - 1,
-      tokenUsage
+      tokenUsage,
+      loreMatches
     }
   });
 };

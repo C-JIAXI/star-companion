@@ -147,6 +147,7 @@ backupsRouter.post(
           variants: message.variants,
           activeVariantIndex: message.activeVariantIndex,
           tokenUsage: message.tokenUsage ?? undefined,
+          loreMatches: message.loreMatches ?? undefined,
           ...importedDates(message)
         };
 

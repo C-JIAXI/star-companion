@@ -1,5 +1,4 @@
-import { AlertTriangle, GripHorizontal, HelpCircle } from "lucide-react";
-import { useRef, useState } from "react";
+import { AlertTriangle, HelpCircle } from "lucide-react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
 
 export function Panel({ title, action, children }: { title: ReactNode; action?: ReactNode; children: ReactNode }) {
@@ -78,57 +77,12 @@ export function TextInput({ className = "", ...props }: InputHTMLAttributes<HTML
 }
 
 export function TextArea({ className = "", style, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  const [height, setHeight] = useState<number | null>(null);
-  const dragStart = useRef<{ y: number; height: number } | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-
-  const startResize = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const textarea = textareaRef.current;
-    if (!textarea) {
-      return;
-    }
-
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    dragStart.current = {
-      y: event.clientY,
-      height: textarea.getBoundingClientRect().height
-    };
-  };
-
-  const resize = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (!dragStart.current) {
-      return;
-    }
-
-    const nextHeight = Math.max(100, dragStart.current.height + event.clientY - dragStart.current.y);
-    setHeight(nextHeight);
-  };
-
-  const stopResize = () => {
-    dragStart.current = null;
-  };
-
   return (
-    <div className="group min-w-0 rounded-lg border border-white/10 bg-ink-950/50 transition-all hover:border-white/20 focus-within:border-ember-500 focus-within:bg-ink-950 focus-within:ring-1 focus-within:ring-ember-500/50">
-      <textarea
-        className={`min-h-[100px] w-full min-w-0 resize-none rounded-t-lg border-0 bg-transparent px-3 py-2.5 text-sm text-slate-100 outline-none placeholder:text-slate-500 ${className}`}
-        ref={textareaRef}
-        style={{ ...style, ...(height ? { height } : {}) }}
-        {...props}
-      />
-      <button
-        aria-label="Resize text area"
-        className="grid h-6 w-full cursor-ns-resize place-items-center rounded-b-lg border-t border-white/10 bg-white/[0.03] text-slate-600 transition hover:bg-white/[0.06] hover:text-ember-300 focus:outline-none focus:ring-1 focus:ring-inset focus:ring-ember-500/50 group-focus-within:border-ember-500/30 group-focus-within:text-slate-400"
-        type="button"
-        onPointerDown={startResize}
-        onPointerLeave={stopResize}
-        onPointerMove={resize}
-        onPointerUp={stopResize}
-      >
-        <GripHorizontal size={16} />
-      </button>
-    </div>
+    <textarea
+      className={`custom-scrollbar h-[320px] w-full min-w-0 resize-none overflow-y-auto rounded-lg border border-white/10 bg-ink-950/50 px-3 py-2.5 text-sm text-slate-100 outline-none transition-all placeholder:text-slate-500 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50 ${className}`}
+      style={style}
+      {...props}
+    />
   );
 }
 

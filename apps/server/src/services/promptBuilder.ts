@@ -11,6 +11,7 @@ type PromptInput = {
 export type MatchedLoreEntry = {
   id: string;
   lorebookId: string;
+  lorebookName: string;
   keys: string[];
   content: string;
   priority: number;
@@ -61,9 +62,12 @@ const formatMessageContent = (message: Message, characterNames: Map<string, stri
   return name ? `${name}: ${message.content}` : message.content;
 };
 
-const serializeMatchedLoreEntry = (entry: LoreEntry): MatchedLoreEntry => ({
+type LoreEntryWithBook = LoreEntry & { lorebook?: { name: string } | null };
+
+const serializeMatchedLoreEntry = (entry: LoreEntryWithBook): MatchedLoreEntry => ({
   id: entry.id,
   lorebookId: entry.lorebookId,
+  lorebookName: entry.lorebook?.name ?? "",
   keys: toStringArray(entry.keys),
   content: entry.content,
   priority: entry.priority,
@@ -106,6 +110,7 @@ const findMatchedLoreEntries = async (recentMessages: Message[]) => {
 
   const entries = await prisma.loreEntry.findMany({
     where: { enabled: true },
+    include: { lorebook: { select: { name: true } } },
     orderBy: [{ priority: "desc" }, { updatedAt: "desc" }]
   });
 

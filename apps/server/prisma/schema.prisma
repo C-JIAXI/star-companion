@@ -62,6 +62,7 @@ model Message {
   variants           Json      @default("[]")
   activeVariantIndex Int       @default(0)
   tokenUsage         Json?
+  loreMatches        Json?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 

@@ -7,7 +7,6 @@ import {
   RefreshCw,
   RotateCcw,
   Send,
-  Sparkles,
   StopCircle,
   Trash2,
   X
@@ -22,7 +21,6 @@ import type {
   ChatWithMessagesDTO,
   GenerationClientMessage,
   GenerationServerMessage,
-  LoreEntryDTO,
   MessageDTO,
   TokenUsageDTO
 } from "../types";
@@ -40,7 +38,6 @@ export function ChatPage() {
   const [draft, setDraft] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingCharacterId, setStreamingCharacterId] = useState<string | null>(null);
-  const [matchedLoreEntries, setMatchedLoreEntries] = useState<LoreEntryDTO[]>([]);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [editingMessage, setEditingMessage] = useState<MessageDTO | null>(null);
   const [editDraft, setEditDraft] = useState("");
@@ -70,6 +67,31 @@ export function ChatPage() {
     });
 
     return usage.estimated ? `${detail} · ${t("chat.tokensEstimated")}` : detail;
+  };
+
+  const getTriggeredLorebooks = (message: MessageDTO) => {
+    const books = new Map<string, { id: string; name: string; keys: Set<string>; count: number }>();
+
+    for (const entry of message.loreMatches) {
+      const id = entry.lorebookId;
+      const existing = books.get(id);
+      const name = entry.lorebookName?.trim() || entry.keys[0] || t("nav.lore");
+
+      if (existing) {
+        existing.count += 1;
+        entry.keys.forEach((key) => existing.keys.add(key));
+        continue;
+      }
+
+      books.set(id, {
+        id,
+        name,
+        keys: new Set(entry.keys),
+        count: 1
+      });
+    }
+
+    return Array.from(books.values());
   };
 
   const loadBase = async () => {
@@ -117,7 +139,6 @@ export function ChatPage() {
   const createChat = async () => {
     setLoading(true);
     setError(null);
-    setMatchedLoreEntries([]);
     try {
       const chat = await api.chats.create({
         title: title.trim(),
@@ -214,7 +235,6 @@ export function ChatPage() {
         }
 
         if (message.type === "lore_matches") {
-          setMatchedLoreEntries(message.entries);
           return;
         }
 
@@ -252,7 +272,6 @@ export function ChatPage() {
 
     setLoading(true);
     setError(null);
-    setMatchedLoreEntries([]);
     try {
       const socket = await getSocket();
       const requestId = crypto.randomUUID();
@@ -429,31 +448,6 @@ export function ChatPage() {
               ))}
             </div>
 
-            {matchedLoreEntries.length > 0 ? (
-              <div className="mb-4 shrink-0 animate-fade-in rounded-xl border border-ember-500/20 bg-ember-500/5 p-4 shadow-inner">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                  <p className="text-sm font-semibold text-ember-200 flex items-center gap-2">
-                    <Sparkles size={14} />
-                    {t("chat.loreMatches")}
-                  </p>
-                  <Badge>{matchedLoreEntries.length}</Badge>
-                </div>
-                <div className="space-y-2.5">
-                  {matchedLoreEntries.map((entry) => (
-                    <article className="rounded-lg bg-ink-950/50 p-3 text-xs text-slate-300" key={entry.id}>
-                      <div className="mb-2 flex flex-wrap gap-1.5">
-                        {entry.keys.map((key) => (
-                          <Badge key={key}>{key}</Badge>
-                        ))}
-                        <Badge>{t("common.priority")} {entry.priority}</Badge>
-                      </div>
-                      <p className="line-clamp-2 leading-relaxed whitespace-pre-wrap opacity-90">{entry.content}</p>
-                    </article>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
             <div className="custom-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto rounded-xl border border-white/5 bg-ink-950/30 p-4">
               {activeChat.messages.length === 0 ? (
                 <div className="h-full flex items-center justify-center">
@@ -491,9 +485,25 @@ export function ChatPage() {
                     </div>
                     <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
                     {message.role === "assistant" ? (
-                      <p className="mt-3 border-t border-white/5 pt-2 text-[11px] text-slate-500 font-medium">
-                        {formatTokenUsage(message.tokenUsage)}
-                      </p>
+                      <div className="mt-3 border-t border-white/5 pt-2">
+                        <p className="text-[11px] font-medium text-slate-500">
+                          {formatTokenUsage(message.tokenUsage)}
+                        </p>
+                        {message.loreMatches.length > 0 ? (
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            <span className="text-[11px] font-medium text-slate-500">{t("chat.triggeredLore")}</span>
+                            {getTriggeredLorebooks(message).map((book) => (
+                              <span
+                                className="inline-flex max-w-full items-center rounded-full border border-ember-500/20 bg-ember-500/10 px-2 py-0.5 text-[11px] font-medium text-ember-200"
+                                key={book.id}
+                              >
+                                <span className="truncate">{book.name}</span>
+                                {book.count > 1 ? <span className="ml-1 text-ember-200/70">x{book.count}</span> : null}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
                     ) : null}
                   </article>
                 ))
