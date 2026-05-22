@@ -13,7 +13,7 @@ export type TokenUsage = {
   estimated: boolean;
 };
 
-export type ChatCompletionStreamEvent =
+type ChatCompletionStreamEvent =
   | {
       type: "token";
       content: string;
@@ -23,7 +23,7 @@ export type ChatCompletionStreamEvent =
       usage: TokenUsage;
     };
 
-export type ConnectionTestResult = {
+type ConnectionTestResult = {
   reachable: true;
   model: string;
   checkedAt: string;

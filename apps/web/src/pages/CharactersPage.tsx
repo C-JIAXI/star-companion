@@ -2,7 +2,7 @@ import { Copy, Download, FileUp, Plus, Save, Search, Trash2 } from "lucide-react
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
-import { downloadJson, readFileText } from "../lib/form";
+import { downloadJson, readFileText } from "../lib/files";
 import type { CharacterDTO, CharacterInput } from "../types";
 import { Button, ConfirmDialog, EmptyState, ErrorNotice, Field, HelpLabel, Panel, SuccessNotice, TextArea, TextInput } from "../components/ui";
 

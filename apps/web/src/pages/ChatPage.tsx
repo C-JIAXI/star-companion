@@ -1,23 +1,19 @@
 import {
-  ChevronLeft,
-  ChevronRight,
   Check,
-  Copy,
   MessageSquarePlus,
   RefreshCw,
-  RotateCcw,
   Send,
   Settings,
   Sparkles,
   StopCircle,
   Trash2,
-  UserRound,
   X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { generateId } from "../lib/uuid";
+import { useWebSocket } from "../lib/useWebSocket";
 import type {
   CharacterDTO,
   ChatDTO,
@@ -31,6 +27,12 @@ import type {
   TokenUsageDTO
 } from "../types";
 import { Badge, Button, ConfirmDialog, EmptyState, ErrorNotice, Field, Panel, SuccessNotice, TextArea, TextInput } from "../components/ui";
+import {
+  AssistantMessageBubble,
+  StreamingBubble,
+  SystemNotification,
+  UserMessageBubble
+} from "../components/messages";
 
 export function ChatPage() {
   const { t } = useI18n();
@@ -92,7 +94,127 @@ export function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const socketRef = useRef<WebSocket | null>(null);
+  const streamingBufferRef = useRef("");
+
+  const upsertMessage = (message: MessageDTO) => {
+    setActiveChat((current) => {
+      if (!current || current.id !== message.chatId) {
+        return current;
+      }
+
+      if (current.messages.some((item) => item.id === message.id)) {
+        return {
+          ...current,
+          messages: current.messages.map((item) => (item.id === message.id ? message : item))
+        };
+      }
+
+      return {
+        ...current,
+        messages: [...current.messages, message]
+      };
+    });
+  };
+
+  const onMessageHandlersRef = useRef<{
+    upsertMessage: (message: MessageDTO) => void;
+    setStreamingContent: (value: React.SetStateAction<string>) => void;
+  }>({ upsertMessage: () => {}, setStreamingContent: () => {} });
+
+  const { send: sendWs, connect, disconnect, isConnected } = useWebSocket({
+    onMessage(message) {
+      const handlers = onMessageHandlersRef.current;
+      const msg = message as GenerationServerMessage;
+
+      if (msg.type === "user_message") {
+        handlers.upsertMessage(msg.message);
+        return;
+      }
+
+      if (msg.type === "token") {
+        streamingBufferRef.current += msg.content;
+        return;
+      }
+
+      if (msg.type === "generation_character_started") {
+        setStreamingCharacterId(msg.characterId);
+        setStreamingContent("");
+        streamingBufferRef.current = "";
+        return;
+      }
+
+      if (msg.type === "lore_matches") {
+        return;
+      }
+
+      if (msg.type === "assistant_message") {
+        handlers.upsertMessage(msg.message);
+        setStreamingContent("");
+        setStreamingCharacterId(null);
+        streamingBufferRef.current = "";
+        return;
+      }
+
+      if (msg.type === "generation_started") {
+        setActiveRequestId(msg.requestId);
+        setStreamingContent("");
+        setStreamingCharacterId(null);
+        streamingBufferRef.current = "";
+        return;
+      }
+
+      if (msg.type === "user_profile_updated") {
+        setUserProfileSummary(msg.summary);
+        setUserProfileUpdatedAt(msg.updatedAt);
+        return;
+      }
+
+      if (msg.type === "generation_done" || msg.type === "generation_stopped") {
+        setActiveRequestId(null);
+        setStreamingContent("");
+        setStreamingCharacterId(null);
+        streamingBufferRef.current = "";
+        setLoading(false);
+        return;
+      }
+
+      if (msg.type === "error") {
+        setError(msg.error);
+        setActiveRequestId(null);
+        setStreamingContent("");
+        setStreamingCharacterId(null);
+        streamingBufferRef.current = "";
+        setLoading(false);
+        return;
+      }
+    }
+  });
+
+  useEffect(() => {
+    onMessageHandlersRef.current = {
+      upsertMessage,
+      setStreamingContent
+    };
+  }, [upsertMessage, setStreamingContent]);
+
+  useEffect(() => {
+    if (!activeRequestId) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      if (streamingBufferRef.current) {
+        setStreamingContent((prev) => prev + streamingBufferRef.current);
+        streamingBufferRef.current = "";
+      }
+    }, 40);
+
+    return () => clearInterval(intervalId);
+  }, [activeRequestId]);
+
+  useEffect(() => {
+    connect();
+  }, []);
 
   const characterMap = useMemo(
     () => new Map(characters.map((character) => [character.id, character])),
@@ -146,35 +268,6 @@ export function ChatPage() {
     return trimmed ? trimmed.slice(0, 2) : t("common.unknown").slice(0, 2);
   };
 
-  const renderMessageAvatar = ({
-    align = "left",
-    avatar,
-    name,
-    user = false
-  }: {
-    align?: "left" | "right";
-    avatar?: string | null;
-    name?: string;
-    user?: boolean;
-  }) => (
-    <div
-      className={`grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl border text-xs font-bold shadow-md ${
-        user
-          ? "border-ember-300/40 bg-ink-950/20 text-ink-950 shadow-ember-500/10"
-          : "border-white/10 bg-ink-800 text-ember-100 shadow-black/20"
-      } ${align === "right" ? "order-2" : "order-1"}`}
-      title={name}
-    >
-      {avatar ? (
-        <img alt="" className="h-full w-full object-cover" src={avatar} />
-      ) : user ? (
-        <UserRound size={18} />
-      ) : (
-        getCharacterInitials(name)
-      )}
-    </div>
-  );
-
   const loadBase = async () => {
     const [characterData, lorebookData, chatData, settings] = await Promise.all([
       api.characters.list(),
@@ -225,7 +318,7 @@ export function ChatPage() {
 
   useEffect(
     () => () => {
-      socketRef.current?.close();
+      disconnect();
     },
     []
   );
@@ -476,101 +569,6 @@ export function ChatPage() {
     }
   };
 
-  const upsertMessage = (message: MessageDTO) => {
-    setActiveChat((current) => {
-      if (!current || current.id !== message.chatId) {
-        return current;
-      }
-
-      if (current.messages.some((item) => item.id === message.id)) {
-        return {
-          ...current,
-          messages: current.messages.map((item) => (item.id === message.id ? message : item))
-        };
-      }
-
-      return {
-        ...current,
-        messages: [...current.messages, message]
-      };
-    });
-  };
-
-  const getSocket = () =>
-    new Promise<WebSocket>((resolve, reject) => {
-      const existing = socketRef.current;
-      if (existing?.readyState === WebSocket.OPEN) {
-        resolve(existing);
-        return;
-      }
-
-      existing?.close();
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
-      socketRef.current = socket;
-
-      socket.onopen = () => resolve(socket);
-      socket.onerror = () => reject(new Error(t("chat.websocketFailed")));
-      socket.onmessage = (event) => {
-        const message = JSON.parse(String(event.data)) as GenerationServerMessage;
-
-        if (message.type === "ready") {
-          return;
-        }
-
-        if (message.type === "user_message") {
-          upsertMessage(message.message);
-          return;
-        }
-
-        if (message.type === "token") {
-          setStreamingContent((current) => current + message.content);
-          return;
-        }
-
-        if (message.type === "generation_character_started") {
-          setStreamingCharacterId(message.characterId);
-          setStreamingContent("");
-          return;
-        }
-
-        if (message.type === "lore_matches") {
-          return;
-        }
-
-        if (message.type === "assistant_message") {
-          upsertMessage(message.message);
-          setStreamingContent("");
-          setStreamingCharacterId(null);
-          return;
-        }
-
-        if (message.type === "user_profile_updated") {
-          setUserProfileSummary(message.summary);
-          setUserProfileUpdatedAt(message.updatedAt);
-          return;
-        }
-
-        if (message.type === "generation_done" || message.type === "generation_stopped") {
-          setLoading(false);
-          setActiveRequestId(null);
-          setStreamingContent("");
-          setStreamingCharacterId(null);
-          void loadChat(selectedChatId);
-          void loadBase();
-          return;
-        }
-
-        if (message.type === "error") {
-          setError(message.error);
-          setLoading(false);
-          setActiveRequestId(null);
-          setStreamingContent("");
-          setStreamingCharacterId(null);
-        }
-      };
-    });
-
   const sendMessage = async () => {
     if (!activeChat || !draft.trim()) {
       return;
@@ -580,7 +578,9 @@ export function ChatPage() {
     setError(null);
     setStatus(null);
     try {
-      const socket = await getSocket();
+      if (!isConnected) {
+        throw new Error(t("chat.websocketFailed"));
+      }
       const requestId = generateId();
       const payload: GenerationClientMessage = {
         type: "generate",
@@ -592,9 +592,10 @@ export function ChatPage() {
       setActiveRequestId(requestId);
       setStreamingContent("");
       setStreamingCharacterId(null);
+      streamingBufferRef.current = "";
       setDraft("");
       setTargetCharacterId(null);
-      socket.send(JSON.stringify(payload));
+      sendWs(payload);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedSend"));
       setLoading(false);
@@ -605,7 +606,7 @@ export function ChatPage() {
   };
 
   const stopGeneration = () => {
-    if (!activeRequestId || socketRef.current?.readyState !== WebSocket.OPEN) {
+    if (!activeRequestId) {
       return;
     }
 
@@ -613,7 +614,7 @@ export function ChatPage() {
       type: "stop",
       requestId: activeRequestId
     };
-    socketRef.current.send(JSON.stringify(payload));
+    sendWs(payload);
   };
 
   const regenerateMessage = async (message: MessageDTO) => {
@@ -624,7 +625,9 @@ export function ChatPage() {
     setLoading(true);
     setError(null);
     try {
-      const socket = await getSocket();
+      if (!isConnected) {
+        throw new Error(t("chat.websocketFailed"));
+      }
       const requestId = generateId();
       const payload: GenerationClientMessage = {
         type: "regenerate",
@@ -634,7 +637,8 @@ export function ChatPage() {
       setActiveRequestId(requestId);
       setStreamingContent("");
       setStreamingCharacterId(message.characterId);
-      socket.send(JSON.stringify(payload));
+      streamingBufferRef.current = "";
+      sendWs(payload);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedRegenerate"));
       setLoading(false);
@@ -1058,140 +1062,54 @@ export function ChatPage() {
                   const senderName = character?.name ?? (isUser ? "You" : isSystem ? "" : message.role);
 
                   if (isSystem) {
+                    return <SystemNotification key={message.id} content={message.content} />;
+                  }
+
+                  if (isUser) {
                     return (
-                      <div className="flex justify-center" key={message.id}>
-                        <div className="shrink-0 rounded-full bg-white/5 px-4 py-1.5 text-xs text-slate-500 select-none">
-                          {message.content}
-                        </div>
-                      </div>
+                      <UserMessageBubble
+                        key={message.id}
+                        message={message}
+                        senderName={senderName}
+                        onCopy={() => void copyMessage(message)}
+                        onEdit={() => startEditingMessage(message)}
+                        onDelete={() => setPendingDeleteMessage(message)}
+                      />
                     );
                   }
 
                   return (
-                    <div
-                      className={`group flex items-start gap-3 ${isUser ? "justify-end" : "justify-start"}`}
+                    <AssistantMessageBubble
                       key={message.id}
-                    >
-                      {!isUser
-                        ? renderMessageAvatar({
-                            avatar: character?.avatar,
-                            name: senderName
-                          })
-                        : null}
-                      <article
-                        className={`order-1 relative max-w-[calc(100%-3.25rem)] rounded-2xl p-4 text-sm shadow-sm transition-all hover:shadow-md sm:max-w-[85%] ${
-                          isUser
-                            ? "bg-gradient-to-br from-ember-400 to-ember-500 text-ink-950 rounded-br-sm"
-                            : "bg-ink-800/80 border border-white/5 text-slate-100 rounded-bl-sm backdrop-blur-sm"
-                        }`}
-                      >
-                        <div
-                          className={`mb-3 flex flex-col gap-2 ${
-                            isUser ? "items-end" : "items-start"
-                          } sm:mb-2 sm:flex-row sm:items-center sm:justify-between`}
-                        >
-                          <span
-                            className={`shrink-0 text-xs font-bold tracking-wide sm:max-w-[45%] sm:truncate ${
-                              isUser ? "sm:order-2 sm:text-right" : "sm:order-1"
-                            } ${
-                              isUser ? "text-ink-900/70" : "text-ember-400"
-                            }`}
-                          >
-                            {senderName}
-                          </span>
-                          <span
-                            className={`flex w-full flex-wrap items-center gap-1.5 text-[11px] opacity-100 sm:w-auto sm:flex-nowrap sm:text-xs sm:opacity-0 sm:transition-opacity sm:duration-200 sm:group-hover:opacity-100 ${
-                              isUser
-                                ? "justify-end sm:order-1 sm:justify-start"
-                                : "justify-start sm:order-2 sm:justify-end"
-                            }`}
-                          >
-                            {message.role === "assistant" && message.variants.length > 1 ? (
-                              <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-ink-950/40 px-2 py-0.5 text-[11px] sm:text-xs">
-                                <button className="rounded-full p-0.5 transition-colors hover:bg-white/20" type="button" onClick={() => void switchVariant(message, -1)}><ChevronLeft size={13} /></button>
-                                <span className="font-medium">{message.activeVariantIndex + 1}/{message.variants.length}</span>
-                                <button className="rounded-full p-0.5 transition-colors hover:bg-white/20" type="button" onClick={() => void switchVariant(message, 1)}><ChevronRight size={13} /></button>
-                              </span>
-                            ) : null}
-                            <button className={`inline-flex items-center gap-1 whitespace-nowrap font-medium hover:underline ${isUser ? "text-ink-900/70" : "text-slate-400 hover:text-slate-200"}`} type="button" onClick={() => void copyMessage(message)}><Copy size={12} />{t("common.copy")}</button>
-                            {message.role === "assistant" ? (
-                              <button disabled={Boolean(activeRequestId)} className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline disabled:opacity-40" type="button" onClick={() => void regenerateMessage(message)}><RotateCcw size={12} />{t("chat.regenerate")}</button>
-                            ) : null}
-                            <button className={`whitespace-nowrap font-medium hover:underline ${isUser ? "text-ink-900/70" : "text-slate-400 hover:text-slate-200"}`} type="button" onClick={() => startEditingMessage(message)}>{t("common.edit")}</button>
-                            <button className={`whitespace-nowrap font-medium hover:underline ${isUser ? "text-ink-900/70" : "text-rose-400 hover:text-rose-300"}`} type="button" onClick={() => setPendingDeleteMessage(message)}>{t("common.delete")}</button>
-                          </span>
-                        </div>
-                        <p
-                          className={`whitespace-pre-wrap leading-relaxed ${
-                            isUser ? "text-right" : "text-left"
-                          }`}
-                        >
-                          {message.content}
-                        </p>
-                        {message.role === "assistant" ? (
-                          <div className="mt-3 border-t border-white/5 pt-2">
-                            <p className="text-[11px] font-medium text-slate-500">
-                              {formatTokenUsage(message.tokenUsage)}
-                            </p>
-                            {message.loreMatches.length > 0 ? (
-                              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                                <span className="text-[11px] font-medium text-slate-500">{t("chat.triggeredLore")}</span>
-                                {getTriggeredLorebooks(message).map((book) => (
-                                  <span
-                                    className="inline-flex max-w-full items-center rounded-full border border-ember-500/20 bg-ember-500/10 px-2 py-0.5 text-[11px] font-medium text-ember-200"
-                                    key={book.id}
-                                  >
-                                    <span className="truncate">{book.name}</span>
-                                    {book.count > 1 ? <span className="ml-1 text-ember-200/70">x{book.count}</span> : null}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : null}
-                          </div>
-                        ) : null}
-                      </article>
-                      {isUser
-                        ? renderMessageAvatar({
-                            align: "right",
-                            name: senderName,
-                            user: true
-                          })
-                        : null}
-                    </div>
+                      message={message}
+                      senderName={senderName}
+                      avatar={character?.avatar}
+                      tokenUsageFormatter={formatTokenUsage}
+                      triggeredLorebooks={getTriggeredLorebooks(message)}
+                      onCopy={() => void copyMessage(message)}
+                      onRegenerate={() => void regenerateMessage(message)}
+                      onEdit={() => startEditingMessage(message)}
+                      onDelete={() => setPendingDeleteMessage(message)}
+                      onVariantPrev={() => void switchVariant(message, -1)}
+                      onVariantNext={() => void switchVariant(message, 1)}
+                      disableRegenerate={Boolean(activeRequestId)}
+                    />
                   );
                 })
               )}
-              {activeRequestId ? (
-                <div className="flex items-start justify-start gap-3">
-                  {renderMessageAvatar({
-                    avatar: streamingCharacterId ? characterMap.get(streamingCharacterId)?.avatar : null,
-                    name: streamingCharacterId
+              {activeRequestId && streamingCharacterId ? (
+                <StreamingBubble
+                  key="streaming"
+                  characterName={
+                    streamingCharacterId
                       ? characterMap.get(streamingCharacterId)?.name ?? t("common.unknown")
                       : t("chat.streaming")
-                  })}
-                  <article className="order-1 max-w-[calc(100%-3.25rem)] rounded-2xl rounded-bl-sm border border-ember-500/20 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-md animate-fade-in backdrop-blur-sm sm:max-w-[85%]">
-                    <div className="mb-2 text-xs font-bold tracking-wide text-ember-400 flex items-center gap-2">
-                      <span className="relative flex h-2 w-2">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-ember-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-ember-500"></span>
-                      </span>
-                      {streamingCharacterId
-                        ? t("chat.streamingAs", {
-                            name: characterMap.get(streamingCharacterId)?.name ?? t("common.unknown")
-                          })
-                        : t("chat.streaming")}
-                    </div>
-                    {streamingContent ? (
-                      <p className="whitespace-pre-wrap leading-relaxed">{streamingContent}</p>
-                    ) : (
-                      <div className="flex items-center gap-1 py-1">
-                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-ember-400/60 [animation-delay:0ms]"></span>
-                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-ember-400/60 [animation-delay:150ms]"></span>
-                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-ember-400/60 [animation-delay:300ms]"></span>
-                      </div>
-                    )}
-                  </article>
-                </div>
+                  }
+                  characterAvatar={
+                    streamingCharacterId ? characterMap.get(streamingCharacterId)?.avatar : null
+                  }
+                  content={streamingContent}
+                />
               ) : null}
             </div>
 
