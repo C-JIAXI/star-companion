@@ -8,6 +8,7 @@ import {
   RotateCcw,
   Send,
   Settings,
+  Sparkles,
   StopCircle,
   Trash2,
   UserRound,
@@ -16,6 +17,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
+import { generateId } from "../lib/uuid";
 import type {
   CharacterDTO,
   ChatDTO,
@@ -23,7 +25,9 @@ import type {
   ChatWithMessagesDTO,
   GenerationClientMessage,
   GenerationServerMessage,
+  LorebookDTO,
   MessageDTO,
+  ModelPreset,
   TokenUsageDTO
 } from "../types";
 import { Badge, Button, ConfirmDialog, EmptyState, ErrorNotice, Field, Panel, SuccessNotice, TextArea, TextInput } from "../components/ui";
@@ -32,12 +36,14 @@ export function ChatPage() {
   const { t } = useI18n();
   const [mobilePane, setMobilePane] = useState<"chats" | "messages" | "create">("messages");
   const [characters, setCharacters] = useState<CharacterDTO[]>([]);
+  const [lorebooks, setLorebooks] = useState<LorebookDTO[]>([]);
   const [chats, setChats] = useState<ChatDTO[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [activeChat, setActiveChat] = useState<ChatWithMessagesDTO | null>(null);
   const [title, setTitle] = useState("");
   const [mode, setMode] = useState<ChatMode>("single");
   const [characterIds, setCharacterIds] = useState<string[]>([]);
+  const [lorebookIds, setLorebookIds] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingCharacterId, setStreamingCharacterId] = useState<string | null>(null);
@@ -46,6 +52,9 @@ export function ChatPage() {
   const [editDraft, setEditDraft] = useState("");
   const [memorySettingsOpen, setMemorySettingsOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState("12");
+  const [chatLorebookIdsDraft, setChatLorebookIdsDraft] = useState<string[]>([]);
+  const [settingsModels, setSettingsModels] = useState<ModelPreset[]>([]);
+  const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [pendingDeleteChat, setPendingDeleteChat] = useState<ChatDTO | null>(null);
   const [pendingDeleteMessage, setPendingDeleteMessage] = useState<MessageDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +65,11 @@ export function ChatPage() {
   const characterMap = useMemo(
     () => new Map(characters.map((character) => [character.id, character])),
     [characters]
+  );
+
+  const lorebookMap = useMemo(
+    () => new Map(lorebooks.map((lorebook) => [lorebook.id, lorebook])),
+    [lorebooks]
   );
 
   const getModeLabel = (chatMode: ChatMode) =>
@@ -135,9 +149,19 @@ export function ChatPage() {
   );
 
   const loadBase = async () => {
-    const [characterData, chatData] = await Promise.all([api.characters.list(), api.chats.list()]);
+    const [characterData, lorebookData, chatData, settings] = await Promise.all([
+      api.characters.list(),
+      api.lorebooks.list(),
+      api.chats.list(),
+      api.settings.get()
+    ]);
     setCharacters(characterData);
+    setLorebooks(lorebookData);
     setChats(chatData);
+    setSettingsModels(settings.models ?? []);
+    if (settings.models?.length) {
+      setActiveModelId(settings.models[0].id);
+    }
     if (!selectedChatId && chatData[0]) {
       setSelectedChatId(chatData[0].id);
     }
@@ -151,6 +175,7 @@ export function ChatPage() {
     const chat = await api.chats.get(id);
     setActiveChat(chat);
     setMemoryDraft(String(chat.memoryTurns));
+    setChatLorebookIdsDraft(chat.lorebookIds ?? []);
   };
 
   useEffect(() => {
@@ -182,9 +207,32 @@ export function ChatPage() {
   }, [status]);
 
   const toggleCharacter = (id: string) => {
-    setCharacterIds((current) =>
+    setCharacterIds((current) => {
+      if (mode === "single") {
+        return current[0] === id ? current : [id];
+      }
+
+      return current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id];
+    });
+  };
+
+  const toggleLorebook = (id: string) => {
+    setLorebookIds((current) =>
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
     );
+  };
+
+  const toggleChatLorebookDraft = (id: string) => {
+    setChatLorebookIdsDraft((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
+    );
+  };
+
+  const updateMode = (nextMode: ChatMode) => {
+    setMode(nextMode);
+    setCharacterIds((current) => (nextMode === "single" ? current.slice(0, 1) : current));
   };
 
   const createChat = async () => {
@@ -195,10 +243,12 @@ export function ChatPage() {
       const chat = await api.chats.create({
         title: title.trim(),
         mode,
-        characterIds
+        characterIds,
+        lorebookIds
       });
       setTitle("");
       setCharacterIds([]);
+      setLorebookIds([]);
       setSelectedChatId(chat.id);
       setMobilePane("messages");
       await loadBase();
@@ -215,7 +265,24 @@ export function ChatPage() {
     }
 
     setMemoryDraft(String(activeChat.memoryTurns));
-    setMemorySettingsOpen((current) => !current);
+    setChatLorebookIdsDraft(activeChat.lorebookIds ?? []);
+    setMemorySettingsOpen((current) => {
+      if (!current) {
+        void api.settings.get().then((settings) => {
+          const models = settings.models ?? [];
+          setSettingsModels(models);
+          if (models.length > 0) {
+            const active = models.find(
+              (m) => m.provider === settings.activeProvider && m.model === settings.model
+            );
+            setActiveModelId(active?.id ?? models[0].id);
+          } else {
+            setActiveModelId(null);
+          }
+        });
+      }
+      return !current;
+    });
   };
 
   const updateMemory = async () => {
@@ -230,13 +297,28 @@ export function ChatPage() {
     setError(null);
     setStatus(null);
     try {
-      const updated = await api.chats.update(activeChat.id, { memoryTurns });
-      setActiveChat((current) => (current ? { ...current, memoryTurns: updated.memoryTurns } : current));
+      const updated = await api.chats.update(activeChat.id, {
+        memoryTurns,
+        lorebookIds: chatLorebookIdsDraft
+      });
+      setActiveChat((current) =>
+        current
+          ? {
+              ...current,
+              memoryTurns: updated.memoryTurns,
+              lorebookIds: updated.lorebookIds
+            }
+          : current
+      );
       setChats((current) =>
-        current.map((chat) => (chat.id === updated.id ? { ...chat, memoryTurns: updated.memoryTurns } : chat))
+        current.map((chat) =>
+          chat.id === updated.id
+            ? { ...chat, memoryTurns: updated.memoryTurns, lorebookIds: updated.lorebookIds }
+            : chat
+        )
       );
       setMemorySettingsOpen(false);
-      setStatus(t("chat.memorySaved"));
+      setStatus(t("chat.chatSettingsSaved"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdateMemory"));
     } finally {
@@ -364,7 +446,7 @@ export function ChatPage() {
     setStatus(null);
     try {
       const socket = await getSocket();
-      const requestId = crypto.randomUUID();
+      const requestId = generateId();
       const payload: GenerationClientMessage = {
         type: "generate",
         requestId,
@@ -406,7 +488,7 @@ export function ChatPage() {
     setError(null);
     try {
       const socket = await getSocket();
-      const requestId = crypto.randomUUID();
+      const requestId = generateId();
       const payload: GenerationClientMessage = {
         type: "regenerate",
         requestId,
@@ -424,7 +506,18 @@ export function ChatPage() {
   };
 
   const copyMessage = async (message: MessageDTO) => {
-    await navigator.clipboard.writeText(message.content);
+    try {
+      await navigator.clipboard.writeText(message.content);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = message.content;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
   };
 
   const switchVariant = async (message: MessageDTO, direction: -1 | 1) => {
@@ -521,17 +614,25 @@ export function ChatPage() {
             <EmptyState>{t("chat.noChats")}</EmptyState>
           ) : (
             chats.map((chat) => (
-              <button
-                className={`group w-full rounded-lg border p-3 text-left text-sm transition-all duration-200 ${
+              <div
+                className={`group w-full cursor-pointer rounded-lg border p-3 text-left text-sm transition-all duration-200 ${
                   selectedChatId === chat.id
                     ? "border-ember-500/50 bg-ember-500/10 shadow-md shadow-ember-500/5"
                     : "border-white/5 bg-white/5 hover:border-white/10 hover:bg-white/10"
                 }`}
                 key={chat.id}
-                type="button"
+                role="button"
+                tabIndex={0}
                 onClick={() => {
                   setSelectedChatId(chat.id);
                   setMobilePane("messages");
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setSelectedChatId(chat.id);
+                    setMobilePane("messages");
+                  }
                 }}
               >
                 <div className="flex items-start justify-between gap-2">
@@ -541,12 +642,17 @@ export function ChatPage() {
                       <span className={`inline-block h-1.5 w-1.5 rounded-full ${chat.mode === 'group' ? 'bg-indigo-400' : 'bg-emerald-400'}`}></span>
                       {getModeLabel(chat.mode)} <span className="opacity-50">·</span> {t("chat.boundCharacters", { count: chat.characterIds.length })}
                     </p>
+                    {chat.lorebookIds.length > 0 ? (
+                      <p className="mt-1 truncate text-xs text-slate-500">
+                        {t("chat.boundLorebooks", { count: chat.lorebookIds.length })}
+                      </p>
+                    ) : null}
                   </div>
                   <Button className="!h-8 !min-h-8 !w-8 !p-0 opacity-0 transition-opacity group-hover:opacity-100" variant="ghost" onClick={(event) => { event.stopPropagation(); setPendingDeleteChat(chat); }}>
                     <Trash2 size={14} className="text-rose-400" />
                   </Button>
                 </div>
-              </button>
+              </div>
             ))
           )}
         </div>
@@ -569,25 +675,106 @@ export function ChatPage() {
                 <Settings size={15} />
               </Button>
               {memorySettingsOpen ? (
-                <div className="absolute right-0 top-10 z-20 w-56 rounded-lg border border-white/10 bg-ink-900 p-3 shadow-xl shadow-black/30">
-                  <Field label={t("chat.memorySettings")}>
-                    <TextInput
-                      min={1}
-                      max={50}
-                      type="number"
-                      value={memoryDraft}
-                      onChange={(event) => setMemoryDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          void updateMemory();
-                        }
-                      }}
-                    />
-                  </Field>
-                  <p className="mt-2 text-xs leading-relaxed text-slate-500">{t("chat.memoryHelp")}</p>
-                  <Button className="mt-3 w-full !min-h-[34px]" disabled={loading} onClick={() => void updateMemory()}>
-                    {t("common.save")}
-                  </Button>
+                <div className="absolute right-0 top-10 z-20 w-72 rounded-xl border border-white/10 bg-ink-900/95 p-3.5 shadow-xl shadow-black/30 backdrop-blur-md">
+                  {settingsModels.length > 0 ? (
+                    <div className="mb-3 border-b border-white/10 pb-3">
+                      <p className="mb-2 text-sm font-semibold text-slate-100">
+                        {t("chat.modelSwitchTitle")}
+                      </p>
+                      <div className="space-y-1.5">
+                        {settingsModels.map((model) => (
+                          <button
+                            className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
+                              activeModelId === model.id
+                                ? "bg-ember-500/15 text-ember-200 ring-1 ring-ember-500/30"
+                                : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                            }`}
+                            key={model.id}
+                            type="button"
+                            onClick={() => {
+                              setActiveModelId(model.id);
+                              setMemorySettingsOpen(false);
+                              void api.settings.update({
+                                activeProvider: model.provider,
+                                apiBaseUrl: model.apiBaseUrl,
+                                model: model.model,
+                                apiKey: model.key ?? "",
+                                temperature: 0.8,
+                                maxTokens: 800,
+                                topP: 1,
+                                language: "zh-CN",
+                                models: settingsModels
+                              });
+                              setStatus(t("chat.modelSwitched", { label: model.label || model.model }));
+                            }}
+                          >
+                            <Sparkles
+                              size={14}
+                              className={activeModelId === model.id ? "text-ember-300" : "text-slate-500"}
+                            />
+                            <span className="min-w-0 flex-1 truncate font-medium">
+                              {model.label || model.model}
+                            </span>
+                            <span className="ml-auto shrink-0 text-[11px] font-medium text-slate-500">
+                              {model.provider}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="space-y-3">
+                    <Field label={t("chat.memorySettings")} labelClassName="!text-sm !font-semibold !text-slate-100">
+                      <TextInput
+                        min={1}
+                        max={50}
+                        type="number"
+                        value={memoryDraft}
+                        onChange={(event) => setMemoryDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            void updateMemory();
+                          }
+                        }}
+                      />
+                    </Field>
+                    <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
+                      {t("chat.memoryHelp")}
+                    </p>
+                    <div className="border-t border-white/10 pt-3">
+                      <p className="mb-2 text-sm font-semibold text-slate-100">{t("chat.lorebooks")}</p>
+                      {lorebooks.length === 0 ? (
+                        <p className="rounded-lg border border-white/5 bg-white/5 px-3 py-2 text-xs text-slate-400">
+                          {t("chat.noLorebooks")}
+                        </p>
+                      ) : (
+                        <div className="custom-scrollbar max-h-40 space-y-1.5 overflow-y-auto pr-1">
+                          {lorebooks.map((lorebook) => (
+                            <label
+                              className={`flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                                chatLorebookIdsDraft.includes(lorebook.id)
+                                  ? "border-ember-500/30 bg-ember-500/10 text-ember-100"
+                                  : "border-white/5 bg-white/5 text-slate-300 hover:bg-white/10"
+                              }`}
+                              key={lorebook.id}
+                            >
+                              <input
+                                checked={chatLorebookIdsDraft.includes(lorebook.id)}
+                                type="checkbox"
+                                className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                                onChange={() => toggleChatLorebookDraft(lorebook.id)}
+                              />
+                              <span className="min-w-0 truncate">{lorebook.name}</span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <Button className="w-full !min-h-[34px]" disabled={loading} onClick={() => void updateMemory()}>
+                      {t("common.save")}
+                    </Button>
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -602,6 +789,9 @@ export function ChatPage() {
               <Badge>{getModeLabel(activeChat.mode)}</Badge>
               {activeChat.characterIds.map((id) => (
                 <Badge key={id}>{characterMap.get(id)?.name ?? t("common.unknown")}</Badge>
+              ))}
+              {activeChat.lorebookIds.map((id) => (
+                <Badge key={id}>{lorebookMap.get(id)?.name ?? t("nav.lore")}</Badge>
               ))}
             </div>
 
@@ -634,27 +824,49 @@ export function ChatPage() {
                             : "bg-ink-800/80 border border-white/5 text-slate-100 rounded-bl-sm backdrop-blur-sm"
                         }`}
                       >
-                        <div className="mb-2 flex items-center justify-between gap-3">
-                          <span className={`text-xs font-bold tracking-wide ${isUser ? "text-ink-900/70" : "text-ember-400"}`}>
+                        <div
+                          className={`mb-3 flex flex-col gap-2 ${
+                            isUser ? "items-end" : "items-start"
+                          } sm:mb-2 sm:flex-row sm:items-center sm:justify-between`}
+                        >
+                          <span
+                            className={`shrink-0 text-xs font-bold tracking-wide sm:max-w-[45%] sm:truncate ${
+                              isUser ? "sm:order-2 sm:text-right" : "sm:order-1"
+                            } ${
+                              isUser ? "text-ink-900/70" : "text-ember-400"
+                            }`}
+                          >
                             {senderName}
                           </span>
-                          <span className="flex flex-wrap justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                          <span
+                            className={`flex w-full flex-wrap items-center gap-1.5 text-[11px] opacity-100 sm:w-auto sm:flex-nowrap sm:text-xs sm:opacity-0 sm:transition-opacity sm:duration-200 sm:group-hover:opacity-100 ${
+                              isUser
+                                ? "justify-end sm:order-1 sm:justify-start"
+                                : "justify-start sm:order-2 sm:justify-end"
+                            }`}
+                          >
                             {message.role === "assistant" && message.variants.length > 1 ? (
-                              <span className="mr-2 inline-flex items-center gap-1.5 text-xs bg-ink-950/40 rounded-full px-2 py-0.5">
-                                <button className="rounded-full hover:bg-white/20 p-0.5 transition-colors" type="button" onClick={() => void switchVariant(message, -1)}><ChevronLeft size={13} /></button>
+                              <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-ink-950/40 px-2 py-0.5 text-[11px] sm:text-xs">
+                                <button className="rounded-full p-0.5 transition-colors hover:bg-white/20" type="button" onClick={() => void switchVariant(message, -1)}><ChevronLeft size={13} /></button>
                                 <span className="font-medium">{message.activeVariantIndex + 1}/{message.variants.length}</span>
-                                <button className="rounded-full hover:bg-white/20 p-0.5 transition-colors" type="button" onClick={() => void switchVariant(message, 1)}><ChevronRight size={13} /></button>
+                                <button className="rounded-full p-0.5 transition-colors hover:bg-white/20" type="button" onClick={() => void switchVariant(message, 1)}><ChevronRight size={13} /></button>
                               </span>
                             ) : null}
-                            <button className={`inline-flex items-center gap-1 text-xs font-medium hover:underline ${isUser ? "text-ink-900/70" : "text-slate-400 hover:text-slate-200"}`} type="button" onClick={() => void copyMessage(message)}><Copy size={12} />{t("common.copy")}</button>
+                            <button className={`inline-flex items-center gap-1 whitespace-nowrap font-medium hover:underline ${isUser ? "text-ink-900/70" : "text-slate-400 hover:text-slate-200"}`} type="button" onClick={() => void copyMessage(message)}><Copy size={12} />{t("common.copy")}</button>
                             {message.role === "assistant" ? (
-                              <button disabled={Boolean(activeRequestId)} className="inline-flex items-center gap-1 text-xs font-medium text-slate-400 hover:text-slate-200 hover:underline disabled:opacity-40" type="button" onClick={() => void regenerateMessage(message)}><RotateCcw size={12} />{t("chat.regenerate")}</button>
+                              <button disabled={Boolean(activeRequestId)} className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline disabled:opacity-40" type="button" onClick={() => void regenerateMessage(message)}><RotateCcw size={12} />{t("chat.regenerate")}</button>
                             ) : null}
-                            <button className={`text-xs font-medium hover:underline ${isUser ? "text-ink-900/70" : "text-slate-400 hover:text-slate-200"}`} type="button" onClick={() => startEditingMessage(message)}>{t("common.edit")}</button>
-                            <button className={`text-xs font-medium hover:underline ${isUser ? "text-ink-900/70" : "text-rose-400 hover:text-rose-300"}`} type="button" onClick={() => setPendingDeleteMessage(message)}>{t("common.delete")}</button>
+                            <button className={`whitespace-nowrap font-medium hover:underline ${isUser ? "text-ink-900/70" : "text-slate-400 hover:text-slate-200"}`} type="button" onClick={() => startEditingMessage(message)}>{t("common.edit")}</button>
+                            <button className={`whitespace-nowrap font-medium hover:underline ${isUser ? "text-ink-900/70" : "text-rose-400 hover:text-rose-300"}`} type="button" onClick={() => setPendingDeleteMessage(message)}>{t("common.delete")}</button>
                           </span>
                         </div>
-                        <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+                        <p
+                          className={`whitespace-pre-wrap leading-relaxed ${
+                            isUser ? "text-right" : "text-left"
+                          }`}
+                        >
+                          {message.content}
+                        </p>
                         {message.role === "assistant" ? (
                           <div className="mt-3 border-t border-white/5 pt-2">
                             <p className="text-[11px] font-medium text-slate-500">
@@ -745,7 +957,7 @@ export function ChatPage() {
         <div className="space-y-3">
           <Field label={t("chat.title")}><TextInput value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
           <Field label={t("chat.mode")}>
-            <select className="min-h-[40px] w-full rounded-lg border border-white/10 bg-ink-950/50 px-3 text-sm text-slate-100 outline-none transition-all hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50" value={mode} onChange={(event) => setMode(event.target.value as ChatMode)}>
+            <select className="min-h-[40px] w-full rounded-lg border border-white/10 bg-ink-950/50 px-3 text-sm text-slate-100 outline-none transition-all hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50" value={mode} onChange={(event) => updateMode(event.target.value as ChatMode)}>
               <option value="single">{t("chat.mode.single")}</option>
               <option value="group">{t("chat.mode.group")}</option>
             </select>
@@ -758,8 +970,56 @@ export function ChatPage() {
               <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
                 {characters.map((character) => (
                   <label className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 text-sm transition-all duration-200 hover:bg-white/10 ${characterIds.includes(character.id) ? 'border-ember-500/30 bg-ember-500/5' : 'border-white/5 bg-white/5'}`} key={character.id}>
-                    <input checked={characterIds.includes(character.id)} type="checkbox" onChange={() => toggleCharacter(character.id)} className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50" />
-                    <span className={characterIds.includes(character.id) ? 'font-medium text-ember-100' : 'text-slate-200'}>{character.name}</span>
+                    <input checked={characterIds.includes(character.id)} name={mode === "single" ? "chat-character-single" : undefined} type={mode === "single" ? "radio" : "checkbox"} onChange={() => toggleCharacter(character.id)} className={`${mode === "single" ? "rounded-full" : "rounded"} border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50`} />
+                    <span className={`grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg border text-xs font-semibold ${
+                      characterIds.includes(character.id)
+                        ? "border-ember-400/40 bg-ember-500/10 text-ember-100"
+                        : "border-white/10 bg-ink-800 text-slate-200"
+                    }`}>
+                      {character.avatar ? (
+                        <img alt="" className="h-full w-full object-cover" src={character.avatar} />
+                      ) : (
+                        getCharacterInitials(character.name)
+                      )}
+                    </span>
+                    <span className={`min-w-0 truncate ${characterIds.includes(character.id) ? 'font-medium text-ember-100' : 'text-slate-200'}`}>
+                      {character.name}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="space-y-2.5">
+            <p className="text-sm font-medium text-slate-300">{t("chat.lorebooks")}</p>
+            {lorebooks.length === 0 ? (
+              <EmptyState>{t("chat.noLorebooks")}</EmptyState>
+            ) : (
+              <div className="custom-scrollbar max-h-[220px] space-y-2 overflow-y-auto pr-1">
+                {lorebooks.map((lorebook) => (
+                  <label
+                    className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 text-sm transition-all duration-200 hover:bg-white/10 ${
+                      lorebookIds.includes(lorebook.id)
+                        ? "border-ember-500/30 bg-ember-500/5"
+                        : "border-white/5 bg-white/5"
+                    }`}
+                    key={lorebook.id}
+                  >
+                    <input
+                      checked={lorebookIds.includes(lorebook.id)}
+                      type="checkbox"
+                      className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                      onChange={() => toggleLorebook(lorebook.id)}
+                    />
+                    <span
+                      className={`min-w-0 truncate ${
+                        lorebookIds.includes(lorebook.id)
+                          ? "font-medium text-ember-100"
+                          : "text-slate-200"
+                      }`}
+                    >
+                      {lorebook.name}
+                    </span>
                   </label>
                 ))}
               </div>

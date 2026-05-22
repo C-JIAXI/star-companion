@@ -8,11 +8,13 @@ import type {
   AppLanguage,
   BackupDTO,
   BackupImportSummaryDTO,
+  LoreTriggerMode,
   LoreEntryDTO,
   LorebookDTO,
   LorebookWithEntriesDTO,
   MessageDTO,
   MessageRole,
+  ModelPreset,
   PublicUserSettingsDTO,
   TokenUsageDTO
 } from "@local-roleplay/shared";
@@ -42,6 +44,7 @@ export type ChatInput = {
   title: string;
   mode: ChatMode;
   characterIds: string[];
+  lorebookIds?: string[];
   memoryTurns?: number;
 };
 
@@ -63,6 +66,7 @@ export type SettingsInput = {
   maxTokens: number;
   topP: number;
   language: AppLanguage;
+  models: ModelPreset[];
 };
 
 export type LorebookInput = {
@@ -74,6 +78,8 @@ export type LoreEntryInput = {
   keys: string[];
   content: string;
   priority: number;
+  triggerMode: LoreTriggerMode;
+  alwaysActive: boolean;
   enabled: boolean;
 };
 
@@ -87,10 +93,13 @@ export type {
   AppLanguage,
   BackupDTO,
   BackupImportSummaryDTO,
+  LoreTriggerMode,
   LoreEntryDTO,
   LorebookDTO,
   LorebookWithEntriesDTO,
   MessageDTO,
+  MessageRole,
+  ModelPreset,
   PublicUserSettingsDTO,
   TokenUsageDTO
 };

@@ -103,6 +103,7 @@ backupsRouter.post(
           title: chat.title,
           mode: chat.mode,
           characterIds: chat.characterIds,
+          lorebookIds: chat.lorebookIds,
           memoryTurns: chat.memoryTurns,
           ...importedDates(chat)
         };
@@ -182,6 +183,8 @@ backupsRouter.post(
             keys: entry.keys,
             content: entry.content,
             priority: entry.priority,
+            triggerMode: entry.triggerMode ?? "both",
+            alwaysActive: entry.alwaysActive,
             enabled: entry.enabled,
             ...importedDates(entry)
           };

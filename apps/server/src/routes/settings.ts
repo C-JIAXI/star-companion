@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { asyncHandler, parseBody } from "../lib/http.js";
 import { testModelConnection } from "../services/openaiCompatible.js";
@@ -62,6 +62,7 @@ settingsRouter.put(
       maxTokens: body.maxTokens,
       topP: body.topP,
       language: body.language,
+      models: body.models as Prisma.JsonArray,
       apiKey: "apiKey" in body ? encryptApiKey(body.apiKey) : undefined
     };
 

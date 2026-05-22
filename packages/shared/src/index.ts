@@ -4,6 +4,15 @@ export type ChatMode = "single" | "group";
 export type MessageRole = "user" | "assistant" | "system";
 export type AppLanguage = "zh-CN" | "en";
 
+export interface ModelPreset {
+  id: string;
+  label: string;
+  provider: string;
+  apiBaseUrl: string;
+  key?: string;
+  model: string;
+}
+
 export interface UserSettingsDTO {
   id: string;
   activeProvider: string;
@@ -13,6 +22,7 @@ export interface UserSettingsDTO {
   maxTokens: number;
   topP: number;
   language: AppLanguage;
+  models: ModelPreset[];
   createdAt: string;
   updatedAt: string;
 }
@@ -37,6 +47,7 @@ export interface ChatDTO {
   title: string;
   mode: ChatMode;
   characterIds: string[];
+  lorebookIds: string[];
   memoryTurns: number;
   createdAt: string;
   updatedAt: string;
@@ -75,6 +86,8 @@ export interface LorebookDTO {
   updatedAt: string;
 }
 
+export type LoreTriggerMode = "user" | "assistant" | "both";
+
 export interface LoreEntryDTO {
   id: string;
   lorebookId: string;
@@ -82,6 +95,8 @@ export interface LoreEntryDTO {
   keys: string[];
   content: string;
   priority: number;
+  triggerMode: LoreTriggerMode;
+  alwaysActive: boolean;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;

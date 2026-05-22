@@ -1,0 +1,1 @@
+ALTER TABLE "LoreEntry" ADD COLUMN "triggerMode" TEXT NOT NULL DEFAULT 'both';

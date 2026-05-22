@@ -18,6 +18,8 @@ const loreMatchSchema = z.object({
   keys: stringArraySchema,
   content: z.string(),
   priority: z.number().int(),
+  triggerMode: z.enum(["user", "assistant", "both"]).default("both"),
+  alwaysActive: z.boolean().default(false),
   enabled: z.boolean(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
@@ -31,22 +33,21 @@ export const characterCreateSchema = z.object({
   suffix: z.string().default("")
 });
 
-export const characterUpdateSchema = characterCreateSchema.partial().refine(
-  (value) => Object.keys(value).length > 0,
-  "At least one field is required"
-);
+export const characterUpdateSchema = characterCreateSchema
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, "At least one field is required");
 
 export const chatCreateSchema = z.object({
   title: z.string().trim().min(1),
   mode: z.enum(["single", "group"]).default("single"),
   characterIds: stringArraySchema,
+  lorebookIds: stringArraySchema,
   memoryTurns: z.number().int().min(1).max(50).default(12)
 });
 
-export const chatUpdateSchema = chatCreateSchema.partial().refine(
-  (value) => Object.keys(value).length > 0,
-  "At least one field is required"
-);
+export const chatUpdateSchema = chatCreateSchema
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, "At least one field is required");
 
 export const messageCreateSchema = z.object({
   chatId: idSchema,
@@ -83,7 +84,19 @@ export const settingsUpdateSchema = z.object({
   temperature: z.number().min(0).max(2),
   maxTokens: z.number().int().min(1).max(200000),
   topP: z.number().min(0).max(1),
-  language: z.enum(["zh-CN", "en"]).default("zh-CN")
+  language: z.enum(["zh-CN", "en"]).default("zh-CN"),
+  models: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        label: z.string().min(1),
+        provider: z.string().min(1),
+        apiBaseUrl: z.string().url(),
+        key: z.string().optional(),
+        model: z.string().min(1)
+      })
+    )
+    .default([])
 });
 
 export const generationRequestSchema = z.object({
@@ -110,22 +123,24 @@ export const lorebookCreateSchema = z.object({
   description: z.string().default("")
 });
 
-export const lorebookUpdateSchema = lorebookCreateSchema.partial().refine(
-  (value) => Object.keys(value).length > 0,
-  "At least one field is required"
-);
+export const lorebookUpdateSchema = lorebookCreateSchema
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, "At least one field is required");
+
+const loreTriggerModeSchema = z.enum(["user", "assistant", "both"]).default("both");
 
 export const loreEntryCreateSchema = z.object({
   keys: stringArraySchema,
   content: z.string().min(1),
   priority: z.number().int().default(0),
+  triggerMode: loreTriggerModeSchema,
+  alwaysActive: z.boolean().default(false),
   enabled: z.boolean().default(true)
 });
 
-export const loreEntryUpdateSchema = loreEntryCreateSchema.partial().refine(
-  (value) => Object.keys(value).length > 0,
-  "At least one field is required"
-);
+export const loreEntryUpdateSchema = loreEntryCreateSchema
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, "At least one field is required");
 
 const backupDateSchema = z.string().datetime().optional();
 

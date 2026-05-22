@@ -1,11 +1,29 @@
 import { AlertTriangle, CheckCircle, HelpCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
+import type {
+  ButtonHTMLAttributes,
+  CSSProperties,
+  InputHTMLAttributes,
+  ReactNode,
+  TextareaHTMLAttributes
+} from "react";
 
-export function Panel({ title, action, children }: { title: ReactNode; action?: ReactNode; children: ReactNode }) {
+export function Panel({
+  title,
+  action,
+  children,
+  className = ""
+}: {
+  title: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
   return (
-    <section className="animate-fade-in h-full min-w-0 rounded-xl border border-white/5 bg-ink-900/80 p-4 shadow-lg shadow-black/20 backdrop-blur-sm transition-all">
+    <section
+      className={`animate-fade-in h-full min-w-0 rounded-xl border border-white/5 bg-ink-900/80 p-4 shadow-lg shadow-black/20 backdrop-blur-sm transition-all ${className}`}
+    >
       <div className="mb-3 flex items-center justify-between gap-3">
         <h3 className="text-sm font-semibold tracking-wide text-slate-100">{title}</h3>
         {action}
@@ -19,12 +37,18 @@ export function Button({
   variant = "primary",
   className = "",
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "ghost" | "danger" | "secondary" }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: "primary" | "ghost" | "danger" | "secondary";
+}) {
   const variants = {
-    primary: "bg-ember-500 text-ink-950 hover:bg-ember-400 focus:ring-ember-500/50 shadow-md shadow-ember-500/20",
-    secondary: "bg-ink-800 text-slate-200 hover:bg-ink-700 border border-white/5 focus:ring-ink-600/50",
-    ghost: "bg-transparent text-slate-300 hover:bg-white/10 hover:text-slate-100 focus:ring-white/20",
-    danger: "bg-rose-500/90 text-white hover:bg-rose-500 focus:ring-rose-500/50 shadow-md shadow-rose-500/20"
+    primary:
+      "bg-ember-500 text-ink-950 hover:bg-ember-400 focus:ring-ember-500/50 shadow-md shadow-ember-500/20",
+    secondary:
+      "bg-ink-800 text-slate-200 hover:bg-ink-700 border border-white/5 focus:ring-ink-600/50",
+    ghost:
+      "bg-transparent text-slate-300 hover:bg-white/10 hover:text-slate-100 focus:ring-white/20",
+    danger:
+      "bg-rose-500/90 text-white hover:bg-rose-500 focus:ring-rose-500/50 shadow-md shadow-rose-500/20"
   };
 
   return (
@@ -36,35 +60,102 @@ export function Button({
   );
 }
 
-export function Field({ label, children }: { label: ReactNode; children: ReactNode }) {
+export function Field({
+  label,
+  labelClassName = "",
+  children
+}: {
+  label: ReactNode;
+  labelClassName?: string;
+  children: ReactNode;
+}) {
   return (
     <label className="grid min-w-0 gap-1.5 text-sm">
-      <span className="font-medium text-slate-300">{label}</span>
+      <span className={`font-medium text-slate-300 ${labelClassName}`}>{label}</span>
       {children}
     </label>
   );
 }
 
 export function HelpLabel({ label, description }: { label: ReactNode; description: ReactNode }) {
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const [open, setOpen] = useState(false);
+  const [tooltipStyle, setTooltipStyle] = useState<CSSProperties | null>(null);
+
+  const updateTooltipPosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) {
+      setTooltipStyle(null);
+      return;
+    }
+
+    const rect = trigger.getBoundingClientRect();
+    const horizontalPadding = 16;
+    const verticalGap = 8;
+    const tooltipWidth = Math.min(256, window.innerWidth - horizontalPadding * 2);
+    const estimatedTooltipHeight = 96;
+    const spaceBelow = window.innerHeight - rect.bottom - horizontalPadding;
+    const placeAbove =
+      spaceBelow < estimatedTooltipHeight && rect.top > estimatedTooltipHeight + verticalGap;
+    const left = Math.min(
+      Math.max(rect.left + rect.width / 2 - tooltipWidth / 2, horizontalPadding),
+      window.innerWidth - tooltipWidth - horizontalPadding
+    );
+
+    setTooltipStyle({
+      left,
+      top: placeAbove ? rect.top - verticalGap : rect.bottom + verticalGap,
+      width: tooltipWidth,
+      transform: placeAbove ? "translateY(-100%)" : undefined
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    updateTooltipPosition();
+    const handleViewportChange = () => updateTooltipPosition();
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+
+    return () => {
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [open, updateTooltipPosition]);
+
   return (
     <span className="inline-flex items-center gap-1.5">
       <span>{label}</span>
-      <span className="group relative inline-flex">
+      <span className="relative inline-flex">
         <span
+          ref={triggerRef}
           aria-label={typeof label === "string" ? `${label} help` : "Field help"}
           className="inline-grid h-4 w-4 cursor-help place-items-center rounded-full text-slate-500 outline-none transition-colors hover:text-ember-400 focus:text-ember-400"
           role="img"
           tabIndex={0}
+          onBlur={() => setOpen(false)}
+          onFocus={() => setOpen(true)}
+          onMouseEnter={() => setOpen(true)}
+          onMouseLeave={() => setOpen(false)}
         >
           <HelpCircle size={14} />
         </span>
-        <span
-          className="animate-fade-in pointer-events-none absolute left-0 top-6 z-30 hidden w-64 rounded-lg border border-white/10 bg-ink-800/95 backdrop-blur-md px-3 py-2.5 text-xs leading-relaxed text-slate-200 shadow-xl shadow-black/40 group-hover:block group-focus-within:block"
-          role="tooltip"
-        >
-          {description}
-        </span>
       </span>
+      {open && tooltipStyle && typeof document !== "undefined"
+        ? createPortal(
+            <span
+              className="animate-fade-in pointer-events-none fixed z-[80] rounded-lg border border-white/10 bg-ink-800/95 px-3 py-2.5 text-xs leading-relaxed text-slate-200 shadow-xl shadow-black/40 backdrop-blur-md"
+              role="tooltip"
+              style={tooltipStyle}
+            >
+              {description}
+            </span>,
+            document.body
+          )
+        : null}
     </span>
   );
 }
@@ -78,7 +169,11 @@ export function TextInput({ className = "", ...props }: InputHTMLAttributes<HTML
   );
 }
 
-export function TextArea({ className = "", style, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function TextArea({
+  className = "",
+  style,
+  ...props
+}: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
       className={`custom-scrollbar h-[320px] w-full min-w-0 resize-none overflow-y-auto rounded-lg border border-white/10 bg-ink-950/50 px-3 py-2.5 text-sm text-slate-100 outline-none transition-all placeholder:text-slate-500 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50 ${className}`}
@@ -173,25 +268,30 @@ export function ConfirmDialog({
   onConfirm: () => void;
 }) {
   return (
-    <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm p-4">
+    <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 p-3 backdrop-blur-sm sm:p-4">
       <section
         aria-labelledby="confirm-dialog-title"
-        className="animate-scale-in w-full max-w-md rounded-2xl border border-white/10 bg-ink-900 p-6 shadow-2xl shadow-black/50"
+        className="animate-scale-in flex max-h-[calc(100dvh-1.5rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-white/10 bg-ink-900 shadow-2xl shadow-black/50 sm:max-h-[calc(100dvh-2rem)]"
         role="dialog"
       >
+        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-5 sm:p-6">
         <div className="flex gap-4">
           <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-rose-500/15 text-rose-400 ring-4 ring-rose-500/5">
             <AlertTriangle size={20} />
           </div>
           <div className="min-w-0 pt-1">
-            <h3 className="text-lg font-semibold tracking-tight text-slate-100" id="confirm-dialog-title">
+            <h3
+              className="text-lg font-semibold tracking-tight text-slate-100"
+              id="confirm-dialog-title"
+            >
               {title}
             </h3>
             <p className="mt-2 text-sm leading-relaxed text-slate-300">{message}</p>
           </div>
         </div>
+        </div>
 
-        <div className="mt-6 flex flex-wrap justify-end gap-3">
+        <div className="flex shrink-0 flex-wrap justify-end gap-3 border-t border-white/10 px-5 py-4 sm:px-6">
           <Button disabled={loading} variant="ghost" onClick={onCancel}>
             {cancelLabel}
           </Button>

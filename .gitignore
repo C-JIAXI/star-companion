@@ -3,6 +3,7 @@ dist
 .env
 .env.local
 *.log
+tmp-*.png
 .DS_Store
 .vite
 coverage
@@ -11,4 +12,7 @@ test-results
 apps/web/playwright-report
 apps/web/test-results
 apps/server/prisma/dev.db
-apps/server/prisma/dev.db-journal
+apps/server/prisma/dev.db*
+packages/shared/src/*.js
+packages/shared/src/*.d.ts
+packages/shared/src/*.map

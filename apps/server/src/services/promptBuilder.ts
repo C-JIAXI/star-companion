@@ -8,6 +8,8 @@ type PromptInput = {
   before?: Date;
 };
 
+type LoreTriggerMode = "user" | "assistant" | "both";
+
 export type MatchedLoreEntry = {
   id: string;
   lorebookId: string;
@@ -15,6 +17,8 @@ export type MatchedLoreEntry = {
   keys: string[];
   content: string;
   priority: number;
+  triggerMode: LoreTriggerMode;
+  alwaysActive: boolean;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -28,7 +32,16 @@ const toStringArray = (value: Prisma.JsonValue): string[] => {
   return value.filter((item): item is string => typeof item === "string");
 };
 
-const toContextMessageLimit = (memoryTurns: number) => Math.max(1, Math.min(memoryTurns, 50)) * 2 + 1;
+const toContextMessageLimit = (memoryTurns: number) =>
+  Math.max(1, Math.min(memoryTurns, 50)) * 2 + 1;
+
+const normalizeLoreTriggerMode = (value: string | null | undefined): LoreTriggerMode => {
+  if (value === "user" || value === "assistant") {
+    return value;
+  }
+
+  return "both";
+};
 
 const buildCharacterSystemPrompt = (character: Character | null): string => {
   if (!character) {
@@ -68,6 +81,8 @@ const serializeMatchedLoreEntry = (entry: LoreEntryWithBook): MatchedLoreEntry =
   keys: toStringArray(entry.keys),
   content: entry.content,
   priority: entry.priority,
+  triggerMode: normalizeLoreTriggerMode(entry.triggerMode),
+  alwaysActive: entry.alwaysActive,
   enabled: entry.enabled,
   createdAt: entry.createdAt.toISOString(),
   updatedAt: entry.updatedAt.toISOString()
@@ -75,6 +90,21 @@ const serializeMatchedLoreEntry = (entry: LoreEntryWithBook): MatchedLoreEntry =
 
 const matchesContext = (entry: LoreEntry, contextText: string) =>
   toStringArray(entry.keys).some((key) => contextText.includes(key.toLowerCase()));
+
+const buildLoreContexts = (recentMessages: Message[]) => {
+  const messageText = (roles: Array<Message["role"]>) =>
+    recentMessages
+      .filter((message) => roles.includes(message.role))
+      .map((message) => message.content)
+      .join("\n")
+      .toLowerCase();
+
+  return {
+    user: messageText(["user"]),
+    assistant: messageText(["assistant"]),
+    both: messageText(["user", "assistant"])
+  } satisfies Record<LoreTriggerMode, string>;
+};
 
 const buildLoreSystemPrompt = (entries: MatchedLoreEntry[]) => {
   if (entries.length === 0) {
@@ -95,32 +125,49 @@ const buildLoreSystemPrompt = (entries: MatchedLoreEntry[]) => {
   ].join("\n\n");
 };
 
-const findMatchedLoreEntries = async (recentMessages: Message[]) => {
-  const contextText = recentMessages
-    .map((message) => message.content)
-    .join("\n")
-    .toLowerCase();
+const findMatchedLoreEntries = async (recentMessages: Message[], lorebookIds: string[]) => {
+  if (lorebookIds.length === 0) {
+    return [];
+  }
 
-  if (!contextText.trim()) {
+  const contexts = buildLoreContexts(recentMessages);
+
+  if (!Object.values(contexts).some((contextText) => contextText.trim())) {
     return [];
   }
 
   const entries = await prisma.loreEntry.findMany({
-    where: { enabled: true },
+    where: {
+      enabled: true,
+      lorebookId: { in: lorebookIds }
+    },
     include: { lorebook: { select: { name: true } } },
     orderBy: [{ priority: "desc" }, { updatedAt: "desc" }]
   });
 
-  return entries.filter((entry) => matchesContext(entry, contextText)).slice(0, 8).map(serializeMatchedLoreEntry);
+  return entries
+    .filter((entry) => {
+      if (entry.alwaysActive) {
+        return true;
+      }
+
+      const triggerMode = normalizeLoreTriggerMode(entry.triggerMode);
+      return matchesContext(entry, contexts[triggerMode]);
+    })
+    .slice(0, 8)
+    .map(serializeMatchedLoreEntry);
 };
 
-export const resolveChatCharacterId = async (chatId: string, requestedCharacterId?: string | null) => {
+export const resolveChatCharacterId = async (
+  chatId: string,
+  requestedCharacterId?: string | null
+) => {
   if (requestedCharacterId) {
     return requestedCharacterId;
   }
 
   const chat = await prisma.chat.findUnique({ where: { id: chatId } });
-  return chat ? toStringArray(chat.characterIds)[0] ?? null : null;
+  return chat ? (toStringArray(chat.characterIds)[0] ?? null) : null;
 };
 
 export const buildPromptMessages = async ({
@@ -136,9 +183,13 @@ export const buildPromptContext = async ({
   chatId,
   characterId,
   before
-}: PromptInput): Promise<{ messages: ChatCompletionMessage[]; matchedLoreEntries: MatchedLoreEntry[] }> => {
+}: PromptInput): Promise<{
+  messages: ChatCompletionMessage[];
+  matchedLoreEntries: MatchedLoreEntry[];
+}> => {
   const chat = await prisma.chat.findUnique({ where: { id: chatId } });
-  const resolvedCharacterId = characterId ?? (chat ? toStringArray(chat.characterIds)[0] ?? null : null);
+  const resolvedCharacterId =
+    characterId ?? (chat ? (toStringArray(chat.characterIds)[0] ?? null) : null);
   const character = resolvedCharacterId
     ? await prisma.character.findUnique({ where: { id: resolvedCharacterId } })
     : null;
@@ -155,19 +206,25 @@ export const buildPromptContext = async ({
   const recentMessages = recentMessagesDesc.reverse();
 
   const characterIds = [
-    ...new Set(recentMessages.map((message) => message.characterId).filter((id): id is string => Boolean(id)))
+    ...new Set(
+      recentMessages.map((message) => message.characterId).filter((id): id is string => Boolean(id))
+    )
   ];
   const characters = characterIds.length
     ? await prisma.character.findMany({ where: { id: { in: characterIds } } })
     : [];
   const characterNames = new Map(characters.map((item) => [item.id, item.name]));
-  const matchedLoreEntries = await findMatchedLoreEntries(recentMessages);
+  const matchedLoreEntries = await findMatchedLoreEntries(
+    recentMessages,
+    chat ? toStringArray(chat.lorebookIds) : []
+  );
   const lorePrompt = buildLoreSystemPrompt(matchedLoreEntries);
 
   const systemMessages: ChatCompletionMessage[] = [
     {
       role: "system",
-      content: "Global instruction: support immersive roleplay while preserving user control and local data privacy."
+      content:
+        "Global instruction: support immersive roleplay while preserving user control and local data privacy."
     },
     {
       role: "system",

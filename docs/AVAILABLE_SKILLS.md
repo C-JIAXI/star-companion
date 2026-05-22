@@ -1,12 +1,33 @@
 # 可用 Skills 说明
 
-这份文档记录当前 Codex 会话里可用的 skills。你可以直接用自然语言触发，也可以像 `[$qa](C:\Users\CJIAXI\.codex\skills\qa\SKILL.md)` 这样点名调用。
+这份文档记录当前 Codex 会话里可直接使用的 skills，以及本项目里最常用的调用方式。
+
+- 同步时间：`2026-05-21`
+- 触发方式：
+  - 直接自然语言描述需求
+  - 显式点名，例如 `[$qa](C:\Users\CJIAXI\.codex\skills\qa\SKILL.md)`
+
+## 当前状态
+
+- 已同步当前会话内可用 skills
+- `openai/skills` 仓库当前未提供此前推荐的 `frontend-skill`
+- 因此当前前端制作仍以本机已有 skills 为主：`prototype`、`design-an-interface`、`browser:browser`、`imagegen`
+
+## 前端制作优先组合
+
+| 场景 | 优先 Skill |
+| --- | --- |
+| 做页面结构和交互原型 | `prototype` |
+| 比较多套界面或接口方案 | `design-an-interface` |
+| 打开本地页面、点击、截图、回归检查 | `browser:browser` |
+| 生成插图、背景图、贴图、位图素材 | `imagegen` |
+| 做移动端/桌面端样式问题排查 | `browser:browser` + `diagnose` |
 
 ## 开发与调试
 
 | Skill | 能做什么 |
 | --- | --- |
-| `diagnose` | 按“复现 → 缩小 → 假设 → 验证 → 修复 → 回归测试”的流程处理 bug、报错、性能回退。 |
+| `diagnose` | 按“复现 -> 缩小 -> 假设 -> 验证 -> 修复 -> 回归测试”的流程处理 bug、报错、性能回退。 |
 | `tdd` | 用红绿重构方式写功能或修 bug，先补测试，再实现。 |
 | `review` | 审查某个分支、PR 或一段 WIP 变更，重点找 bug、风险、缺测试和需求偏差。 |
 | `prototype` | 快速做可运行原型，用来试 UI、状态机、数据模型或交互方案。 |
@@ -95,6 +116,7 @@
 - 想知道还缺什么：`qa` 或 `review`
 - 新功能要稳一点：`tdd`
 - 要拆任务：`to-issues`
-- 要写毕设/说明文档：`edit-article`、`documents:documents`
+- 要写毕设或说明文档：`edit-article`、`documents:documents`
 - 要做界面验证：`browser:browser`
 - 要整理架构：`zoom-out`、`improve-codebase-architecture`
+- 要做前端快速改版：`prototype` + `browser:browser`

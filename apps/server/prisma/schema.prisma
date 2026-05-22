@@ -19,6 +19,8 @@ model UserSettings {
   topP           Float    @default(1)
   /// UI language. Valid values are "zh-CN" and "en".
   language       String   @default("zh-CN")
+  /// JSON array of model presets: [{ id, label, provider, apiBaseUrl, key, model }]
+  models         Json?    @default("[]")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }
@@ -42,6 +44,7 @@ model Chat {
   /// Valid values: "single" or "group".
   mode         String   @default("single")
   characterIds Json    @default("[]")
+  lorebookIds  Json     @default("[]")
   /// Number of recent user/assistant turns carried into prompt context.
   memoryTurns  Int      @default(12)
   createdAt    DateTime @default(now())
@@ -87,6 +90,8 @@ model LoreEntry {
   keys       Json     @default("[]")
   content    String
   priority   Int      @default(0)
+  triggerMode String  @default("both")
+  alwaysActive Boolean @default(false)
   enabled    Boolean  @default(true)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
