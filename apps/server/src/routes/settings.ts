@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { asyncHandler, parseBody } from "../lib/http.js";
 import { testModelConnection } from "../services/openaiCompatible.js";
-import { settingsUpdateSchema } from "../schemas.js";
+import { settingsUpdateSchema, userProfileUpdateSchema } from "../schemas.js";
 import { serializeSettings } from "../serializers.js";
 import { encryptApiKey, hasStoredApiKey } from "../services/apiKeyVault.js";
 
@@ -62,6 +62,10 @@ settingsRouter.put(
       maxTokens: body.maxTokens,
       topP: body.topP,
       language: body.language,
+      autoSummarizeUser: body.autoSummarizeUser,
+      userProfileSummary: body.userProfileSummary,
+      userProfileUpdatedAt:
+        typeof body.userProfileSummary === "string" ? new Date() : undefined,
       models: body.models as Prisma.JsonArray,
       apiKey: "apiKey" in body ? encryptApiKey(body.apiKey) : undefined
     };
@@ -69,6 +73,30 @@ settingsRouter.put(
     const settings = await prisma.userSettings.update({
       where: { id: existing.id },
       data
+    });
+
+    response.json({
+      ok: true,
+      data: {
+        ...serializeSettings(settings),
+        hasApiKey: hasStoredApiKey(settings.apiKey)
+      }
+    });
+  })
+);
+
+settingsRouter.put(
+  "/user-profile",
+  asyncHandler(async (request, response) => {
+    const body = parseBody(userProfileUpdateSchema, request.body);
+    const existing = await getOrCreateSettings();
+    const settings = await prisma.userSettings.update({
+      where: { id: existing.id },
+      data: {
+        userProfileSummary: body.userProfileSummary.trim(),
+        autoSummarizeUser: body.autoSummarizeUser,
+        userProfileUpdatedAt: body.userProfileSummary.trim() ? new Date() : null
+      }
     });
 
     response.json({

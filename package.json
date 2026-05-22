@@ -9,6 +9,7 @@
     "dev": "concurrently -n shared,server,web -c cyan,green,magenta \"npm run dev --prefix packages/shared\" \"npm run dev --prefix apps/server\" \"npm run dev --prefix apps/web\"",
     "build": "npm run build --prefix packages/shared && npm run build --prefix apps/server && npm run build --prefix apps/web",
     "test:api": "node scripts/smoke-api.mjs",
+    "test:server": "npm run test --prefix apps/server",
     "test:e2e": "npm run test:e2e --prefix apps/web",
     "lint": "npm run lint --prefix packages/shared && npm run lint --prefix apps/server && npm run lint --prefix apps/web",
     "format": "prettier --write .",

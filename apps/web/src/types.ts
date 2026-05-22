@@ -38,6 +38,7 @@ export type CharacterInput = {
   prefix?: string;
   prompt?: string;
   suffix?: string;
+  relationship?: string;
 };
 
 export type ChatInput = {
@@ -67,6 +68,8 @@ export type SettingsInput = {
   topP: number;
   language: AppLanguage;
   models: ModelPreset[];
+  autoSummarizeUser?: boolean;
+  userProfileSummary?: string;
 };
 
 export type LorebookInput = {

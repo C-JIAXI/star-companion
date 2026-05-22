@@ -23,6 +23,9 @@ export interface UserSettingsDTO {
   topP: number;
   language: AppLanguage;
   models: ModelPreset[];
+  userProfileSummary: string;
+  autoSummarizeUser: boolean;
+  userProfileUpdatedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -38,6 +41,7 @@ export interface CharacterDTO {
   prefix: string;
   prompt: string;
   suffix: string;
+  relationship: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -133,6 +137,7 @@ export type GenerationClientMessage =
       chatId: string;
       content: string;
       characterId?: string | null;
+      targetCharacterId?: string | null;
     }
   | {
       type: "regenerate";
@@ -179,6 +184,12 @@ export type GenerationServerMessage =
       type: "assistant_message";
       requestId: string;
       message: MessageDTO;
+    }
+  | {
+      type: "user_profile_updated";
+      requestId: string;
+      summary: string;
+      updatedAt: string | null;
     }
   | {
       type: "generation_done";

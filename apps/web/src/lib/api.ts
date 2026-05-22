@@ -74,6 +74,11 @@ export const api = {
     get: () => request<PublicUserSettingsDTO>("/api/settings"),
     update: (input: SettingsInput) =>
       request<PublicUserSettingsDTO>("/api/settings", { method: "PUT", body: input }),
+    updateUserProfile: (input: { userProfileSummary: string; autoSummarizeUser?: boolean }) =>
+      request<PublicUserSettingsDTO>("/api/settings/user-profile", {
+        method: "PUT",
+        body: input
+      }),
     test: () =>
       request<{ reachable: true; model: string; checkedAt: string }>("/api/settings/test", {
         method: "POST"

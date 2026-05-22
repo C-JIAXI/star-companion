@@ -30,7 +30,8 @@ export const characterCreateSchema = z.object({
   avatar: z.string().trim().nullable().optional(),
   prefix: z.string().default(""),
   prompt: z.string().default(""),
-  suffix: z.string().default("")
+  suffix: z.string().default(""),
+  relationship: z.string().default("")
 });
 
 export const characterUpdateSchema = characterCreateSchema
@@ -85,6 +86,8 @@ export const settingsUpdateSchema = z.object({
   maxTokens: z.number().int().min(1).max(200000),
   topP: z.number().min(0).max(1),
   language: z.enum(["zh-CN", "en"]).default("zh-CN"),
+  autoSummarizeUser: z.boolean().optional(),
+  userProfileSummary: z.string().max(4000).optional(),
   models: z
     .array(
       z.object({
@@ -99,12 +102,18 @@ export const settingsUpdateSchema = z.object({
     .default([])
 });
 
+export const userProfileUpdateSchema = z.object({
+  userProfileSummary: z.string().max(4000).default(""),
+  autoSummarizeUser: z.boolean().optional()
+});
+
 export const generationRequestSchema = z.object({
   type: z.literal("generate"),
   requestId: z.string().min(1),
   chatId: idSchema,
   content: z.string().trim().min(1),
-  characterId: idSchema.nullable().optional()
+  characterId: idSchema.nullable().optional(),
+  targetCharacterId: idSchema.nullable().optional()
 });
 
 export const regenerateRequestSchema = z.object({

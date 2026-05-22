@@ -21,6 +21,10 @@ model UserSettings {
   language       String   @default("zh-CN")
   /// JSON array of model presets: [{ id, label, provider, apiBaseUrl, key, model }]
   models         Json?    @default("[]")
+  /// Local user profile memory summarised from user messages.
+  userProfileSummary String @default("")
+  autoSummarizeUser Boolean @default(true)
+  userProfileUpdatedAt DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }
@@ -32,6 +36,8 @@ model Character {
   prefix    String   @default("")
   prompt    String   @default("")
   suffix    String   @default("")
+  /// Describes relationship with other characters in group chats, e.g. "friends with B, rival of C"
+  relationship String @default("")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

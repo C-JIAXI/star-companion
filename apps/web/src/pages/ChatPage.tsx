@@ -41,10 +41,11 @@ export function ChatPage() {
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [activeChat, setActiveChat] = useState<ChatWithMessagesDTO | null>(null);
   const [title, setTitle] = useState("");
-  const [mode, setMode] = useState<ChatMode>("single");
   const [characterIds, setCharacterIds] = useState<string[]>([]);
+  const mode: ChatMode = characterIds.length > 1 ? "group" : "single";
   const [lorebookIds, setLorebookIds] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
+  const [targetCharacterId, setTargetCharacterId] = useState<string | null>(null);
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingCharacterId, setStreamingCharacterId] = useState<string | null>(null);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
@@ -53,8 +54,39 @@ export function ChatPage() {
   const [memorySettingsOpen, setMemorySettingsOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState("12");
   const [chatLorebookIdsDraft, setChatLorebookIdsDraft] = useState<string[]>([]);
+  const [showAddCharacter, setShowAddCharacter] = useState(false);
+  const autoCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const memorySettingsRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (memorySettingsOpen && memorySettingsRef.current && !memorySettingsRef.current.contains(event.target as Node)) {
+        setMemorySettingsOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [memorySettingsOpen]);
+
+  useEffect(() => {
+    if (showAddCharacter) {
+      autoCloseTimer.current = setTimeout(() => setShowAddCharacter(false), 1500);
+    }
+    return () => {
+      if (autoCloseTimer.current) {
+        clearTimeout(autoCloseTimer.current);
+      }
+    };
+  }, [showAddCharacter]);
+
   const [settingsModels, setSettingsModels] = useState<ModelPreset[]>([]);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
+  const [userProfileSummary, setUserProfileSummary] = useState("");
+  const [userProfileUpdatedAt, setUserProfileUpdatedAt] = useState<string | null>(null);
+  const [autoSummarizeUser, setAutoSummarizeUser] = useState(true);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [editingProfileDraft, setEditingProfileDraft] = useState("");
   const [pendingDeleteChat, setPendingDeleteChat] = useState<ChatDTO | null>(null);
   const [pendingDeleteMessage, setPendingDeleteMessage] = useState<MessageDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -65,11 +97,6 @@ export function ChatPage() {
   const characterMap = useMemo(
     () => new Map(characters.map((character) => [character.id, character])),
     [characters]
-  );
-
-  const lorebookMap = useMemo(
-    () => new Map(lorebooks.map((lorebook) => [lorebook.id, lorebook])),
-    [lorebooks]
   );
 
   const getModeLabel = (chatMode: ChatMode) =>
@@ -159,6 +186,9 @@ export function ChatPage() {
     setLorebooks(lorebookData);
     setChats(chatData);
     setSettingsModels(settings.models ?? []);
+    setUserProfileSummary(settings.userProfileSummary ?? "");
+    setUserProfileUpdatedAt(settings.userProfileUpdatedAt ?? null);
+    setAutoSummarizeUser(settings.autoSummarizeUser);
     if (settings.models?.length) {
       setActiveModelId(settings.models[0].id);
     }
@@ -207,15 +237,11 @@ export function ChatPage() {
   }, [status]);
 
   const toggleCharacter = (id: string) => {
-    setCharacterIds((current) => {
-      if (mode === "single") {
-        return current[0] === id ? current : [id];
-      }
-
-      return current.includes(id)
+    setCharacterIds((current) =>
+      current.includes(id)
         ? current.filter((item) => item !== id)
-        : [...current, id];
-    });
+        : [...current, id]
+    );
   };
 
   const toggleLorebook = (id: string) => {
@@ -228,11 +254,6 @@ export function ChatPage() {
     setChatLorebookIdsDraft((current) =>
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
     );
-  };
-
-  const updateMode = (nextMode: ChatMode) => {
-    setMode(nextMode);
-    setCharacterIds((current) => (nextMode === "single" ? current.slice(0, 1) : current));
   };
 
   const createChat = async () => {
@@ -264,6 +285,7 @@ export function ChatPage() {
       return;
     }
 
+    setShowAddCharacter(false);
     setMemoryDraft(String(activeChat.memoryTurns));
     setChatLorebookIdsDraft(activeChat.lorebookIds ?? []);
     setMemorySettingsOpen((current) => {
@@ -271,6 +293,9 @@ export function ChatPage() {
         void api.settings.get().then((settings) => {
           const models = settings.models ?? [];
           setSettingsModels(models);
+          setUserProfileSummary(settings.userProfileSummary ?? "");
+          setUserProfileUpdatedAt(settings.userProfileUpdatedAt ?? null);
+          setAutoSummarizeUser(settings.autoSummarizeUser);
           if (models.length > 0) {
             const active = models.find(
               (m) => m.provider === settings.activeProvider && m.model === settings.model
@@ -283,6 +308,74 @@ export function ChatPage() {
       }
       return !current;
     });
+  };
+
+  const clearUserProfileSummary = async () => {
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const settings = await api.settings.updateUserProfile({
+        userProfileSummary: "",
+        autoSummarizeUser
+      });
+      setUserProfileSummary(settings.userProfileSummary);
+      setUserProfileUpdatedAt(settings.userProfileUpdatedAt);
+      setAutoSummarizeUser(settings.autoSummarizeUser);
+      setEditingProfile(false);
+      setStatus(t("chat.userProfileCleared"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdateUserProfile"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveUserProfileSummary = async () => {
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const settings = await api.settings.updateUserProfile({
+        userProfileSummary: editingProfileDraft.trim(),
+        autoSummarizeUser
+      });
+      setUserProfileSummary(settings.userProfileSummary);
+      setUserProfileUpdatedAt(settings.userProfileUpdatedAt);
+      setAutoSummarizeUser(settings.autoSummarizeUser);
+      setEditingProfile(false);
+      setStatus(t("chat.userProfileSaved"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdateUserProfile"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const startEditingProfile = () => {
+    setEditingProfileDraft(userProfileSummary);
+    setEditingProfile(true);
+  };
+
+  const cancelEditingProfile = () => {
+    setEditingProfile(false);
+    setEditingProfileDraft("");
+  };
+
+  const updateAutoSummarizeUser = async (enabled: boolean) => {
+    setAutoSummarizeUser(enabled);
+    try {
+      const settings = await api.settings.updateUserProfile({
+        userProfileSummary,
+        autoSummarizeUser: enabled
+      });
+      setUserProfileSummary(settings.userProfileSummary);
+      setUserProfileUpdatedAt(settings.userProfileUpdatedAt);
+      setAutoSummarizeUser(settings.autoSummarizeUser);
+    } catch (caught) {
+      setAutoSummarizeUser((current) => !current);
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdateUserProfile"));
+    }
   };
 
   const updateMemory = async () => {
@@ -342,6 +435,39 @@ export function ChatPage() {
       await loadBase();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedDelete"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const addCharacterToChat = async (character: CharacterDTO) => {
+    if (!activeChat) {
+      return;
+    }
+
+    setShowAddCharacter(false);
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const updatedChat = await api.chats.update(activeChat.id, {
+        characterIds: [...activeChat.characterIds, character.id],
+        mode: "group"
+      });
+
+      await api.messages.create({
+        chatId: activeChat.id,
+        role: "system",
+        content: `${t("chat.joinedGroup", { name: character.name })}`
+      });
+
+      const reloaded = await api.chats.get(activeChat.id);
+      setActiveChat(reloaded);
+      setChats((current) =>
+        current.map((c) => (c.id === updatedChat.id ? updatedChat : c))
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedAddCharacter"));
     } finally {
       setLoading(false);
     }
@@ -416,6 +542,12 @@ export function ChatPage() {
           return;
         }
 
+        if (message.type === "user_profile_updated") {
+          setUserProfileSummary(message.summary);
+          setUserProfileUpdatedAt(message.updatedAt);
+          return;
+        }
+
         if (message.type === "generation_done" || message.type === "generation_stopped") {
           setLoading(false);
           setActiveRequestId(null);
@@ -451,12 +583,14 @@ export function ChatPage() {
         type: "generate",
         requestId,
         chatId: activeChat.id,
-        content: draft.trim()
+        content: draft.trim(),
+        targetCharacterId
       };
       setActiveRequestId(requestId);
       setStreamingContent("");
       setStreamingCharacterId(null);
       setDraft("");
+      setTargetCharacterId(null);
       socket.send(JSON.stringify(payload));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedSend"));
@@ -664,7 +798,7 @@ export function ChatPage() {
         title={activeChat?.title ?? t("chat.messageStream")}
         action={
           activeChat ? (
-            <div className="relative">
+            <div className="relative" ref={memorySettingsRef}>
               <Button
                 aria-expanded={memorySettingsOpen}
                 aria-label={t("chat.memorySettings")}
@@ -675,7 +809,7 @@ export function ChatPage() {
                 <Settings size={15} />
               </Button>
               {memorySettingsOpen ? (
-                <div className="absolute right-0 top-10 z-20 w-72 rounded-xl border border-white/10 bg-ink-900/95 p-3.5 shadow-xl shadow-black/30 backdrop-blur-md">
+                <div className="custom-scrollbar absolute right-0 top-10 z-20 max-h-80 w-72 overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-3.5 shadow-xl shadow-black/30 backdrop-blur-md sm:max-h-[calc(100dvh-22rem)]">
                   {settingsModels.length > 0 ? (
                     <div className="mb-3 border-b border-white/10 pb-3">
                       <p className="mb-2 text-sm font-semibold text-slate-100">
@@ -743,6 +877,85 @@ export function ChatPage() {
                       {t("chat.memoryHelp")}
                     </p>
                     <div className="border-t border-white/10 pt-3">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-100">
+                          {t("chat.userProfileMemory")}
+                        </p>
+                        <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-400">
+                          <input
+                            checked={autoSummarizeUser}
+                            type="checkbox"
+                            className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                            onChange={(event) => void updateAutoSummarizeUser(event.target.checked)}
+                          />
+                          {t("chat.autoSummarizeUser")}
+                        </label>
+                      </div>
+                      {editingProfile ? (
+                        <div className="space-y-2">
+                          <textarea
+                            className="min-h-[100px] w-full min-w-0 rounded-lg border border-white/10 bg-ink-950/50 px-3 py-2.5 text-xs leading-5 text-slate-100 outline-none transition-all placeholder:text-slate-500 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50 resize-y"
+                            value={editingProfileDraft}
+                            onChange={(event) => setEditingProfileDraft(event.target.value)}
+                          />
+                          <div className="flex gap-2">
+                            <Button
+                              className="flex-1 !min-h-[32px] text-xs"
+                              disabled={loading}
+                              onClick={() => void saveUserProfileSummary()}
+                            >
+                              {t("common.save")}
+                            </Button>
+                            <Button
+                              className="!min-h-[32px] px-3 text-xs"
+                              disabled={loading}
+                              variant="ghost"
+                              onClick={cancelEditingProfile}
+                            >
+                              {t("common.cancel")}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="rounded-lg border border-white/5 bg-ink-950/55 px-3 py-2 text-xs leading-5 text-slate-400">
+                            {userProfileSummary.trim() ? (
+                              <p className="custom-scrollbar max-h-28 overflow-y-auto whitespace-pre-wrap pr-1">
+                                {userProfileSummary}
+                              </p>
+                            ) : (
+                              <p>{t("chat.userProfileEmpty")}</p>
+                            )}
+                            {userProfileUpdatedAt ? (
+                              <p className="mt-2 text-[11px] text-slate-500">
+                                {t("chat.userProfileUpdated")}
+                              </p>
+                            ) : null}
+                          </div>
+                          <div className="mt-2 flex gap-2">
+                            <Button
+                              className="flex-1 !min-h-[32px] text-xs"
+                              disabled={loading}
+                              variant="secondary"
+                              onClick={startEditingProfile}
+                            >
+                              {t("chat.editUserProfile")}
+                            </Button>
+                            {userProfileSummary.trim() ? (
+                              <Button
+                                className="!min-h-[32px] px-3 text-xs"
+                                disabled={loading}
+                                variant="danger"
+                                onClick={() => void clearUserProfileSummary()}
+                              >
+                                {t("chat.clearUserProfile")}
+                              </Button>
+                            ) : null}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    <div className="border-t border-white/10 pt-3">
                       <p className="mb-2 text-sm font-semibold text-slate-100">{t("chat.lorebooks")}</p>
                       {lorebooks.length === 0 ? (
                         <p className="rounded-lg border border-white/5 bg-white/5 px-3 py-2 text-xs text-slate-400">
@@ -785,14 +998,48 @@ export function ChatPage() {
           <EmptyState>{t("chat.selectOrCreate")}</EmptyState>
         ) : (
           <div className="flex min-h-[calc(100vh-260px)] flex-col lg:h-[calc(100%-40px)] lg:min-h-0">
-            <div className="mb-4 flex shrink-0 flex-wrap gap-2 border-b border-white/5 pb-4">
+            <div className="mb-4 flex shrink-0 flex-wrap items-center gap-2 border-b border-white/5 pb-4">
               <Badge>{getModeLabel(activeChat.mode)}</Badge>
               {activeChat.characterIds.map((id) => (
                 <Badge key={id}>{characterMap.get(id)?.name ?? t("common.unknown")}</Badge>
               ))}
-              {activeChat.lorebookIds.map((id) => (
-                <Badge key={id}>{lorebookMap.get(id)?.name ?? t("nav.lore")}</Badge>
-              ))}
+              {activeChat.mode === "group" ? (
+                <div className="relative">
+                  <button
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-dashed border-white/20 text-xs text-slate-400 transition-colors hover:border-ember-400/40 hover:text-ember-300"
+                    type="button"
+                    onClick={() => { setMemorySettingsOpen(false); setShowAddCharacter(!showAddCharacter); }}
+                  >
+                    +
+                  </button>
+                  {showAddCharacter ? (
+                    <div className="absolute left-0 top-8 z-30 w-48 rounded-lg border border-white/10 bg-ink-900 p-1.5 shadow-xl shadow-black/30">
+                      {characters
+                        .filter((c) => !activeChat.characterIds.includes(c.id))
+                        .map((character) => (
+                          <button
+                            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-slate-400 transition-colors hover:bg-white/5 hover:text-slate-200"
+                            key={character.id}
+                            type="button"
+                            onClick={() => void addCharacterToChat(character)}
+                          >
+                            <span className="grid h-6 w-6 shrink-0 place-items-center overflow-hidden rounded border border-white/10 bg-ink-800 text-[9px] font-semibold text-slate-300">
+                              {character.avatar ? (
+                                <img alt="" className="h-full w-full object-cover" src={character.avatar} />
+                              ) : (
+                                character.name.slice(0, 2)
+                              )}
+                            </span>
+                            {character.name}
+                          </button>
+                        ))}
+                      {characters.filter((c) => !activeChat.characterIds.includes(c.id)).length === 0 ? (
+                        <p className="px-2.5 py-2 text-xs text-slate-500">{t("chat.noMoreCharacters")}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
 
             <div className="custom-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto rounded-xl border border-white/5 bg-ink-950/30 p-4">
@@ -803,8 +1050,19 @@ export function ChatPage() {
               ) : (
                 activeChat.messages.map((message) => {
                   const isUser = message.role === "user";
+                  const isSystem = message.role === "system";
                   const character = message.characterId ? characterMap.get(message.characterId) : undefined;
-                  const senderName = character?.name ?? (isUser ? "You" : message.role);
+                  const senderName = character?.name ?? (isUser ? "You" : isSystem ? "" : message.role);
+
+                  if (isSystem) {
+                    return (
+                      <div className="flex justify-center" key={message.id}>
+                        <div className="shrink-0 rounded-full bg-white/5 px-4 py-1.5 text-xs text-slate-500 select-none">
+                          {message.content}
+                        </div>
+                      </div>
+                    );
+                  }
 
                   return (
                     <div
@@ -927,6 +1185,37 @@ export function ChatPage() {
             </div>
 
             <div className="sticky bottom-3 mt-3 grid min-w-0 shrink-0 grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-lg border border-white/5 bg-ink-950/95 p-1.5 shadow-xl shadow-black/30 backdrop-blur-sm lg:static lg:bg-ink-950/40 lg:shadow-none">
+              {activeChat?.mode === "group" && activeChat?.characterIds?.length > 1 ? (
+                <div className="col-span-full flex flex-wrap items-center gap-1.5 pb-1">
+                  <button
+                    className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                      targetCharacterId === null
+                        ? "bg-ember-500/20 text-ember-200"
+                        : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"
+                    }`}
+                    type="button"
+                    onClick={() => setTargetCharacterId(null)}
+                  >
+                    {t("chat.targetAll")}
+                  </button>
+                  {Array.from(characterMap.entries())
+                    .filter(([id]) => activeChat?.characterIds?.includes(id))
+                    .map(([id, character]) => (
+                      <button
+                        className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                          targetCharacterId === id
+                            ? "bg-ember-500/20 text-ember-200"
+                            : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"
+                        }`}
+                        key={id}
+                        type="button"
+                        onClick={() => setTargetCharacterId(id === targetCharacterId ? null : id)}
+                      >
+                        {character.name}
+                      </button>
+                    ))}
+                </div>
+              ) : null}
               <TextInput
                 className="min-w-0 border-0 bg-transparent focus:bg-transparent focus:ring-0"
                 placeholder={t("chat.writeMessage")}
@@ -956,12 +1245,6 @@ export function ChatPage() {
       >
         <div className="space-y-3">
           <Field label={t("chat.title")}><TextInput value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
-          <Field label={t("chat.mode")}>
-            <select className="min-h-[40px] w-full rounded-lg border border-white/10 bg-ink-950/50 px-3 text-sm text-slate-100 outline-none transition-all hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50" value={mode} onChange={(event) => updateMode(event.target.value as ChatMode)}>
-              <option value="single">{t("chat.mode.single")}</option>
-              <option value="group">{t("chat.mode.group")}</option>
-            </select>
-          </Field>
           <div className="space-y-2.5">
             <p className="text-sm font-medium text-slate-300">{t("nav.characters")}</p>
             {characters.length === 0 ? (
@@ -970,7 +1253,7 @@ export function ChatPage() {
               <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
                 {characters.map((character) => (
                   <label className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 text-sm transition-all duration-200 hover:bg-white/10 ${characterIds.includes(character.id) ? 'border-ember-500/30 bg-ember-500/5' : 'border-white/5 bg-white/5'}`} key={character.id}>
-                    <input checked={characterIds.includes(character.id)} name={mode === "single" ? "chat-character-single" : undefined} type={mode === "single" ? "radio" : "checkbox"} onChange={() => toggleCharacter(character.id)} className={`${mode === "single" ? "rounded-full" : "rounded"} border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50`} />
+                    <input checked={characterIds.includes(character.id)} type="checkbox" onChange={() => toggleCharacter(character.id)} className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50" />
                     <span className={`grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg border text-xs font-semibold ${
                       characterIds.includes(character.id)
                         ? "border-ember-400/40 bg-ember-500/10 text-ember-100"

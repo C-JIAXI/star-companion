@@ -179,6 +179,56 @@ export async function* streamChatCompletion({
   }
 }
 
+export const completeChatCompletion = async ({
+  settings,
+  messages,
+  signal,
+  maxTokens,
+  temperature
+}: {
+  settings: UserSettings;
+  messages: ChatCompletionMessage[];
+  signal?: AbortSignal;
+  maxTokens?: number;
+  temperature?: number;
+}) => {
+  let response: Response;
+  try {
+    response = await fetch(joinApiPath(settings.apiBaseUrl, "chat/completions"), {
+      method: "POST",
+      headers: authHeaders(settings),
+      signal,
+      body: JSON.stringify({
+        model: settings.model,
+        messages,
+        temperature: temperature ?? Math.min(settings.temperature, 0.4),
+        max_tokens: maxTokens ?? Math.min(settings.maxTokens, 500),
+        top_p: settings.topP,
+        stream: false
+      })
+    });
+  } catch (error) {
+    if (signal?.aborted) {
+      throw error;
+    }
+    throw new Error("Unable to reach the configured model API");
+  }
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  const payload = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string }; text?: string }>;
+  };
+
+  return (
+    payload.choices?.[0]?.message?.content ??
+    payload.choices?.[0]?.text ??
+    ""
+  ).trim();
+};
+
 const estimateTokens = (text: string) => {
   const compact = text.trim();
   if (!compact) {

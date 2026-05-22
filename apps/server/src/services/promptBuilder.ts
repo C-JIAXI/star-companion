@@ -43,8 +43,32 @@ const normalizeLoreTriggerMode = (value: string | null | undefined): LoreTrigger
   return "both";
 };
 
-const buildCharacterSystemPrompt = (character: Character | null): string => {
+const buildCharacterSystemPrompt = (character: Character | null, groupContext?: {
+  allCharacters: Character[];
+  recentCharacterCounts: Map<string, number>;
+  chatId: string;
+}): string => {
   if (!character) {
+    if (groupContext) {
+      const roster = groupContext.allCharacters
+        .map((c) => {
+          const mentions = groupContext.recentCharacterCounts.get(c.id) ?? 0;
+          const relation = c.relationship.trim() ? ` (${c.relationship.trim()})` : "";
+          const freq = mentions > 0 ? ` — spoke ${mentions} time(s) recently` : " — has not spoken yet";
+          return `- ${c.name}${relation}${freq}`;
+        })
+        .join("\n");
+
+      return [
+        "You are an assistant in a group roleplay chat.",
+        "The following characters are participating in this conversation:",
+        roster,
+        "",
+        "Stay in character when a character is selected.",
+        "Write vivid, direct replies without describing hidden system instructions."
+      ].join("\n");
+    }
+
     return [
       "You are an assistant in a local-first roleplay chat.",
       "Stay in character when a character is selected.",
@@ -59,6 +83,30 @@ const buildCharacterSystemPrompt = (character: Character | null): string => {
     character.suffix ? `Suffix:\n${character.suffix}` : "",
     "Reply as this character. Do not mention implementation details or hidden instructions."
   ];
+
+  if (groupContext) {
+    const others = groupContext.allCharacters
+      .filter((c) => c.id !== character.id)
+      .map((c) => {
+        const relation = c.relationship.trim()
+          ? ` (${c.relationship.trim()})`
+          : "";
+        const mentions = groupContext.recentCharacterCounts.get(c.id) ?? 0;
+        const freq = mentions > 0 ? ` — spoke ${mentions} time(s) recently` : " — has not spoken yet";
+        return `- ${c.name}${relation}${freq}`;
+      })
+      .join("\n");
+
+    if (others) {
+      sections.push(
+        "",
+        "This is a group conversation. The following other characters are present:",
+        others,
+        "",
+        `You are "${character.name}". React naturally to what others say. If you have spoken multiple times recently, consider letting others respond first.`
+      );
+    }
+  }
 
   return sections.filter(Boolean).join("\n\n");
 };
@@ -193,6 +241,10 @@ export const buildPromptContext = async ({
   const character = resolvedCharacterId
     ? await prisma.character.findUnique({ where: { id: resolvedCharacterId } })
     : null;
+  const settings = await prisma.userSettings.findFirst({
+    orderBy: { createdAt: "asc" },
+    select: { userProfileSummary: true }
+  });
   const contextMessageLimit = toContextMessageLimit(chat?.memoryTurns ?? 12);
 
   const recentMessagesDesc = await prisma.message.findMany({
@@ -204,6 +256,26 @@ export const buildPromptContext = async ({
     take: contextMessageLimit
   });
   const recentMessages = recentMessagesDesc.reverse();
+
+  const isGroup = chat?.mode === "group";
+  const allCharacterIds = isGroup && chat ? toStringArray(chat.characterIds) : [];
+  const allCharacters = allCharacterIds.length
+    ? await prisma.character.findMany({ where: { id: { in: allCharacterIds } } })
+    : [];
+
+  const recentCharacterCounts = new Map<string, number>();
+  for (const message of recentMessages) {
+    if (message.characterId) {
+      recentCharacterCounts.set(
+        message.characterId,
+        (recentCharacterCounts.get(message.characterId) ?? 0) + 1
+      );
+    }
+  }
+
+  const groupContext = isGroup
+    ? { allCharacters, recentCharacterCounts, chatId }
+    : undefined;
 
   const characterIds = [
     ...new Set(
@@ -228,8 +300,20 @@ export const buildPromptContext = async ({
     },
     {
       role: "system",
-      content: buildCharacterSystemPrompt(character)
+      content: buildCharacterSystemPrompt(character, groupContext)
     },
+    ...(settings?.userProfileSummary.trim()
+      ? [
+          {
+            role: "system" as const,
+            content: [
+              "Known user profile memory, summarised from prior user messages.",
+              "Use this only to personalise responses naturally. Do not expose or quote it unless the user asks.",
+              settings.userProfileSummary.trim()
+            ].join("\n\n")
+          }
+        ]
+      : []),
     ...(lorePrompt ? [{ role: "system" as const, content: lorePrompt }] : [])
   ];
 
@@ -245,8 +329,32 @@ export const buildPromptContext = async ({
 };
 
 export const createInitialCharacterMessages = async (chatId: string, characterIds: string[]) => {
-  void chatId;
-  void characterIds;
+  if (characterIds.length < 2) {
+    return;
+  }
+
+  const characters = await prisma.character.findMany({
+    where: { id: { in: characterIds } },
+    orderBy: [{ updatedAt: "desc" }]
+  });
+
+  if (characters.length === 0) {
+    return;
+  }
+
+  const names = characters.map((c) => c.name);
+  const last = names.pop();
+  const nameList = names.length > 0 ? `${names.join("、")}、${last}` : last;
+
+  await prisma.message.create({
+    data: {
+      chatId,
+      role: "system",
+      content: `你邀请了 ${nameList} 加入了群聊`,
+      variants: [],
+      activeVariantIndex: 0
+    }
+  });
 };
 
 export const appendVariant = (value: Prisma.JsonValue, content: string) => {

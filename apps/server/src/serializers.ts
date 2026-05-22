@@ -146,6 +146,9 @@ export const serializeSettings = (settings: UserSettings) => ({
   topP: settings.topP,
   language: settings.language === "en" ? "en" : "zh-CN",
   models: toModelPresets(settings.models),
+  userProfileSummary: settings.userProfileSummary,
+  autoSummarizeUser: settings.autoSummarizeUser,
+  userProfileUpdatedAt: settings.userProfileUpdatedAt?.toISOString() ?? null,
   createdAt: toIso(settings.createdAt),
   updatedAt: toIso(settings.updatedAt)
 });
@@ -157,6 +160,7 @@ export const serializeCharacter = (character: Character) => ({
   prefix: character.prefix,
   prompt: character.prompt,
   suffix: character.suffix,
+  relationship: character.relationship,
   createdAt: toIso(character.createdAt),
   updatedAt: toIso(character.updatedAt)
 });

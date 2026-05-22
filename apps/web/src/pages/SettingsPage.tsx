@@ -38,7 +38,8 @@ const defaultForm: SettingsInput = {
   maxTokens: 800,
   topP: 1,
   language: "zh-CN",
-  models: []
+  models: [],
+  userProfileSummary: ""
 };
 
 const selectClassName =
@@ -215,7 +216,8 @@ export function SettingsPage() {
           maxTokens: settings.maxTokens,
           topP: settings.topP,
           language: settings.language,
-          models: settings.models ?? []
+          models: settings.models ?? [],
+          userProfileSummary: settings.userProfileSummary ?? ""
         };
         setForm(nextForm);
         setSavedSnapshot(serializeForm(nextForm));

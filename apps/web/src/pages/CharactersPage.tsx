@@ -1,5 +1,5 @@
 import { Copy, Download, FileUp, Plus, Save, Search, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { downloadJson, readFileText } from "../lib/form";
@@ -11,7 +11,8 @@ const blankForm = {
   avatar: "",
   prefix: "",
   prompt: "",
-  suffix: ""
+  suffix: "",
+  relationship: ""
 };
 
 type CharacterForm = typeof blankForm;
@@ -21,7 +22,8 @@ const toForm = (character: CharacterDTO): CharacterForm => ({
   avatar: character.avatar ?? "",
   prefix: character.prefix,
   prompt: character.prompt,
-  suffix: character.suffix
+  suffix: character.suffix,
+  relationship: character.relationship
 });
 
 const toInput = (form: CharacterForm): CharacterInput => ({
@@ -29,7 +31,8 @@ const toInput = (form: CharacterForm): CharacterInput => ({
   avatar: form.avatar || null,
   prefix: form.prefix,
   prompt: form.prompt,
-  suffix: form.suffix
+  suffix: form.suffix,
+  relationship: form.relationship
 });
 
 type ImportedCharacter = Partial<CharacterInput> & {
@@ -49,6 +52,7 @@ export function CharactersPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const creatingRef = useRef(false);
 
   const selected = useMemo(
     () => characters.find((character) => character.id === selectedId) ?? null,
@@ -72,7 +76,7 @@ export function CharactersPage() {
   const loadCharacters = async () => {
     const data = await api.characters.list();
     setCharacters(data);
-    if (!selectedId && data[0]) {
+    if (!selectedId && !creatingRef.current && data[0]) {
       setSelectedId(data[0].id);
       setForm(toForm(data[0]));
     }
@@ -94,6 +98,7 @@ export function CharactersPage() {
   }, [status]);
 
   const selectCharacter = (character: CharacterDTO) => {
+    creatingRef.current = false;
     setSelectedId(character.id);
     setForm(toForm(character));
     setError(null);
@@ -101,6 +106,7 @@ export function CharactersPage() {
   };
 
   const resetForm = () => {
+    creatingRef.current = true;
     setSelectedId(null);
     setForm(blankForm);
     setError(null);
@@ -112,13 +118,15 @@ export function CharactersPage() {
     setError(null);
     setStatus(null);
     try {
-      if (selected) {
-        await api.characters.update(selected.id, toInput(form));
+      const editingCharacter = creatingRef.current ? null : selected;
+      if (editingCharacter) {
+        await api.characters.update(editingCharacter.id, toInput(form));
       } else {
         await api.characters.create(toInput(form));
       }
       await loadCharacters();
-      if (!selected) {
+      if (!editingCharacter) {
+        creatingRef.current = false;
         setForm(blankForm);
       }
       setStatus(t("characters.saved"));
@@ -294,6 +302,8 @@ export function CharactersPage() {
               </div>
             </div>
           </div>
+
+          <Field label={<HelpLabel label={t("characters.relationship")} description={t("help.characterRelationship")} />}><TextInput value={form.relationship} onChange={(event) => setForm({ ...form, relationship: event.target.value })} /></Field>
 
           <Field label={<HelpLabel label={t("characters.prefix")} description={t("help.characterPrefix")} />}><TextArea value={form.prefix} onChange={(event) => setForm({ ...form, prefix: event.target.value })} className="min-h-[120px]" /></Field>
           <Field label={<HelpLabel label={t("characters.prompt")} description={t("help.characterPrompt")} />}><TextArea value={form.prompt} onChange={(event) => setForm({ ...form, prompt: event.target.value })} className="min-h-[180px]" /></Field>
