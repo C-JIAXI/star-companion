@@ -206,6 +206,9 @@ export function ChatPage() {
     setActiveChat(chat);
     setMemoryDraft(String(chat.memoryTurns));
     setChatLorebookIdsDraft(chat.lorebookIds ?? []);
+    setTargetCharacterId((current) =>
+      chat.mode === "group" && current && chat.characterIds.includes(current) ? current : null
+    );
   };
 
   useEffect(() => {
@@ -584,7 +587,7 @@ export function ChatPage() {
         requestId,
         chatId: activeChat.id,
         content: draft.trim(),
-        targetCharacterId
+        targetCharacterId: activeChat.mode === "group" ? targetCharacterId : null
       };
       setActiveRequestId(requestId);
       setStreamingContent("");

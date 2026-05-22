@@ -44,6 +44,22 @@ const normalizeLoreTriggerMode = (value: string | null | undefined): LoreTrigger
   return "both";
 };
 
+const resolvePromptCharacterId = (
+  chat: { characterIds: Prisma.JsonValue } | null,
+  requestedCharacterId?: string | null
+) => {
+  if (!chat) {
+    return requestedCharacterId ?? null;
+  }
+
+  const chatCharacterIds = toStringArray(chat.characterIds);
+  if (requestedCharacterId && chatCharacterIds.includes(requestedCharacterId)) {
+    return requestedCharacterId;
+  }
+
+  return chatCharacterIds[0] ?? null;
+};
+
 const buildCharacterSystemPrompt = (character: Character | null, groupContext?: {
   allCharacters: Character[];
   recentCharacterCounts: Map<string, number>;
@@ -211,12 +227,8 @@ export const resolveChatCharacterId = async (
   chatId: string,
   requestedCharacterId?: string | null
 ) => {
-  if (requestedCharacterId) {
-    return requestedCharacterId;
-  }
-
   const chat = await prisma.chat.findUnique({ where: { id: chatId } });
-  return chat ? (toStringArray(chat.characterIds)[0] ?? null) : null;
+  return resolvePromptCharacterId(chat, requestedCharacterId);
 };
 
 export const buildPromptMessages = async ({
@@ -239,8 +251,7 @@ export const buildPromptContext = async ({
   matchedLoreEntries: MatchedLoreEntry[];
 }> => {
   const chat = await prisma.chat.findUnique({ where: { id: chatId } });
-  const resolvedCharacterId =
-    characterId ?? (chat ? (toStringArray(chat.characterIds)[0] ?? null) : null);
+  const resolvedCharacterId = resolvePromptCharacterId(chat, characterId);
   const character = resolvedCharacterId
     ? await prisma.character.findUnique({ where: { id: resolvedCharacterId } })
     : null;

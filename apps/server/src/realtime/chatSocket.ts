@@ -46,11 +46,11 @@ const stripThinkingTags = (content: string): string => {
 };
 
 const getReplyCharacterIds = async (chat: Chat, targetCharacterId?: string | null) => {
-  if (targetCharacterId) {
+  const characterIds = toStringArray(chat.characterIds);
+  if (targetCharacterId && characterIds.includes(targetCharacterId)) {
     return [targetCharacterId];
   }
 
-  const characterIds = toStringArray(chat.characterIds);
   if (chat.mode !== "group" || characterIds.length === 0) {
     return [characterIds[0] ?? null];
   }

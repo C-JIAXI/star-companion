@@ -5,6 +5,7 @@ import { buildPromptContext } from "./promptBuilder.js";
 
 const ids = {
   characterId: "",
+  foreignCharacterId: "",
   boundLorebookId: "",
   unboundLorebookId: "",
   chatId: "",
@@ -44,6 +45,17 @@ describe("buildPromptContext", () => {
       }
     });
     ids.characterId = character.id;
+
+    const foreignCharacter = await prisma.character.create({
+      data: {
+        name: "Prompt Test Foreign Character",
+        avatar: "",
+        prefix: "This character belongs to another chat.",
+        prompt: "A stale group target that must not affect private chats.",
+        suffix: "Never appear in the private chat prompt."
+      }
+    });
+    ids.foreignCharacterId = foreignCharacter.id;
 
     const boundLorebook = await prisma.lorebook.create({
       data: {
@@ -191,6 +203,9 @@ describe("buildPromptContext", () => {
     if (ids.characterId) {
       await prisma.character.delete({ where: { id: ids.characterId } }).catch(() => {});
     }
+    if (ids.foreignCharacterId) {
+      await prisma.character.delete({ where: { id: ids.foreignCharacterId } }).catch(() => {});
+    }
     if (settingsId) {
       await prisma.userSettings
         .update({
@@ -231,5 +246,17 @@ describe("buildPromptContext", () => {
       context.messages.map((message) => message.content).join("\n\n"),
       /User-triggered lore content/
     );
+  });
+
+  it("uses the private chat character when a stale target character is provided", async () => {
+    const context = await buildPromptContext({
+      chatId: ids.chatId,
+      characterId: ids.foreignCharacterId
+    });
+    const promptText = context.messages.map((message) => message.content).join("\n\n");
+
+    assert.match(promptText, /You are writing as the character "Prompt Test Character"/);
+    assert.doesNotMatch(promptText, /Prompt Test Foreign Character/);
+    assert.doesNotMatch(promptText, /A stale group target that must not affect private chats/);
   });
 });
