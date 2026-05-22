@@ -1158,7 +1158,7 @@ export function ChatPage() {
                   );
                 })
               )}
-              {streamingContent ? (
+              {activeRequestId ? (
                 <div className="flex items-start justify-start gap-3">
                   {renderMessageAvatar({
                     avatar: streamingCharacterId ? characterMap.get(streamingCharacterId)?.avatar : null,
@@ -1166,7 +1166,7 @@ export function ChatPage() {
                       ? characterMap.get(streamingCharacterId)?.name ?? t("common.unknown")
                       : t("chat.streaming")
                   })}
-                  <article className="max-w-[calc(100%-3.25rem)] rounded-2xl rounded-bl-sm border border-ember-500/20 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-md animate-fade-in backdrop-blur-sm sm:max-w-[85%]">
+                  <article className="order-1 max-w-[calc(100%-3.25rem)] rounded-2xl rounded-bl-sm border border-ember-500/20 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-md animate-fade-in backdrop-blur-sm sm:max-w-[85%]">
                     <div className="mb-2 text-xs font-bold tracking-wide text-ember-400 flex items-center gap-2">
                       <span className="relative flex h-2 w-2">
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-ember-400 opacity-75"></span>
@@ -1178,7 +1178,15 @@ export function ChatPage() {
                           })
                         : t("chat.streaming")}
                     </div>
-                    <p className="whitespace-pre-wrap leading-relaxed">{streamingContent}</p>
+                    {streamingContent ? (
+                      <p className="whitespace-pre-wrap leading-relaxed">{streamingContent}</p>
+                    ) : (
+                      <div className="flex items-center gap-1 py-1">
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-ember-400/60 [animation-delay:0ms]"></span>
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-ember-400/60 [animation-delay:150ms]"></span>
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-ember-400/60 [animation-delay:300ms]"></span>
+                      </div>
+                    )}
                   </article>
                 </div>
               ) : null}
