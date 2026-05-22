@@ -8,7 +8,7 @@ import {
 } from "../schemas.js";
 import { serializeMessage } from "../serializers.js";
 import { getOrCreateSettings } from "../routes/settings.js";
-import { estimateTokenUsage, streamChatCompletion, type TokenUsage } from "../services/openaiCompatible.js";
+import { estimateTokenUsage, streamChatCompletion, type TokenUsage } from "../services/completions.js";
 import { appendVariant, buildPromptContext, type MatchedLoreEntry } from "../services/promptBuilder.js";
 import { updateUserProfileFromChat } from "../services/userProfileMemory.js";
 

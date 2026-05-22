@@ -1,6 +1,6 @@
 import type { UserSettings } from "@prisma/client";
 import { prisma } from "../db.js";
-import { completeChatCompletion, type ChatCompletionMessage } from "./openaiCompatible.js";
+import { completeChatCompletion, type ChatCompletionMessage } from "./completions.js";
 
 const MAX_PROFILE_LENGTH = 1800;
 const RECENT_USER_MESSAGE_LIMIT = 16;

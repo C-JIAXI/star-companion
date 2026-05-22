@@ -1,6 +1,6 @@
 import type { Character, LoreEntry, Message, Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
-import type { ChatCompletionMessage } from "./openaiCompatible.js";
+import type { ChatCompletionMessage } from "./completions.js";
 
 type PromptInput = {
   chatId: string;

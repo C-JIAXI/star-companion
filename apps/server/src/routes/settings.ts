@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { asyncHandler, parseBody } from "../lib/http.js";
-import { testModelConnection } from "../services/openaiCompatible.js";
+import { testModelConnection } from "../services/completions.js";
 import { settingsUpdateSchema, userProfileUpdateSchema } from "../schemas.js";
 import { serializeSettings } from "../serializers.js";
 import { encryptApiKey, hasStoredApiKey } from "../services/apiKeyVault.js";
