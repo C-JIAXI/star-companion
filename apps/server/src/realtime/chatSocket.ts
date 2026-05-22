@@ -108,7 +108,8 @@ const streamAssistantReply = async ({
   index,
   total,
   before,
-  targetMessageId
+  targetMessageId,
+  excludeMessageIds
 }: {
   socket: WebSocket;
   requestId: string;
@@ -119,6 +120,7 @@ const streamAssistantReply = async ({
   total: number;
   before?: Date;
   targetMessageId?: string;
+  excludeMessageIds?: string[];
 }) => {
   sendJson(socket, {
     type: "generation_character_started",
@@ -132,7 +134,8 @@ const streamAssistantReply = async ({
   const context = await buildPromptContext({
     chatId,
     characterId,
-    before
+    before,
+    excludeMessageIds
   });
   sendJson(socket, {
     type: "lore_matches",
@@ -356,7 +359,7 @@ const handleRegenerate = async (socket: WebSocket, rawMessage: unknown) => {
       abortController,
       index: 0,
       total: 1,
-      before: targetMessage.createdAt,
+      excludeMessageIds: [targetMessage.id],
       targetMessageId: targetMessage.id
     });
 

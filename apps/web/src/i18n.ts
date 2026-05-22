@@ -96,7 +96,7 @@ const zhCN = {
   "chat.noMoreCharacters": "所有角色已在群聊中",
   "chat.failedAddCharacter": "添加角色失败",
   "chat.streaming": "正在生成",
-  "chat.streamingAs": "{{name}} 正在回复",
+  "chat.streamingAs": "{{name}} 正在输入",
   "chat.title": "标题",
   "chat.tokensEstimated": "估算",
   "chat.tokensUnavailable": "Tokens：未记录",

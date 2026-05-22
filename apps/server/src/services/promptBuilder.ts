@@ -6,6 +6,7 @@ type PromptInput = {
   chatId: string;
   characterId?: string | null;
   before?: Date;
+  excludeMessageIds?: string[];
 };
 
 type LoreTriggerMode = "user" | "assistant" | "both";
@@ -221,16 +222,18 @@ export const resolveChatCharacterId = async (
 export const buildPromptMessages = async ({
   chatId,
   characterId,
-  before
+  before,
+  excludeMessageIds
 }: PromptInput): Promise<ChatCompletionMessage[]> => {
-  const context = await buildPromptContext({ chatId, characterId, before });
+  const context = await buildPromptContext({ chatId, characterId, before, excludeMessageIds });
   return context.messages;
 };
 
 export const buildPromptContext = async ({
   chatId,
   characterId,
-  before
+  before,
+  excludeMessageIds
 }: PromptInput): Promise<{
   messages: ChatCompletionMessage[];
   matchedLoreEntries: MatchedLoreEntry[];
@@ -255,7 +258,10 @@ export const buildPromptContext = async ({
     orderBy: { createdAt: "desc" },
     take: contextMessageLimit
   });
-  const recentMessages = recentMessagesDesc.reverse();
+  let recentMessages = recentMessagesDesc.reverse();
+  if (excludeMessageIds?.length) {
+    recentMessages = recentMessages.filter((m) => !excludeMessageIds.includes(m.id));
+  }
 
   const isGroup = chat?.mode === "group";
   const allCharacterIds = isGroup && chat ? toStringArray(chat.characterIds) : [];
