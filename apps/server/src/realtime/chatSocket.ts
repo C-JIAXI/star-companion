@@ -1,4 +1,3 @@
-import type { Chat, Prisma } from "@prisma/client";
 import type { RawData, WebSocket, WebSocketServer } from "ws";
 import { prisma } from "../db.js";
 import {
@@ -20,11 +19,10 @@ const sendJson = (socket: WebSocket, value: unknown) => {
   }
 };
 
-const toStringArray = (value: Prisma.JsonValue): string[] => {
+const toStringArray = (value: unknown): string[] => {
   if (!Array.isArray(value)) {
     return [];
   }
-
   return value.filter((item): item is string => typeof item === "string");
 };
 
@@ -43,60 +41,6 @@ const stripThinkingTags = (content: string): string => {
     }
   }
   return result.trim();
-};
-
-const getReplyCharacterIds = async (chat: Chat, targetCharacterId?: string | null) => {
-  const characterIds = toStringArray(chat.characterIds);
-  if (targetCharacterId && characterIds.includes(targetCharacterId)) {
-    return [targetCharacterId];
-  }
-
-  if (chat.mode !== "group" || characterIds.length === 0) {
-    return [characterIds[0] ?? null];
-  }
-
-  const recentMessages = await prisma.message.findMany({
-    where: { chatId: chat.id },
-    orderBy: { createdAt: "desc" },
-    take: 20
-  });
-
-  const mentionCount = new Map<string, number>();
-  for (const cid of characterIds) {
-    mentionCount.set(cid, 0);
-  }
-
-  const characterNames = new Map<string, string>();
-  if (characterIds.length > 0) {
-    const chars = await prisma.character.findMany({
-      where: { id: { in: characterIds } }
-    });
-    for (const c of chars) {
-      characterNames.set(c.id, c.name.toLowerCase());
-    }
-  }
-
-  const contextText = recentMessages.map((m) => m.content.toLowerCase()).join("\n");
-
-  for (const [cid, name] of characterNames) {
-    let count = 0;
-    let pos = 0;
-    while ((pos = contextText.indexOf(name, pos)) !== -1) {
-      count++;
-      pos += name.length;
-    }
-    mentionCount.set(cid, count);
-  }
-
-  const lastSpeakerId = recentMessages.find((m) => m.characterId)?.characterId;
-
-  const sorted = [...characterIds].sort((a, b) => {
-    if (lastSpeakerId === b) return 1;
-    if (lastSpeakerId === a) return -1;
-    return (mentionCount.get(b) ?? 0) - (mentionCount.get(a) ?? 0);
-  });
-
-  return sorted;
 };
 
 const streamAssistantReply = async ({
@@ -281,38 +225,32 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
       message: serializeMessage(userMessage)
     });
 
-    const replyCharacterIds = await getReplyCharacterIds(chat, request.targetCharacterId);
-    let stopped = false;
+    const characterIds = toStringArray(chat.characterIds);
+    const characterId = characterIds[0] ?? null;
 
-    for (const [index, characterId] of replyCharacterIds.entries()) {
-      stopped = await streamAssistantReply({
-        socket,
-        requestId: request.requestId,
-        chatId: request.chatId,
-        characterId,
-        abortController,
-        index,
-        total: replyCharacterIds.length
-      });
-
-      if (stopped) {
-        break;
-      }
-    }
+    const stopped = await streamAssistantReply({
+      socket,
+      requestId: request.requestId,
+      chatId: request.chatId,
+      characterId,
+      abortController,
+      index: 0,
+      total: 1
+    });
 
     if (!stopped) {
       try {
         const settings = await getOrCreateSettings();
-        const updatedSettings = await updateUserProfileFromChat({
+        const updatedChat = await updateUserProfileFromChat({
           chatId: request.chatId,
           settings
         });
-        if (updatedSettings.userProfileSummary !== settings.userProfileSummary) {
+        if (updatedChat) {
           sendJson(socket, {
             type: "user_profile_updated",
             requestId: request.requestId,
-            summary: updatedSettings.userProfileSummary,
-            updatedAt: updatedSettings.userProfileUpdatedAt?.toISOString() ?? null
+            summary: updatedChat.userProfileSummary,
+            updatedAt: updatedChat.userProfileUpdatedAt?.toISOString() ?? null
           });
         }
       } catch {

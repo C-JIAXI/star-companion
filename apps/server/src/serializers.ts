@@ -1,8 +1,6 @@
 import type {
   Character,
   Chat,
-  LoreEntry,
-  Lorebook,
   Message,
   Prisma,
   UserSettings
@@ -16,8 +14,6 @@ interface ModelPreset {
   key?: string;
   model: string;
 }
-
-type LorebookWithEntries = Lorebook & { entries?: LoreEntry[] };
 
 const toIso = (date: Date) => date.toISOString();
 
@@ -96,7 +92,7 @@ const toLoreMatches = (value: Prisma.JsonValue | null) => {
 
       const entry = item as Record<string, unknown>;
       const id = entry.id;
-      const lorebookId = entry.lorebookId;
+      const characterId = entry.characterId;
       const keys = entry.keys;
       const content = entry.content;
       const priority = entry.priority;
@@ -108,7 +104,7 @@ const toLoreMatches = (value: Prisma.JsonValue | null) => {
 
       if (
         typeof id !== "string" ||
-        typeof lorebookId !== "string" ||
+        typeof characterId !== "string" ||
         !Array.isArray(keys) ||
         typeof content !== "string" ||
         typeof priority !== "number" ||
@@ -121,8 +117,8 @@ const toLoreMatches = (value: Prisma.JsonValue | null) => {
 
       return {
         id,
-        lorebookId,
-        lorebookName: typeof entry.lorebookName === "string" ? entry.lorebookName : undefined,
+        characterId,
+        characterName: typeof entry.characterName === "string" ? entry.characterName : undefined,
         keys: keys.filter((key): key is string => typeof key === "string"),
         content,
         priority,
@@ -131,6 +127,48 @@ const toLoreMatches = (value: Prisma.JsonValue | null) => {
         enabled,
         createdAt,
         updatedAt
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+};
+
+const toLoreEntries = (value: Prisma.JsonValue) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+
+      const entry = item as Record<string, unknown>;
+      const id = entry.id;
+      const keys = entry.keys;
+      const content = entry.content;
+      const priority = entry.priority;
+      const triggerMode = entry.triggerMode;
+      const alwaysActive = entry.alwaysActive;
+      const enabled = entry.enabled;
+
+      if (
+        typeof id !== "string" ||
+        !Array.isArray(keys) ||
+        typeof content !== "string" ||
+        typeof priority !== "number"
+      ) {
+        return null;
+      }
+
+      return {
+        id,
+        keys: keys.filter((key): key is string => typeof key === "string"),
+        content,
+        priority,
+        triggerMode: normalizeLoreTriggerMode(triggerMode),
+        alwaysActive: alwaysActive === true,
+        enabled: enabled !== false
       };
     })
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
@@ -161,6 +199,7 @@ export const serializeCharacter = (character: Character) => ({
   prompt: character.prompt,
   suffix: character.suffix,
   relationship: character.relationship,
+  loreEntries: toLoreEntries(character.loreEntries),
   createdAt: toIso(character.createdAt),
   updatedAt: toIso(character.updatedAt)
 });
@@ -168,10 +207,11 @@ export const serializeCharacter = (character: Character) => ({
 export const serializeChat = (chat: Chat) => ({
   id: chat.id,
   title: chat.title,
-  mode: chat.mode === "group" ? "group" : "single",
+  mode: "single",
   characterIds: toStringArray(chat.characterIds),
-  lorebookIds: toStringArray(chat.lorebookIds),
   memoryTurns: chat.memoryTurns,
+  userProfileSummary: chat.userProfileSummary,
+  userProfileUpdatedAt: chat.userProfileUpdatedAt?.toISOString() ?? null,
   createdAt: toIso(chat.createdAt),
   updatedAt: toIso(chat.updatedAt)
 });
@@ -188,30 +228,4 @@ export const serializeMessage = (message: Message) => ({
   loreMatches: toLoreMatches(message.loreMatches),
   createdAt: toIso(message.createdAt),
   updatedAt: toIso(message.updatedAt)
-});
-
-export const serializeLorebook = (lorebook: Lorebook) => ({
-  id: lorebook.id,
-  name: lorebook.name,
-  description: lorebook.description,
-  createdAt: toIso(lorebook.createdAt),
-  updatedAt: toIso(lorebook.updatedAt)
-});
-
-export const serializeLoreEntry = (entry: LoreEntry) => ({
-  id: entry.id,
-  lorebookId: entry.lorebookId,
-  keys: toStringArray(entry.keys),
-  content: entry.content,
-  priority: entry.priority,
-  triggerMode: normalizeLoreTriggerMode(entry.triggerMode),
-  alwaysActive: entry.alwaysActive,
-  enabled: entry.enabled,
-  createdAt: toIso(entry.createdAt),
-  updatedAt: toIso(entry.updatedAt)
-});
-
-export const serializeLorebookWithEntries = (lorebook: LorebookWithEntries) => ({
-  ...serializeLorebook(lorebook),
-  entries: lorebook.entries?.map(serializeLoreEntry) ?? []
 });

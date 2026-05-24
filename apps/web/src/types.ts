@@ -1,5 +1,6 @@
 import type {
   CharacterDTO,
+  CharacterLoreEntryDTO,
   ChatDTO,
   ChatMode,
   ChatWithMessagesDTO,
@@ -9,9 +10,7 @@ import type {
   BackupDTO,
   BackupImportSummaryDTO,
   LoreTriggerMode,
-  LoreEntryDTO,
-  LorebookDTO,
-  LorebookWithEntriesDTO,
+  MatchedLoreEntryDTO,
   MessageDTO,
   MessageRole,
   ModelPreset,
@@ -19,7 +18,7 @@ import type {
   TokenUsageDTO
 } from "@local-roleplay/shared";
 
-export type AppSection = "chat" | "characters" | "lore" | "settings";
+export type AppSection = "chat" | "characters" | "settings";
 
 export type ApiEnvelope<T> = {
   ok: boolean;
@@ -39,14 +38,15 @@ export type CharacterInput = {
   prompt?: string;
   suffix?: string;
   relationship?: string;
+  loreEntries?: (Omit<CharacterLoreEntryDTO, "id"> & { id?: string })[];
 };
 
 export type ChatInput = {
   title: string;
   mode: ChatMode;
   characterIds: string[];
-  lorebookIds?: string[];
   memoryTurns?: number;
+  userProfileSummary?: string;
 };
 
 export type MessageInput = {
@@ -72,22 +72,9 @@ export type SettingsInput = {
   userProfileSummary?: string;
 };
 
-export type LorebookInput = {
-  name: string;
-  description?: string;
-};
-
-export type LoreEntryInput = {
-  keys: string[];
-  content: string;
-  priority: number;
-  triggerMode: LoreTriggerMode;
-  alwaysActive: boolean;
-  enabled: boolean;
-};
-
 export type {
   CharacterDTO,
+  CharacterLoreEntryDTO,
   ChatDTO,
   ChatMode,
   ChatWithMessagesDTO,
@@ -97,9 +84,7 @@ export type {
   BackupDTO,
   BackupImportSummaryDTO,
   LoreTriggerMode,
-  LoreEntryDTO,
-  LorebookDTO,
-  LorebookWithEntriesDTO,
+  MatchedLoreEntryDTO,
   MessageDTO,
   MessageRole,
   ModelPreset,

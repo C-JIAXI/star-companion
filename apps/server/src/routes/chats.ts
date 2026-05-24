@@ -3,7 +3,6 @@ import { prisma } from "../db.js";
 import { asyncHandler, HttpError, parseBody, requireParam } from "../lib/http.js";
 import { chatCreateSchema, chatUpdateSchema } from "../schemas.js";
 import { serializeChat, serializeMessage } from "../serializers.js";
-import { createInitialCharacterMessages } from "../services/promptBuilder.js";
 
 export const chatsRouter = Router();
 
@@ -23,7 +22,6 @@ chatsRouter.post(
   asyncHandler(async (request, response) => {
     const body = parseBody(chatCreateSchema, request.body);
     const chat = await prisma.chat.create({ data: body });
-    await createInitialCharacterMessages(chat.id, body.characterIds);
 
     response.status(201).json({ ok: true, data: serializeChat(chat) });
   })

@@ -1,10 +1,24 @@
-import { Copy, Download, FileUp, Plus, Save, Search, Trash2 } from "lucide-react";
+import { ChevronDown, Copy, Download, FileUp, Plus, Save, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { downloadJson, readFileText } from "../lib/files";
-import type { CharacterDTO, CharacterInput } from "../types";
+import type { CharacterDTO, CharacterInput, CharacterLoreEntryDTO } from "../types";
 import { Button, ConfirmDialog, EmptyState, ErrorNotice, Field, HelpLabel, Panel, SuccessNotice, TextArea, TextInput } from "../components/ui";
+
+const blankLoreEntry = (): CharacterLoreEntryDTO & { _localId: string; _collapsed: boolean } => ({
+  id: "",
+  keys: [],
+  content: "",
+  priority: 0,
+  triggerMode: "both",
+  alwaysActive: false,
+  enabled: true,
+  _localId: Math.random().toString(36).slice(2),
+  _collapsed: false
+});
+
+type LoreEntryForm = ReturnType<typeof blankLoreEntry>;
 
 const blankForm = {
   name: "",
@@ -12,7 +26,8 @@ const blankForm = {
   prefix: "",
   prompt: "",
   suffix: "",
-  relationship: ""
+  relationship: "",
+  loreEntries: [] as LoreEntryForm[]
 };
 
 type CharacterForm = typeof blankForm;
@@ -23,7 +38,18 @@ const toForm = (character: CharacterDTO): CharacterForm => ({
   prefix: character.prefix,
   prompt: character.prompt,
   suffix: character.suffix,
-  relationship: character.relationship
+  relationship: character.relationship,
+  loreEntries: (character.loreEntries ?? []).map((entry) => ({
+      id: entry.id,
+      keys: entry.keys,
+      content: entry.content,
+      priority: entry.priority,
+      triggerMode: entry.triggerMode,
+      alwaysActive: entry.alwaysActive,
+      enabled: entry.enabled,
+      _localId: Math.random().toString(36).slice(2),
+      _collapsed: true
+    }))
 });
 
 const toInput = (form: CharacterForm): CharacterInput => ({
@@ -32,7 +58,8 @@ const toInput = (form: CharacterForm): CharacterInput => ({
   prefix: form.prefix,
   prompt: form.prompt,
   suffix: form.suffix,
-  relationship: form.relationship
+  relationship: form.relationship,
+  loreEntries: form.loreEntries.map(({ _localId, ...entry }) => entry)
 });
 
 type ImportedCharacter = Partial<CharacterInput> & {
@@ -40,6 +67,7 @@ type ImportedCharacter = Partial<CharacterInput> & {
   scenario?: string;
   systemPrompt?: string;
   avatar?: string | null;
+  loreEntries?: CharacterLoreEntryDTO[];
 };
 
 export function CharactersPage() {
@@ -169,7 +197,8 @@ export function CharactersPage() {
     try {
       const duplicated = await api.characters.create({
         ...toInput(toForm(selected)),
-        name: `${selected.name} ${t("characters.copySuffix")}`
+        name: `${selected.name} ${t("characters.copySuffix")}`,
+        loreEntries: (selected.loreEntries ?? []).map(({ id: _id, ...rest }) => rest)
       });
       await loadCharacters();
       setSelectedId(duplicated.id);
@@ -206,7 +235,9 @@ export function CharactersPage() {
         avatar: parsed.avatar ?? null,
         prefix: parsed.prefix ?? parsed.systemPrompt ?? "",
         prompt: parsed.prompt ?? parsed.description ?? "",
-        suffix: parsed.suffix ?? parsed.scenario ?? ""
+        suffix: parsed.suffix ?? parsed.scenario ?? "",
+        relationship: parsed.relationship ?? "",
+        loreEntries: parsed.loreEntries ?? []
       });
       await loadCharacters();
     } catch (caught) {
@@ -308,7 +339,197 @@ export function CharactersPage() {
           <Field label={<HelpLabel label={t("characters.prefix")} description={t("help.characterPrefix")} />}><TextArea value={form.prefix} onChange={(event) => setForm({ ...form, prefix: event.target.value })} className="min-h-[120px]" /></Field>
           <Field label={<HelpLabel label={t("characters.prompt")} description={t("help.characterPrompt")} />}><TextArea value={form.prompt} onChange={(event) => setForm({ ...form, prompt: event.target.value })} className="min-h-[180px]" /></Field>
           <Field label={<HelpLabel label={t("characters.suffix")} description={t("help.characterSuffix")} />}><TextArea value={form.suffix} onChange={(event) => setForm({ ...form, suffix: event.target.value })} className="min-h-[120px]" /></Field>
-          
+
+          <div className="border-t border-white/5 pt-5">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-sm font-semibold text-slate-100">{t("characters.loreEntries")}</p>
+              <span className="text-xs text-slate-500">
+                {t("characters.loreEntryCount", { count: form.loreEntries.filter((e) => e.enabled).length })}
+                {" · "}
+                {t("characters.loreEntryCount", { count: form.loreEntries.length })}
+              </span>
+            </div>
+            {form.loreEntries.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-white/10 px-4 py-6 text-center">
+                <p className="text-sm text-slate-400">{t("characters.loreEntryEmpty")}</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {form.loreEntries.map((entry, index) => (
+                  <div
+                    className={`rounded-xl border transition-colors ${
+                      entry.enabled
+                        ? "border-white/10 bg-ink-950/40"
+                        : "border-white/5 bg-ink-950/20 opacity-60"
+                    }`}
+                    key={entry._localId}
+                  >
+                    <div
+                      className="flex cursor-pointer items-center justify-between gap-2 px-4 py-3 select-none"
+                      onClick={() => {
+                        const next = [...form.loreEntries];
+                        next[index] = { ...entry, _collapsed: !entry._collapsed };
+                        setForm({ ...form, loreEntries: next });
+                      }}
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <ChevronDown
+                          className={`shrink-0 text-slate-500 transition-transform duration-200 ${
+                            entry._collapsed ? "-rotate-90" : ""
+                          }`}
+                          size={14}
+                        />
+                        {entry.keys.length > 0 ? (
+                          <span className="truncate text-xs font-medium text-amber-200/80">
+                            {entry.keys.join(", ")}
+                          </span>
+                        ) : (
+                          <span className="whitespace-nowrap text-xs font-medium text-slate-500">
+                            {t("characters.loreEntryIndex", { index: index + 1 })}
+                          </span>
+                        )}
+                        {entry._collapsed && entry.content ? (
+                          <span className="hidden truncate text-xs text-slate-500 opacity-60 sm:inline">
+                            — {entry.content}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <label
+                          className="flex cursor-pointer items-center gap-1.5 rounded-lg px-1.5 py-1 text-xs text-slate-400 transition-colors hover:bg-white/5"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <input
+                            checked={entry.enabled}
+                            type="checkbox"
+                            className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                            onChange={() => {
+                              const next = [...form.loreEntries];
+                              next[index] = { ...entry, enabled: !entry.enabled };
+                              setForm({ ...form, loreEntries: next });
+                            }}
+                          />
+                          {t("common.enabled")}
+                        </label>
+                        <button
+                          className="rounded-lg p-1 text-slate-500 transition-colors hover:bg-red-500/10 hover:text-red-400"
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            const next = form.loreEntries.filter((_, i) => i !== index);
+                            setForm({ ...form, loreEntries: next });
+                          }}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    <div
+                      className={`overflow-hidden transition-all duration-200 ease-out ${
+                        entry._collapsed
+                          ? "max-h-0 border-t-0 opacity-0"
+                          : "max-h-[1000px] border-t border-white/5 opacity-100"
+                      }`}
+                    >
+                      <div className="px-4 pb-4 pt-3">
+                        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_140px]">
+                          <div className="space-y-3">
+                            <Field label={t("characters.loreEntryKeys")}>
+                              <TextInput
+                                placeholder={t("characters.loreEntryKeysPlaceholder")}
+                                value={entry.keys.join(", ")}
+                                onChange={(event) => {
+                                  const keys = event.target.value
+                                    .split(/[,，]/)
+                                    .map((k) => k.trim())
+                                    .filter(Boolean);
+                                  const next = [...form.loreEntries];
+                                  next[index] = { ...entry, keys };
+                                  setForm({ ...form, loreEntries: next });
+                                }}
+                              />
+                            </Field>
+                            <Field label={t("characters.loreEntryContent")}>
+                              <TextArea
+                                className="min-h-[80px]"
+                                value={entry.content}
+                                onChange={(event) => {
+                                  const next = [...form.loreEntries];
+                                  next[index] = { ...entry, content: event.target.value };
+                                  setForm({ ...form, loreEntries: next });
+                                }}
+                              />
+                            </Field>
+                          </div>
+                          <div className="space-y-3">
+                            <Field label={t("common.priority")}>
+                              <TextInput
+                                type="number"
+                                value={String(entry.priority)}
+                                onChange={(event) => {
+                                  const next = [...form.loreEntries];
+                                  next[index] = {
+                                    ...entry,
+                                    priority: Math.max(0, Number(event.target.value) || 0)
+                                  };
+                                  setForm({ ...form, loreEntries: next });
+                                }}
+                              />
+                            </Field>
+                            <Field label={t("characters.loreEntryTriggerMode")}>
+                              <select
+                                className="w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-2 text-sm text-slate-200 focus:border-ember-500/50 focus:outline-none focus:ring-1 focus:ring-ember-500/30"
+                                value={entry.triggerMode}
+                                onChange={(event) => {
+                                  const next = [...form.loreEntries];
+                                  next[index] = {
+                                    ...entry,
+                                    triggerMode: event.target.value as "user" | "assistant" | "both"
+                                  };
+                                  setForm({ ...form, loreEntries: next });
+                                }}
+                              >
+                                <option value="both">{t("characters.loreEntryTriggerBoth")}</option>
+                                <option value="user">{t("characters.loreEntryTriggerUser")}</option>
+                                <option value="assistant">{t("characters.loreEntryTriggerAssistant")}</option>
+                              </select>
+                            </Field>
+                            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-400">
+                              <input
+                                checked={entry.alwaysActive}
+                                type="checkbox"
+                                className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                                onChange={() => {
+                                  const next = [...form.loreEntries];
+                                  next[index] = { ...entry, alwaysActive: !entry.alwaysActive };
+                                  setForm({ ...form, loreEntries: next });
+                                }}
+                              />
+                              {t("characters.loreEntryAlwaysActive")}
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <Button
+              className="mt-3 w-full !min-h-[36px]"
+              variant="secondary"
+              onClick={() =>
+                setForm({
+                  ...form,
+                  loreEntries: [...form.loreEntries, blankLoreEntry()]
+                })
+              }
+            >
+              <Plus size={14} />
+              {t("characters.loreEntryAdd")}
+            </Button>
+          </div>
+
           <div className="flex flex-wrap justify-end gap-3 pt-4 border-t border-white/5">
             <Button disabled={loading || !selected} variant="secondary" onClick={() => void duplicateCharacter()}>
               <Copy size={16} />

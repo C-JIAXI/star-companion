@@ -1,6 +1,5 @@
 import { useCallback } from "react";
 import { useAppStore } from "./store/useAppStore";
-import type { AppLanguage } from "./types";
 
 const zhCN = {
   "app.tagline": "本地优先角色扮演实验室",
@@ -28,14 +27,11 @@ const zhCN = {
   "common.unknown": "未知",
   "nav.characters": "角色",
   "nav.chat": "聊天",
-  "nav.lore": "世界书",
   "nav.settings": "设置",
   "section.characters.subtitle": "创建、编辑、删除、导入和导出原创角色卡。",
   "section.characters.title": "角色工坊",
   "section.chat.subtitle": "创建聊天、绑定角色，并通过后端代理流式生成回复。",
   "section.chat.title": "聊天工作台",
-  "section.lore.subtitle": "管理关键词触发的上下文条目，为后续提示词注入做准备。",
-  "section.lore.title": "世界书",
   "section.settings.subtitle": "在本地保存模型配置。所有模型请求都通过后端代理。",
   "section.settings.title": "模型设置",
   "chat.boundCharacters": "{{count}} 个角色",
@@ -59,13 +55,9 @@ const zhCN = {
   "chat.failedSend": "发送消息失败",
   "chat.failedUpdateMemory": "保存记忆设置失败",
   "chat.failedUpdateUserProfile": "保存用户信息摘要失败",
-  "chat.loreMatches": "本次命中的世界书",
+  "chat.loreMatches": "本次命中的角色世界书",
   "chat.memorySaved": "记忆设置已保存。",
   "chat.chatSettingsSaved": "对话设置已保存。",
-  "chat.lorebooks": "世界书",
-  "chat.boundLorebooks": "{{count}} 本世界书",
-  "chat.noLorebooks": "还没有世界书。",
-  "chat.userProfileMemory": "用户信息摘要",
   "chat.autoSummarizeUser": "自动总结",
   "chat.userProfileEmpty": "还没有可用的用户信息摘要。系统会根据后续用户消息自动整理。",
   "chat.userProfileUpdated": "已根据最近对话更新",
@@ -74,14 +66,11 @@ const zhCN = {
   "chat.userProfileSaved": "用户信息摘要已保存。",
   "chat.clearUserProfile": "清空用户信息摘要",
   "chat.messageSaved": "消息修改已保存。",
-  "chat.triggeredLore": "触发世界书",
+  "chat.triggeredLore": "触发角色世界书",
   "chat.memorySettings": "记忆",
   "chat.memoryHelp": "控制生成时回看的历史对话轮数。\n1 表示最近 1 轮用户消息和 AI 回复，2 表示最近 2 轮。\n当前正在发送的消息始终会参与生成。",
   "chat.memoryValue": "记忆：{{count}}",
   "chat.messageStream": "消息流",
-  "chat.mode": "模式",
-  "chat.mode.group": "群聊",
-  "chat.mode.single": "私聊",
   "chat.modelSwitchTitle": "模型切换",
   "chat.modelSwitched": "已切换到模型「{{label}}」",
   "chat.noChats": "还没有聊天。在右侧创建一个。",
@@ -91,10 +80,6 @@ const zhCN = {
   "chat.saveEdit": "保存修改",
   "chat.regenerate": "重生成",
   "chat.stop": "停止",
-  "chat.targetAll": "所有角色",
-  "chat.joinedGroup": "{{name}} 加入了群聊",
-  "chat.noMoreCharacters": "所有角色已在群聊中",
-  "chat.failedAddCharacter": "添加角色失败",
   "chat.streaming": "正在生成",
   "chat.streamingAs": "{{name}} 正在输入",
   "chat.title": "标题",
@@ -128,58 +113,19 @@ const zhCN = {
   "characters.scenario": "场景",
   "characters.suffix": "后置词",
   "characters.systemPrompt": "系统提示词",
-  "characters.tags": "标签",
-  "characters.tagsPlaceholder": "游侠, 悬疑, 盟友",
-  "lore.addEntry": "添加条目",
-  "lore.bookSearchPlaceholder": "搜索世界书名称或描述",
-  "lore.content": "内容",
-  "lore.create": "创建世界书",
-  "lore.deleteBookConfirm": "删除世界书“{{name}}”？",
-  "lore.deleteBookTitle": "删除世界书",
-  "lore.deleteEntryConfirm": "删除这条世界书条目？",
-  "lore.deleteEntryTitle": "删除条目",
-  "lore.disable": "停用",
-  "lore.edit": "编辑世界书",
-  "lore.editEntryPrompt": "编辑世界书条目内容",
-  "lore.editEntryHelp": "调整该条目的注入内容，保存后会立即更新世界书。",
-  "lore.editEntryPlaceholder": "输入新的世界书条目内容",
-  "lore.editEntryTitle": "编辑世界书条目",
-  "lore.enable": "启用",
-  "lore.entries": "条目",
-  "lore.entrySearchPlaceholder": "搜索关键词或内容",
-  "lore.failedCreateEntry": "创建世界书条目失败",
-  "lore.failedDeleteBook": "删除世界书失败",
-  "lore.failedEditEntry": "保存世界书条目失败",
-  "lore.failedLoad": "加载世界书失败",
-  "lore.failedLoadBook": "加载世界书详情失败",
-  "lore.failedSave": "保存世界书失败",
-  "lore.failedUpdate": "更新世界书失败",
-  "lore.filterAll": "全部",
-  "lore.filterDisabled": "停用",
-  "lore.filterEnabled": "启用",
-  "lore.filterStatus": "状态筛选",
-  "lore.filterTrigger": "触发筛选",
-  "lore.filteredResults": "显示 {{count}} / {{total}}",
-  "lore.filteredEmpty": "没有匹配当前搜索的条目。",
-  "lore.entrySaved": "世界书条目已保存。",
-  "lore.keys": "关键词",
-  "lore.keysDisplay": "关键词：{{keys}}",
-  "lore.keysPlaceholder": "城门, 首都, 神器",
-  "lore.noEntries": "这本世界书还没有条目。",
-  "lore.noLorebooks": "还没有世界书。用编辑器创建一本。",
-  "lore.composerTitle": "新增条目",
-  "lore.composerSubtitle": "为“{{name}}”补充会在聊天中自动注入的设定片段。",
-  "lore.currentBook": "当前世界书",
-  "lore.saved": "世界书已保存。",
-  "lore.selectBeforeEntries": "先选择一本世界书，再添加条目。",
-  "lore.saveEntry": "保存条目",
-  "lore.statsBooks": "世界书数",
-  "lore.statsEntries": "条目数",
-  "lore.statsEnabled": "启用中",
-  "lore.statsPriority": "最高优先级",
-  "lore.statsTriggers": "触发分布",
-  "lore.summaryEmpty": "选中一本世界书后，这里会显示条目规模和触发分布。",
-  "lore.summaryTitle": "概览",
+  "characters.loreEntries": "角色世界书",
+  "characters.loreEntryEmpty": "还没有世界书词条。添加词条后，聊天时会根据关键词自动触发。",
+  "characters.loreEntryAdd": "添加词条",
+  "characters.loreEntryIndex": "词条 {{index}}",
+  "characters.loreEntryCount": "{{count}} 条",
+  "characters.loreEntryKeys": "触发关键词",
+  "characters.loreEntryKeysPlaceholder": "用逗号分隔，例如：武器, 故乡, 秘密",
+  "characters.loreEntryContent": "词条内容",
+  "characters.loreEntryTriggerMode": "触发模式",
+  "characters.loreEntryTriggerBoth": "双方",
+  "characters.loreEntryTriggerUser": "用户",
+  "characters.loreEntryTriggerAssistant": "角色",
+  "characters.loreEntryAlwaysActive": "始终激活",
   "settings.apiBaseUrl": "API Base URL",
   "settings.apiKey": "API Key",
   "settings.apiKeyPlaceholderEmpty": "仅保存在本地数据库",
@@ -187,9 +133,9 @@ const zhCN = {
   "settings.backendReachable": "后端代理可访问。",
   "settings.backupExported": "备份 JSON 已开始下载。",
   "settings.backupHelp":
-    "导出的完整备份包含角色、聊天、消息和世界书；设置会导出模型参数，但不会导出 API Key。",
+    "导出的完整备份包含角色、聊天和消息；设置会导出模型参数，但不会导出 API Key。",
   "settings.backupImported":
-    "导入完成：{{characters}} 个角色、{{chats}} 段聊天、{{messages}} 条消息、{{lorebooks}} 本世界书、{{loreEntries}} 条世界书条目。",
+    "导入完成：{{characters}} 个角色、{{chats}} 段聊天、{{messages}} 条消息。",
   "settings.backupPanel": "数据备份",
   "settings.connectionFailed": "连接测试失败",
   "settings.exportBackup": "导出完整备份",
@@ -200,7 +146,7 @@ const zhCN = {
   "settings.healthFailed": "健康检查失败：{{status}}",
   "settings.importBackup": "导入备份",
   "settings.importBackupConfirm":
-    "导入备份会写入本地数据库。替换模式会删除现有角色、聊天、消息和世界书，但不会清除 API Key。确定继续吗？",
+    "导入备份会写入本地数据库。替换模式会删除现有角色、聊天和消息，但不会清除 API Key。确定继续吗？",
   "settings.importBackupTitle": "导入备份",
   "settings.importMode": "导入模式",
   "settings.importModeMerge": "合并：保留现有数据并更新同 ID 项",
@@ -233,24 +179,10 @@ const zhCN = {
   "help.characterPrompt": "角色的主体提示词，适合写人设、背景、目标、行为方式和对话风格。",
   "help.characterRelationship": "描述该角色与其他角色之间的关系，用于群聊时增强角色互动表现。例如「与B是师徒关系，暗中敌视C」。",
   "help.characterSuffix":
-    "放在角色提示词之后的补充说明，适合写输出格式、禁忌、结尾规则或临场约束。",
-  "help.tags": "用于整理、搜索和筛选角色的短标签。",
-  "help.lorebook": "世界书是一组关键词触发的背景资料，用来在聊天时自动补充相关设定。",
-  "help.loreKeys": "触发世界书条目的关键词。最近上下文命中这些词时会注入对应内容。",
-  "help.lorePriority": "多个世界书条目命中时的排序权重。数值越高越优先注入。",
-  "help.loreContent": "命中关键词后注入 prompt 的设定文本，应保持准确、简洁。",
-  "lore.triggerMode": "\u89e6\u53d1\u65b9\u5f0f",
-  "lore.triggerMode.user": "\u7528\u6237\u89e6\u53d1",
-  "lore.triggerMode.assistant": "AI\u89e6\u53d1",
-  "lore.triggerMode.both": "\u5171\u540c\u89e6\u53d1",
-  "lore.alwaysActive": "\u6301\u7eed\u89e6\u53d1",
-  "help.loreAlwaysActive":
-    "\u542f\u7528\u540e\uff0c\u53ea\u8981\u5f53\u524d\u5bf9\u8bdd\u7ed1\u5b9a\u4e86\u8fd9\u672c\u4e16\u754c\u4e66\uff0c\u8be5\u6761\u76ee\u5c31\u4f1a\u6bcf\u6b21\u6ce8\u5165\uff0c\u4e0d\u9700\u8981\u5173\u952e\u8bcd\u547d\u4e2d\u3002",
-  "help.loreTriggerMode":
-    "\u63a7\u5236\u8fd9\u6761\u4e16\u754c\u4e66\u7531\u7528\u6237\u6d88\u606f\u3001AI\u56de\u590d\u6216\u53cc\u65b9\u4e0a\u4e0b\u6587\u89e6\u53d1\u3002"
+    "放在角色提示词之后的补充说明，适合写输出格式、禁忌、结尾规则或临场约束。"
 } as const;
 
-const en: Record<TranslationKey, string> = {
+const en: Record<keyof typeof zhCN, string> = {
   "app.tagline": "Local-first roleplay lab",
   "common.addEntry": "Add Entry",
   "common.apiKeyStored": "API key stored locally",
@@ -260,97 +192,80 @@ const en: Record<TranslationKey, string> = {
   "common.copy": "Copy",
   "common.delete": "Delete",
   "common.description": "Description",
-  "common.disabled": "disabled",
+  "common.disabled": "Disabled",
   "common.edit": "Edit",
-  "common.enabled": "enabled",
+  "common.enabled": "Enabled",
   "common.export": "Export",
   "common.import": "Import",
   "common.name": "Name",
   "common.new": "New",
-  "common.noApiKey": "No API key",
+  "common.noApiKey": "No API key saved",
   "common.noDescription": "No description",
-  "common.priority": "priority",
+  "common.priority": "Priority",
   "common.refresh": "Refresh",
   "common.save": "Save",
   "common.select": "Select",
   "common.unknown": "Unknown",
   "nav.characters": "Characters",
   "nav.chat": "Chat",
-  "nav.lore": "Lore",
   "nav.settings": "Settings",
-  "section.characters.subtitle":
-    "Create, edit, delete, import, and export original character cards.",
-  "section.characters.title": "Character Studio",
-  "section.chat.subtitle":
-    "Create chats, bind characters, and stream replies through the backend proxy.",
-  "section.chat.title": "Chat Workspace",
-  "section.lore.subtitle": "Manage keyword-triggered context entries for later prompt injection.",
-  "section.lore.title": "Lorebooks",
+  "section.characters.subtitle": "Create, edit, delete, import, and export original character cards.",
+  "section.characters.title": "Character Workshop",
+  "section.chat.subtitle": "Create chats, bind characters, and stream responses through the backend proxy.",
+  "section.chat.title": "Chat Workbench",
   "section.settings.subtitle":
-    "Store provider configuration locally. Model requests stay behind the backend proxy.",
+    "Configure your model provider. All model requests are proxied through the backend.",
   "section.settings.title": "Model Settings",
-  "chat.boundCharacters": "{{count}} characters",
+  "chat.boundCharacters": "{{count}} character(s)",
   "chat.chats": "Chats",
   "chat.createChat": "Create Chat",
-  "chat.createCharactersFirst": "Create characters before binding them to a chat.",
-  "chat.deleteChatConfirm": 'Delete chat "{{title}}"?',
+  "chat.createCharactersFirst": "Create characters first, then bind them to chats.",
+  "chat.deleteChatConfirm": "Delete chat \"{{title}}\"?",
   "chat.deleteChatTitle": "Delete Chat",
   "chat.deleteMessageConfirm": "Delete this message?",
   "chat.deleteMessageTitle": "Delete Message",
-  "chat.editMessageHelp":
-    "Adjust the message content here. Saving updates the current chat record immediately.",
-  "chat.editMessagePrompt": "Edit message",
+  "chat.editMessageHelp": "Adjust the message content here. Saving updates the current chat immediately.",
+  "chat.editMessagePrompt": "Edit Message",
   "chat.editMessagePlaceholder": "Enter the revised message content",
   "chat.editMessageTitle": "Edit Message",
   "chat.failedCreate": "Failed to create chat",
   "chat.failedDelete": "Failed to delete chat",
-  "chat.failedEdit": "Failed to save message edits",
+  "chat.failedEdit": "Failed to save message edit",
   "chat.failedLoad": "Failed to load chat data",
   "chat.failedLoadChat": "Failed to load chat",
   "chat.failedRegenerate": "Failed to regenerate",
   "chat.failedSend": "Failed to send message",
   "chat.failedUpdateMemory": "Failed to save memory settings",
-  "chat.failedUpdateUserProfile": "Failed to save user profile summary",
-  "chat.loreMatches": "Matched lore entries",
+  "chat.failedUpdateUserProfile": "Failed to update user profile",
+  "chat.loreMatches": "Matched character lore entries",
   "chat.memorySaved": "Memory settings saved.",
   "chat.chatSettingsSaved": "Chat settings saved.",
-  "chat.lorebooks": "Lorebooks",
-  "chat.boundLorebooks": "{{count}} lorebooks",
-  "chat.noLorebooks": "No lorebooks yet.",
-  "chat.userProfileMemory": "User Profile Memory",
-  "chat.autoSummarizeUser": "Auto summarize",
+  "chat.autoSummarizeUser": "Auto-summarize",
   "chat.userProfileEmpty":
-    "No user profile summary yet. The system will summarize durable user information from later messages.",
+    "No user profile summary yet. The system will build one from subsequent messages.",
   "chat.userProfileUpdated": "Updated from recent conversation",
   "chat.userProfileCleared": "User profile summary cleared.",
   "chat.editUserProfile": "Edit",
   "chat.userProfileSaved": "User profile summary saved.",
-  "chat.clearUserProfile": "Clear User Profile Summary",
-  "chat.messageSaved": "Message changes saved.",
-  "chat.triggeredLore": "Triggered lore",
+  "chat.clearUserProfile": "Clear user profile",
+  "chat.messageSaved": "Message saved.",
+  "chat.triggeredLore": "Triggered character lore",
   "chat.memorySettings": "Memory",
   "chat.memoryHelp":
     "Controls how many recent conversation turns are included during generation.\n1 includes the latest user message and AI reply, 2 includes the latest two turns.\nThe message currently being sent is always included.",
   "chat.memoryValue": "Memory: {{count}}",
   "chat.messageStream": "Message Stream",
-  "chat.mode": "Mode",
-  "chat.mode.group": "Group",
-  "chat.mode.single": "Private",
   "chat.modelSwitchTitle": "Switch Model",
-  "chat.modelSwitched": 'Switched to model "{{label}}"',
+  "chat.modelSwitched": "Switched to model \"{{label}}\"",
   "chat.noChats": "No chats yet. Create one on the right.",
   "chat.noMessages": "This chat has no messages yet.",
   "chat.selectOrCreate": "Select or create a chat to view messages.",
   "chat.send": "Send",
-  "chat.saveEdit": "Save Changes",
+  "chat.saveEdit": "Save Edit",
   "chat.regenerate": "Regenerate",
   "chat.stop": "Stop",
-  "chat.targetAll": "All Characters",
-  "chat.joinedGroup": "{{name}} joined the group",
-  "chat.noMoreCharacters": "All characters are already in the chat",
-  "chat.failedAddCharacter": "Failed to add character",
   "chat.streaming": "Generating",
-  "chat.streamingAs": "{{name}} is replying",
+  "chat.streamingAs": "{{name}} typing",
   "chat.title": "Title",
   "chat.tokensEstimated": "estimated",
   "chat.tokensUnavailable": "Tokens: not recorded",
@@ -359,10 +274,10 @@ const en: Record<TranslationKey, string> = {
   "chat.writeMessage": "Write a user message",
   "characters.avatarUrl": "Avatar URL",
   "characters.create": "Create Character",
-  "characters.deleteConfirm": 'Delete character "{{name}}"?',
-  "characters.copySuffix": "Copy",
-  "characters.duplicate": "Duplicate",
-  "characters.duplicated": "Character duplicated.",
+  "characters.deleteConfirm": "Delete character \"{{name}}\"?",
+  "characters.copySuffix": "copy",
+  "characters.duplicate": "Duplicate Character",
+  "characters.duplicated": "Character duplicate created.",
   "characters.edit": "Edit Character",
   "characters.exampleDialog": "Example Dialog",
   "characters.failedDelete": "Failed to delete character",
@@ -372,79 +287,39 @@ const en: Record<TranslationKey, string> = {
   "characters.firstMessage": "First Message",
   "characters.saved": "Character saved.",
   "characters.importMissingName": "Character JSON must include a name",
-  "characters.noCharacters": "No characters yet. Create an original card to start.",
+  "characters.noCharacters": "No characters yet. Create an original character card to get started.",
   "characters.noSearchResults": "No matching characters.",
   "characters.personality": "Personality",
   "characters.prefix": "Prefix",
   "characters.prompt": "Prompt",
   "characters.relationship": "Relationship",
-  "characters.searchPlaceholder": "Search names or prompts",
+  "characters.searchPlaceholder": "Search character name or prompt",
   "characters.scenario": "Scenario",
   "characters.suffix": "Suffix",
   "characters.systemPrompt": "System Prompt",
-  "characters.tags": "Tags",
-  "characters.tagsPlaceholder": "ranger, mystery, ally",
-  "lore.addEntry": "Add Entry",
-  "lore.bookSearchPlaceholder": "Search lorebook name or description",
-  "lore.content": "Content",
-  "lore.create": "Create Lorebook",
-  "lore.deleteBookConfirm": 'Delete lorebook "{{name}}"?',
-  "lore.deleteBookTitle": "Delete Lorebook",
-  "lore.deleteEntryConfirm": "Delete this lore entry?",
-  "lore.deleteEntryTitle": "Delete Entry",
-  "lore.disable": "Disable",
-  "lore.edit": "Edit Lorebook",
-  "lore.editEntryPrompt": "Edit lore entry content",
-  "lore.editEntryHelp":
-    "Adjust the injected content for this entry. Saving updates the lorebook immediately.",
-  "lore.editEntryPlaceholder": "Enter the revised lore entry content",
-  "lore.editEntryTitle": "Edit Lore Entry",
-  "lore.enable": "Enable",
-  "lore.entries": "Entries",
-  "lore.entrySearchPlaceholder": "Search keys or content",
-  "lore.failedCreateEntry": "Failed to create lore entry",
-  "lore.failedDeleteBook": "Failed to delete lorebook",
-  "lore.failedEditEntry": "Failed to save lore entry",
-  "lore.failedLoad": "Failed to load lorebooks",
-  "lore.failedLoadBook": "Failed to load lorebook",
-  "lore.failedSave": "Failed to save lorebook",
-  "lore.failedUpdate": "Failed to update lorebook",
-  "lore.filterAll": "All",
-  "lore.filterDisabled": "Disabled",
-  "lore.filterEnabled": "Enabled",
-  "lore.filterStatus": "Status",
-  "lore.filterTrigger": "Trigger",
-  "lore.filteredResults": "Showing {{count}} / {{total}}",
-  "lore.filteredEmpty": "No entries match the current search.",
-  "lore.entrySaved": "Lore entry saved.",
-  "lore.keys": "Keys",
-  "lore.keysDisplay": "Keys: {{keys}}",
-  "lore.keysPlaceholder": "gate, capital, artifact",
-  "lore.noEntries": "No entries in this lorebook.",
-  "lore.noLorebooks": "No lorebooks yet. Create one with the editor.",
-  "lore.composerTitle": "New Entry",
-  "lore.composerSubtitle": "Add background snippets for {{name}} that can be injected into chat.",
-  "lore.currentBook": "Current Lorebook",
-  "lore.saved": "Lorebook saved.",
-  "lore.selectBeforeEntries": "Select a lorebook before adding entries.",
-  "lore.saveEntry": "Save Entry",
-  "lore.statsBooks": "Lorebooks",
-  "lore.statsEntries": "Entries",
-  "lore.statsEnabled": "Enabled",
-  "lore.statsPriority": "Top Priority",
-  "lore.statsTriggers": "Trigger Split",
-  "lore.summaryEmpty": "Select a lorebook to see entry volume and trigger distribution.",
-  "lore.summaryTitle": "Overview",
+  "characters.loreEntries": "Character Lore",
+  "characters.loreEntryEmpty": "No lore entries yet. Add entries to inject contextual world info during chat.",
+  "characters.loreEntryAdd": "Add Entry",
+  "characters.loreEntryIndex": "Entry {{index}}",
+  "characters.loreEntryCount": "{{count}}",
+  "characters.loreEntryKeys": "Trigger Keywords",
+  "characters.loreEntryKeysPlaceholder": "Comma separated, e.g. weapon, hometown, secret",
+  "characters.loreEntryContent": "Content",
+  "characters.loreEntryTriggerMode": "Trigger Mode",
+  "characters.loreEntryTriggerBoth": "Both",
+  "characters.loreEntryTriggerUser": "User",
+  "characters.loreEntryTriggerAssistant": "Assistant",
+  "characters.loreEntryAlwaysActive": "Always Active",
   "settings.apiBaseUrl": "API Base URL",
   "settings.apiKey": "API Key",
-  "settings.apiKeyPlaceholderEmpty": "Stored only in local database",
-  "settings.apiKeyPlaceholderStored": "Leave blank to clear or replace saved key",
-  "settings.backendReachable": "Backend proxy is reachable.",
+  "settings.apiKeyPlaceholderEmpty": "Stored locally only",
+  "settings.apiKeyPlaceholderStored": "Leave empty to remove or replace the saved key",
+  "settings.backendReachable": "Backend proxy reachable.",
   "settings.backupExported": "Backup JSON download started.",
   "settings.backupHelp":
-    "Full backups include characters, chats, messages, and lorebooks. Settings export model parameters, but never the API key.",
+    "The exported backup includes characters, chats, and messages. Settings export model params but not the API key.",
   "settings.backupImported":
-    "Import complete: {{characters}} characters, {{chats}} chats, {{messages}} messages, {{lorebooks}} lorebooks, {{loreEntries}} lore entries.",
+    "Import complete: {{characters}} character(s), {{chats}} chat(s), {{messages}} message(s).",
   "settings.backupPanel": "Data Backup",
   "settings.connectionFailed": "Connection test failed",
   "settings.exportBackup": "Export Full Backup",
@@ -455,104 +330,82 @@ const en: Record<TranslationKey, string> = {
   "settings.healthFailed": "Health check failed: {{status}}",
   "settings.importBackup": "Import Backup",
   "settings.importBackupConfirm":
-    "Importing a backup will write to the local database. Replace mode deletes existing characters, chats, messages, and lorebooks, but keeps the API key. Continue?",
+    "Importing will write into the local database. Replace mode will delete existing characters, chats, and messages, but will not clear your API key. Continue?",
   "settings.importBackupTitle": "Import Backup",
   "settings.importMode": "Import Mode",
-  "settings.importModeMerge": "Merge: keep existing data and update matching IDs",
-  "settings.importModeReplace": "Replace: clear existing data before importing",
-  "settings.language": "Interface Language",
+  "settings.importModeMerge": "Merge — keep existing data and update matching IDs",
+  "settings.importModeReplace": "Replace — clear existing data then import",
+  "settings.language": "Language",
   "settings.maxTokens": "Max Tokens",
   "settings.model": "Model",
-  "settings.modelReachable": "Model service reachable. Current model: {{model}}",
+  "settings.modelReachable": "Model service reachable — current model: {{model}}",
   "settings.panelTitle": "Provider Settings",
   "settings.provider": "Provider",
   "settings.saved": "Settings saved locally.",
   "settings.saveSettings": "Save Settings",
   "settings.temperature": "Temperature",
   "settings.testBackend": "Test Backend",
-  "settings.testModel": "Test Model",
+  "settings.testModel": "Test Model Connection",
   "settings.topP": "Top P",
   "help.provider":
-    "Selects the model service type used by the backend proxy. The MVP defaults to an OpenAI-compatible API.",
+    "Select the model service type for the backend proxy to connect to. The MVP defaults to OpenAI-compatible interfaces.",
   "help.apiBaseUrl":
-    "The root endpoint for the model service. LLM requests go through the backend proxy, so the frontend never sends the API key directly.",
+    "Root URL of the model service. All LLM requests are proxied through the backend so the frontend never carries the API key directly.",
   "help.apiKey":
-    "The secret key used to call the model service. It is encrypted by the backend before local storage, and the frontend never calls providers directly.",
+    "The key used to call the model service. Encrypted with a local key on the backend when saved. The frontend never holds or calls it directly.",
   "help.model":
-    "The concrete model name to call, such as gpt-4o-mini or a model ID exposed by a local compatible service.",
+    "The specific model name to call, e.g. gpt-4o-mini or a model ID provided by a local compatible service.",
   "help.temperature":
-    "Controls reply randomness. Higher values are more varied; lower values are steadier.",
+    "Controls randomness. Higher values produce more varied replies, lower values produce more deterministic replies.",
   "help.maxTokens":
-    "Limits how many tokens the model can generate in one reply, helping control length and cost.",
+    "Limits the maximum number of tokens the model can generate in a single reply, controlling length and cost.",
   "help.topP":
-    "Limits word choices to a cumulative probability range. Usually tune this or Temperature as the main creativity control.",
+    "Restricts word selection to the cumulative probability range. Typically you only need to adjust Temperature or Top P, not both.",
   "help.systemPrompt":
-    "The highest-priority character instruction sent to the model, shaping identity, tone, boundaries, and style.",
+    "The highest-priority role instruction for the model, used to constrain identity, tone, boundaries, and output style.",
   "help.scenario":
-    "The roleplay background and opening situation for this character. It is included when prompts are assembled.",
+    "The current background and opening context for the character, included in subsequent prompt assembly.",
   "help.exampleDialog":
-    "Sample dialog helps the model imitate the character's voice and interaction rhythm.",
-  "help.firstMessage": "The first message the character sends when a new chat begins.",
+    "Example dialogue helps the model mimic the character's speech patterns and interaction rhythm.",
+  "help.firstMessage":
+    "The first message the character proactively sends when starting a new chat.",
   "help.characterPrefix":
-    "High-priority text placed before the character prompt, useful for identity boundaries, voice rules, and fixed constraints.",
+    "High-priority instructions placed before the character prompt. Suitable for identity boundaries, tone rules, and fixed constraints.",
   "help.characterPrompt":
-    "The main character prompt, useful for persona, background, goals, behavior, and dialogue style.",
+    "The character's main prompt. Suitable for personality, background, goals, behavior, and dialogue style.",
   "help.characterRelationship":
-    "Describes this character's relationship with others. Used in group chats to enhance character interaction. E.g. \"mentors B, secretly opposes C\".",
+    "Describes relationships between this character and others in group chats, e.g. 'Mentor to B, secretly hostile toward C'.",
   "help.characterSuffix":
-    "Supplemental text placed after the character prompt, useful for output format, restrictions, ending rules, or scene-specific constraints.",
-  "help.tags": "Short labels for organizing, searching, and filtering characters.",
-  "help.lorebook":
-    "A lorebook is a set of keyword-triggered background notes that can be injected into chat context.",
-  "help.loreKeys":
-    "Keywords that trigger a lore entry. When recent context matches them, the entry content is injected.",
-  "help.lorePriority": "Sort weight for matched lore entries. Higher values are injected first.",
-  "help.loreContent":
-    "The setting text injected into the prompt after a keyword match. Keep it accurate and concise.",
-  "lore.triggerMode": "Trigger Mode",
-  "lore.triggerMode.user": "User Trigger",
-  "lore.triggerMode.assistant": "AI Trigger",
-  "lore.triggerMode.both": "Shared Trigger",
-  "lore.alwaysActive": "Always Active",
-  "help.loreAlwaysActive":
-    "When enabled, this entry is injected every time the current chat binds this lorebook, without keyword matching.",
-  "help.loreTriggerMode":
-    "Controls whether this lore entry is matched from user messages, AI replies, or both sides of the recent context."
-};
+    "Supplementary instructions placed after the character prompt. Suitable for output formatting, taboos, closing rules, and situational constraints."
+} as const;
 
-export type TranslationKey = keyof typeof zhCN;
+type TranslationKey = keyof typeof zhCN;
 
-const dictionaries: Record<AppLanguage, Record<TranslationKey, string>> = {
-  "zh-CN": zhCN,
-  en
-};
+const dictionaries = { "zh-CN": zhCN, en } as const;
 
-export const languageOptions: Array<{ value: AppLanguage; label: string }> = [
-  { value: "zh-CN", label: "简体中文" },
-  { value: "en", label: "English" }
+export const languageOptions = [
+  { label: "简体中文", value: "zh-CN" as const },
+  { label: "English", value: "en" as const }
 ];
 
-export const translate = (
-  language: AppLanguage,
-  key: TranslationKey,
-  params: Record<string, string | number> = {}
-) => {
-  let value = dictionaries[language][key] ?? dictionaries.en[key] ?? key;
-  for (const [paramKey, paramValue] of Object.entries(params)) {
-    value = value.replaceAll(`{{${paramKey}}}`, String(paramValue));
-  }
-  return value;
-};
+export type { TranslationKey };
 
 export const useI18n = () => {
-  const language = useAppStore((state) => state.language);
+  const { language } = useAppStore();
+  const dict = dictionaries[language];
 
-  return {
-    language,
-    t: useCallback(
-      (key: TranslationKey, params?: Record<string, string | number>) =>
-        translate(language, key, params),
-      [language]
-    )
-  };
+  const t = useCallback(
+    (key: TranslationKey, params?: Record<string, string | number>) => {
+      let value = dict[key] ?? zhCN[key];
+      if (params) {
+        for (const [param, replacement] of Object.entries(params)) {
+          value = value.replace(`{{${param}}}`, String(replacement));
+        }
+      }
+      return value;
+    },
+    [language, dict]
+  );
+
+  return { t, language };
 };

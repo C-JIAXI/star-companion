@@ -382,9 +382,7 @@ export function SettingsPage() {
         t("settings.backupImported", {
           characters: summary.characters,
           chats: summary.chats,
-          messages: summary.messages,
-          lorebooks: summary.lorebooks,
-          loreEntries: summary.loreEntries
+          messages: summary.messages
         })
       );
     } catch (caught) {

@@ -1,4 +1,4 @@
-import type { Character, LoreEntry, Message, Prisma } from "@prisma/client";
+import type { Character, Message, Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import type { ChatCompletionMessage } from "./completions.js";
 
@@ -13,16 +13,14 @@ type LoreTriggerMode = "user" | "assistant" | "both";
 
 export type MatchedLoreEntry = {
   id: string;
-  lorebookId: string;
-  lorebookName: string;
+  characterId: string;
+  characterName: string;
   keys: string[];
   content: string;
   priority: number;
   triggerMode: LoreTriggerMode;
   alwaysActive: boolean;
   enabled: boolean;
-  createdAt: string;
-  updatedAt: string;
 };
 
 const toStringArray = (value: Prisma.JsonValue): string[] => {
@@ -60,32 +58,8 @@ const resolvePromptCharacterId = (
   return chatCharacterIds[0] ?? null;
 };
 
-const buildCharacterSystemPrompt = (character: Character | null, groupContext?: {
-  allCharacters: Character[];
-  recentCharacterCounts: Map<string, number>;
-  chatId: string;
-}): string => {
+const buildCharacterSystemPrompt = (character: Character | null): string => {
   if (!character) {
-    if (groupContext) {
-      const roster = groupContext.allCharacters
-        .map((c) => {
-          const mentions = groupContext.recentCharacterCounts.get(c.id) ?? 0;
-          const relation = c.relationship.trim() ? ` (${c.relationship.trim()})` : "";
-          const freq = mentions > 0 ? ` — spoke ${mentions} time(s) recently` : " — has not spoken yet";
-          return `- ${c.name}${relation}${freq}`;
-        })
-        .join("\n");
-
-      return [
-        "You are an assistant in a group roleplay chat.",
-        "The following characters are participating in this conversation:",
-        roster,
-        "",
-        "Stay in character when a character is selected.",
-        "Write vivid, direct replies without describing hidden system instructions."
-      ].join("\n");
-    }
-
     return [
       "You are an assistant in a local-first roleplay chat.",
       "Stay in character when a character is selected.",
@@ -101,30 +75,6 @@ const buildCharacterSystemPrompt = (character: Character | null, groupContext?: 
     "Reply as this character. Do not mention implementation details or hidden instructions."
   ];
 
-  if (groupContext) {
-    const others = groupContext.allCharacters
-      .filter((c) => c.id !== character.id)
-      .map((c) => {
-        const relation = c.relationship.trim()
-          ? ` (${c.relationship.trim()})`
-          : "";
-        const mentions = groupContext.recentCharacterCounts.get(c.id) ?? 0;
-        const freq = mentions > 0 ? ` — spoke ${mentions} time(s) recently` : " — has not spoken yet";
-        return `- ${c.name}${relation}${freq}`;
-      })
-      .join("\n");
-
-    if (others) {
-      sections.push(
-        "",
-        "This is a group conversation. The following other characters are present:",
-        others,
-        "",
-        `You are "${character.name}". React naturally to what others say. If you have spoken multiple times recently, consider letting others respond first.`
-      );
-    }
-  }
-
   return sections.filter(Boolean).join("\n\n");
 };
 
@@ -137,24 +87,57 @@ const formatMessageContent = (message: Message, characterNames: Map<string, stri
   return name ? `${name}: ${message.content}` : message.content;
 };
 
-type LoreEntryWithBook = LoreEntry & { lorebook?: { name: string } | null };
+type CharacterLoreEntry = {
+  id: string;
+  keys: string[];
+  content: string;
+  priority: number;
+  triggerMode: string | null;
+  alwaysActive: boolean;
+  enabled: boolean;
+};
 
-const serializeMatchedLoreEntry = (entry: LoreEntryWithBook): MatchedLoreEntry => ({
-  id: entry.id,
-  lorebookId: entry.lorebookId,
-  lorebookName: entry.lorebook?.name ?? "",
-  keys: toStringArray(entry.keys),
-  content: entry.content,
-  priority: entry.priority,
-  triggerMode: normalizeLoreTriggerMode(entry.triggerMode),
-  alwaysActive: entry.alwaysActive,
-  enabled: entry.enabled,
-  createdAt: entry.createdAt.toISOString(),
-  updatedAt: entry.updatedAt.toISOString()
-});
+const toLoreEntries = (value: Prisma.JsonValue) => {
+  if (!Array.isArray(value)) {
+    return [] as CharacterLoreEntry[];
+  }
 
-const matchesContext = (entry: LoreEntry, contextText: string) =>
-  toStringArray(entry.keys).some((key) => contextText.includes(key.toLowerCase()));
+  return value
+    .map((item): CharacterLoreEntry | null => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+
+      const entry = item as Record<string, unknown>;
+      const id = entry.id;
+      const keys = entry.keys;
+      const content = entry.content;
+      const priority = entry.priority;
+
+      if (
+        typeof id !== "string" ||
+        !Array.isArray(keys) ||
+        typeof content !== "string" ||
+        typeof priority !== "number"
+      ) {
+        return null;
+      }
+
+      return {
+        id,
+        keys: keys.filter((key): key is string => typeof key === "string"),
+        content,
+        priority,
+        triggerMode: typeof entry.triggerMode === "string" ? entry.triggerMode : null,
+        alwaysActive: entry.alwaysActive === true,
+        enabled: entry.enabled !== false
+      };
+    })
+    .filter((entry): entry is CharacterLoreEntry => entry !== null);
+};
+
+const matchesContext = (keys: string[], contextText: string) =>
+  keys.some((key) => contextText.includes(key.toLowerCase()));
 
 const buildLoreContexts = (recentMessages: Message[]) => {
   const messageText = (roles: Array<Message["role"]>) =>
@@ -190,8 +173,12 @@ const buildLoreSystemPrompt = (entries: MatchedLoreEntry[]) => {
   ].join("\n\n");
 };
 
-const findMatchedLoreEntries = async (recentMessages: Message[], lorebookIds: string[]) => {
-  if (lorebookIds.length === 0) {
+const findMatchedLoreEntries = (
+  characterLoreEntries: CharacterLoreEntry[],
+  recentMessages: Message[],
+  characterName: string
+): MatchedLoreEntry[] => {
+  if (characterLoreEntries.length === 0) {
     return [];
   }
 
@@ -201,14 +188,7 @@ const findMatchedLoreEntries = async (recentMessages: Message[], lorebookIds: st
     return [];
   }
 
-  const entries = await prisma.loreEntry.findMany({
-    where: {
-      enabled: true,
-      lorebookId: { in: lorebookIds }
-    },
-    include: { lorebook: { select: { name: true } } },
-    orderBy: [{ priority: "desc" }, { updatedAt: "desc" }]
-  });
+  const entries = characterLoreEntries.filter((entry) => entry.enabled);
 
   return entries
     .filter((entry) => {
@@ -217,10 +197,21 @@ const findMatchedLoreEntries = async (recentMessages: Message[], lorebookIds: st
       }
 
       const triggerMode = normalizeLoreTriggerMode(entry.triggerMode);
-      return matchesContext(entry, contexts[triggerMode]);
+      return matchesContext(entry.keys, contexts[triggerMode]);
     })
+    .sort((a, b) => b.priority - a.priority)
     .slice(0, 8)
-    .map(serializeMatchedLoreEntry);
+    .map((entry) => ({
+      id: entry.id,
+      characterId: "",
+      characterName,
+      keys: entry.keys,
+      content: entry.content,
+      priority: entry.priority,
+      triggerMode: normalizeLoreTriggerMode(entry.triggerMode),
+      alwaysActive: entry.alwaysActive,
+      enabled: entry.enabled
+    }));
 };
 
 export const resolveChatCharacterId = async (
@@ -255,10 +246,6 @@ export const buildPromptContext = async ({
   const character = resolvedCharacterId
     ? await prisma.character.findUnique({ where: { id: resolvedCharacterId } })
     : null;
-  const settings = await prisma.userSettings.findFirst({
-    orderBy: { createdAt: "asc" },
-    select: { userProfileSummary: true }
-  });
   const contextMessageLimit = toContextMessageLimit(chat?.memoryTurns ?? 12);
 
   const recentMessagesDesc = await prisma.message.findMany({
@@ -274,26 +261,6 @@ export const buildPromptContext = async ({
     recentMessages = recentMessages.filter((m) => !excludeMessageIds.includes(m.id));
   }
 
-  const isGroup = chat?.mode === "group";
-  const allCharacterIds = isGroup && chat ? toStringArray(chat.characterIds) : [];
-  const allCharacters = allCharacterIds.length
-    ? await prisma.character.findMany({ where: { id: { in: allCharacterIds } } })
-    : [];
-
-  const recentCharacterCounts = new Map<string, number>();
-  for (const message of recentMessages) {
-    if (message.characterId) {
-      recentCharacterCounts.set(
-        message.characterId,
-        (recentCharacterCounts.get(message.characterId) ?? 0) + 1
-      );
-    }
-  }
-
-  const groupContext = isGroup
-    ? { allCharacters, recentCharacterCounts, chatId }
-    : undefined;
-
   const characterIds = [
     ...new Set(
       recentMessages.map((message) => message.characterId).filter((id): id is string => Boolean(id))
@@ -303,9 +270,11 @@ export const buildPromptContext = async ({
     ? await prisma.character.findMany({ where: { id: { in: characterIds } } })
     : [];
   const characterNames = new Map(characters.map((item) => [item.id, item.name]));
-  const matchedLoreEntries = await findMatchedLoreEntries(
+
+  const matchedLoreEntries = findMatchedLoreEntries(
+    toLoreEntries(character?.loreEntries ?? []),
     recentMessages,
-    chat ? toStringArray(chat.lorebookIds) : []
+    character?.name ?? ""
   );
   const lorePrompt = buildLoreSystemPrompt(matchedLoreEntries);
 
@@ -317,16 +286,16 @@ export const buildPromptContext = async ({
     },
     {
       role: "system",
-      content: buildCharacterSystemPrompt(character, groupContext)
+      content: buildCharacterSystemPrompt(character)
     },
-    ...(settings?.userProfileSummary.trim()
+    ...(chat?.userProfileSummary.trim()
       ? [
           {
             role: "system" as const,
             content: [
               "Known user profile memory, summarised from prior user messages.",
               "Use this only to personalise responses naturally. Do not expose or quote it unless the user asks.",
-              settings.userProfileSummary.trim()
+              chat.userProfileSummary.trim()
             ].join("\n\n")
           }
         ]
@@ -343,35 +312,6 @@ export const buildPromptContext = async ({
     messages: [...systemMessages, ...historyMessages],
     matchedLoreEntries
   };
-};
-
-export const createInitialCharacterMessages = async (chatId: string, characterIds: string[]) => {
-  if (characterIds.length < 2) {
-    return;
-  }
-
-  const characters = await prisma.character.findMany({
-    where: { id: { in: characterIds } },
-    orderBy: [{ updatedAt: "desc" }]
-  });
-
-  if (characters.length === 0) {
-    return;
-  }
-
-  const names = characters.map((c) => c.name);
-  const last = names.pop();
-  const nameList = names.length > 0 ? `${names.join("、")}、${last}` : last;
-
-  await prisma.message.create({
-    data: {
-      chatId,
-      role: "system",
-      content: `你邀请了 ${nameList} 加入了群聊`,
-      variants: [],
-      activeVariantIndex: 0
-    }
-  });
 };
 
 export const appendVariant = (value: Prisma.JsonValue, content: string) => {

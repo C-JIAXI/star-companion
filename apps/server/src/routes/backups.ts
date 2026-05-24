@@ -5,7 +5,6 @@ import { backupImportSchema } from "../schemas.js";
 import {
   serializeCharacter,
   serializeChat,
-  serializeLorebookWithEntries,
   serializeMessage,
   serializeSettings
 } from "../serializers.js";
@@ -21,15 +20,11 @@ const importedDates = (value: { createdAt?: string; updatedAt?: string }) => ({
 backupsRouter.get(
   "/export",
   asyncHandler(async (_request, response) => {
-    const [settings, characters, chats, messages, lorebooks] = await Promise.all([
+    const [settings, characters, chats, messages] = await Promise.all([
       getOrCreateSettings(),
       prisma.character.findMany({ orderBy: { updatedAt: "desc" } }),
       prisma.chat.findMany({ orderBy: { updatedAt: "desc" } }),
-      prisma.message.findMany({ orderBy: { createdAt: "asc" } }),
-      prisma.lorebook.findMany({
-        include: { entries: { orderBy: [{ priority: "desc" }, { updatedAt: "desc" }] } },
-        orderBy: { updatedAt: "desc" }
-      })
+      prisma.message.findMany({ orderBy: { createdAt: "asc" } })
     ]);
 
     response.json({
@@ -40,8 +35,7 @@ backupsRouter.get(
         settings: serializeSettings(settings),
         characters: characters.map(serializeCharacter),
         chats: chats.map(serializeChat),
-        messages: messages.map(serializeMessage),
-        lorebooks: lorebooks.map(serializeLorebookWithEntries)
+        messages: messages.map(serializeMessage)
       }
     });
   })
@@ -56,7 +50,6 @@ backupsRouter.post(
       if (backup.mode === "replace") {
         await tx.message.deleteMany();
         await tx.chat.deleteMany();
-        await tx.lorebook.deleteMany();
         await tx.character.deleteMany();
       }
 
@@ -84,6 +77,8 @@ backupsRouter.post(
           prefix: character.prefix,
           prompt: character.prompt,
           suffix: character.suffix,
+          relationship: character.relationship ?? "",
+          loreEntries: character.loreEntries ?? [],
           ...importedDates(character)
         };
 
@@ -103,7 +98,6 @@ backupsRouter.post(
           title: chat.title,
           mode: chat.mode,
           characterIds: chat.characterIds,
-          lorebookIds: chat.lorebookIds,
           memoryTurns: chat.memoryTurns,
           ...importedDates(chat)
         };
@@ -161,54 +155,11 @@ backupsRouter.post(
         importedMessages += 1;
       }
 
-      let importedLoreEntries = 0;
-      for (const lorebook of backup.lorebooks) {
-        const lorebookData = {
-          name: lorebook.name,
-          description: lorebook.description,
-          ...importedDates(lorebook)
-        };
-
-        const importedLorebook = lorebook.id
-          ? await tx.lorebook.upsert({
-              where: { id: lorebook.id },
-              update: lorebookData,
-              create: { id: lorebook.id, ...lorebookData }
-            })
-          : await tx.lorebook.create({ data: lorebookData });
-
-        for (const entry of lorebook.entries) {
-          const entryData = {
-            lorebookId: importedLorebook.id,
-            keys: entry.keys,
-            content: entry.content,
-            priority: entry.priority,
-            triggerMode: entry.triggerMode ?? "both",
-            alwaysActive: entry.alwaysActive,
-            enabled: entry.enabled,
-            ...importedDates(entry)
-          };
-
-          if (entry.id) {
-            await tx.loreEntry.upsert({
-              where: { id: entry.id },
-              update: entryData,
-              create: { id: entry.id, ...entryData }
-            });
-          } else {
-            await tx.loreEntry.create({ data: entryData });
-          }
-          importedLoreEntries += 1;
-        }
-      }
-
       return {
         mode: backup.mode,
         characters: backup.characters.length,
         chats: backup.chats.length,
         messages: importedMessages,
-        lorebooks: backup.lorebooks.length,
-        loreEntries: importedLoreEntries,
         settingsImported
       };
     });

@@ -36,8 +36,8 @@ model Character {
   prefix    String   @default("")
   prompt    String   @default("")
   suffix    String   @default("")
-  /// Describes relationship with other characters in group chats, e.g. "friends with B, rival of C"
   relationship String @default("")
+  loreEntries Json   @default("[]")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -45,16 +45,15 @@ model Character {
 }
 
 model Chat {
-  id           String   @id @default(cuid())
-  title        String
-  /// Valid values: "single" or "group".
-  mode         String   @default("single")
-  characterIds Json    @default("[]")
-  lorebookIds  Json     @default("[]")
-  /// Number of recent user/assistant turns carried into prompt context.
-  memoryTurns  Int      @default(12)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                  String   @id @default(cuid())
+  title               String
+  mode                String   @default("single")
+  characterIds        Json    @default("[]")
+  memoryTurns         Int      @default(12)
+  userProfileSummary  String   @default("")
+  userProfileUpdatedAt DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   messages Message[]
 }
@@ -78,31 +77,4 @@ model Message {
 
   @@index([chatId])
   @@index([characterId])
-}
-
-model Lorebook {
-  id          String   @id @default(cuid())
-  name        String
-  description String   @default("")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  entries LoreEntry[]
-}
-
-model LoreEntry {
-  id         String   @id @default(cuid())
-  lorebookId String
-  keys       Json     @default("[]")
-  content    String
-  priority   Int      @default(0)
-  triggerMode String  @default("both")
-  alwaysActive Boolean @default(false)
-  enabled    Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  lorebook Lorebook @relation(fields: [lorebookId], references: [id], onDelete: Cascade)
-
-  @@index([lorebookId])
 }

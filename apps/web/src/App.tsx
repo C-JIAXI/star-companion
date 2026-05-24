@@ -1,11 +1,10 @@
-import { BookOpen, MessageSquareText, Settings, Sparkles, Users } from "lucide-react";
+import { MessageSquareText, Settings, Sparkles, Users } from "lucide-react";
 import { useEffect } from "react";
 import { APP_NAME } from "@local-roleplay/shared";
 import { api } from "./lib/api";
 import { useI18n, type TranslationKey } from "./i18n";
 import { ChatPage } from "./pages/ChatPage";
 import { CharactersPage } from "./pages/CharactersPage";
-import { LorePage } from "./pages/LorePage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { useAppStore } from "./store/useAppStore";
 import type { AppSection } from "./types";
@@ -13,7 +12,6 @@ import type { AppSection } from "./types";
 const navItems = [
   { id: "chat", labelKey: "nav.chat", icon: MessageSquareText },
   { id: "characters", labelKey: "nav.characters", icon: Users },
-  { id: "lore", labelKey: "nav.lore", icon: BookOpen },
   { id: "settings", labelKey: "nav.settings", icon: Settings }
 ] as const;
 
@@ -26,10 +24,6 @@ const sectionMeta = {
     titleKey: "section.characters.title",
     subtitleKey: "section.characters.subtitle"
   },
-  lore: {
-    titleKey: "section.lore.title",
-    subtitleKey: "section.lore.subtitle"
-  },
   settings: {
     titleKey: "section.settings.title",
     subtitleKey: "section.settings.subtitle"
@@ -37,12 +31,11 @@ const sectionMeta = {
 } satisfies Record<AppSection, { titleKey: TranslationKey; subtitleKey: TranslationKey }>;
 
 const isSection = (value: string): value is AppSection =>
-  value === "chat" || value === "characters" || value === "lore" || value === "settings";
+  value === "chat" || value === "characters" || value === "settings";
 
 const sectionPaths: Record<AppSection, string> = {
   chat: "/",
   characters: "/characters",
-  lore: "/lore",
   settings: "/settings"
 };
 
@@ -143,7 +136,6 @@ export function App() {
           <div className="animate-fade-in p-4 lg:p-6">
             {activeSection === "chat" ? <ChatPage /> : null}
             {activeSection === "characters" ? <CharactersPage /> : null}
-            {activeSection === "lore" ? <LorePage /> : null}
             {activeSection === "settings" ? <SettingsPage /> : null}
           </div>
         </main>

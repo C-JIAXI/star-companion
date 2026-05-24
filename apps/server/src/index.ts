@@ -8,7 +8,6 @@ import { errorMiddleware } from "./lib/http.js";
 import { backupsRouter } from "./routes/backups.js";
 import { charactersRouter } from "./routes/characters.js";
 import { chatsRouter } from "./routes/chats.js";
-import { lorebooksRouter } from "./routes/lorebooks.js";
 import { messagesRouter } from "./routes/messages.js";
 import { settingsRouter } from "./routes/settings.js";
 import { attachChatSocket } from "./realtime/chatSocket.js";
@@ -42,7 +41,6 @@ app.use("/api/characters", charactersRouter);
 app.use("/api/chats", chatsRouter);
 app.use("/api/messages", messagesRouter);
 app.use("/api/settings", settingsRouter);
-app.use("/api/lorebooks", lorebooksRouter);
 app.use("/api/backups", backupsRouter);
 
 app.use(errorMiddleware);

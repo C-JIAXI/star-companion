@@ -7,11 +7,6 @@ import type {
   ChatDTO,
   ChatInput,
   ChatWithMessagesDTO,
-  LorebookDTO,
-  LorebookInput,
-  LorebookWithEntriesDTO,
-  LoreEntryDTO,
-  LoreEntryInput,
   MessageDTO,
   MessageInput,
   PublicUserSettingsDTO,
@@ -83,24 +78,6 @@ export const api = {
       request<{ reachable: true; model: string; checkedAt: string }>("/api/settings/test", {
         method: "POST"
       })
-  },
-  lorebooks: {
-    list: () => request<LorebookDTO[]>("/api/lorebooks"),
-    create: (input: LorebookInput) =>
-      request<LorebookDTO>("/api/lorebooks", { method: "POST", body: input }),
-    get: (id: string) => request<LorebookWithEntriesDTO>(`/api/lorebooks/${id}`),
-    update: (id: string, input: Partial<LorebookInput>) =>
-      request<LorebookDTO>(`/api/lorebooks/${id}`, { method: "PUT", body: input }),
-    remove: (id: string) => request<void>(`/api/lorebooks/${id}`, { method: "DELETE" }),
-    createEntry: (lorebookId: string, input: LoreEntryInput) =>
-      request<LoreEntryDTO>(`/api/lorebooks/${lorebookId}/entries`, {
-        method: "POST",
-        body: input
-      }),
-    updateEntry: (id: string, input: Partial<LoreEntryInput>) =>
-      request<LoreEntryDTO>(`/api/lorebooks/entries/${id}`, { method: "PUT", body: input }),
-    removeEntry: (id: string) =>
-      request<void>(`/api/lorebooks/entries/${id}`, { method: "DELETE" })
   },
   backups: {
     export: () => request<BackupDTO>("/api/backups/export"),

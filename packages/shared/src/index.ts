@@ -1,6 +1,6 @@
 export const APP_NAME = "Local Roleplay Platform";
 
-export type ChatMode = "single" | "group";
+export type ChatMode = "single";
 export type MessageRole = "user" | "assistant" | "system";
 export type AppLanguage = "zh-CN" | "en";
 
@@ -34,6 +34,16 @@ export interface PublicUserSettingsDTO extends UserSettingsDTO {
   hasApiKey: boolean;
 }
 
+export interface CharacterLoreEntryDTO {
+  id: string;
+  keys: string[];
+  content: string;
+  priority: number;
+  triggerMode: LoreTriggerMode;
+  alwaysActive: boolean;
+  enabled: boolean;
+}
+
 export interface CharacterDTO {
   id: string;
   name: string;
@@ -42,6 +52,7 @@ export interface CharacterDTO {
   prompt: string;
   suffix: string;
   relationship: string;
+  loreEntries: CharacterLoreEntryDTO[];
   createdAt: string;
   updatedAt: string;
 }
@@ -51,8 +62,9 @@ export interface ChatDTO {
   title: string;
   mode: ChatMode;
   characterIds: string[];
-  lorebookIds: string[];
   memoryTurns: number;
+  userProfileSummary: string;
+  userProfileUpdatedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -70,7 +82,7 @@ export interface MessageDTO {
   variants: string[];
   activeVariantIndex: number;
   tokenUsage: TokenUsageDTO | null;
-  loreMatches: LoreEntryDTO[];
+  loreMatches: MatchedLoreEntryDTO[];
   createdAt: string;
   updatedAt: string;
 }
@@ -82,20 +94,12 @@ export interface TokenUsageDTO {
   estimated: boolean;
 }
 
-export interface LorebookDTO {
-  id: string;
-  name: string;
-  description: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export type LoreTriggerMode = "user" | "assistant" | "both";
 
-export interface LoreEntryDTO {
+export interface MatchedLoreEntryDTO {
   id: string;
-  lorebookId: string;
-  lorebookName?: string;
+  characterId: string;
+  characterName?: string;
   keys: string[];
   content: string;
   priority: number;
@@ -106,10 +110,6 @@ export interface LoreEntryDTO {
   updatedAt: string;
 }
 
-export interface LorebookWithEntriesDTO extends LorebookDTO {
-  entries: LoreEntryDTO[];
-}
-
 export interface BackupDTO {
   schemaVersion: 1;
   exportedAt: string;
@@ -117,7 +117,6 @@ export interface BackupDTO {
   characters: CharacterDTO[];
   chats: ChatDTO[];
   messages: MessageDTO[];
-  lorebooks: LorebookWithEntriesDTO[];
 }
 
 export interface BackupImportSummaryDTO {
@@ -125,8 +124,6 @@ export interface BackupImportSummaryDTO {
   characters: number;
   chats: number;
   messages: number;
-  lorebooks: number;
-  loreEntries: number;
   settingsImported: boolean;
 }
 
@@ -166,7 +163,7 @@ export type GenerationServerMessage =
   | {
       type: "lore_matches";
       requestId: string;
-      entries: LoreEntryDTO[];
+      entries: MatchedLoreEntryDTO[];
     }
   | {
       type: "generation_character_started";

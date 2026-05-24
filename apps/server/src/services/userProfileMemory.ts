@@ -1,4 +1,4 @@
-import type { UserSettings } from "@prisma/client";
+import type { Chat, UserSettings } from "@prisma/client";
 import { prisma } from "../db.js";
 import { completeChatCompletion, type ChatCompletionMessage } from "./completions.js";
 
@@ -40,9 +40,14 @@ export const updateUserProfileFromChat = async ({
 }: {
   chatId: string;
   settings: UserSettings;
-}) => {
+}): Promise<Chat | null> => {
   if (!settings.autoSummarizeUser) {
-    return settings;
+    return null;
+  }
+
+  const chat = await prisma.chat.findUnique({ where: { id: chatId } });
+  if (!chat) {
+    return null;
   }
 
   const userMessages = await prisma.message.findMany({
@@ -60,24 +65,24 @@ export const updateUserProfileFromChat = async ({
     .filter(Boolean);
 
   if (recentContents.length === 0) {
-    return settings;
+    return null;
   }
 
   const summary = trimUserProfileSummary(
     await completeChatCompletion({
       settings,
-      messages: buildUserProfileSummaryMessages(settings.userProfileSummary, recentContents),
+      messages: buildUserProfileSummaryMessages(chat.userProfileSummary, recentContents),
       maxTokens: 500,
       temperature: 0.2
     })
   );
 
-  if (!summary || summary === settings.userProfileSummary) {
-    return settings;
+  if (!summary || summary === chat.userProfileSummary) {
+    return null;
   }
 
-  return prisma.userSettings.update({
-    where: { id: settings.id },
+  return prisma.chat.update({
+    where: { id: chatId },
     data: {
       userProfileSummary: summary,
       userProfileUpdatedAt: new Date()

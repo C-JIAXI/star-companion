@@ -13,8 +13,8 @@ const tokenUsageSchema = z.object({
 
 const loreMatchSchema = z.object({
   id: idSchema,
-  lorebookId: idSchema,
-  lorebookName: z.string().optional(),
+  characterId: idSchema,
+  characterName: z.string().optional(),
   keys: stringArraySchema,
   content: z.string(),
   priority: z.number().int(),
@@ -25,13 +25,26 @@ const loreMatchSchema = z.object({
   updatedAt: z.string().datetime()
 });
 
+const loreEntrySchema = z.object({
+  id: z.string().min(1).optional(),
+  keys: stringArraySchema,
+  content: z.string().min(1),
+  priority: z.number().int().default(0),
+  triggerMode: z.enum(["user", "assistant", "both"]).default("both"),
+  alwaysActive: z.boolean().default(false),
+  enabled: z.boolean().default(true)
+});
+
+const loreEntriesSchema = z.array(loreEntrySchema).default([]);
+
 export const characterCreateSchema = z.object({
   name: z.string().trim().min(1),
   avatar: z.string().trim().nullable().optional(),
   prefix: z.string().default(""),
   prompt: z.string().default(""),
   suffix: z.string().default(""),
-  relationship: z.string().default("")
+  relationship: z.string().default(""),
+  loreEntries: loreEntriesSchema
 });
 
 export const characterUpdateSchema = characterCreateSchema
@@ -40,10 +53,10 @@ export const characterUpdateSchema = characterCreateSchema
 
 export const chatCreateSchema = z.object({
   title: z.string().trim().min(1),
-  mode: z.enum(["single", "group"]).default("single"),
+  mode: z.enum(["single"]).default("single"),
   characterIds: stringArraySchema,
-  lorebookIds: stringArraySchema,
-  memoryTurns: z.number().int().min(1).max(50).default(12)
+  memoryTurns: z.number().int().min(1).max(50).default(12),
+  userProfileSummary: z.string().default("")
 });
 
 export const chatUpdateSchema = chatCreateSchema
@@ -127,30 +140,6 @@ export const stopGenerationRequestSchema = z.object({
   requestId: z.string().min(1)
 });
 
-export const lorebookCreateSchema = z.object({
-  name: z.string().trim().min(1),
-  description: z.string().default("")
-});
-
-export const lorebookUpdateSchema = lorebookCreateSchema
-  .partial()
-  .refine((value) => Object.keys(value).length > 0, "At least one field is required");
-
-const loreTriggerModeSchema = z.enum(["user", "assistant", "both"]).default("both");
-
-export const loreEntryCreateSchema = z.object({
-  keys: stringArraySchema,
-  content: z.string().min(1),
-  priority: z.number().int().default(0),
-  triggerMode: loreTriggerModeSchema,
-  alwaysActive: z.boolean().default(false),
-  enabled: z.boolean().default(true)
-});
-
-export const loreEntryUpdateSchema = loreEntryCreateSchema
-  .partial()
-  .refine((value) => Object.keys(value).length > 0, "At least one field is required");
-
 const backupDateSchema = z.string().datetime().optional();
 
 const backupSettingsSchema = settingsUpdateSchema.omit({ apiKey: true }).partial();
@@ -172,6 +161,8 @@ const backupCharacterSchema = characterCreateSchema
     prefix: character.prefix || character.systemPrompt || "",
     prompt: character.prompt || character.description || "",
     suffix: character.suffix || character.scenario || "",
+    relationship: character.relationship ?? "",
+    loreEntries: character.loreEntries ?? [],
     createdAt: character.createdAt,
     updatedAt: character.updatedAt
   }));
@@ -188,20 +179,6 @@ const backupMessageSchema = messageCreateSchema.extend({
   updatedAt: backupDateSchema
 });
 
-const backupLoreEntrySchema = loreEntryCreateSchema.extend({
-  id: idSchema.optional(),
-  lorebookId: idSchema.optional(),
-  createdAt: backupDateSchema,
-  updatedAt: backupDateSchema
-});
-
-const backupLorebookSchema = lorebookCreateSchema.extend({
-  id: idSchema.optional(),
-  entries: z.array(backupLoreEntrySchema).default([]),
-  createdAt: backupDateSchema,
-  updatedAt: backupDateSchema
-});
-
 export const backupImportSchema = z.object({
   schemaVersion: z.literal(1).default(1),
   exportedAt: z.string().datetime().optional(),
@@ -209,6 +186,5 @@ export const backupImportSchema = z.object({
   characters: z.array(backupCharacterSchema).default([]),
   chats: z.array(backupChatSchema).default([]),
   messages: z.array(backupMessageSchema).default([]),
-  lorebooks: z.array(backupLorebookSchema).default([]),
   mode: z.enum(["merge", "replace"]).default("merge")
 });
