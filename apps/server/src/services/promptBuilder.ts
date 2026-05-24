@@ -299,6 +299,19 @@ export const buildPromptContext = async ({
       role: "system",
       content: buildCharacterSystemPrompt(character)
     },
+    ...(chat?.userPersona.trim()
+      ? [
+          {
+            role: "system" as const,
+            content: [
+              "Explicit user setting for this chat.",
+              "Treat this as direct user-authored context about the user's identity, preferences, relationship dynamic, or boundaries.",
+              "When it conflicts with inferred profile memory, prefer this explicit setting.",
+              chat.userPersona.trim()
+            ].join("\n\n")
+          }
+        ]
+      : []),
     ...(chat?.userProfileSummary.trim()
       ? [
           {

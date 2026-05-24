@@ -50,6 +50,7 @@ export function ChatPage() {
   const [memorySettingsOpen, setMemorySettingsOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState("12");
   const memorySettingsRef = useRef<HTMLDivElement | null>(null);
+  const personaEditorRef = useRef<HTMLDivElement | null>(null);
   const profileEditorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -66,6 +67,8 @@ export function ChatPage() {
   const [settingsModels, setSettingsModels] = useState<ModelPreset[]>([]);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [autoSummarizeUser, setAutoSummarizeUser] = useState(true);
+  const [editingPersona, setEditingPersona] = useState(false);
+  const [editingPersonaDraft, setEditingPersonaDraft] = useState("");
   const [editingProfile, setEditingProfile] = useState(false);
   const [editingProfileDraft, setEditingProfileDraft] = useState("");
   const [pendingDeleteChat, setPendingDeleteChat] = useState<ChatDTO | null>(null);
@@ -358,6 +361,11 @@ export function ChatPage() {
   };
 
   const handleMemorySettingsPointerDownCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (editingPersona && personaEditorRef.current && !personaEditorRef.current.contains(event.target as Node)) {
+      setEditingPersona(false);
+      setEditingPersonaDraft("");
+    }
+
     if (!editingProfile || !profileEditorRef.current) {
       return;
     }
@@ -365,6 +373,47 @@ export function ChatPage() {
     if (!profileEditorRef.current.contains(event.target as Node)) {
       setEditingProfile(false);
       setEditingProfileDraft("");
+    }
+  };
+
+  const clearUserPersona = async () => {
+    if (!activeChat) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      await api.chats.update(activeChat.id, { userPersona: "" });
+      setActiveChat({ ...activeChat, userPersona: "" });
+      setEditingPersona(false);
+      setStatus(t("chat.userPersonaCleared"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdateUserPersona"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveUserPersona = async () => {
+    if (!activeChat) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const userPersona = editingPersonaDraft.trim();
+      await api.chats.update(activeChat.id, { userPersona });
+      setActiveChat({ ...activeChat, userPersona });
+      setEditingPersona(false);
+      setStatus(t("chat.userPersonaSaved"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdateUserPersona"));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -409,6 +458,16 @@ export function ChatPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const startEditingPersona = () => {
+    setEditingPersonaDraft(activeChat?.userPersona ?? "");
+    setEditingPersona(true);
+  };
+
+  const cancelEditingPersona = () => {
+    setEditingPersona(false);
+    setEditingPersonaDraft("");
   };
 
   const startEditingProfile = () => {
@@ -805,6 +864,82 @@ export function ChatPage() {
                       {t("chat.memoryHelp")}
                     </p>
                     <div className="border-t border-white/10 pt-3">
+                      <div className="mb-2">
+                        <p className="text-sm font-semibold text-slate-100">
+                          {t("chat.userPersonaTitle")}
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-slate-400">
+                          {t("chat.userPersonaHelp")}
+                        </p>
+                      </div>
+                      {editingPersona ? (
+                        <div ref={personaEditorRef} className="space-y-2">
+                          <textarea
+                            className="min-h-[100px] w-full min-w-0 resize-none rounded-lg border border-white/10 bg-ink-950/50 px-3 py-2.5 text-xs leading-5 text-slate-100 outline-none transition-all placeholder:text-slate-500 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50"
+                            value={editingPersonaDraft}
+                            onChange={(event) => setEditingPersonaDraft(event.target.value)}
+                          />
+                          <div className="flex gap-2">
+                            <Button
+                              className="flex-1 !min-h-[32px] text-xs"
+                              disabled={loading}
+                              onClick={() => void saveUserPersona()}
+                            >
+                              {t("common.save")}
+                            </Button>
+                            <Button
+                              className="!min-h-[32px] px-3 text-xs"
+                              disabled={loading}
+                              variant="ghost"
+                              onClick={cancelEditingPersona}
+                            >
+                              {t("common.cancel")}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="rounded-lg border border-white/5 bg-ink-950/55 px-3 py-2 text-xs leading-5 text-slate-400">
+                            {activeChat?.userPersona?.trim() ? (
+                              <p className="custom-scrollbar max-h-28 overflow-y-auto whitespace-pre-wrap pr-1">
+                                {activeChat.userPersona}
+                              </p>
+                            ) : (
+                              <p>{t("chat.userPersonaEmpty")}</p>
+                            )}
+                          </div>
+                          <div className="mt-2 flex gap-2">
+                            <Button
+                              className="flex-1 !min-h-[32px] text-xs"
+                              disabled={loading}
+                              variant="secondary"
+                              onClick={startEditingPersona}
+                            >
+                              {t("chat.editUserPersona")}
+                            </Button>
+                            {activeChat?.userPersona?.trim() ? (
+                              <Button
+                                className="!min-h-[32px] px-3 text-xs"
+                                disabled={loading}
+                                variant="danger"
+                                onClick={() => void clearUserPersona()}
+                              >
+                                {t("chat.clearUserPersona")}
+                              </Button>
+                            ) : null}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    <div className="border-t border-white/10 pt-3">
+                      <div className="mb-2">
+                        <p className="text-sm font-semibold text-slate-100">
+                          {t("chat.userProfileTitle")}
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-slate-400">
+                          {t("chat.userProfileHelp")}
+                        </p>
+                      </div>
                       <div className="mb-2 flex items-center justify-between gap-2">
                         <p className="text-sm font-semibold text-slate-100">
                           {t("chat.autoSummarizeUser")}

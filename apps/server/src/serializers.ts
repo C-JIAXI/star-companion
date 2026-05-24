@@ -210,6 +210,7 @@ export const serializeChat = (chat: Chat) => ({
   mode: "single",
   characterIds: toStringArray(chat.characterIds),
   memoryTurns: chat.memoryTurns,
+  userPersona: chat.userPersona,
   userProfileSummary: chat.userProfileSummary,
   userProfileUpdatedAt: chat.userProfileUpdatedAt?.toISOString() ?? null,
   createdAt: toIso(chat.createdAt),

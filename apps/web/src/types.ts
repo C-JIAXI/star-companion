@@ -46,6 +46,7 @@ export type ChatInput = {
   mode: ChatMode;
   characterIds: string[];
   memoryTurns?: number;
+  userPersona?: string;
   userProfileSummary?: string;
 };
 

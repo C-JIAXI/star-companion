@@ -1,1 +1,2 @@
-ALTER TABLE "Character" DROP COLUMN "relationship";
+-- The relationship column never shipped in the persisted schema.
+-- Keep this migration as a no-op so fresh databases and Prisma shadow databases can replay history safely.

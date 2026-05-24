@@ -105,6 +105,7 @@ describe("buildPromptContext", () => {
         mode: "single",
         characterIds: [character.id],
         memoryTurns: 4,
+        userPersona: "The user is roleplaying as a cautious investigator who values truth over comfort.",
         userProfileSummary: "User prefers concise technical summaries."
       }
     });
@@ -178,6 +179,8 @@ describe("buildPromptContext", () => {
     const promptText = context.messages.map((message) => message.content).join("\n\n");
 
     assert.match(promptText, /User prefers concise technical summaries/);
+    assert.match(promptText, /The user is roleplaying as a cautious investigator who values truth over comfort\./);
+    assert.match(promptText, /When it conflicts with inferred profile memory, prefer this explicit setting\./);
     assert.match(promptText, /You are writing as the character "Prompt Test Character"/);
     assert.match(promptText, /HTML rendering is enabled for this character/);
     assert.match(promptText, /Available renderer CSS:\n\.card \{ color: #fff; \} \.title \{ font-weight: 700; \}/);

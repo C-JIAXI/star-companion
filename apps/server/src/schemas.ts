@@ -56,6 +56,7 @@ export const chatCreateSchema = z.object({
   mode: z.enum(["single"]).default("single"),
   characterIds: stringArraySchema,
   memoryTurns: z.number().int().min(1).max(50).default(12),
+  userPersona: z.string().max(4000).default(""),
   userProfileSummary: z.string().default("")
 });
 

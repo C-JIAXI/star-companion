@@ -99,6 +99,8 @@ backupsRouter.post(
           mode: chat.mode,
           characterIds: chat.characterIds,
           memoryTurns: chat.memoryTurns,
+          userPersona: chat.userPersona,
+          userProfileSummary: chat.userProfileSummary,
           ...importedDates(chat)
         };
 

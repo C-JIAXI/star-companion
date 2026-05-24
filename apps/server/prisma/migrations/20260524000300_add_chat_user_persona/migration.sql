@@ -1,0 +1,1 @@
+ALTER TABLE "Chat" ADD COLUMN "userPersona" TEXT NOT NULL DEFAULT '';

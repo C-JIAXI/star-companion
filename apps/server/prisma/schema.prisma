@@ -50,6 +50,8 @@ model Chat {
   mode                String   @default("single")
   characterIds        Json    @default("[]")
   memoryTurns         Int      @default(12)
+  /// Explicit user-authored persona / preference notes for this chat.
+  userPersona         String   @default("")
   userProfileSummary  String   @default("")
   userProfileUpdatedAt DateTime?
   createdAt           DateTime @default(now())

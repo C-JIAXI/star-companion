@@ -63,6 +63,7 @@ export interface ChatDTO {
   mode: ChatMode;
   characterIds: string[];
   memoryTurns: number;
+  userPersona: string;
   userProfileSummary: string;
   userProfileUpdatedAt: string | null;
   createdAt: string;
