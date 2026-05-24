@@ -1,5 +1,7 @@
 import { ChevronDown, Copy, Download, FileUp, Plus, Save, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { MarkdownEditor } from "../components/MarkdownEditor";
+import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { downloadJson, readFileText } from "../lib/files";
@@ -19,6 +21,40 @@ const blankLoreEntry = (): CharacterLoreEntryDTO & { _localId: string; _collapse
 });
 
 type LoreEntryForm = ReturnType<typeof blankLoreEntry>;
+type EditorSectionId = "prompt" | "html" | "lore";
+
+const HTML_PREVIEW_TEMPLATES = {
+  card: `<article class="character-card">
+  <header class="character-card__header">
+    <small class="character-card__eyebrow">Aurora Archive</small>
+    <h2 class="character-card__title">遐蝶</h2>
+  </header>
+  <p class="character-card__body">雪停之前，先把话慢慢说完。风声会替我们守住多余的秘密。</p>
+  <ul class="character-card__tags">
+    <li>低语</li>
+    <li>雪夜</li>
+    <li>陪伴</li>
+  </ul>
+</article>`,
+  dialogue: `<section class="dialogue-shell">
+  <p class="dialogue-shell__speaker">阿格莱雅</p>
+  <blockquote class="dialogue-shell__line">远道而来的贵客，风已顺着金丝带来了你的讯息。欢迎来到奥赫玛。</blockquote>
+  <p class="dialogue-shell__note">适合带旁白、分段对白和角色名。</p>
+</section>`,
+  dossier: `<section class="dossier-panel">
+  <h3>行动摘要</h3>
+  <table>
+    <tbody>
+      <tr><th>地点</th><td>日光庭</td></tr>
+      <tr><th>状态</th><td>观察中</td></tr>
+      <tr><th>备注</th><td>情绪稳定，愿意继续对话。</td></tr>
+    </tbody>
+  </table>
+</section>`
+} as const;
+
+type HtmlPreviewTemplateId = keyof typeof HTML_PREVIEW_TEMPLATES;
+const DEFAULT_HTML_PREVIEW_TEMPLATE: HtmlPreviewTemplateId = "card";
 
 const blankForm = {
   name: "",
@@ -26,7 +62,7 @@ const blankForm = {
   prefix: "",
   prompt: "",
   suffix: "",
-  relationship: "",
+  htmlCss: "",
   loreEntries: [] as LoreEntryForm[]
 };
 
@@ -38,7 +74,7 @@ const toForm = (character: CharacterDTO): CharacterForm => ({
   prefix: character.prefix,
   prompt: character.prompt,
   suffix: character.suffix,
-  relationship: character.relationship,
+  htmlCss: character.htmlCss,
   loreEntries: (character.loreEntries ?? []).map((entry) => ({
       id: entry.id,
       keys: entry.keys,
@@ -58,7 +94,7 @@ const toInput = (form: CharacterForm): CharacterInput => ({
   prefix: form.prefix,
   prompt: form.prompt,
   suffix: form.suffix,
-  relationship: form.relationship,
+  htmlCss: form.htmlCss,
   loreEntries: form.loreEntries.map(({ _localId, ...entry }) => entry)
 });
 
@@ -67,6 +103,7 @@ type ImportedCharacter = Partial<CharacterInput> & {
   scenario?: string;
   systemPrompt?: string;
   avatar?: string | null;
+  htmlCss?: string;
   loreEntries?: CharacterLoreEntryDTO[];
 };
 
@@ -80,7 +117,28 @@ export function CharactersPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [activeEditorSection, setActiveEditorSection] = useState<EditorSectionId>("prompt");
+  const [previewTemplateId, setPreviewTemplateId] = useState<HtmlPreviewTemplateId>(DEFAULT_HTML_PREVIEW_TEMPLATE);
+  const [previewMarkup, setPreviewMarkup] = useState<string>(HTML_PREVIEW_TEMPLATES[DEFAULT_HTML_PREVIEW_TEMPLATE]);
   const creatingRef = useRef(false);
+
+  const htmlPreviewTemplates = useMemo(
+    () => [
+      { id: "card" as const, label: t("characters.htmlTemplateCard"), markup: HTML_PREVIEW_TEMPLATES.card },
+      { id: "dialogue" as const, label: t("characters.htmlTemplateDialogue"), markup: HTML_PREVIEW_TEMPLATES.dialogue },
+      { id: "dossier" as const, label: t("characters.htmlTemplateDossier"), markup: HTML_PREVIEW_TEMPLATES.dossier }
+    ],
+    [t]
+  );
+
+  const editorSections = useMemo(
+    () => [
+      { id: "prompt" as const, label: t("characters.editorSectionPrompt") },
+      { id: "html" as const, label: t("characters.editorSectionHtml") },
+      { id: "lore" as const, label: t("characters.editorSectionLore") }
+    ],
+    [t]
+  );
 
   const selected = useMemo(
     () => characters.find((character) => character.id === selectedId) ?? null,
@@ -94,7 +152,14 @@ export function CharactersPage() {
     }
 
     return characters.filter((character) =>
-      [character.name, character.avatar ?? "", character.prefix, character.prompt, character.suffix]
+      [
+        character.name,
+        character.avatar ?? "",
+        character.prefix,
+        character.prompt,
+        character.suffix,
+        character.htmlCss
+      ]
         .join("\n")
         .toLowerCase()
         .includes(keyword)
@@ -236,7 +301,7 @@ export function CharactersPage() {
         prefix: parsed.prefix ?? parsed.systemPrompt ?? "",
         prompt: parsed.prompt ?? parsed.description ?? "",
         suffix: parsed.suffix ?? parsed.scenario ?? "",
-        relationship: parsed.relationship ?? "",
+        htmlCss: parsed.htmlCss ?? "",
         loreEntries: parsed.loreEntries ?? []
       });
       await loadCharacters();
@@ -247,18 +312,24 @@ export function CharactersPage() {
     }
   };
 
+  const applyPreviewTemplate = (templateId: HtmlPreviewTemplateId) => {
+    setPreviewTemplateId(templateId);
+    setPreviewMarkup(HTML_PREVIEW_TEMPLATES[templateId]);
+  };
+
   return (
-    <div className="grid gap-6 lg:grid-cols-[340px_1fr]">
+    <div className="grid gap-8 xl:grid-cols-[320px_minmax(0,1fr)] 2xl:grid-cols-[360px_minmax(0,1fr)]">
       <Panel
+        className="h-fit xl:sticky xl:top-24"
         title={t("nav.characters")}
         action={
-          <Button variant="secondary" onClick={resetForm} className="!min-h-[32px] !h-8 !px-3 text-xs">
+          <Button variant="secondary" onClick={resetForm} className="!h-9 !min-h-[36px] !px-3 text-xs">
             <Plus size={14} />
             {t("common.new")}
           </Button>
         }
       >
-        <div className="space-y-2.5">
+        <div className="space-y-4">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
             <TextInput
@@ -273,9 +344,10 @@ export function CharactersPage() {
           ) : filteredCharacters.length === 0 ? (
             <EmptyState>{t("characters.noSearchResults")}</EmptyState>
           ) : (
-            filteredCharacters.map((character) => (
+            <div className="custom-scrollbar max-h-[38rem] space-y-3 overflow-y-auto pr-1">
+            {filteredCharacters.map((character) => (
               <button
-                className={`group w-full rounded-xl border p-3.5 text-left text-sm transition-all duration-200 ${
+                className={`group w-full rounded-xl border p-4 text-left text-sm transition-all duration-200 ${
                   selectedId === character.id
                     ? "border-ember-500/50 bg-ember-500/10 shadow-md shadow-ember-500/5"
                     : "border-white/5 bg-white/5 hover:border-white/10 hover:bg-white/10"
@@ -284,8 +356,8 @@ export function CharactersPage() {
                 type="button"
                 onClick={() => selectCharacter(character)}
               >
-                <div className="flex items-start gap-3.5">
-                  <div className={`grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-ink-800 text-sm font-semibold transition-all duration-200 ${selectedId === character.id ? 'ring-2 ring-ember-500/50 ring-offset-2 ring-offset-ink-900' : 'group-hover:scale-105'}`}>
+                <div className="flex items-start gap-4">
+                  <div className={`grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-ink-800 text-sm font-semibold transition-all duration-200 ${selectedId === character.id ? 'ring-2 ring-ember-500/50 ring-offset-2 ring-offset-ink-900' : 'group-hover:scale-105'}`}>
                     {character.avatar ? <img alt="" className="h-full w-full rounded-lg object-cover" src={character.avatar} /> : character.name.slice(0, 2)}
                   </div>
                   <div className="min-w-0 pt-0.5">
@@ -294,12 +366,14 @@ export function CharactersPage() {
                   </div>
                 </div>
               </button>
-            ))
+            ))}
+            </div>
           )}
         </div>
       </Panel>
 
       <Panel
+        className="p-5 sm:p-6"
         title={selected ? t("characters.edit") : t("characters.create")}
         action={
           <div className="flex flex-wrap gap-2">
@@ -315,16 +389,16 @@ export function CharactersPage() {
           </div>
         }
       >
-        <div className="space-y-6">
+        <div className="space-y-8">
           <ErrorNotice message={error} />
           <SuccessNotice message={status} />
-          <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_120px]">
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_148px]">
             <div className="grid gap-5">
-            <Field label={t("common.name")}><TextInput value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
-            <Field label={t("characters.avatarUrl")}><TextInput value={form.avatar} onChange={(event) => setForm({ ...form, avatar: event.target.value })} /></Field>
+              <Field label={t("common.name")}><TextInput value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
+              <Field label={t("characters.avatarUrl")}><TextInput value={form.avatar} onChange={(event) => setForm({ ...form, avatar: event.target.value })} /></Field>
             </div>
-            <div className="grid min-h-[120px] place-items-center rounded-xl border border-white/5 bg-ink-950/40 p-3">
-              <div className="grid h-20 w-20 place-items-center overflow-hidden rounded-xl bg-ink-800 text-lg font-semibold text-slate-300 ring-1 ring-white/10">
+            <div className="grid min-h-[148px] place-items-center rounded-2xl border border-white/5 bg-ink-950/40 p-4">
+              <div className="grid h-24 w-24 place-items-center overflow-hidden rounded-2xl bg-ink-800 text-lg font-semibold text-slate-300 ring-1 ring-white/10">
                 {form.avatar ? (
                   <img alt="" className="h-full w-full object-cover" src={form.avatar} />
                 ) : (
@@ -334,12 +408,122 @@ export function CharactersPage() {
             </div>
           </div>
 
-          <Field label={<HelpLabel label={t("characters.relationship")} description={t("help.characterRelationship")} />}><TextInput value={form.relationship} onChange={(event) => setForm({ ...form, relationship: event.target.value })} /></Field>
+          <div className="rounded-2xl border border-white/5 bg-ink-950/25 p-2">
+            <div className="grid grid-cols-3 gap-2.5">
+              {editorSections.map((section) => (
+                <button
+                  key={section.id}
+                  type="button"
+                  className={`min-h-11 rounded-xl px-4 py-2.5 text-sm font-medium transition-colors ${
+                    activeEditorSection === section.id
+                      ? "bg-ember-500 text-ink-950 shadow-sm shadow-ember-500/20"
+                      : "text-slate-300 hover:bg-white/5 hover:text-slate-100"
+                  }`}
+                  onClick={() => setActiveEditorSection(section.id)}
+                >
+                  {section.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-          <Field label={<HelpLabel label={t("characters.prefix")} description={t("help.characterPrefix")} />}><TextArea value={form.prefix} onChange={(event) => setForm({ ...form, prefix: event.target.value })} className="min-h-[120px]" /></Field>
-          <Field label={<HelpLabel label={t("characters.prompt")} description={t("help.characterPrompt")} />}><TextArea value={form.prompt} onChange={(event) => setForm({ ...form, prompt: event.target.value })} className="min-h-[180px]" /></Field>
-          <Field label={<HelpLabel label={t("characters.suffix")} description={t("help.characterSuffix")} />}><TextArea value={form.suffix} onChange={(event) => setForm({ ...form, suffix: event.target.value })} className="min-h-[120px]" /></Field>
+          {activeEditorSection === "prompt" ? (
+            <div className="space-y-7">
+              <Field
+                container="div"
+                label={<HelpLabel label={t("characters.prefix")} description={t("help.characterPrefix")} />}
+              >
+                <MarkdownEditor
+                  value={form.prefix}
+                  onChange={(nextValue) => setForm({ ...form, prefix: nextValue })}
+                  height={180}
+                />
+              </Field>
+              <Field
+                container="div"
+                label={<HelpLabel label={t("characters.prompt")} description={t("help.characterPrompt")} />}
+              >
+                <MarkdownEditor
+                  value={form.prompt}
+                  onChange={(nextValue) => setForm({ ...form, prompt: nextValue })}
+                  height={320}
+                />
+              </Field>
+              <Field
+                container="div"
+                label={<HelpLabel label={t("characters.suffix")} description={t("help.characterSuffix")} />}
+              >
+                <MarkdownEditor
+                  value={form.suffix}
+                  onChange={(nextValue) => setForm({ ...form, suffix: nextValue })}
+                  height={220}
+                />
+              </Field>
+            </div>
+          ) : null}
 
+          {activeEditorSection === "html" ? (
+            <div className="space-y-5">
+              <Field label={<HelpLabel label={t("characters.htmlCss")} description={t("help.characterHtmlCss")} />}>
+                <TextArea value={form.htmlCss} onChange={(event) => setForm({ ...form, htmlCss: event.target.value })} className="!h-[170px] min-h-[170px] font-mono text-xs leading-6" />
+              </Field>
+
+              <div className="rounded-xl border border-white/5 bg-ink-950/30 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="space-y-1">
+                    <h4 className="text-sm font-semibold text-slate-100">{t("characters.htmlPreview")}</h4>
+                    <p className="text-xs leading-5 text-slate-500">{t("characters.htmlPreviewHelp")}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {htmlPreviewTemplates.map((template) => (
+                      <Button
+                        key={template.id}
+                        variant={previewTemplateId === template.id ? "secondary" : "ghost"}
+                        className="!h-8 !min-h-[32px] !px-3 text-xs"
+                        onClick={() => applyPreviewTemplate(template.id)}
+                      >
+                        {template.label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                  <Field label={t("characters.htmlPreviewMarkup")}>
+                    <TextArea
+                      className="!h-[180px] min-h-[180px] font-mono text-xs leading-6"
+                      spellCheck={false}
+                      value={previewMarkup}
+                      onChange={(event) => setPreviewMarkup(event.target.value)}
+                    />
+                  </Field>
+                  <Field label={t("characters.htmlPreviewRendered")}>
+                    <div className="custom-scrollbar min-h-[180px] overflow-y-auto rounded-xl border border-white/5 bg-ink-950/60 p-4">
+                      <div className="rounded-2xl border border-white/5 bg-ink-900/70 p-4 shadow-inner shadow-black/20">
+                        <div className="flex items-start gap-3">
+                          <div className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-xl border border-white/10 bg-ink-800 text-sm font-semibold text-ember-100 shadow-black/20">
+                            {form.avatar ? (
+                              <img alt="" className="h-full w-full object-cover" src={form.avatar} />
+                            ) : (
+                              (form.name || t("common.unknown")).slice(0, 2)
+                            )}
+                          </div>
+                          <article className="min-w-0 flex-1 rounded-2xl rounded-bl-sm border border-white/5 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-sm backdrop-blur-sm">
+                            <div className="mb-3 text-xs font-bold tracking-wide text-ember-400">
+                              {form.name || t("common.unknown")}
+                            </div>
+                            <ScopedHtmlRenderer content={previewMarkup} htmlCss={form.htmlCss} />
+                          </article>
+                        </div>
+                      </div>
+                    </div>
+                  </Field>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {activeEditorSection === "lore" ? (
           <div className="border-t border-white/5 pt-5">
             <div className="mb-3 flex items-center justify-between">
               <p className="text-sm font-semibold text-slate-100">{t("characters.loreEntries")}</p>
@@ -449,13 +633,13 @@ export function CharactersPage() {
                                 }}
                               />
                             </Field>
-                            <Field label={t("characters.loreEntryContent")}>
-                              <TextArea
-                                className="min-h-[80px]"
+                            <Field container="div" label={t("characters.loreEntryContent")}>
+                              <MarkdownEditor
+                                height={180}
                                 value={entry.content}
-                                onChange={(event) => {
+                                onChange={(nextValue) => {
                                   const next = [...form.loreEntries];
-                                  next[index] = { ...entry, content: event.target.value };
+                                  next[index] = { ...entry, content: nextValue };
                                   setForm({ ...form, loreEntries: next });
                                 }}
                               />
@@ -529,6 +713,7 @@ export function CharactersPage() {
               {t("characters.loreEntryAdd")}
             </Button>
           </div>
+          ) : null}
 
           <div className="flex flex-wrap justify-end gap-3 pt-4 border-t border-white/5">
             <Button disabled={loading || !selected} variant="secondary" onClick={() => void duplicateCharacter()}>

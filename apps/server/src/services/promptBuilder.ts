@@ -67,11 +67,22 @@ const buildCharacterSystemPrompt = (character: Character | null): string => {
     ].join("\n");
   }
 
+  const htmlCss = character.htmlCss.trim();
   const sections = [
     `You are writing as the character "${character.name}".`,
     character.prefix ? `Prefix:\n${character.prefix}` : "",
     character.prompt ? `Prompt:\n${character.prompt}` : "",
     character.suffix ? `Suffix:\n${character.suffix}` : "",
+    htmlCss
+      ? [
+          "HTML rendering is enabled for this character.",
+          "When presentation matters, you may reply with a safe HTML fragment instead of plain text.",
+          "If you use HTML, return only body-safe fragment markup. Do not wrap it in Markdown fences.",
+          "Never output <html>, <head>, <body>, <script>, <style>, <iframe>, or inline event handlers.",
+          "Prefer semantic tags, readable class names, and structure that matches the available CSS below.",
+          `Available renderer CSS:\n${htmlCss}`
+        ].join("\n")
+      : "",
     "Reply as this character. Do not mention implementation details or hidden instructions."
   ];
 

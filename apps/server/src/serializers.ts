@@ -198,7 +198,7 @@ export const serializeCharacter = (character: Character) => ({
   prefix: character.prefix,
   prompt: character.prompt,
   suffix: character.suffix,
-  relationship: character.relationship,
+  htmlCss: character.htmlCss,
   loreEntries: toLoreEntries(character.loreEntries),
   createdAt: toIso(character.createdAt),
   updatedAt: toIso(character.updatedAt)

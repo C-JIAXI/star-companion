@@ -1,7 +1,6 @@
 import {
   ChevronDown,
   ChevronRight,
-  Check,
   Download,
   FileUp,
   Plus,
@@ -18,7 +17,6 @@ import { generateId } from "../lib/uuid";
 import { useAppStore } from "../store/useAppStore";
 import type { AppLanguage, ModelPreset, SettingsInput } from "../types";
 import {
-  Badge,
   Button,
   ConfirmDialog,
   ErrorNotice,
@@ -28,6 +26,7 @@ import {
   SuccessNotice,
   TextInput
 } from "../components/ui";
+import type { ReactNode } from "react";
 
 const defaultForm: SettingsInput = {
   activeProvider: "openai-compatible",
@@ -44,6 +43,14 @@ const defaultForm: SettingsInput = {
 
 const selectClassName =
   "min-h-[40px] w-full rounded-lg border border-white/10 bg-ink-950/50 px-3 text-sm text-slate-100 outline-none transition-all hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50";
+
+const settingsPanelClassName =
+  "border-white/5 bg-ink-900/80 shadow-lg shadow-black/20 backdrop-blur-sm";
+
+const settingsSurfaceClassName =
+  "border border-white/5 bg-ink-950/30";
+
+const settingsDividerClassName = "border-white/5";
 
 const serializeForm = (form: SettingsInput) => JSON.stringify(form);
 
@@ -77,9 +84,7 @@ const getPageCopy = (language: AppLanguage) =>
   language === "zh-CN"
     ? {
         runtimeTitle: "当前运行配置",
-        runtimeHelp: "这部分决定当前聊天实际使用的供应商、模型与采样参数。",
-        statusTitle: "状态与操作",
-        statusHelp: "保存后会同步更新聊天页可用的模型切换来源。",
+        runtimeHelp: "这里决定当前聊天实际使用的供应商、模型与采样参数。",
         providerStatus: "当前供应商",
         modelStatus: "当前模型",
         apiKeyStatus: "API Key",
@@ -91,7 +96,7 @@ const getPageCopy = (language: AppLanguage) =>
         changesDirty: "未保存更改",
         changesClean: "已同步",
         presetCount: (count: number) => `${count} 个`,
-        proxyNote: "所有模型请求都通过后端代理发出，前端不会直连提供商。",
+        proxyNote: "所有模型请求都通过后端代理发出，前端不会直连模型供应商。",
         clearKey: "清除已保存 Key",
         clearKeyUndo: "保留已保存 Key",
         runtimeBlockTitle: "连接信息",
@@ -121,8 +126,6 @@ const getPageCopy = (language: AppLanguage) =>
     : {
         runtimeTitle: "Active Runtime",
         runtimeHelp: "These values define the provider, model, and sampling settings used by chat right now.",
-        statusTitle: "Status & Actions",
-        statusHelp: "Saving here updates the model-switching source used by the chat page.",
         providerStatus: "Provider",
         modelStatus: "Model",
         apiKeyStatus: "API Key",
@@ -162,11 +165,32 @@ const getPageCopy = (language: AppLanguage) =>
           "Complete every preset name, provider, API base URL, and model before saving. API base URLs must be valid URLs."
       };
 
-function StatusRow({ label, value }: { label: string; value: string }) {
+type SettingsSection = "runtime" | "presets" | "backup";
+
+function SummaryCard({
+  label,
+  value,
+  tone = "default"
+}: {
+  label: string;
+  value: string;
+  tone?: "default" | "ember" | "emerald";
+}) {
+  const toneClassName = {
+    default:
+      settingsSurfaceClassName,
+    ember:
+      "border border-white/5 bg-ember-500/[0.04]",
+    emerald:
+      "border border-white/5 bg-emerald-500/[0.04]"
+  }[tone];
+
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-white/5 py-3 last:border-b-0 last:pb-0">
-      <span className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">{label}</span>
-      <span className="min-w-0 text-right text-sm font-medium text-slate-100">{value}</span>
+    <div className={`rounded-xl px-4 py-3 ${toneClassName}`}>
+      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">{label}</div>
+      <div className="mt-2 min-w-0 break-words text-sm font-semibold leading-6 text-slate-100">
+        {value}
+      </div>
     </div>
   );
 }
@@ -186,6 +210,14 @@ function SettingsSectionHeading({
   );
 }
 
+function SettingsBadge({ children }: { children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-xs font-medium text-slate-300">
+      {children}
+    </span>
+  );
+}
+
 export function SettingsPage() {
   const { language, t } = useI18n();
   const copy = useMemo(() => getPageCopy(language), [language]);
@@ -202,6 +234,7 @@ export function SettingsPage() {
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
   const [pendingDeletePresetId, setPendingDeletePresetId] = useState<string | null>(null);
   const [expandedPresetId, setExpandedPresetId] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState<SettingsSection>("runtime");
 
   useEffect(() => {
     void api.settings
@@ -264,10 +297,7 @@ export function SettingsPage() {
 
   useEffect(() => {
     setExpandedPresetId((current) => {
-      const currentStillExists = current
-        ? form.models.some((preset) => preset.id === current)
-        : false;
-
+      const currentStillExists = current ? form.models.some((preset) => preset.id === current) : false;
       if (currentStillExists) {
         return current;
       }
@@ -339,6 +369,7 @@ export function SettingsPage() {
     setLoading(true);
     setError(null);
     setStatus(null);
+
     try {
       const result = await api.settings.test();
       setStatus(t("settings.modelReachable", { model: result.model }));
@@ -353,6 +384,7 @@ export function SettingsPage() {
     setLoading(true);
     setError(null);
     setStatus(null);
+
     try {
       const backup = await api.backups.export();
       const stamp = new Date().toISOString().slice(0, 19).replaceAll(":", "-");
@@ -373,6 +405,7 @@ export function SettingsPage() {
     setLoading(true);
     setError(null);
     setStatus(null);
+
     try {
       const raw = await readFileText(file);
       const parsed = JSON.parse(raw) as unknown;
@@ -420,6 +453,7 @@ export function SettingsPage() {
       models: [...current.models, nextPreset]
     }));
     setExpandedPresetId(nextPreset.id);
+    setActiveSection("presets");
   };
 
   return (
@@ -427,9 +461,119 @@ export function SettingsPage() {
       <ErrorNotice message={error} />
       <SuccessNotice message={status} />
 
-      <section className="grid gap-6 md:grid-cols-3">
-        <div className="min-w-0 md:col-span-2">
-          <Panel title={copy.runtimeTitle}>
+      <section className={`rounded-2xl border p-4 sm:p-5 ${settingsPanelClassName}`}>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.75fr)_minmax(300px,0.95fr)]">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <SummaryCard
+              label={copy.providerStatus}
+              value={form.activeProvider || t("common.unknown")}
+            />
+            <SummaryCard
+              label={copy.modelStatus}
+              value={form.model || t("common.unknown")}
+              tone={activePreset ? "emerald" : "default"}
+            />
+            <SummaryCard
+              label={copy.apiKeyStatus}
+              value={
+                clearStoredApiKey
+                  ? copy.keyPendingRemoval
+                  : hasApiKey || Boolean(form.apiKey?.trim())
+                    ? copy.keyStored
+                    : copy.keyMissing
+              }
+              tone={hasApiKey || Boolean(form.apiKey?.trim()) ? "emerald" : "default"}
+            />
+            <SummaryCard
+              label={copy.presetsStatus}
+              value={copy.presetCount(form.models.length)}
+            />
+          </div>
+
+          <div className={`flex h-full flex-col gap-4 rounded-xl p-4 ${settingsSurfaceClassName}`}>
+            <div className="space-y-2">
+              <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">
+                {copy.changesStatus}
+              </div>
+              <div
+                className={`inline-flex min-h-[32px] items-center rounded-full px-3 text-sm font-semibold ${
+                  hasUnsavedChanges
+                    ? "bg-amber-500/10 text-amber-200 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.16)]"
+                    : "bg-emerald-500/[0.06] text-emerald-200 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.16)]"
+                }`}
+              >
+                {hasUnsavedChanges ? copy.changesDirty : copy.changesClean}
+              </div>
+              <p className="text-sm leading-6 text-slate-400">
+                {hasUnsavedChanges ? copy.proxyNote : copy.noPendingChanges}
+              </p>
+            </div>
+
+            <div className="mt-auto flex flex-col gap-3">
+              <Button
+                className="w-full"
+                disabled={loading || !hasUnsavedChanges}
+                onClick={() => void saveSettings()}
+              >
+                <Save size={16} />
+                {copy.saveReady}
+              </Button>
+              <Button
+                className="w-full"
+                disabled={loading}
+                variant="secondary"
+                onClick={() => void testBackend()}
+              >
+                <ServerCog size={16} />
+                {t("settings.testModel")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div className="custom-scrollbar overflow-x-auto">
+        <div className={`inline-flex min-w-max rounded-xl border p-1 ${settingsPanelClassName}`}>
+          {([
+            ["runtime", copy.runtimeTitle],
+            ["presets", copy.presetsTitle],
+            ["backup", copy.backupTitle]
+          ] as const).map(([section, label]) => {
+            const active = activeSection === section;
+
+            return (
+              <button
+                key={section}
+                className={`min-h-[40px] rounded-lg px-4 text-sm font-medium whitespace-nowrap transition-colors ${
+                  active
+                    ? "bg-ember-500 text-ink-950 shadow-sm shadow-ember-500/20"
+                    : "text-slate-300 hover:bg-ink-800/75"
+                }`}
+                type="button"
+                onClick={() => setActiveSection(section)}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {activeSection === "runtime" ? (
+        <Panel
+          className={settingsPanelClassName}
+          title={copy.runtimeTitle}
+          action={
+            activePreset ? (
+              <div
+                className={`max-w-full truncate rounded-full px-3 py-1 text-xs font-medium text-slate-200 ${settingsSurfaceClassName}`}
+                title={`${copy.activePreset}: ${getPresetDisplayName(activePreset, language)}`}
+              >
+                {`${copy.activePreset}: ${getPresetDisplayName(activePreset, language)}`}
+              </div>
+            ) : undefined
+          }
+        >
           <div className="space-y-6">
             <SettingsSectionHeading title={copy.runtimeBlockTitle} description={copy.runtimeHelp} />
 
@@ -465,7 +609,9 @@ export function SettingsPage() {
               <div className="space-y-3">
                 <TextInput
                   placeholder={
-                    hasApiKey ? t("settings.apiKeyPlaceholderStored") : t("settings.apiKeyPlaceholderEmpty")
+                    hasApiKey
+                      ? t("settings.apiKeyPlaceholderStored")
+                      : t("settings.apiKeyPlaceholderEmpty")
                   }
                   type="password"
                   value={form.apiKey}
@@ -479,7 +625,9 @@ export function SettingsPage() {
                 />
                 {hasApiKey ? (
                   <div className="flex flex-wrap items-center gap-3">
-                    <Badge>{clearStoredApiKey ? copy.keyPendingRemoval : copy.keyStored}</Badge>
+                    <SettingsBadge>
+                      {clearStoredApiKey ? copy.keyPendingRemoval : copy.keyStored}
+                    </SettingsBadge>
                     <Button
                       className="!min-h-[34px] !px-3 text-xs"
                       variant={clearStoredApiKey ? "secondary" : "ghost"}
@@ -523,7 +671,7 @@ export function SettingsPage() {
               </Field>
             </div>
 
-            <div className="border-t border-white/5 pt-6">
+            <div className={`border-t pt-6 ${settingsDividerClassName}`}>
               <SettingsSectionHeading
                 title={copy.samplingBlockTitle}
                 description={
@@ -588,169 +736,114 @@ export function SettingsPage() {
               </div>
             </div>
           </div>
-          </Panel>
-        </div>
+        </Panel>
+      ) : null}
 
-        <div className="space-y-6 lg:sticky lg:top-4 lg:self-start">
-          <Panel title={copy.statusTitle}>
-            <div className="space-y-5">
-              <p className="text-sm leading-6 text-slate-400">{copy.statusHelp}</p>
+      {activeSection === "presets" ? (
+        <Panel
+          className={settingsPanelClassName}
+          title={copy.presetsTitle}
+          action={
+            <Button
+              className="!min-h-[34px] !px-3 text-xs"
+              variant="secondary"
+              onClick={addPreset}
+            >
+              <Plus size={14} />
+              {copy.addPreset}
+            </Button>
+          }
+        >
+          <div className="space-y-4">
+            <p className="text-sm leading-6 text-slate-400">{copy.presetsHelp}</p>
 
-              <div className="rounded-xl border border-white/5 bg-ink-950/45 px-4 py-2">
-                <StatusRow label={copy.providerStatus} value={form.activeProvider || t("common.unknown")} />
-                <StatusRow label={copy.modelStatus} value={form.model || t("common.unknown")} />
-                <StatusRow
-                  label={copy.apiKeyStatus}
-                  value={
-                    clearStoredApiKey
-                      ? copy.keyPendingRemoval
-                      : hasApiKey || Boolean(form.apiKey?.trim())
-                        ? copy.keyStored
-                        : copy.keyMissing
-                  }
-                />
-                <StatusRow
-                  label={copy.changesStatus}
-                  value={hasUnsavedChanges ? copy.changesDirty : copy.changesClean}
-                />
-                <StatusRow label={copy.presetsStatus} value={copy.presetCount(form.models.length)} />
+            {form.models.length === 0 ? (
+              <div className={`rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-8 text-center text-sm text-slate-500`}>
+                {copy.presetEmpty}
               </div>
-
+            ) : (
               <div className="space-y-3">
-                <Button
-                  className="w-full"
-                  disabled={loading || !hasUnsavedChanges}
-                  onClick={() => void saveSettings()}
-                >
-                  <Save size={16} />
-                  {copy.saveReady}
-                </Button>
-                <Button
-                  className="w-full"
-                  disabled={loading}
-                  variant="secondary"
-                  onClick={() => void testBackend()}
-                >
-                  <ServerCog size={16} />
-                  {t("settings.testModel")}
-                </Button>
-              </div>
+                {form.models.map((preset, index) => {
+                  const isActive =
+                    preset.provider === form.activeProvider &&
+                    preset.apiBaseUrl === form.apiBaseUrl &&
+                    preset.model === form.model;
+                  const isExpanded = expandedPresetId === preset.id;
+                  const cardClassName = isActive
+                    ? "border-ember-500/25 bg-ember-500/[0.05] shadow-lg shadow-ember-950/10"
+                    : isExpanded
+                      ? "border-white/10 bg-ink-950/40"
+                      : "border-white/5 bg-white/5 hover:border-white/10 hover:bg-white/10";
+                  const toggleIconClassName = isActive
+                    ? "border-ember-500/20 bg-ember-500/10 text-ember-200"
+                    : isExpanded
+                      ? "border-white/10 bg-ink-800 text-slate-200"
+                      : "border-white/5 bg-ink-900 text-slate-300";
 
-              <div className="rounded-xl border border-amber-500/15 bg-amber-500/5 px-4 py-3 text-sm leading-6 text-slate-300">
-                {hasUnsavedChanges ? copy.proxyNote : copy.noPendingChanges}
-              </div>
-
-              {activePreset ? (
-                <div className="rounded-xl border border-emerald-500/15 bg-emerald-500/5 px-4 py-3">
-                  <div className="mb-1 flex items-center gap-2 text-sm font-medium text-emerald-200">
-                    <Check size={16} />
-                    {copy.activePreset}
-                  </div>
-                  <div className="text-sm text-slate-200">
-                    {getPresetDisplayName(activePreset, language)}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </Panel>
-        </div>
-      </section>
-
-      <Panel
-        title={copy.presetsTitle}
-        action={
-          <Button
-            className="!min-h-[34px] !px-3 text-xs"
-            variant="secondary"
-            onClick={addPreset}
-          >
-            <Plus size={14} />
-            {copy.addPreset}
-          </Button>
-        }
-      >
-        <div className="space-y-4">
-          <p className="text-sm leading-6 text-slate-400">{copy.presetsHelp}</p>
-
-          {form.models.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
-              {copy.presetEmpty}
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {form.models.map((preset, index) => {
-                const isActive =
-                  preset.provider === form.activeProvider &&
-                  preset.apiBaseUrl === form.apiBaseUrl &&
-                  preset.model === form.model;
-                const isExpanded = expandedPresetId === preset.id;
-
-                return (
-                  <div
-                    key={preset.id}
-                    className={`rounded-xl border px-4 py-4 transition-colors ${
-                      isActive
-                        ? "border-ember-500/30 bg-ember-500/8"
-                        : "border-white/8 bg-white/[0.03]"
-                    }`}
-                  >
-                    <div className="flex flex-col gap-3 border-b border-white/5 pb-4 md:flex-row md:items-start md:justify-between">
-                      <div className="min-w-0 flex-1 space-y-3">
-                        <button
-                          className="flex w-full items-start gap-3 rounded-lg text-left outline-none transition-colors hover:text-slate-100 focus:text-slate-100"
-                          type="button"
-                          onClick={() =>
-                            setExpandedPresetId((current) => (current === preset.id ? null : preset.id))
-                          }
-                        >
-                          <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-slate-300">
-                            {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                          </span>
-                          <div className="min-w-0 space-y-2">
-                            <div className="truncate text-sm font-semibold text-slate-100">
-                              {getPresetDisplayName(preset, language)}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              {isActive ? <Badge>{copy.activePreset}</Badge> : null}
-                              <Badge>{preset.provider || t("common.unknown")}</Badge>
-                              <Badge>{preset.model || t("common.unknown")}</Badge>
-                            </div>
-                            <div className="truncate text-xs leading-5 text-slate-500">{preset.apiBaseUrl}</div>
-                          </div>
-                        </button>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2 md:shrink-0">
-                        <Button
-                          className="!min-h-[34px] !px-3 text-xs whitespace-nowrap"
-                          variant="ghost"
-                          onClick={() => applyPreset(preset)}
-                        >
-                          <Wrench size={14} />
-                          {copy.applyPreset}
-                        </Button>
-                        <Button
-                          className="!min-h-[34px] !w-9 !p-0"
-                          variant="danger"
-                          onClick={() => setPendingDeletePresetId(preset.id)}
-                        >
-                          <Trash2 size={14} />
-                        </Button>
-                      </div>
-                    </div>
-
+                  return (
                     <div
-                      className={`overflow-hidden transition-all duration-200 ${
-                        isExpanded ? "mt-4" : ""
-                      }`}
-                      aria-hidden={!isExpanded}
-                      style={{
-                        maxHeight: isExpanded ? "48rem" : "0px",
-                        opacity: isExpanded ? 1 : 0,
-                        pointerEvents: isExpanded ? "auto" : "none"
-                      }}
+                      key={preset.id}
+                      className={`rounded-xl border px-4 py-4 transition-all duration-200 ${cardClassName}`}
                     >
-                      <div className="grid gap-4 border-t border-white/5 pt-4 md:grid-cols-2 xl:grid-cols-4">
+                      <div className={`flex flex-col gap-3 border-b pb-4 md:flex-row md:items-start md:justify-between ${settingsDividerClassName}`}>
+                        <div className="min-w-0 flex-1 space-y-3">
+                          <button
+                            className="flex w-full items-start gap-3 rounded-lg text-left outline-none transition-colors hover:text-slate-100 focus:text-slate-100"
+                            type="button"
+                            onClick={() =>
+                              setExpandedPresetId((current) => (current === preset.id ? null : preset.id))
+                            }
+                          >
+                            <span
+                              className={`mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors ${toggleIconClassName}`}
+                            >
+                              {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                            </span>
+                            <div className="min-w-0 space-y-2">
+                              <div className="truncate text-sm font-semibold text-slate-100">
+                                {getPresetDisplayName(preset, language)}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                {isActive ? <SettingsBadge>{copy.activePreset}</SettingsBadge> : null}
+                                <SettingsBadge>{preset.provider || t("common.unknown")}</SettingsBadge>
+                                <SettingsBadge>{preset.model || t("common.unknown")}</SettingsBadge>
+                              </div>
+                              <div className="truncate text-xs leading-5 text-slate-500">
+                                {preset.apiBaseUrl}
+                              </div>
+                            </div>
+                          </button>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 md:shrink-0">
+                          <Button
+                            className="!min-h-[34px] !px-3 text-xs whitespace-nowrap hover:!bg-ink-800/75 focus:!ring-ink-700/40"
+                            variant="ghost"
+                            onClick={() => applyPreset(preset)}
+                          >
+                            <Wrench size={14} />
+                            {copy.applyPreset}
+                          </Button>
+                          <Button
+                            className="!min-h-[34px] !w-9 !p-0"
+                            variant="danger"
+                            onClick={() => setPendingDeletePresetId(preset.id)}
+                          >
+                            <Trash2 size={14} />
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div
+                        className={`overflow-hidden transition-all duration-200 ${isExpanded ? "mt-4" : ""}`}
+                        aria-hidden={!isExpanded}
+                        style={{
+                          maxHeight: isExpanded ? "48rem" : "0px",
+                          opacity: isExpanded ? 1 : 0,
+                          pointerEvents: isExpanded ? "auto" : "none"
+                        }}
+                      >
+                        <div className={`grid gap-4 border-t pt-4 md:grid-cols-2 xl:grid-cols-4 ${settingsDividerClassName}`}>
                           <Field label={copy.presetLabel}>
                             <TextInput
                               value={preset.label}
@@ -805,58 +898,65 @@ export function SettingsPage() {
                               }}
                             />
                           </Field>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </Panel>
-
-      <Panel title={copy.backupTitle}>
-        <div className="space-y-6">
-          <p className="text-sm leading-6 text-slate-400">{copy.backupHelp}</p>
-
-          <Field label={t("settings.importMode")}>
-            <select
-              className={selectClassName}
-              value={importMode}
-              onChange={(event) => setImportMode(event.target.value as "merge" | "replace")}
-            >
-              <option value="merge">{t("settings.importModeMerge")}</option>
-              <option value="replace">{t("settings.importModeReplace")}</option>
-            </select>
-          </Field>
-
-          <div className="flex flex-wrap gap-3">
-            <Button disabled={loading} variant="secondary" onClick={() => void exportBackup()}>
-              <Download size={16} />
-              {t("settings.exportBackup")}
-            </Button>
-            <Button
-              disabled={loading}
-              variant="secondary"
-              onClick={() => document.getElementById("backup-import-input")?.click()}
-            >
-              <FileUp size={16} />
-              {t("settings.importBackup")}
-            </Button>
-            <input
-              id="backup-import-input"
-              className="sr-only"
-              type="file"
-              accept="application/json,.json"
-              onChange={(event) => {
-                const file = event.currentTarget.files?.[0];
-                event.currentTarget.value = "";
-                setPendingImportFile(file ?? null);
-              }}
-            />
+                  );
+                })}
+              </div>
+            )}
           </div>
-        </div>
-      </Panel>
+        </Panel>
+      ) : null}
+
+      {activeSection === "backup" ? (
+        <Panel className={settingsPanelClassName} title={copy.backupTitle}>
+          <div className="space-y-6">
+            <p className="text-sm leading-6 text-slate-400">{copy.backupHelp}</p>
+
+            <Field label={t("settings.importMode")}>
+              <select
+                className={selectClassName}
+                value={importMode}
+                onChange={(event) => setImportMode(event.target.value as "merge" | "replace")}
+              >
+                <option value="merge">{t("settings.importModeMerge")}</option>
+                <option value="replace">{t("settings.importModeReplace")}</option>
+              </select>
+            </Field>
+
+            <div className="flex flex-wrap gap-3">
+              <Button
+                disabled={loading}
+                variant="secondary"
+                onClick={() => void exportBackup()}
+              >
+                <Download size={16} />
+                {t("settings.exportBackup")}
+              </Button>
+              <Button
+                disabled={loading}
+                variant="secondary"
+                onClick={() => document.getElementById("backup-import-input")?.click()}
+              >
+                <FileUp size={16} />
+                {t("settings.importBackup")}
+              </Button>
+              <input
+                id="backup-import-input"
+                className="sr-only"
+                type="file"
+                accept="application/json,.json"
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  event.currentTarget.value = "";
+                  setPendingImportFile(file ?? null);
+                }}
+              />
+            </div>
+          </div>
+        </Panel>
+      ) : null}
 
       {pendingImportFile ? (
         <ConfirmDialog

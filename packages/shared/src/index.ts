@@ -51,7 +51,7 @@ export interface CharacterDTO {
   prefix: string;
   prompt: string;
   suffix: string;
-  relationship: string;
+  htmlCss: string;
   loreEntries: CharacterLoreEntryDTO[];
   createdAt: string;
   updatedAt: string;

@@ -1,0 +1,95 @@
+.roleplay-md-editor.w-md-editor {
+  background: transparent;
+  color: #e2e8f0;
+  box-shadow: none;
+}
+
+.roleplay-md-editor .w-md-editor-toolbar {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: transparent;
+}
+
+.roleplay-md-editor .w-md-editor-toolbar ul > li > button {
+  color: #94a3b8;
+}
+
+.roleplay-md-editor .w-md-editor-toolbar ul > li > button:hover,
+.roleplay-md-editor .w-md-editor-toolbar ul > li.active > button {
+  background: rgba(255, 255, 255, 0.06);
+  color: #f8fafc;
+}
+
+.roleplay-md-editor .w-md-editor-toolbar-divider {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.roleplay-md-editor .w-md-editor-content,
+.roleplay-md-editor .w-md-editor-input,
+.roleplay-md-editor .w-md-editor-preview {
+  background: transparent;
+}
+
+.roleplay-md-editor .w-md-editor-input {
+  border-right: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.roleplay-md-editor .w-md-editor-text,
+.roleplay-md-editor .w-md-editor-text-pre,
+.roleplay-md-editor .w-md-editor-text-input,
+.roleplay-md-editor .w-md-editor-text-pre > code,
+.roleplay-md-editor .w-md-editor-text-input {
+  font-size: 0.875rem !important;
+  line-height: 1.75 !important;
+  color: #e2e8f0 !important;
+}
+
+.roleplay-md-editor .w-md-editor-text-input::placeholder {
+  color: #64748b;
+}
+
+.roleplay-md-editor .w-md-editor-text-input {
+  caret-color: #f59e0b;
+}
+
+.roleplay-md-editor .w-md-editor-preview {
+  box-shadow: none;
+  padding: 0;
+}
+
+.roleplay-md-editor .w-md-editor-preview .wmde-markdown,
+.roleplay-md-editor .w-md-editor-preview .wmde-markdown-var {
+  background: transparent;
+  color: #e2e8f0;
+}
+
+.roleplay-md-editor .w-md-editor-preview .wmde-markdown {
+  padding: 16px;
+}
+
+.roleplay-md-editor .w-md-editor-preview .wmde-markdown hr {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.roleplay-md-editor .w-md-editor-preview .wmde-markdown table th,
+.roleplay-md-editor .w-md-editor-preview .wmde-markdown table td {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.roleplay-md-editor .w-md-editor-preview .wmde-markdown blockquote {
+  color: #cbd5e1;
+  border-left-color: rgba(245, 158, 11, 0.45);
+}
+
+.roleplay-md-editor .w-md-editor-preview .wmde-markdown pre {
+  background: rgba(15, 23, 42, 0.9);
+}
+
+.roleplay-md-editor .w-md-editor-preview .wmde-markdown code {
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.roleplay-md-editor .w-md-editor-bar svg,
+.roleplay-md-editor .w-md-editor-toolbar svg {
+  width: 15px;
+  height: 15px;
+}

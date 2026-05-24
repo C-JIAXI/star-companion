@@ -50,6 +50,7 @@ export function ChatPage() {
   const [memorySettingsOpen, setMemorySettingsOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState("12");
   const memorySettingsRef = useRef<HTMLDivElement | null>(null);
+  const profileEditorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -356,6 +357,17 @@ export function ChatPage() {
     });
   };
 
+  const handleMemorySettingsPointerDownCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!editingProfile || !profileEditorRef.current) {
+      return;
+    }
+
+    if (!profileEditorRef.current.contains(event.target as Node)) {
+      setEditingProfile(false);
+      setEditingProfileDraft("");
+    }
+  };
+
   const clearUserProfileSummary = async () => {
     if (!activeChat) {
       return;
@@ -629,7 +641,7 @@ export function ChatPage() {
 
   return (
     <>
-    <div className="mb-4 grid grid-cols-3 gap-1 rounded-xl border border-white/10 bg-ink-900/80 p-1 lg:hidden">
+    <div className="mb-5 grid grid-cols-3 gap-1 rounded-xl border border-white/10 bg-ink-900/80 p-1 xl:hidden">
       {[
         { key: "chats", label: t("chat.chats") },
         { key: "messages", label: t("chat.messageStream") },
@@ -649,8 +661,8 @@ export function ChatPage() {
         </button>
       ))}
     </div>
-    <div className="grid min-w-0 gap-6 lg:h-[calc(100vh-112px)] lg:min-h-0 lg:grid-cols-[340px_minmax(0,1fr)_300px]">
-      <div className={mobilePane === "chats" ? "block lg:h-full" : "hidden lg:block lg:h-full"}>
+    <div className="grid min-w-0 gap-8 xl:h-[calc(100vh-112px)] xl:min-h-0 xl:grid-cols-[300px_minmax(0,1fr)_300px] 2xl:grid-cols-[340px_minmax(0,1fr)_320px]">
+      <div className={mobilePane === "chats" ? "block xl:h-full" : "hidden xl:block xl:h-full"}>
       <Panel
         title={t("chat.chats")}
         action={
@@ -660,7 +672,7 @@ export function ChatPage() {
           </Button>
         }
       >
-        <div className="max-h-[calc(100vh-220px)] space-y-2 overflow-y-auto pr-1 lg:h-[calc(100%-40px)] lg:max-h-none">
+        <div className="max-h-[calc(100vh-220px)] space-y-3 overflow-y-auto pr-1 xl:h-[calc(100%-40px)] xl:max-h-none">
           <ErrorNotice message={error} />
           <SuccessNotice message={status} />
           {chats.length === 0 ? (
@@ -668,7 +680,7 @@ export function ChatPage() {
           ) : (
             chats.map((chat) => (
               <div
-                className={`group w-full cursor-pointer rounded-lg border p-3 text-left text-sm transition-all duration-200 ${
+                className={`group w-full cursor-pointer rounded-xl border p-4 text-left text-sm transition-all duration-200 ${
                   selectedChatId === chat.id
                     ? "border-ember-500/50 bg-ember-500/10 shadow-md shadow-ember-500/5"
                     : "border-white/5 bg-white/5 hover:border-white/10 hover:bg-white/10"
@@ -706,7 +718,7 @@ export function ChatPage() {
       </Panel>
       </div>
 
-      <div className={mobilePane === "messages" ? "block lg:h-full" : "hidden lg:block lg:h-full"}>
+      <div className={mobilePane === "messages" ? "block xl:h-full" : "hidden xl:block xl:h-full"}>
       <Panel
         title={activeChat?.title ?? t("chat.messageStream")}
         action={
@@ -722,7 +734,10 @@ export function ChatPage() {
                 <Settings size={15} />
               </Button>
               {memorySettingsOpen ? (
-                <div className="custom-scrollbar absolute right-0 top-10 z-20 max-h-80 w-72 overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-3.5 shadow-xl shadow-black/30 backdrop-blur-md sm:max-h-[calc(100dvh-22rem)]">
+                <div
+                  className="custom-scrollbar absolute right-0 top-10 z-20 max-h-80 w-72 overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-3.5 shadow-xl shadow-black/30 backdrop-blur-md sm:max-h-[calc(100dvh-22rem)]"
+                  onPointerDownCapture={handleMemorySettingsPointerDownCapture}
+                >
                   {settingsModels.length > 0 ? (
                     <div className="mb-3 border-b border-white/10 pb-3">
                       <p className="mb-2 text-sm font-semibold text-slate-100">
@@ -805,7 +820,7 @@ export function ChatPage() {
                         </label>
                       </div>
                       {editingProfile ? (
-                        <div className="space-y-2">
+                        <div ref={profileEditorRef} className="space-y-2">
                           <textarea
                             className="min-h-[100px] w-full min-w-0 resize-none rounded-lg border border-white/10 bg-ink-950/50 px-3 py-2.5 text-xs leading-5 text-slate-100 outline-none transition-all placeholder:text-slate-500 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50"
                             value={editingProfileDraft}
@@ -881,14 +896,14 @@ export function ChatPage() {
         {!activeChat ? (
           <EmptyState>{t("chat.selectOrCreate")}</EmptyState>
         ) : (
-          <div className="flex min-h-[calc(100vh-260px)] flex-col lg:h-[calc(100%-40px)] lg:min-h-0">
-            <div className="mb-4 flex shrink-0 flex-wrap items-center gap-2 border-b border-white/5 pb-4">
+          <div className="flex min-h-[calc(100vh-260px)] flex-col xl:h-[calc(100%-40px)] xl:min-h-0">
+            <div className="mb-5 flex shrink-0 flex-wrap items-center gap-2 border-b border-white/5 pb-5">
               {activeChat.characterIds.map((id) => (
                 <Badge key={id}>{characterMap.get(id)?.name ?? t("common.unknown")}</Badge>
               ))}
             </div>
 
-            <div className="custom-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto rounded-xl border border-white/5 bg-ink-950/30 p-4">
+            <div className="custom-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto rounded-2xl border border-white/5 bg-ink-950/30 p-5">
               {activeChat.messages.length === 0 ? (
                 <div className="h-full flex items-center justify-center">
                   <EmptyState>{t("chat.noMessages")}</EmptyState>
@@ -923,6 +938,7 @@ export function ChatPage() {
                       message={message}
                       senderName={senderName}
                       avatar={character?.avatar}
+                      htmlCss={character?.htmlCss}
                       tokenUsageFormatter={formatTokenUsage}
                       triggeredLorebooks={getTriggeredLorebooks(message)}
                       onCopy={() => void copyMessage(message)}
@@ -947,12 +963,15 @@ export function ChatPage() {
                   characterAvatar={
                     streamingCharacterId ? characterMap.get(streamingCharacterId)?.avatar : null
                   }
+                  htmlCss={
+                    streamingCharacterId ? characterMap.get(streamingCharacterId)?.htmlCss : undefined
+                  }
                   content={streamingContent}
                 />
               ) : null}
             </div>
 
-            <div className="sticky bottom-3 mt-3 grid min-w-0 shrink-0 grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-lg border border-white/5 bg-ink-950/95 p-1.5 shadow-xl shadow-black/30 backdrop-blur-sm lg:static lg:bg-ink-950/40 lg:shadow-none">
+            <div className="sticky bottom-3 mt-4 grid min-w-0 shrink-0 grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-xl border border-white/5 bg-ink-950/95 p-2 shadow-xl shadow-black/30 backdrop-blur-sm xl:static xl:bg-ink-950/40 xl:shadow-none">
               <TextInput
                 className="min-w-0 border-0 bg-transparent focus:bg-transparent focus:ring-0"
                 placeholder={t("chat.writeMessage")}
@@ -975,23 +994,23 @@ export function ChatPage() {
       </Panel>
       </div>
 
-      <div className={mobilePane === "create" ? "block lg:h-full" : "hidden lg:block lg:h-full"}>
+      <div className={mobilePane === "create" ? "block xl:h-full" : "hidden xl:block xl:h-full"}>
       <Panel
         title={t("chat.createChat")}
         action={<MessageSquarePlus size={16} className="text-slate-400" />}
       >
-        <div className="space-y-3">
+        <div className="space-y-5">
           <Field label={t("chat.title")}><TextInput value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
-          <div className="space-y-2.5">
+          <div className="space-y-3">
             <p className="text-sm font-medium text-slate-300">{t("nav.characters")}</p>
             {characters.length === 0 ? (
               <EmptyState>{t("chat.createCharactersFirst")}</EmptyState>
             ) : (
-              <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
+              <div className="custom-scrollbar max-h-[420px] space-y-3 overflow-y-auto pr-1">
                 {characters.map((character) => (
-                  <label className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 text-sm transition-all duration-200 hover:bg-white/10 ${characterIds.includes(character.id) ? 'border-ember-500/30 bg-ember-500/5' : 'border-white/5 bg-white/5'}`} key={character.id}>
+                  <label className={`flex cursor-pointer items-center gap-4 rounded-xl border p-4 text-sm transition-all duration-200 hover:bg-white/10 ${characterIds.includes(character.id) ? 'border-ember-500/30 bg-ember-500/5' : 'border-white/5 bg-white/5'}`} key={character.id}>
                     <input checked={characterIds.includes(character.id)} type="radio" name="character-select" onChange={() => toggleCharacter(character.id)} className="rounded-full border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50" />
-                    <span className={`grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg border text-xs font-semibold ${
+                    <span className={`grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-xl border text-xs font-semibold ${
                       characterIds.includes(character.id)
                         ? "border-ember-400/40 bg-ember-500/10 text-ember-100"
                         : "border-white/10 bg-ink-800 text-slate-200"

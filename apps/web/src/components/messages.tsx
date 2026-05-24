@@ -2,6 +2,7 @@ import { ChevronLeft, ChevronRight, Copy, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import type { MessageDTO, TokenUsageDTO } from "../types";
+import { ScopedHtmlRenderer, containsRenderableHtml } from "./ScopedHtmlRenderer";
 
 type TokenUsageFormatter = (usage: TokenUsageDTO | null) => string;
 
@@ -13,6 +14,27 @@ type TriggeredLorebook = {
 };
 
 const FLUSH_INTERVAL_MS = 40;
+function MessageBody({
+  content,
+  htmlCss,
+  align = "left",
+  renderHtml = true
+}: {
+  content: string;
+  htmlCss?: string;
+  align?: "left" | "right";
+  renderHtml?: boolean;
+}) {
+  if (renderHtml && containsRenderableHtml(content)) {
+    return <ScopedHtmlRenderer content={content} htmlCss={htmlCss} />;
+  }
+
+  return (
+    <p className={`whitespace-pre-wrap leading-relaxed ${align === "right" ? "text-right" : "text-left"}`}>
+      {content}
+    </p>
+  );
+}
 
 function Avatar({
   avatar,
@@ -145,7 +167,7 @@ export function UserMessageBubble({
             </button>
           </span>
         </div>
-        <p className="whitespace-pre-wrap text-right leading-relaxed">{message.content}</p>
+        <MessageBody align="right" content={message.content} renderHtml={false} />
       </article>
       <Avatar align="right" name={senderName} className="order-2" />
     </div>
@@ -156,6 +178,7 @@ export function AssistantMessageBubble({
   message,
   senderName,
   avatar,
+  htmlCss,
   tokenUsageFormatter,
   triggeredLorebooks,
   onCopy,
@@ -169,6 +192,7 @@ export function AssistantMessageBubble({
   message: MessageDTO;
   senderName: string;
   avatar?: string | null;
+  htmlCss?: string;
   tokenUsageFormatter: TokenUsageFormatter;
   triggeredLorebooks: TriggeredLorebook[];
   onCopy: () => void;
@@ -212,7 +236,7 @@ export function AssistantMessageBubble({
             </button>
           </span>
         </div>
-        <p className="whitespace-pre-wrap text-left leading-relaxed">{message.content}</p>
+        <MessageBody content={message.content} htmlCss={htmlCss} />
         <TokenInfo usage={message.tokenUsage} formatter={tokenUsageFormatter} lorebooks={triggeredLorebooks} />
       </article>
     </div>
@@ -222,10 +246,12 @@ export function AssistantMessageBubble({
 export function StreamingBubble({
   characterName,
   characterAvatar,
+  htmlCss,
   content
 }: {
   characterName: string;
   characterAvatar?: string | null;
+  htmlCss?: string;
   content: string;
 }) {
   const [displayedContent, setDisplayedContent] = useState("");
@@ -267,7 +293,7 @@ export function StreamingBubble({
           {characterName}
         </div>
         {displayedContent ? (
-          <p className="whitespace-pre-wrap leading-relaxed">{displayedContent}</p>
+          <MessageBody content={displayedContent} htmlCss={htmlCss} />
         ) : (
           <div className="flex items-center gap-1 py-1">
             <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-ember-400/60 [animation-delay:0ms]"></span>

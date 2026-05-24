@@ -77,7 +77,7 @@ backupsRouter.post(
           prefix: character.prefix,
           prompt: character.prompt,
           suffix: character.suffix,
-          relationship: character.relationship ?? "",
+          htmlCss: character.htmlCss ?? "",
           loreEntries: character.loreEntries ?? [],
           ...importedDates(character)
         };

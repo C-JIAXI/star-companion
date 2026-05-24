@@ -37,7 +37,7 @@ export type CharacterInput = {
   prefix?: string;
   prompt?: string;
   suffix?: string;
-  relationship?: string;
+  htmlCss?: string;
   loreEntries?: (Omit<CharacterLoreEntryDTO, "id"> & { id?: string })[];
 };
 

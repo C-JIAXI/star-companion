@@ -1,0 +1,1 @@
+ALTER TABLE "Character" ADD COLUMN "htmlCss" TEXT NOT NULL DEFAULT '';

@@ -24,6 +24,7 @@ describe("buildPromptContext", () => {
         prefix: "Stay grounded.",
         prompt: "A character used by prompt builder tests.",
         suffix: "Reply briefly.",
+        htmlCss: ".card { color: #fff; } .title { font-weight: 700; }",
         loreEntries: [
           {
             id: "entry-1",
@@ -178,6 +179,8 @@ describe("buildPromptContext", () => {
 
     assert.match(promptText, /User prefers concise technical summaries/);
     assert.match(promptText, /You are writing as the character "Prompt Test Character"/);
+    assert.match(promptText, /HTML rendering is enabled for this character/);
+    assert.match(promptText, /Available renderer CSS:\n\.card \{ color: #fff; \} \.title \{ font-weight: 700; \}/);
     assert.deepEqual(
       new Set(matchedContents),
       new Set([

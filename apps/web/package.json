@@ -11,8 +11,11 @@
     "lint": "eslint src --ext .ts,.tsx"
   },
   "dependencies": {
+    "@uiw/react-md-editor": "^4.1.1",
     "@vitejs/plugin-react": "^5.0.4",
+    "dompurify": "^3.4.5",
     "lucide-react": "^0.546.0",
+    "marked": "^18.0.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zustand": "^5.0.8"

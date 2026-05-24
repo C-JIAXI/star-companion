@@ -43,7 +43,7 @@ export const characterCreateSchema = z.object({
   prefix: z.string().default(""),
   prompt: z.string().default(""),
   suffix: z.string().default(""),
-  relationship: z.string().default(""),
+  htmlCss: z.string().default(""),
   loreEntries: loreEntriesSchema
 });
 
@@ -161,7 +161,7 @@ const backupCharacterSchema = characterCreateSchema
     prefix: character.prefix || character.systemPrompt || "",
     prompt: character.prompt || character.description || "",
     suffix: character.suffix || character.scenario || "",
-    relationship: character.relationship ?? "",
+    htmlCss: character.htmlCss ?? "",
     loreEntries: character.loreEntries ?? [],
     createdAt: character.createdAt,
     updatedAt: character.updatedAt

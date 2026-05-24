@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle, HelpCircle } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type {
   ButtonHTMLAttributes,
@@ -63,17 +63,21 @@ export function Button({
 export function Field({
   label,
   labelClassName = "",
-  children
+  children,
+  container = "label"
 }: {
   label: ReactNode;
   labelClassName?: string;
   children: ReactNode;
+  container?: "label" | "div";
 }) {
+  const Container = container;
+
   return (
-    <label className="grid min-w-0 gap-1.5 text-sm">
+    <Container className="grid min-w-0 gap-1.5 text-sm">
       <span className={`font-medium text-slate-300 ${labelClassName}`}>{label}</span>
       {children}
-    </label>
+    </Container>
   );
 }
 
@@ -169,19 +173,20 @@ export function TextInput({ className = "", ...props }: InputHTMLAttributes<HTML
   );
 }
 
-export function TextArea({
-  className = "",
-  style,
-  ...props
-}: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return (
-    <textarea
-      className={`custom-scrollbar h-[320px] w-full min-w-0 resize-none overflow-y-auto rounded-lg border border-white/10 bg-ink-950/50 px-3 py-2.5 text-sm text-slate-100 outline-none transition-all placeholder:text-slate-500 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50 ${className}`}
-      style={style}
-      {...props}
-    />
-  );
-}
+export const TextArea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
+  ({ className = "", style, ...props }, ref) => {
+    return (
+      <textarea
+        ref={ref}
+        className={`custom-scrollbar h-[320px] w-full min-w-0 resize-none overflow-y-auto rounded-lg border border-white/10 bg-ink-950/50 px-3 py-2.5 text-sm text-slate-100 outline-none transition-all placeholder:text-slate-500 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50 ${className}`}
+        style={style}
+        {...props}
+      />
+    );
+  }
+);
+
+TextArea.displayName = "TextArea";
 
 export function EmptyState({ children }: { children: ReactNode }) {
   return (
