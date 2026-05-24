@@ -1,5 +1,54 @@
 import { expect, test } from "@playwright/test";
 
+test("changing language does not immediately reload stale server settings", async ({ page }) => {
+  let settingsGetCount = 0;
+  const now = new Date().toISOString();
+
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+
+    settingsGetCount += 1;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          id: "settings-e2e",
+          activeProvider: "openai-compatible",
+          apiBaseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini",
+          temperature: 0.8,
+          maxTokens: 800,
+          topP: 1,
+          language: "zh-CN",
+          models: [],
+          userProfileSummary: "",
+          autoSummarizeUser: true,
+          userProfileUpdatedAt: null,
+          createdAt: now,
+          updatedAt: now,
+          hasApiKey: false
+        }
+      })
+    });
+  });
+
+  await page.goto("/settings");
+  const languageSelect = page.locator("select", { has: page.locator('option[value="en"]') });
+  await expect(languageSelect).toHaveValue("zh-CN");
+  const settingsGetCountAfterLoad = settingsGetCount;
+
+  await languageSelect.selectOption("en");
+  await expect(page.getByRole("heading", { name: "Model Settings" })).toBeVisible();
+  await page.waitForTimeout(500);
+
+  await expect(languageSelect).toHaveValue("en");
+  expect(settingsGetCount).toBe(settingsGetCountAfterLoad);
+});
+
 test("direct routes render their workspace headers", async ({ page }) => {
   await page.goto("/characters");
   await expect(page.getByRole("heading", { name: /角色工坊|Character Studio/ })).toBeVisible();

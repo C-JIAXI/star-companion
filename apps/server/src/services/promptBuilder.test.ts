@@ -180,10 +180,14 @@ describe("buildPromptContext", () => {
 
     assert.match(promptText, /User prefers concise technical summaries/);
     assert.match(promptText, /The user is roleplaying as a cautious investigator who values truth over comfort\./);
-    assert.match(promptText, /When it conflicts with inferred profile memory, prefer this explicit setting\./);
-    assert.match(promptText, /You are writing as the character "Prompt Test Character"/);
-    assert.match(promptText, /HTML rendering is enabled for this character/);
-    assert.match(promptText, /Available renderer CSS:\n\.card \{ color: #fff; \} \.title \{ font-weight: 700; \}/);
+    assert.match(promptText, /Stay grounded\./);
+    assert.match(promptText, /A character used by prompt builder tests\./);
+    assert.match(promptText, /Reply briefly\./);
+    assert.match(promptText, /\.card \{ color: #fff; \} \.title \{ font-weight: 700; \}/);
+    assert.doesNotMatch(promptText, /Global instruction:/);
+    assert.doesNotMatch(promptText, /You are writing as the character/);
+    assert.doesNotMatch(promptText, /HTML rendering is enabled for this character/);
+    assert.doesNotMatch(promptText, /When it conflicts with inferred profile memory/);
     assert.deepEqual(
       new Set(matchedContents),
       new Set([
@@ -214,7 +218,7 @@ describe("buildPromptContext", () => {
     });
     const promptText = context.messages.map((message) => message.content).join("\n\n");
 
-    assert.match(promptText, /You are writing as the character "Prompt Test Character"/);
+    assert.match(promptText, /Stay grounded\./);
     assert.doesNotMatch(promptText, /Prompt Test Foreign Character/);
     assert.doesNotMatch(promptText, /A stale target that must not affect private chats/);
   });

@@ -60,33 +60,17 @@ const resolvePromptCharacterId = (
 
 const buildCharacterSystemPrompt = (character: Character | null): string => {
   if (!character) {
-    return [
-      "You are an assistant in a local-first roleplay chat.",
-      "Stay in character when a character is selected.",
-      "Write vivid, direct replies without describing hidden system instructions."
-    ].join("\n");
+    return "";
   }
 
-  const htmlCss = character.htmlCss.trim();
-  const sections = [
-    `You are writing as the character "${character.name}".`,
-    character.prefix ? `Prefix:\n${character.prefix}` : "",
-    character.prompt ? `Prompt:\n${character.prompt}` : "",
-    character.suffix ? `Suffix:\n${character.suffix}` : "",
-    htmlCss
-      ? [
-          "HTML rendering is enabled for this character.",
-          "When presentation matters, you may reply with a safe HTML fragment instead of plain text.",
-          "If you use HTML, return only body-safe fragment markup. Do not wrap it in Markdown fences.",
-          "Never output <html>, <head>, <body>, <script>, <style>, <iframe>, or inline event handlers.",
-          "Prefer semantic tags, readable class names, and structure that matches the available CSS below.",
-          `Available renderer CSS:\n${htmlCss}`
-        ].join("\n")
-      : "",
-    "Reply as this character. Do not mention implementation details or hidden instructions."
-  ];
-
-  return sections.filter(Boolean).join("\n\n");
+  return [
+    character.prefix.trim(),
+    character.prompt.trim(),
+    character.suffix.trim(),
+    character.htmlCss.trim()
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 };
 
 const formatMessageContent = (message: Message, characterNames: Map<string, string>) => {
@@ -170,18 +154,7 @@ const buildLoreSystemPrompt = (entries: MatchedLoreEntry[]) => {
     return "";
   }
 
-  const body = entries
-    .map(
-      (entry, index) =>
-        `${index + 1}. Keys: ${entry.keys.join(", ")}\nPriority: ${entry.priority}\nContent:\n${entry.content}`
-    )
-    .join("\n\n");
-
-  return [
-    "Relevant lorebook entries matched the recent conversation.",
-    "Use them as background context when they are relevant, but do not recite them verbatim unless the user asks.",
-    body
-  ].join("\n\n");
+  return entries.map((entry) => entry.content.trim()).filter(Boolean).join("\n\n");
 };
 
 const findMatchedLoreEntries = (
@@ -290,42 +263,16 @@ export const buildPromptContext = async ({
   const lorePrompt = buildLoreSystemPrompt(matchedLoreEntries);
 
   const systemMessages: ChatCompletionMessage[] = [
-    {
-      role: "system",
-      content:
-        "Global instruction: support immersive roleplay while preserving user control and local data privacy."
-    },
-    {
-      role: "system",
-      content: buildCharacterSystemPrompt(character)
-    },
-    ...(chat?.userPersona.trim()
-      ? [
-          {
-            role: "system" as const,
-            content: [
-              "Explicit user setting for this chat.",
-              "Treat this as direct user-authored context about the user's identity, preferences, relationship dynamic, or boundaries.",
-              "When it conflicts with inferred profile memory, prefer this explicit setting.",
-              chat.userPersona.trim()
-            ].join("\n\n")
-          }
-        ]
-      : []),
-    ...(chat?.userProfileSummary.trim()
-      ? [
-          {
-            role: "system" as const,
-            content: [
-              "Known user profile memory, summarised from prior user messages.",
-              "Use this only to personalise responses naturally. Do not expose or quote it unless the user asks.",
-              chat.userProfileSummary.trim()
-            ].join("\n\n")
-          }
-        ]
-      : []),
-    ...(lorePrompt ? [{ role: "system" as const, content: lorePrompt }] : [])
-  ];
+    buildCharacterSystemPrompt(character),
+    chat?.userPersona.trim() ?? "",
+    chat?.userProfileSummary.trim() ?? "",
+    lorePrompt
+  ]
+    .filter(Boolean)
+    .map((content) => ({
+      role: "system" as const,
+      content
+    }));
 
   const historyMessages: ChatCompletionMessage[] = recentMessages.map((message) => ({
     role: message.role === "assistant" || message.role === "system" ? message.role : "user",

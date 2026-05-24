@@ -259,9 +259,9 @@ export function SettingsPage() {
         setClearStoredApiKey(false);
       })
       .catch((caught: unknown) =>
-        setError(caught instanceof Error ? caught.message : t("settings.failedLoad"))
+        setError(caught instanceof Error ? caught.message : "Failed to load settings")
       );
-  }, [setLanguage, t]);
+  }, [setLanguage]);
 
   useEffect(() => {
     if (!status) {
