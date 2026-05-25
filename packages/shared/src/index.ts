@@ -58,6 +58,14 @@ export interface CharacterDTO {
   updatedAt: string;
 }
 
+export interface PaginatedCharactersDTO {
+  items: CharacterDTO[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 export interface ChatDTO {
   id: string;
   title: string;

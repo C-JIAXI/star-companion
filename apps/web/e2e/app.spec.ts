@@ -443,6 +443,135 @@ test("long chats paginate and keep messages inside the scrollable viewport", asy
   }
 });
 
+test("character page paginates and searches server-side character results", async ({
+  page,
+  request
+}, testInfo) => {
+  testInfo.setTimeout(60_000);
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const prefix = `Bulk Character ${suffix}`;
+  const targetName = `${prefix} target`;
+  const createdIds = Array.from({ length: 40 }, (_, index) => `e2e-character-page-${suffix}-${index}`).concat(
+    `e2e-character-page-${suffix}-target`
+  );
+
+  try {
+    const importResponse = await request.post("/api/backups/import", {
+      data: {
+        schemaVersion: 1,
+        mode: "merge",
+        characters: [
+          ...Array.from({ length: 40 }, (_, index) => ({
+            id: createdIds[index],
+            name: `${prefix} ${String(index).padStart(2, "0")}`,
+            avatar: null,
+            prefix: "Paging fixture.",
+            prompt: `Bulk prompt ${index}`,
+            suffix: "Reply directly.",
+            htmlCss: "",
+            loreEntries: []
+          })),
+          {
+            id: createdIds[40],
+            name: targetName,
+            avatar: null,
+            prefix: "Paging fixture.",
+            prompt: `Unique server-side-search token ${suffix}`,
+            suffix: "Reply directly.",
+            htmlCss: "",
+            loreEntries: []
+          }
+        ],
+        chats: [],
+        messages: []
+      }
+    });
+    expect(importResponse.ok()).toBeTruthy();
+
+    await page.goto("/characters");
+    await page.getByPlaceholder(/搜索角色名称|鎼滅储瑙掕壊鍚嶇О|Search character name or prompt/).fill(prefix);
+    await expect(page.getByTestId("characters-page-next")).toBeEnabled();
+    await page.getByTestId("characters-page-next").click();
+    await expect(page.getByTestId("characters-page-prev")).toBeEnabled();
+
+    await page.getByPlaceholder(/搜索角色名称|鎼滅储瑙掕壊鍚嶇О|Search character name or prompt/).fill(`server-side-search token ${suffix}`);
+    await page.getByRole("button", { name: new RegExp(targetName) }).click();
+    await expect(page.getByLabel(/名称|鍚嶇О|Name/)).toHaveValue(targetName);
+  } finally {
+    await Promise.all(createdIds.filter(Boolean).map((id) => request.delete(`/api/characters/${id}`)));
+  }
+});
+
+test("chat creation paginates and searches characters before creating a chat", async ({
+  page,
+  request
+}, testInfo) => {
+  testInfo.setTimeout(60_000);
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const prefix = `Create Chat Character ${suffix}`;
+  const targetName = `${prefix} target`;
+  const chatTitle = `Paged Character Chat ${suffix}`;
+  const createdIds = Array.from({ length: 40 }, (_, index) => `e2e-create-chat-${suffix}-${index}`).concat(
+    `e2e-create-chat-${suffix}-target`
+  );
+  let chatId: string | null = null;
+
+  try {
+    const importResponse = await request.post("/api/backups/import", {
+      data: {
+        schemaVersion: 1,
+        mode: "merge",
+        characters: [
+          ...Array.from({ length: 40 }, (_, index) => ({
+            id: createdIds[index],
+            name: `${prefix} ${String(index).padStart(2, "0")}`,
+            avatar: null,
+            prefix: "Create chat paging fixture.",
+            prompt: `Create chat prompt ${index}`,
+            suffix: "Reply directly.",
+            htmlCss: "",
+            loreEntries: []
+          })),
+          {
+            id: createdIds[40],
+            name: targetName,
+            avatar: null,
+            prefix: "Create chat paging fixture.",
+            prompt: `Create chat unique-search token ${suffix}`,
+            suffix: "Reply directly.",
+            htmlCss: "",
+            loreEntries: []
+          }
+        ],
+        chats: [],
+        messages: []
+      }
+    });
+    expect(importResponse.ok()).toBeTruthy();
+
+    await page.goto("/");
+    await page.getByPlaceholder(/搜索角色名称|Search character name or prompt|鎼滅储瑙掕壊鍚嶇О/).fill(prefix);
+    await expect(page.getByTestId("create-chat-character-page-next")).toBeEnabled();
+    await page.getByTestId("create-chat-character-page-next").click();
+    await expect(page.getByTestId("create-chat-character-page-prev")).toBeEnabled();
+
+    await page.getByPlaceholder(/搜索角色名称|Search character name or prompt|鎼滅储瑙掕壊鍚嶇О/).fill(`unique-search token ${suffix}`);
+    await page.getByText(targetName).click();
+    await page.getByLabel(/标题|鏍囬|Title/).fill(chatTitle);
+    await page.getByRole("button", { name: /创建聊天|鍒涘缓鑱婂ぉ|Create Chat/ }).last().click();
+    await expect(page.getByRole("button", { name: chatTitle })).toBeVisible();
+
+    const chatsResponse = await request.get("/api/chats");
+    const chats = ((await chatsResponse.json()) as ApiDataResponse<E2EChat[]>).data ?? [];
+    chatId = chats.find((chat) => chat.title === chatTitle)?.id ?? null;
+  } finally {
+    if (chatId) {
+      await request.delete(`/api/chats/${chatId}`);
+    }
+    await Promise.all(createdIds.filter(Boolean).map((id) => request.delete(`/api/characters/${id}`)));
+  }
+});
+
 test("lore entries show persistent trigger without trigger mode badge", async ({ page, request }) => {
   const name = `E2E Lorebook ${Date.now()}`;
   const content = "Persistent trigger entry created by Playwright.";

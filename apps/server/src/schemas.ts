@@ -51,6 +51,33 @@ export const characterUpdateSchema = characterCreateSchema
   .partial()
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");
 
+const toPositiveInt = (fallback: number) =>
+  z
+    .preprocess((value) => {
+      if (Array.isArray(value)) {
+        return value[0];
+      }
+      if (typeof value === "string" && value.trim() !== "") {
+        return Number(value);
+      }
+      return value;
+    }, z.number().int().positive().catch(fallback))
+    .default(fallback);
+
+export const characterPageQuerySchema = z
+  .object({
+    q: z
+      .preprocess((value) => (Array.isArray(value) ? value[0] : value), z.string().trim().catch(""))
+      .default(""),
+    page: toPositiveInt(1),
+    pageSize: toPositiveInt(40)
+  })
+  .transform((query) => ({
+    q: query.q,
+    page: query.page,
+    pageSize: Math.min(query.pageSize, 100)
+  }));
+
 export const chatCreateSchema = z.object({
   title: z.string().trim().min(1),
   mode: z.enum(["single"]).default("single"),

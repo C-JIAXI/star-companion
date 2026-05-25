@@ -9,6 +9,7 @@ import type {
   ChatWithMessagesDTO,
   MessageDTO,
   MessageInput,
+  PaginatedCharactersDTO,
   PublicUserSettingsDTO,
   SettingsInput
 } from "../types";
@@ -42,6 +43,21 @@ const request = async <T>(path: string, options: RequestOptions = {}): Promise<T
 export const api = {
   characters: {
     list: () => request<CharacterDTO[]>("/api/characters"),
+    get: (id: string) => request<CharacterDTO>(`/api/characters/${id}`),
+    page: (query: { q?: string; page?: number; pageSize?: number } = {}) => {
+      const params = new URLSearchParams();
+      if (query.q?.trim()) {
+        params.set("q", query.q.trim());
+      }
+      if (query.page !== undefined) {
+        params.set("page", String(query.page));
+      }
+      if (query.pageSize !== undefined) {
+        params.set("pageSize", String(query.pageSize));
+      }
+      const suffix = params.toString();
+      return request<PaginatedCharactersDTO>(`/api/characters/page${suffix ? `?${suffix}` : ""}`);
+    },
     create: (input: CharacterInput) =>
       request<CharacterDTO>("/api/characters", { method: "POST", body: input }),
     update: (id: string, input: Partial<CharacterInput>) =>

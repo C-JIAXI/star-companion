@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { parseBody } from "./lib/http.js";
-import { chatUpdateSchema, settingsUpdateSchema } from "./schemas.js";
+import { characterPageQuerySchema, chatUpdateSchema, settingsUpdateSchema } from "./schemas.js";
 
 describe("chatUpdateSchema", () => {
   it("does not inject create-time defaults into partial chat updates", () => {
@@ -31,5 +31,21 @@ describe("settingsUpdateSchema", () => {
     });
 
     assert.equal(parsed.showMessageAvatars, false);
+  });
+});
+
+describe("characterPageQuerySchema", () => {
+  it("normalizes defaults and clamps page size", () => {
+    assert.deepEqual(parseBody(characterPageQuerySchema, {}), {
+      q: "",
+      page: 1,
+      pageSize: 40
+    });
+
+    assert.deepEqual(parseBody(characterPageQuerySchema, { q: "  pilot  ", page: "2", pageSize: "500" }), {
+      q: "pilot",
+      page: 2,
+      pageSize: 100
+    });
   });
 });

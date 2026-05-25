@@ -1,4 +1,4 @@
-import { ChevronDown, Copy, Download, FileUp, Plus, Save, Search, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Copy, Download, FileUp, Plus, Save, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MarkdownEditor } from "../components/MarkdownEditor";
 import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
@@ -7,6 +7,8 @@ import { api } from "../lib/api";
 import { downloadJson, readFileText } from "../lib/files";
 import type { CharacterDTO, CharacterInput, CharacterLoreEntryDTO } from "../types";
 import { Button, ConfirmDialog, EmptyState, ErrorNotice, Field, HelpLabel, Panel, SuccessNotice, TextArea, TextInput } from "../components/ui";
+
+const CHARACTER_PAGE_SIZE = 40;
 
 const blankLoreEntry = (): CharacterLoreEntryDTO & { _localId: string; _collapsed: boolean } => ({
   id: "",
@@ -107,10 +109,21 @@ type ImportedCharacter = Partial<CharacterInput> & {
   loreEntries?: CharacterLoreEntryDTO[];
 };
 
+const emptyCharacterPage = {
+  items: [] as CharacterDTO[],
+  total: 0,
+  page: 1,
+  pageSize: CHARACTER_PAGE_SIZE,
+  totalPages: 1
+};
+
 export function CharactersPage() {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
   const [characters, setCharacters] = useState<CharacterDTO[]>([]);
+  const [characterPage, setCharacterPage] = useState(1);
+  const [pagination, setPagination] = useState(emptyCharacterPage);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedCharacter, setSelectedCharacter] = useState<CharacterDTO | null>(null);
   const [form, setForm] = useState<CharacterForm>(blankForm);
   const [searchQuery, setSearchQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -121,6 +134,7 @@ export function CharactersPage() {
   const [previewTemplateId, setPreviewTemplateId] = useState<HtmlPreviewTemplateId>(DEFAULT_HTML_PREVIEW_TEMPLATE);
   const [previewMarkup, setPreviewMarkup] = useState<string>(HTML_PREVIEW_TEMPLATES[DEFAULT_HTML_PREVIEW_TEMPLATE]);
   const creatingRef = useRef(false);
+  const characterRequestRef = useRef(0);
 
   const htmlPreviewTemplates = useMemo(
     () => [
@@ -140,38 +154,58 @@ export function CharactersPage() {
     [t]
   );
 
-  const selected = useMemo(
-    () => characters.find((character) => character.id === selectedId) ?? null,
-    [characters, selectedId]
-  );
+  const selected = selectedCharacter;
 
-  const filteredCharacters = useMemo(() => {
-    const keyword = searchQuery.trim().toLowerCase();
-    if (!keyword) {
-      return characters;
+  const characterRange = useMemo(() => {
+    if (pagination.total === 0) {
+      return { start: 0, end: 0 };
     }
 
-    return characters.filter((character) =>
-      [
-        character.name,
-        character.avatar ?? "",
-        character.prefix,
-        character.prompt,
-        character.suffix,
-        character.htmlCss
-      ]
-        .join("\n")
-        .toLowerCase()
-        .includes(keyword)
-    );
-  }, [characters, searchQuery]);
+    const start = (pagination.page - 1) * pagination.pageSize + 1;
+    const end = Math.min(start + pagination.items.length - 1, pagination.total);
+    return { start, end };
+  }, [pagination]);
 
-  const loadCharacters = async () => {
-    const data = await api.characters.list();
-    setCharacters(data);
-    if (!selectedId && !creatingRef.current && data[0]) {
-      setSelectedId(data[0].id);
-      setForm(toForm(data[0]));
+  const characterPaginationCopy =
+    pagination.total === 0
+      ? t("characters.noSearchResults")
+      : `${characterRange.start}-${characterRange.end} / ${pagination.total}`;
+
+  const loadCharacters = async (nextPage = characterPage) => {
+    const requestId = characterRequestRef.current + 1;
+    characterRequestRef.current = requestId;
+    const data = await api.characters.page({
+      q: searchQuery,
+      page: nextPage,
+      pageSize: CHARACTER_PAGE_SIZE
+    });
+
+    if (requestId !== characterRequestRef.current) {
+      return;
+    }
+
+    if (data.items.length === 0 && data.total > 0 && data.page > 1) {
+      setCharacterPage(data.page - 1);
+      return;
+    }
+
+    setCharacters(data.items);
+    setPagination(data);
+
+    const refreshedSelected = selectedId
+      ? data.items.find((character) => character.id === selectedId) ?? null
+      : null;
+
+    if (refreshedSelected) {
+      setSelectedCharacter(refreshedSelected);
+      setForm(toForm(refreshedSelected));
+      return;
+    }
+
+    if (!selectedId && !creatingRef.current && data.items[0]) {
+      setSelectedId(data.items[0].id);
+      setSelectedCharacter(data.items[0]);
+      setForm(toForm(data.items[0]));
     }
   };
 
@@ -179,7 +213,7 @@ export function CharactersPage() {
     void loadCharacters().catch((caught: unknown) =>
       setError(caught instanceof Error ? caught.message : t("characters.failedLoad"))
     );
-  }, [t]);
+  }, [characterPage, searchQuery, t]);
 
   useEffect(() => {
     if (!status) {
@@ -193,6 +227,7 @@ export function CharactersPage() {
   const selectCharacter = (character: CharacterDTO) => {
     creatingRef.current = false;
     setSelectedId(character.id);
+    setSelectedCharacter(character);
     setForm(toForm(character));
     setError(null);
     setStatus(null);
@@ -201,6 +236,7 @@ export function CharactersPage() {
   const resetForm = () => {
     creatingRef.current = true;
     setSelectedId(null);
+    setSelectedCharacter(null);
     setForm(blankForm);
     setError(null);
     setStatus(null);
@@ -242,6 +278,7 @@ export function CharactersPage() {
       await api.characters.remove(selected.id);
       setDeleteConfirmOpen(false);
       setSelectedId(null);
+      setSelectedCharacter(null);
       setForm(blankForm);
       await loadCharacters();
     } catch (caught) {
@@ -267,6 +304,7 @@ export function CharactersPage() {
       });
       await loadCharacters();
       setSelectedId(duplicated.id);
+      setSelectedCharacter(duplicated);
       setForm(toForm(duplicated));
       setStatus(t("characters.duplicated"));
     } catch (caught) {
@@ -336,16 +374,19 @@ export function CharactersPage() {
               className="pl-9"
               placeholder={t("characters.searchPlaceholder")}
               value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
+              onChange={(event) => {
+                setSearchQuery(event.target.value);
+                setCharacterPage(1);
+              }}
             />
           </div>
-          {characters.length === 0 ? (
+          {characters.length === 0 && pagination.total === 0 && !searchQuery.trim() ? (
             <EmptyState>{t("characters.noCharacters")}</EmptyState>
-          ) : filteredCharacters.length === 0 ? (
+          ) : characters.length === 0 ? (
             <EmptyState>{t("characters.noSearchResults")}</EmptyState>
           ) : (
             <div className="custom-scrollbar max-h-[38rem] space-y-3 overflow-y-auto pr-1">
-            {filteredCharacters.map((character) => (
+            {characters.map((character) => (
               <button
                 className={`group w-full rounded-xl border p-4 text-left text-sm transition-all duration-200 ${
                   selectedId === character.id
@@ -369,6 +410,31 @@ export function CharactersPage() {
             ))}
             </div>
           )}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/5 pt-3 text-xs text-slate-400">
+            <span>{characterPaginationCopy}</span>
+            <div className="flex items-center gap-2">
+              <Button
+                className="!min-h-[32px] !px-3 text-xs"
+                data-testid="characters-page-prev"
+                disabled={loading || pagination.page <= 1}
+                variant="secondary"
+                onClick={() => setCharacterPage((current) => Math.max(1, current - 1))}
+              >
+                <ChevronLeft size={14} />
+                {language === "zh-CN" ? "上一页" : "Previous"}
+              </Button>
+              <Button
+                className="!min-h-[32px] !px-3 text-xs"
+                data-testid="characters-page-next"
+                disabled={loading || pagination.page >= pagination.totalPages}
+                variant="secondary"
+                onClick={() => setCharacterPage((current) => Math.min(pagination.totalPages, current + 1))}
+              >
+                {language === "zh-CN" ? "下一页" : "Next"}
+                <ChevronRight size={14} />
+              </Button>
+            </div>
+          </div>
         </div>
       </Panel>
 

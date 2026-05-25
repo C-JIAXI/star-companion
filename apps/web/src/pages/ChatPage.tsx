@@ -4,6 +4,7 @@ import {
   Check,
   MessageSquarePlus,
   RefreshCw,
+  Search,
   Send,
   Settings,
   Sparkles,
@@ -38,12 +39,26 @@ import {
 } from "../components/messages";
 
 const MESSAGES_PER_PAGE = 30;
+const CREATE_CHAT_CHARACTER_PAGE_SIZE = 40;
+
+const emptyCreateCharacterPage = {
+  items: [] as CharacterDTO[],
+  total: 0,
+  page: 1,
+  pageSize: CREATE_CHAT_CHARACTER_PAGE_SIZE,
+  totalPages: 1
+};
 
 export function ChatPage() {
   const { language, t } = useI18n();
   const showMessageAvatars = useAppStore((state) => state.showMessageAvatars);
   const [mobilePane, setMobilePane] = useState<"chats" | "messages" | "create">("messages");
   const [characters, setCharacters] = useState<CharacterDTO[]>([]);
+  const [createCharacters, setCreateCharacters] = useState<CharacterDTO[]>([]);
+  const [createCharacterSearch, setCreateCharacterSearch] = useState("");
+  const [createCharacterPage, setCreateCharacterPage] = useState(1);
+  const [createCharacterPagination, setCreateCharacterPagination] = useState(emptyCreateCharacterPage);
+  const [selectedCreateCharacter, setSelectedCreateCharacter] = useState<CharacterDTO | null>(null);
   const [chats, setChats] = useState<ChatDTO[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [activeChat, setActiveChat] = useState<ChatWithMessagesDTO | null>(null);
@@ -91,6 +106,7 @@ export function ChatPage() {
   const [loading, setLoading] = useState(false);
   const streamingBufferRef = useRef("");
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
+  const createCharacterRequestRef = useRef(0);
   const paginationStateRef = useRef<{ chatId: string | null; totalPages: number }>({
     chatId: null,
     totalPages: 1
@@ -236,6 +252,16 @@ export function ChatPage() {
     [characters]
   );
 
+  const mergeCharacterCache = (nextCharacters: CharacterDTO[]) => {
+    setCharacters((current) => {
+      const byId = new Map(current.map((character) => [character.id, character]));
+      for (const character of nextCharacters) {
+        byId.set(character.id, character);
+      }
+      return Array.from(byId.values());
+    });
+  };
+
   const formatTokenUsage = (usage: TokenUsageDTO | null) => {
     if (!usage) {
       return t("chat.tokensUnavailable");
@@ -308,6 +334,21 @@ export function ChatPage() {
     return { start, end, total: totalMessages };
   }, [activeChat?.messages.length, pagedMessages.length, safeMessagePage]);
 
+  const createCharacterRange = useMemo(() => {
+    if (createCharacterPagination.total === 0) {
+      return { start: 0, end: 0 };
+    }
+
+    const start = (createCharacterPagination.page - 1) * createCharacterPagination.pageSize + 1;
+    const end = Math.min(start + createCharacterPagination.items.length - 1, createCharacterPagination.total);
+    return { start, end };
+  }, [createCharacterPagination]);
+
+  const createCharacterPaginationCopy =
+    createCharacterPagination.total === 0
+      ? t("characters.noSearchResults")
+      : `${createCharacterRange.start}-${createCharacterRange.end} / ${createCharacterPagination.total}`;
+
   const paginationCopy =
     language === "zh-CN"
       ? {
@@ -326,12 +367,10 @@ export function ChatPage() {
         };
 
   const loadBase = async () => {
-    const [characterData, chatData, settings] = await Promise.all([
-      api.characters.list(),
+    const [chatData, settings] = await Promise.all([
       api.chats.list(),
       api.settings.get()
     ]);
-    setCharacters(characterData);
     setChats(chatData);
     setSettingsModels(settings.models ?? []);
     setRuntimeSettings({
@@ -361,6 +400,14 @@ export function ChatPage() {
     const chat = await api.chats.get(id);
     setActiveChat(chat);
     setMemoryDraft(String(chat.memoryTurns));
+
+    const missingCharacterIds = chat.characterIds.filter((characterId) => !characterMap.has(characterId));
+    if (missingCharacterIds.length > 0) {
+      const fetchedCharacters = await Promise.all(
+        missingCharacterIds.map((characterId) => api.characters.get(characterId).catch(() => null))
+      );
+      mergeCharacterCache(fetchedCharacters.filter((character): character is CharacterDTO => character !== null));
+    }
   };
 
   useEffect(() => {
@@ -368,6 +415,35 @@ export function ChatPage() {
       setError(caught instanceof Error ? caught.message : t("chat.failedLoad"))
     );
   }, [t]);
+
+  useEffect(() => {
+    const requestId = createCharacterRequestRef.current + 1;
+    createCharacterRequestRef.current = requestId;
+
+    void api.characters
+      .page({
+        q: createCharacterSearch,
+        page: createCharacterPage,
+        pageSize: CREATE_CHAT_CHARACTER_PAGE_SIZE
+      })
+      .then((data) => {
+        if (requestId !== createCharacterRequestRef.current) {
+          return;
+        }
+
+        if (data.items.length === 0 && data.total > 0 && data.page > 1) {
+          setCreateCharacterPage(data.page - 1);
+          return;
+        }
+
+        setCreateCharacters(data.items);
+        setCreateCharacterPagination(data);
+        mergeCharacterCache(data.items);
+      })
+      .catch((caught: unknown) =>
+        setError(caught instanceof Error ? caught.message : t("characters.failedLoad"))
+      );
+  }, [createCharacterPage, createCharacterSearch, t]);
 
   useEffect(() => {
     void loadChat(selectedChatId).catch((caught: unknown) =>
@@ -433,10 +509,10 @@ export function ChatPage() {
     return () => window.clearTimeout(timeoutId);
   }, [status]);
 
-  const toggleCharacter = (id: string) => {
-    setCharacterIds((current) =>
-      current.includes(id) ? [] : [id]
-    );
+  const toggleCharacter = (character: CharacterDTO) => {
+    setCharacterIds((current) => (current.includes(character.id) ? [] : [character.id]));
+    setSelectedCreateCharacter((current) => (current?.id === character.id ? null : character));
+    mergeCharacterCache([character]);
   };
 
   const createChat = async () => {
@@ -451,6 +527,7 @@ export function ChatPage() {
       });
       setTitle("");
       setCharacterIds([]);
+      setSelectedCreateCharacter(null);
       setSelectedChatId(chat.id);
       setMobilePane("messages");
       await loadBase();
@@ -1367,11 +1444,42 @@ export function ChatPage() {
           <Field label={t("chat.title")}><TextInput value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
           <div className="space-y-3">
             <p className="text-sm font-medium text-slate-300">{t("nav.characters")}</p>
-            {characters.length === 0 ? (
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+              <TextInput
+                className="pl-9"
+                placeholder={t("characters.searchPlaceholder")}
+                value={createCharacterSearch}
+                onChange={(event) => {
+                  setCreateCharacterSearch(event.target.value);
+                  setCreateCharacterPage(1);
+                }}
+              />
+            </div>
+            {selectedCreateCharacter && !createCharacters.some((character) => character.id === selectedCreateCharacter.id) ? (
+              <label
+                className="grid min-h-[72px] cursor-pointer grid-cols-[auto_40px_minmax(0,1fr)] items-center gap-3 rounded-xl border border-ember-500/30 bg-ember-500/5 px-3 py-2.5 text-sm transition-all duration-200 hover:bg-white/10"
+              >
+                <input checked type="radio" name="character-select" onChange={() => toggleCharacter(selectedCreateCharacter)} className="rounded-full border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50" />
+                <span className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg border border-ember-400/40 bg-ember-500/10 text-xs font-semibold text-ember-100">
+                  {selectedCreateCharacter.avatar ? (
+                    <img alt="" className="h-full w-full object-cover" src={selectedCreateCharacter.avatar} />
+                  ) : (
+                    getCharacterInitials(selectedCreateCharacter.name)
+                  )}
+                </span>
+                <span className="min-w-0 truncate text-[13px] font-medium leading-5 text-ember-100">
+                  {selectedCreateCharacter.name}
+                </span>
+              </label>
+            ) : null}
+            {createCharacters.length === 0 && createCharacterPagination.total === 0 && !createCharacterSearch.trim() ? (
               <EmptyState>{t("chat.createCharactersFirst")}</EmptyState>
+            ) : createCharacters.length === 0 ? (
+              <EmptyState>{t("characters.noSearchResults")}</EmptyState>
             ) : (
               <div className="custom-scrollbar max-h-[420px] space-y-2.5 overflow-y-auto pr-1">
-                {characters.map((character) => (
+                {createCharacters.map((character) => (
                   <label
                     className={`grid min-h-[72px] cursor-pointer grid-cols-[auto_40px_minmax(0,1fr)] items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition-all duration-200 hover:bg-white/10 ${
                       characterIds.includes(character.id)
@@ -1380,7 +1488,7 @@ export function ChatPage() {
                     }`}
                     key={character.id}
                   >
-                    <input checked={characterIds.includes(character.id)} type="radio" name="character-select" onChange={() => toggleCharacter(character.id)} className="rounded-full border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50" />
+                    <input checked={characterIds.includes(character.id)} type="radio" name="character-select" onChange={() => toggleCharacter(character)} className="rounded-full border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50" />
                     <span className={`grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg border text-xs font-semibold ${
                       characterIds.includes(character.id)
                         ? "border-ember-400/40 bg-ember-500/10 text-ember-100"
@@ -1403,6 +1511,31 @@ export function ChatPage() {
                 ))}
               </div>
             )}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/5 pt-3 text-xs text-slate-400">
+              <span>{createCharacterPaginationCopy}</span>
+              <div className="flex items-center gap-2">
+                <Button
+                  className="!min-h-[32px] !px-3 text-xs"
+                  data-testid="create-chat-character-page-prev"
+                  disabled={loading || createCharacterPagination.page <= 1}
+                  variant="secondary"
+                  onClick={() => setCreateCharacterPage((current) => Math.max(1, current - 1))}
+                >
+                  <ChevronLeft size={14} />
+                  {language === "zh-CN" ? "上一页" : "Previous"}
+                </Button>
+                <Button
+                  className="!min-h-[32px] !px-3 text-xs"
+                  data-testid="create-chat-character-page-next"
+                  disabled={loading || createCharacterPagination.page >= createCharacterPagination.totalPages}
+                  variant="secondary"
+                  onClick={() => setCreateCharacterPage((current) => Math.min(createCharacterPagination.totalPages, current + 1))}
+                >
+                  {language === "zh-CN" ? "下一页" : "Next"}
+                  <ChevronRight size={14} />
+                </Button>
+              </div>
+            </div>
           </div>
           <Button disabled={loading || !title.trim() || characterIds.length === 0} onClick={() => void createChat()} className="w-full">
             <MessageSquarePlus size={16} />

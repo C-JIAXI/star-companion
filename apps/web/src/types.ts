@@ -14,6 +14,7 @@ import type {
   MessageDTO,
   MessageRole,
   ModelPreset,
+  PaginatedCharactersDTO,
   PublicUserSettingsDTO,
   TokenUsageDTO
 } from "@local-roleplay/shared";
@@ -90,6 +91,7 @@ export type {
   MessageDTO,
   MessageRole,
   ModelPreset,
+  PaginatedCharactersDTO,
   PublicUserSettingsDTO,
   TokenUsageDTO
 };

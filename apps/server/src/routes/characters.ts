@@ -1,8 +1,9 @@
 import { Router } from "express";
 import { prisma } from "../db.js";
-import { asyncHandler, HttpError, parseBody, requireParam } from "../lib/http.js";
-import { characterCreateSchema, characterUpdateSchema } from "../schemas.js";
+import { asyncHandler, HttpError, parseBody, parseQuery, requireParam } from "../lib/http.js";
+import { characterCreateSchema, characterPageQuerySchema, characterUpdateSchema } from "../schemas.js";
 import { serializeCharacter } from "../serializers.js";
+import { listCharactersPage } from "../services/characterPaging.js";
 
 export const charactersRouter = Router();
 
@@ -14,6 +15,16 @@ charactersRouter.get(
     });
 
     response.json({ ok: true, data: characters.map(serializeCharacter) });
+  })
+);
+
+charactersRouter.get(
+  "/page",
+  asyncHandler(async (request, response) => {
+    const query = parseQuery(characterPageQuerySchema, request.query);
+    const page = await listCharactersPage(query);
+
+    response.json({ ok: true, data: page });
   })
 );
 
