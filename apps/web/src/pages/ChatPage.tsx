@@ -1141,11 +1141,18 @@ export function ChatPage() {
             {characters.length === 0 ? (
               <EmptyState>{t("chat.createCharactersFirst")}</EmptyState>
             ) : (
-              <div className="custom-scrollbar max-h-[420px] space-y-3 overflow-y-auto pr-1">
+              <div className="custom-scrollbar max-h-[420px] space-y-2.5 overflow-y-auto pr-1">
                 {characters.map((character) => (
-                  <label className={`flex cursor-pointer items-center gap-4 rounded-xl border p-4 text-sm transition-all duration-200 hover:bg-white/10 ${characterIds.includes(character.id) ? 'border-ember-500/30 bg-ember-500/5' : 'border-white/5 bg-white/5'}`} key={character.id}>
+                  <label
+                    className={`grid min-h-[72px] cursor-pointer grid-cols-[auto_40px_minmax(0,1fr)] items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition-all duration-200 hover:bg-white/10 ${
+                      characterIds.includes(character.id)
+                        ? "border-ember-500/30 bg-ember-500/5"
+                        : "border-white/5 bg-white/5"
+                    }`}
+                    key={character.id}
+                  >
                     <input checked={characterIds.includes(character.id)} type="radio" name="character-select" onChange={() => toggleCharacter(character.id)} className="rounded-full border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50" />
-                    <span className={`grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-xl border text-xs font-semibold ${
+                    <span className={`grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg border text-xs font-semibold ${
                       characterIds.includes(character.id)
                         ? "border-ember-400/40 bg-ember-500/10 text-ember-100"
                         : "border-white/10 bg-ink-800 text-slate-200"
@@ -1156,7 +1163,11 @@ export function ChatPage() {
                         getCharacterInitials(character.name)
                       )}
                     </span>
-                    <span className={`min-w-0 truncate ${characterIds.includes(character.id) ? 'font-medium text-ember-100' : 'text-slate-200'}`}>
+                    <span
+                      className={`min-w-0 truncate text-[13px] leading-5 ${
+                        characterIds.includes(character.id) ? "font-medium text-ember-100" : "text-slate-200"
+                      }`}
+                    >
                       {character.name}
                     </span>
                   </label>
