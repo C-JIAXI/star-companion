@@ -24,6 +24,7 @@ model UserSettings {
   /// Local user profile memory summarised from user messages.
   userProfileSummary String @default("")
   autoSummarizeUser Boolean @default(true)
+  showMessageAvatars Boolean @default(true)
   userProfileUpdatedAt DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt

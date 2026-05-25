@@ -25,6 +25,7 @@ export interface UserSettingsDTO {
   models: ModelPreset[];
   userProfileSummary: string;
   autoSummarizeUser: boolean;
+  showMessageAvatars: boolean;
   userProfileUpdatedAt: string | null;
   createdAt: string;
   updatedAt: string;

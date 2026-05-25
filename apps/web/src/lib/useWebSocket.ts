@@ -26,6 +26,13 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const resolveSocketUrl = useCallback(() => {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const host = import.meta.env.DEV ? `${window.location.hostname}:4000` : window.location.host;
+
+    return `${protocol}//${host}/ws`;
+  }, []);
+
   const connect = useCallback(() => {
     const existing = socketRef.current;
     if (existing?.readyState === WebSocket.OPEN || existing?.readyState === WebSocket.CONNECTING) {
@@ -34,8 +41,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
 
     existing?.close();
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    const socket = new WebSocket(resolveSocketUrl());
     socketRef.current = socket;
 
     socket.onopen = () => {
@@ -71,7 +77,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       }
       onMessageRef.current?.(message);
     };
-  }, [reconnectInterval, maxReconnectAttempts]);
+  }, [maxReconnectAttempts, reconnectInterval, resolveSocketUrl]);
 
   const send = useCallback((data: unknown): boolean => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {

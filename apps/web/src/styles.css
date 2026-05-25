@@ -7,6 +7,10 @@
     color-scheme: dark;
     --background: #0c0d12;
     --foreground: #f5f6f8;
+    --custom-scrollbar-size: 6px;
+    --custom-scrollbar-radius: 999px;
+    --custom-scrollbar-thumb: #313847;
+    --custom-scrollbar-thumb-hover: #485369;
   }
 
   body {
@@ -58,6 +62,33 @@
   html {
     scroll-behavior: smooth;
   }
+}
+
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--custom-scrollbar-thumb) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: var(--custom-scrollbar-size);
+  height: var(--custom-scrollbar-size);
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--custom-scrollbar-thumb);
+  border-radius: var(--custom-scrollbar-radius);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--custom-scrollbar-thumb-hover);
+}
+
+.custom-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 @keyframes slide-down {

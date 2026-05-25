@@ -60,8 +60,15 @@ export const chatCreateSchema = z.object({
   userProfileSummary: z.string().default("")
 });
 
-export const chatUpdateSchema = chatCreateSchema
-  .partial()
+export const chatUpdateSchema = z
+  .object({
+    title: z.string().trim().min(1).optional(),
+    mode: z.enum(["single"]).optional(),
+    characterIds: z.array(z.string().trim().min(1)).optional(),
+    memoryTurns: z.number().int().min(1).max(50).optional(),
+    userPersona: z.string().max(4000).optional(),
+    userProfileSummary: z.string().optional()
+  })
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");
 
 export const messageCreateSchema = z.object({
@@ -101,6 +108,7 @@ export const settingsUpdateSchema = z.object({
   topP: z.number().min(0).max(1),
   language: z.enum(["zh-CN", "en"]).default("zh-CN"),
   autoSummarizeUser: z.boolean().optional(),
+  showMessageAvatars: z.boolean().optional(),
   userProfileSummary: z.string().max(4000).optional(),
   models: z
     .array(

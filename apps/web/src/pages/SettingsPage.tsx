@@ -38,6 +38,7 @@ const defaultForm: SettingsInput = {
   topP: 1,
   language: "zh-CN",
   models: [],
+  showMessageAvatars: true,
   userProfileSummary: ""
 };
 
@@ -222,6 +223,7 @@ export function SettingsPage() {
   const { language, t } = useI18n();
   const copy = useMemo(() => getPageCopy(language), [language]);
   const setLanguage = useAppStore((state) => state.setLanguage);
+  const setShowMessageAvatars = useAppStore((state) => state.setShowMessageAvatars);
 
   const [form, setForm] = useState<SettingsInput>(defaultForm);
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -250,18 +252,20 @@ export function SettingsPage() {
           topP: settings.topP,
           language: settings.language,
           models: settings.models ?? [],
+          showMessageAvatars: settings.showMessageAvatars,
           userProfileSummary: settings.userProfileSummary ?? ""
         };
         setForm(nextForm);
         setSavedSnapshot(serializeForm(nextForm));
         setLanguage(settings.language);
+        setShowMessageAvatars(settings.showMessageAvatars);
         setHasApiKey(settings.hasApiKey);
         setClearStoredApiKey(false);
       })
       .catch((caught: unknown) =>
         setError(caught instanceof Error ? caught.message : "Failed to load settings")
       );
-  }, [setLanguage]);
+  }, [setLanguage, setShowMessageAvatars]);
 
   useEffect(() => {
     if (!status) {
@@ -349,7 +353,8 @@ export function SettingsPage() {
         maxTokens: settings.maxTokens,
         topP: settings.topP,
         language: settings.language,
-        models: settings.models ?? []
+        models: settings.models ?? [],
+        showMessageAvatars: settings.showMessageAvatars
       };
 
       setForm(nextForm);
@@ -357,6 +362,7 @@ export function SettingsPage() {
       setHasApiKey(settings.hasApiKey);
       setClearStoredApiKey(false);
       setLanguage(settings.language);
+      setShowMessageAvatars(settings.showMessageAvatars);
       setStatus(t("settings.saved"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("settings.failedSave"));
@@ -672,6 +678,26 @@ export function SettingsPage() {
             </div>
 
             <div className={`border-t pt-6 ${settingsDividerClassName}`}>
+              <div className="mb-5 grid gap-5 md:grid-cols-2">
+                <Field label={language === "zh-CN" ? "聊天头像显示" : "Show chat avatars"}>
+                  <label className="flex min-h-[40px] cursor-pointer items-center gap-3 rounded-lg border border-white/10 bg-ink-950/50 px-3 text-sm text-slate-100 transition-all hover:border-white/20">
+                    <input
+                      checked={form.showMessageAvatars ?? true}
+                      type="checkbox"
+                      className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          showMessageAvatars: event.target.checked
+                        }))
+                      }
+                    />
+                    <span className="text-sm text-slate-200">
+                      {language === "zh-CN" ? "在聊天消息中显示角色与用户头像" : "Show user and character avatars in chat messages"}
+                    </span>
+                  </label>
+                </Field>
+              </div>
               <SettingsSectionHeading
                 title={copy.samplingBlockTitle}
                 description={

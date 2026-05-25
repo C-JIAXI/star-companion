@@ -49,6 +49,7 @@ function Avatar({
 }) {
   return (
     <div
+      data-testid="message-avatar"
       className={`grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl border text-xs font-bold shadow-md ${
         align === "right"
           ? "order-2 border-ember-300/40 bg-ink-950/20 text-ink-950 shadow-ember-500/10"
@@ -64,6 +65,29 @@ function Avatar({
     </div>
   );
 }
+
+function AvatarSlot({
+  showAvatar,
+  avatar,
+  name,
+  align = "left",
+  className = ""
+}: {
+  showAvatar: boolean;
+  avatar?: string | null;
+  name?: string;
+  align?: "left" | "right";
+  className?: string;
+}) {
+  if (!showAvatar) {
+    return null;
+  }
+
+  return <Avatar avatar={avatar} name={name} align={align} className={className} />;
+}
+
+const getBubbleWidthClassName = (showAvatar: boolean) =>
+  showAvatar ? "max-w-[calc(100%-3.25rem)] sm:max-w-[85%]" : "max-w-[85%]";
 
 function VariantSwitcher({
   currentIndex,
@@ -135,49 +159,45 @@ export function SystemNotification({ content }: { content: string }) {
 
 export function UserMessageBubble({
   message,
-  senderName,
+  showAvatar,
   onCopy,
   onEdit,
   onDelete
 }: {
   message: MessageDTO;
-  senderName: string;
+  showAvatar: boolean;
   onCopy: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
   const { t } = useI18n();
+  const bubbleWidthClassName = getBubbleWidthClassName(showAvatar);
 
   return (
-    <div className="group flex items-start justify-end gap-3">
-      <article className="order-1 relative max-w-[calc(100%-3.25rem)] rounded-2xl rounded-br-sm bg-gradient-to-br from-ember-400 to-ember-500 p-4 text-sm text-ink-950 shadow-sm transition-all hover:shadow-md sm:max-w-[85%]">
-        <div className="mb-3 flex flex-col items-end gap-2 sm:mb-2 sm:flex-row sm:items-center sm:justify-between">
-          <span className="shrink-0 text-xs font-bold tracking-wide text-ink-900/70 sm:max-w-[45%] sm:order-2 sm:text-right sm:truncate">
-            {senderName}
-          </span>
-          <span className="flex w-full flex-wrap items-center justify-end gap-1.5 text-[11px] opacity-100 sm:w-auto sm:flex-nowrap sm:text-xs sm:opacity-0 sm:transition-opacity sm:duration-200 sm:group-hover:opacity-100 sm:order-1 sm:justify-start">
-            <button className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-ink-900/70 hover:underline" type="button" onClick={onCopy}>
-              <Copy size={12} />{t("common.copy")}
-            </button>
-            <button className="whitespace-nowrap font-medium text-ink-900/70 hover:underline" type="button" onClick={onEdit}>
-              {t("common.edit")}
-            </button>
-            <button className="whitespace-nowrap font-medium text-ink-900/70 hover:underline" type="button" onClick={onDelete}>
-              {t("common.delete")}
-            </button>
-          </span>
+    <div className={`flex items-start justify-end ${showAvatar ? "gap-3" : "gap-0"}`}>
+      <article className={`order-1 relative ${bubbleWidthClassName} rounded-2xl rounded-br-sm bg-gradient-to-br from-ember-400 to-ember-500 p-4 text-sm text-ink-950 shadow-sm`}>
+        <div className="mb-3 flex items-center justify-end gap-1.5 text-[11px] opacity-100 sm:mb-2 sm:text-xs">
+          <button className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-ink-900/70 hover:underline" type="button" onClick={onCopy}>
+            <Copy size={12} />{t("common.copy")}
+          </button>
+          <button className="whitespace-nowrap font-medium text-ink-900/70 hover:underline" type="button" onClick={onEdit}>
+            {t("common.edit")}
+          </button>
+          <button className="whitespace-nowrap font-medium text-ink-900/70 hover:underline" type="button" onClick={onDelete}>
+            {t("common.delete")}
+          </button>
         </div>
         <MessageBody align="right" content={message.content} renderHtml={false} />
       </article>
-      <Avatar align="right" name={senderName} className="order-2" />
+      <AvatarSlot align="right" className="order-2" name="You" showAvatar={showAvatar} />
     </div>
   );
 }
 
 export function AssistantMessageBubble({
   message,
-  senderName,
   avatar,
+  showAvatar,
   htmlCss,
   tokenUsageFormatter,
   triggeredLorebooks,
@@ -190,8 +210,8 @@ export function AssistantMessageBubble({
   disableRegenerate
 }: {
   message: MessageDTO;
-  senderName: string;
   avatar?: string | null;
+  showAvatar: boolean;
   htmlCss?: string;
   tokenUsageFormatter: TokenUsageFormatter;
   triggeredLorebooks: TriggeredLorebook[];
@@ -204,37 +224,33 @@ export function AssistantMessageBubble({
   disableRegenerate: boolean;
 }) {
   const { t } = useI18n();
+  const bubbleWidthClassName = getBubbleWidthClassName(showAvatar);
 
   return (
-    <div className="group flex items-start justify-start gap-3">
-      <Avatar avatar={avatar} name={senderName} />
-      <article className="order-1 relative max-w-[calc(100%-3.25rem)] rounded-2xl rounded-bl-sm border border-white/5 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-sm backdrop-blur-sm transition-all hover:shadow-md sm:max-w-[85%]">
-        <div className="mb-3 flex flex-col items-start gap-2 sm:mb-2 sm:flex-row sm:items-center sm:justify-between">
-          <span className="shrink-0 text-xs font-bold tracking-wide text-ember-400 sm:max-w-[45%] sm:order-1 sm:truncate">
-            {senderName}
-          </span>
-          <span className="flex w-full flex-wrap items-center justify-start gap-1.5 text-[11px] opacity-100 sm:w-auto sm:flex-nowrap sm:text-xs sm:opacity-0 sm:transition-opacity sm:duration-200 sm:group-hover:opacity-100 sm:order-2 sm:justify-end">
-            {message.variants.length > 1 ? (
-              <VariantSwitcher
-                currentIndex={message.activeVariantIndex}
-                total={message.variants.length}
-                onPrev={onVariantPrev}
-                onNext={onVariantNext}
-              />
-            ) : null}
-            <button className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline" type="button" onClick={onCopy}>
-              <Copy size={12} />{t("common.copy")}
-            </button>
-            <button className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline disabled:opacity-40" type="button" disabled={disableRegenerate} onClick={onRegenerate}>
-              <RotateCcw size={12} />{t("chat.regenerate")}
-            </button>
-            <button className="whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline" type="button" onClick={onEdit}>
-              {t("common.edit")}
-            </button>
-            <button className="whitespace-nowrap font-medium text-rose-400 hover:text-rose-300 hover:underline" type="button" onClick={onDelete}>
-              {t("common.delete")}
-            </button>
-          </span>
+    <div className={`flex items-start justify-start ${showAvatar ? "gap-3" : "gap-0"}`}>
+      <AvatarSlot avatar={avatar} showAvatar={showAvatar} />
+      <article className={`order-1 relative ${bubbleWidthClassName} rounded-2xl rounded-bl-sm border border-white/5 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-sm backdrop-blur-sm`}>
+        <div className="mb-3 flex flex-wrap items-center justify-start gap-1.5 text-[11px] opacity-100 sm:mb-2 sm:text-xs">
+          {message.variants.length > 1 ? (
+            <VariantSwitcher
+              currentIndex={message.activeVariantIndex}
+              total={message.variants.length}
+              onPrev={onVariantPrev}
+              onNext={onVariantNext}
+            />
+          ) : null}
+          <button className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline" type="button" onClick={onCopy}>
+            <Copy size={12} />{t("common.copy")}
+          </button>
+          <button className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline disabled:opacity-40" type="button" disabled={disableRegenerate} onClick={onRegenerate}>
+            <RotateCcw size={12} />{t("chat.regenerate")}
+          </button>
+          <button className="whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline" type="button" onClick={onEdit}>
+            {t("common.edit")}
+          </button>
+          <button className="whitespace-nowrap font-medium text-rose-400 hover:text-rose-300 hover:underline" type="button" onClick={onDelete}>
+            {t("common.delete")}
+          </button>
         </div>
         <MessageBody content={message.content} htmlCss={htmlCss} />
         <TokenInfo usage={message.tokenUsage} formatter={tokenUsageFormatter} lorebooks={triggeredLorebooks} />
@@ -244,13 +260,13 @@ export function AssistantMessageBubble({
 }
 
 export function StreamingBubble({
-  characterName,
   characterAvatar,
+  showAvatar,
   htmlCss,
   content
 }: {
-  characterName: string;
   characterAvatar?: string | null;
+  showAvatar: boolean;
   htmlCss?: string;
   content: string;
 }) {
@@ -258,6 +274,7 @@ export function StreamingBubble({
   const bufferRef = useRef("");
   const displayedLengthRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const bubbleWidthClassName = getBubbleWidthClassName(showAvatar);
 
   useEffect(() => {
     if (content.length > displayedLengthRef.current) {
@@ -282,16 +299,9 @@ export function StreamingBubble({
   }, []);
 
   return (
-    <div className="flex items-start justify-start gap-3">
-      <Avatar avatar={characterAvatar} name={characterName} />
-      <article className="order-1 max-w-[calc(100%-3.25rem)] animate-fade-in rounded-2xl rounded-bl-sm border border-ember-500/20 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-md backdrop-blur-sm sm:max-w-[85%]">
-        <div className="mb-2 flex items-center gap-2 text-xs font-bold tracking-wide text-ember-400">
-          <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ember-400 opacity-75"></span>
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-ember-500"></span>
-          </span>
-          {characterName}
-        </div>
+    <div className={`flex items-start justify-start ${showAvatar ? "gap-3" : "gap-0"}`}>
+      <AvatarSlot avatar={characterAvatar} showAvatar={showAvatar} />
+      <article className={`order-1 ${bubbleWidthClassName} animate-fade-in rounded-2xl rounded-bl-sm border border-ember-500/20 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-md backdrop-blur-sm`}>
         {displayedContent ? (
           <MessageBody content={displayedContent} htmlCss={htmlCss} />
         ) : (

@@ -63,6 +63,7 @@ settingsRouter.put(
       topP: body.topP,
       language: body.language,
       autoSummarizeUser: body.autoSummarizeUser,
+      showMessageAvatars: body.showMessageAvatars,
       userProfileSummary: body.userProfileSummary,
       userProfileUpdatedAt:
         typeof body.userProfileSummary === "string" ? new Date() : undefined,

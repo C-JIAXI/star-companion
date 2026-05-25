@@ -54,7 +54,7 @@ const sectionFromLocation = () => {
 };
 
 export function App() {
-  const { activeSection, setActiveSection, setLanguage } = useAppStore();
+  const { activeSection, setActiveSection, setLanguage, setShowMessageAvatars } = useAppStore();
   const { t } = useI18n();
   const active = sectionMeta[activeSection];
 
@@ -79,11 +79,14 @@ export function App() {
     document.documentElement.lang = useAppStore.getState().language;
     void api.settings
       .get()
-      .then((settings) => setLanguage(settings.language))
+      .then((settings) => {
+        setLanguage(settings.language);
+        setShowMessageAvatars(settings.showMessageAvatars);
+      })
       .catch(() => {
         document.documentElement.lang = useAppStore.getState().language;
       });
-  }, [setLanguage]);
+  }, [setLanguage, setShowMessageAvatars]);
 
   const navigate = (section: AppSection) => {
     setActiveSection(section);

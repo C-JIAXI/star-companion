@@ -70,6 +70,7 @@ export type SettingsInput = {
   language: AppLanguage;
   models: ModelPreset[];
   autoSummarizeUser?: boolean;
+  showMessageAvatars?: boolean;
   userProfileSummary?: string;
 };
 

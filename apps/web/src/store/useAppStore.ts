@@ -17,17 +17,21 @@ const getInitialLanguage = (): AppLanguage => {
 interface AppState {
   activeSection: AppSection;
   language: AppLanguage;
+  showMessageAvatars: boolean;
   setActiveSection: (section: AppSection) => void;
   setLanguage: (language: AppLanguage) => void;
+  setShowMessageAvatars: (showMessageAvatars: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
   activeSection: "chat",
   language: getInitialLanguage(),
+  showMessageAvatars: true,
   setActiveSection: (activeSection) => set({ activeSection }),
   setLanguage: (language) => {
     window.localStorage.setItem("app-language", language);
     document.documentElement.lang = language;
     set({ language });
-  }
+  },
+  setShowMessageAvatars: (showMessageAvatars) => set({ showMessageAvatars })
 }));

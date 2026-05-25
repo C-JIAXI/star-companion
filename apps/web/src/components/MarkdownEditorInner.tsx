@@ -72,7 +72,7 @@ export default function MarkdownEditorInner({
         onStatistics={(nextStats) => setStats({ length: nextStats.length, lineCount: nextStats.lineCount })}
         commands={commandSet.getCommands()}
         extraCommands={extraCommands}
-        preview="live"
+        preview="edit"
         height={height}
         visibleDragbar={false}
         hideToolbar={false}

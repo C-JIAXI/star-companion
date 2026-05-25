@@ -1,4 +1,6 @@
 import {
+  ChevronLeft,
+  ChevronRight,
   Check,
   MessageSquarePlus,
   RefreshCw,
@@ -14,6 +16,7 @@ import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { generateId } from "../lib/uuid";
 import { useWebSocket } from "../lib/useWebSocket";
+import { useAppStore } from "../store/useAppStore";
 import type {
   CharacterDTO,
   ChatDTO,
@@ -22,6 +25,8 @@ import type {
   GenerationServerMessage,
   MessageDTO,
   ModelPreset,
+  PublicUserSettingsDTO,
+  SettingsInput,
   TokenUsageDTO
 } from "../types";
 import { Badge, Button, ConfirmDialog, EmptyState, ErrorNotice, Field, Panel, SuccessNotice, TextArea, TextInput } from "../components/ui";
@@ -32,8 +37,11 @@ import {
   UserMessageBubble
 } from "../components/messages";
 
+const MESSAGES_PER_PAGE = 30;
+
 export function ChatPage() {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
+  const showMessageAvatars = useAppStore((state) => state.showMessageAvatars);
   const [mobilePane, setMobilePane] = useState<"chats" | "messages" | "create">("messages");
   const [characters, setCharacters] = useState<CharacterDTO[]>([]);
   const [chats, setChats] = useState<ChatDTO[]>([]);
@@ -66,6 +74,10 @@ export function ChatPage() {
 
   const [settingsModels, setSettingsModels] = useState<ModelPreset[]>([]);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
+  const [runtimeSettings, setRuntimeSettings] = useState<Pick<
+    PublicUserSettingsDTO,
+    "activeProvider" | "apiBaseUrl" | "model" | "temperature" | "maxTokens" | "topP" | "language"
+  > | null>(null);
   const [autoSummarizeUser, setAutoSummarizeUser] = useState(true);
   const [editingPersona, setEditingPersona] = useState(false);
   const [editingPersonaDraft, setEditingPersonaDraft] = useState("");
@@ -73,10 +85,16 @@ export function ChatPage() {
   const [editingProfileDraft, setEditingProfileDraft] = useState("");
   const [pendingDeleteChat, setPendingDeleteChat] = useState<ChatDTO | null>(null);
   const [pendingDeleteMessage, setPendingDeleteMessage] = useState<MessageDTO | null>(null);
+  const [messagePage, setMessagePage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const streamingBufferRef = useRef("");
+  const messageViewportRef = useRef<HTMLDivElement | null>(null);
+  const paginationStateRef = useRef<{ chatId: string | null; totalPages: number }>({
+    chatId: null,
+    totalPages: 1
+  });
 
   const upsertMessage = (message: MessageDTO) => {
     setActiveChat((current) => {
@@ -96,6 +114,18 @@ export function ChatPage() {
         messages: [...current.messages, message]
       };
     });
+  };
+
+  const applyChatUpdate = (updated: ChatDTO) => {
+    setChats((current) => current.map((chat) => (chat.id === updated.id ? updated : chat)));
+    setActiveChat((current) =>
+      current && current.id === updated.id
+        ? {
+            ...current,
+            ...updated
+          }
+        : current
+    );
   };
 
   const onMessageHandlersRef = useRef<{
@@ -250,6 +280,51 @@ export function ChatPage() {
     return trimmed ? trimmed.slice(0, 2) : t("common.unknown").slice(0, 2);
   };
 
+  const totalMessagePages = useMemo(() => {
+    const totalMessages = activeChat?.messages.length ?? 0;
+    return Math.max(1, Math.ceil(totalMessages / MESSAGES_PER_PAGE));
+  }, [activeChat?.messages.length]);
+
+  const safeMessagePage = Math.min(messagePage, totalMessagePages);
+
+  const pagedMessages = useMemo(() => {
+    if (!activeChat) {
+      return [];
+    }
+
+    const startIndex = (safeMessagePage - 1) * MESSAGES_PER_PAGE;
+    return activeChat.messages.slice(startIndex, startIndex + MESSAGES_PER_PAGE);
+  }, [activeChat, safeMessagePage]);
+
+  const pageRange = useMemo(() => {
+    const totalMessages = activeChat?.messages.length ?? 0;
+
+    if (totalMessages === 0) {
+      return { start: 0, end: 0, total: 0 };
+    }
+
+    const start = (safeMessagePage - 1) * MESSAGES_PER_PAGE + 1;
+    const end = Math.min(start + pagedMessages.length - 1, totalMessages);
+    return { start, end, total: totalMessages };
+  }, [activeChat?.messages.length, pagedMessages.length, safeMessagePage]);
+
+  const paginationCopy =
+    language === "zh-CN"
+      ? {
+          previous: "上一页",
+          next: "下一页",
+          newest: "最新页",
+          page: `第 ${safeMessagePage} / ${totalMessagePages} 页`,
+          range: `显示 ${pageRange.start}-${pageRange.end} / ${pageRange.total}`
+        }
+      : {
+          previous: "Previous",
+          next: "Next",
+          newest: "Newest",
+          page: `Page ${safeMessagePage} / ${totalMessagePages}`,
+          range: `Showing ${pageRange.start}-${pageRange.end} of ${pageRange.total}`
+        };
+
   const loadBase = async () => {
     const [characterData, chatData, settings] = await Promise.all([
       api.characters.list(),
@@ -259,7 +334,17 @@ export function ChatPage() {
     setCharacters(characterData);
     setChats(chatData);
     setSettingsModels(settings.models ?? []);
+    setRuntimeSettings({
+      activeProvider: settings.activeProvider,
+      apiBaseUrl: settings.apiBaseUrl,
+      model: settings.model,
+      temperature: settings.temperature,
+      maxTokens: settings.maxTokens,
+      topP: settings.topP,
+      language: settings.language
+    });
     setAutoSummarizeUser(settings.autoSummarizeUser);
+    useAppStore.getState().setShowMessageAvatars(settings.showMessageAvatars);
     if (settings.models?.length) {
       setActiveModelId(settings.models[0].id);
     }
@@ -289,6 +374,48 @@ export function ChatPage() {
       setError(caught instanceof Error ? caught.message : t("chat.failedLoadChat"))
     );
   }, [selectedChatId, t]);
+
+  useEffect(() => {
+    const chatId = activeChat?.id ?? null;
+    const totalPages = Math.max(1, Math.ceil((activeChat?.messages.length ?? 0) / MESSAGES_PER_PAGE));
+    const previous = paginationStateRef.current;
+
+    setMessagePage((current) => {
+      if (!chatId) {
+        return 1;
+      }
+
+      if (previous.chatId !== chatId) {
+        return totalPages;
+      }
+
+      if (current > totalPages) {
+        return totalPages;
+      }
+
+      if (current === previous.totalPages && totalPages > previous.totalPages) {
+        return totalPages;
+      }
+
+      return current;
+    });
+
+    paginationStateRef.current = { chatId, totalPages };
+  }, [activeChat?.id, activeChat?.messages.length]);
+
+  useEffect(() => {
+    const viewport = messageViewportRef.current;
+    if (!viewport) {
+      return;
+    }
+
+    if (safeMessagePage >= totalMessagePages) {
+      viewport.scrollTop = viewport.scrollHeight;
+      return;
+    }
+
+    viewport.scrollTop = 0;
+  }, [activeChat?.id, safeMessagePage, totalMessagePages]);
 
   useEffect(
     () => () => {
@@ -345,6 +472,15 @@ export function ChatPage() {
         void api.settings.get().then((settings) => {
           const models = settings.models ?? [];
           setSettingsModels(models);
+          setRuntimeSettings({
+            activeProvider: settings.activeProvider,
+            apiBaseUrl: settings.apiBaseUrl,
+            model: settings.model,
+            temperature: settings.temperature,
+            maxTokens: settings.maxTokens,
+            topP: settings.topP,
+            language: settings.language
+          });
           setAutoSummarizeUser(settings.autoSummarizeUser);
           if (models.length > 0) {
             const active = models.find(
@@ -354,6 +490,7 @@ export function ChatPage() {
           } else {
             setActiveModelId(null);
           }
+          useAppStore.getState().setShowMessageAvatars(settings.showMessageAvatars);
         });
       }
       return !current;
@@ -385,8 +522,8 @@ export function ChatPage() {
     setError(null);
     setStatus(null);
     try {
-      await api.chats.update(activeChat.id, { userPersona: "" });
-      setActiveChat({ ...activeChat, userPersona: "" });
+      const updated = await api.chats.update(activeChat.id, { userPersona: "" });
+      applyChatUpdate(updated);
       setEditingPersona(false);
       setStatus(t("chat.userPersonaCleared"));
     } catch (caught) {
@@ -406,8 +543,8 @@ export function ChatPage() {
     setStatus(null);
     try {
       const userPersona = editingPersonaDraft.trim();
-      await api.chats.update(activeChat.id, { userPersona });
-      setActiveChat({ ...activeChat, userPersona });
+      const updated = await api.chats.update(activeChat.id, { userPersona });
+      applyChatUpdate(updated);
       setEditingPersona(false);
       setStatus(t("chat.userPersonaSaved"));
     } catch (caught) {
@@ -426,8 +563,8 @@ export function ChatPage() {
     setError(null);
     setStatus(null);
     try {
-      await api.chats.update(activeChat.id, { userProfileSummary: "" });
-      setActiveChat({ ...activeChat, userProfileSummary: "", userProfileUpdatedAt: null });
+      const updated = await api.chats.update(activeChat.id, { userProfileSummary: "" });
+      applyChatUpdate(updated);
       setEditingProfile(false);
       setStatus(t("chat.userProfileCleared"));
     } catch (caught) {
@@ -447,10 +584,10 @@ export function ChatPage() {
     setStatus(null);
     try {
       const summary = editingProfileDraft.trim();
-      await api.chats.update(activeChat.id, {
+      const updated = await api.chats.update(activeChat.id, {
         userProfileSummary: summary
       });
-      setActiveChat({ ...activeChat, userProfileSummary: summary, userProfileUpdatedAt: new Date().toISOString() });
+      applyChatUpdate(updated);
       setEditingProfile(false);
       setStatus(t("chat.userProfileSaved"));
     } catch (caught) {
@@ -526,6 +663,62 @@ export function ChatPage() {
       setMemorySettingsOpen(false);
       setStatus(t("chat.chatSettingsSaved"));
     } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdateMemory"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const switchModel = async (model: ModelPreset) => {
+    if (!runtimeSettings) {
+      return;
+    }
+
+    const previousModelId = activeModelId;
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    setActiveModelId(model.id);
+    setMemorySettingsOpen(false);
+
+    const payload: SettingsInput = {
+      activeProvider: model.provider,
+      apiBaseUrl: model.apiBaseUrl,
+      model: model.model,
+      temperature: runtimeSettings.temperature,
+      maxTokens: runtimeSettings.maxTokens,
+      topP: runtimeSettings.topP,
+      language: runtimeSettings.language,
+      models: settingsModels
+    };
+
+    if (model.key?.trim()) {
+      payload.apiKey = model.key.trim();
+    }
+
+    try {
+      const updated = await api.settings.update(payload);
+      setSettingsModels(updated.models ?? []);
+      setRuntimeSettings({
+        activeProvider: updated.activeProvider,
+        apiBaseUrl: updated.apiBaseUrl,
+        model: updated.model,
+        temperature: updated.temperature,
+        maxTokens: updated.maxTokens,
+        topP: updated.topP,
+        language: updated.language
+      });
+      useAppStore.getState().setShowMessageAvatars(updated.showMessageAvatars);
+      const matchedModel = (updated.models ?? []).find(
+        (item) =>
+          item.provider === updated.activeProvider &&
+          item.apiBaseUrl === updated.apiBaseUrl &&
+          item.model === updated.model
+      );
+      setActiveModelId(matchedModel?.id ?? model.id);
+      setStatus(t("chat.modelSwitched", { label: model.label || model.model }));
+    } catch (caught) {
+      setActiveModelId(previousModelId);
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdateMemory"));
     } finally {
       setLoading(false);
@@ -721,7 +914,13 @@ export function ChatPage() {
       ))}
     </div>
     <div className="grid min-w-0 gap-8 xl:h-[calc(100vh-112px)] xl:min-h-0 xl:grid-cols-[300px_minmax(0,1fr)_300px] 2xl:grid-cols-[340px_minmax(0,1fr)_320px]">
-      <div className={mobilePane === "chats" ? "block xl:h-full" : "hidden xl:block xl:h-full"}>
+      <div
+        className={
+          mobilePane === "chats"
+            ? "block min-w-0 xl:h-full xl:min-h-0"
+            : "hidden min-w-0 xl:block xl:h-full xl:min-h-0"
+        }
+      >
       <Panel
         title={t("chat.chats")}
         action={
@@ -777,8 +976,15 @@ export function ChatPage() {
       </Panel>
       </div>
 
-      <div className={mobilePane === "messages" ? "block xl:h-full" : "hidden xl:block xl:h-full"}>
+      <div
+        className={
+          mobilePane === "messages"
+            ? "block min-w-0 xl:h-full xl:min-h-0"
+            : "hidden min-w-0 xl:block xl:h-full xl:min-h-0"
+        }
+      >
       <Panel
+        className="flex min-h-0 flex-col"
         title={activeChat?.title ?? t("chat.messageStream")}
         action={
           activeChat ? (
@@ -810,24 +1016,10 @@ export function ChatPage() {
                                 ? "bg-ember-500/15 text-ember-200 ring-1 ring-ember-500/30"
                                 : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
                             }`}
+                            disabled={loading}
                             key={model.id}
                             type="button"
-                            onClick={() => {
-                              setActiveModelId(model.id);
-                              setMemorySettingsOpen(false);
-                              void api.settings.update({
-                                activeProvider: model.provider,
-                                apiBaseUrl: model.apiBaseUrl,
-                                model: model.model,
-                                apiKey: model.key ?? "",
-                                temperature: 0.8,
-                                maxTokens: 800,
-                                topP: 1,
-                                language: "zh-CN",
-                                models: settingsModels
-                              });
-                              setStatus(t("chat.modelSwitched", { label: model.label || model.model }));
-                            }}
+                            onClick={() => void switchModel(model)}
                           >
                             <Sparkles
                               size={14}
@@ -1031,25 +1223,60 @@ export function ChatPage() {
         {!activeChat ? (
           <EmptyState>{t("chat.selectOrCreate")}</EmptyState>
         ) : (
-          <div className="flex min-h-[calc(100vh-260px)] flex-col xl:h-[calc(100%-40px)] xl:min-h-0">
+          <div className="flex min-h-0 flex-1 flex-col">
             <div className="mb-5 flex shrink-0 flex-wrap items-center gap-2 border-b border-white/5 pb-5">
               {activeChat.characterIds.map((id) => (
                 <Badge key={id}>{characterMap.get(id)?.name ?? t("common.unknown")}</Badge>
               ))}
             </div>
 
-            <div className="custom-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto rounded-2xl border border-white/5 bg-ink-950/30 p-5">
+            <div
+              ref={messageViewportRef}
+              data-testid="chat-message-viewport"
+              className="custom-scrollbar min-h-[320px] h-[min(62dvh,42rem)] overflow-y-auto overscroll-contain scroll-smooth rounded-2xl border border-white/5 bg-ink-950/30 p-5 space-y-7 xl:h-0 xl:min-h-0 xl:flex-1"
+            >
+              {activeChat.messages.length > MESSAGES_PER_PAGE ? (
+                <div
+                  data-testid="chat-message-pagination"
+                  className="sticky top-0 z-10 -mx-5 -mt-5 mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-white/5 bg-ink-900/90 px-5 pb-3 pt-5 backdrop-blur-md"
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-slate-200">{paginationCopy.page}</p>
+                    <p className="mt-1 text-[11px] text-slate-500">{paginationCopy.range}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      className="!min-h-[32px] !px-3 text-xs"
+                      data-testid="chat-page-prev"
+                      disabled={safeMessagePage <= 1}
+                      variant="secondary"
+                      onClick={() => setMessagePage((current) => Math.max(1, current - 1))}
+                    >
+                      <ChevronLeft size={14} />
+                      {paginationCopy.previous}
+                    </Button>
+                    <Button
+                      className="!min-h-[32px] !px-3 text-xs"
+                      data-testid="chat-page-next"
+                      disabled={safeMessagePage >= totalMessagePages}
+                      variant="secondary"
+                      onClick={() => setMessagePage((current) => Math.min(totalMessagePages, current + 1))}
+                    >
+                      {safeMessagePage >= totalMessagePages ? paginationCopy.newest : paginationCopy.next}
+                      <ChevronRight size={14} />
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
               {activeChat.messages.length === 0 ? (
                 <div className="h-full flex items-center justify-center">
                   <EmptyState>{t("chat.noMessages")}</EmptyState>
                 </div>
               ) : (
-                activeChat.messages.map((message) => {
+                pagedMessages.map((message) => {
                   const isUser = message.role === "user";
                   const isSystem = message.role === "system";
                   const character = message.characterId ? characterMap.get(message.characterId) : undefined;
-                  const senderName = character?.name ?? (isUser ? "You" : isSystem ? "" : message.role);
-
                   if (isSystem) {
                     return <SystemNotification key={message.id} content={message.content} />;
                   }
@@ -1059,7 +1286,7 @@ export function ChatPage() {
                       <UserMessageBubble
                         key={message.id}
                         message={message}
-                        senderName={senderName}
+                        showAvatar={showMessageAvatars}
                         onCopy={() => void copyMessage(message)}
                         onEdit={() => startEditingMessage(message)}
                         onDelete={() => setPendingDeleteMessage(message)}
@@ -1071,8 +1298,8 @@ export function ChatPage() {
                     <AssistantMessageBubble
                       key={message.id}
                       message={message}
-                      senderName={senderName}
                       avatar={character?.avatar}
+                      showAvatar={showMessageAvatars}
                       htmlCss={character?.htmlCss}
                       tokenUsageFormatter={formatTokenUsage}
                       triggeredLorebooks={getTriggeredLorebooks(message)}
@@ -1087,17 +1314,13 @@ export function ChatPage() {
                   );
                 })
               )}
-              {activeRequestId && streamingCharacterId ? (
+              {activeRequestId && streamingCharacterId && safeMessagePage >= totalMessagePages ? (
                 <StreamingBubble
                   key="streaming"
-                  characterName={
-                    streamingCharacterId
-                      ? characterMap.get(streamingCharacterId)?.name ?? t("common.unknown")
-                      : t("chat.streaming")
-                  }
                   characterAvatar={
                     streamingCharacterId ? characterMap.get(streamingCharacterId)?.avatar : null
                   }
+                  showAvatar={showMessageAvatars}
                   htmlCss={
                     streamingCharacterId ? characterMap.get(streamingCharacterId)?.htmlCss : undefined
                   }
@@ -1129,7 +1352,13 @@ export function ChatPage() {
       </Panel>
       </div>
 
-      <div className={mobilePane === "create" ? "block xl:h-full" : "hidden xl:block xl:h-full"}>
+      <div
+        className={
+          mobilePane === "create"
+            ? "block min-w-0 xl:h-full xl:min-h-0"
+            : "hidden min-w-0 xl:block xl:h-full xl:min-h-0"
+        }
+      >
       <Panel
         title={t("chat.createChat")}
         action={<MessageSquarePlus size={16} className="text-slate-400" />}

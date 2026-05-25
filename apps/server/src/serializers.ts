@@ -186,6 +186,7 @@ export const serializeSettings = (settings: UserSettings) => ({
   models: toModelPresets(settings.models),
   userProfileSummary: settings.userProfileSummary,
   autoSummarizeUser: settings.autoSummarizeUser,
+  showMessageAvatars: settings.showMessageAvatars,
   userProfileUpdatedAt: settings.userProfileUpdatedAt?.toISOString() ?? null,
   createdAt: toIso(settings.createdAt),
   updatedAt: toIso(settings.updatedAt)
