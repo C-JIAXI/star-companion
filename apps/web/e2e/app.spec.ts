@@ -14,6 +14,10 @@ type E2EChat = {
   title: string;
 };
 
+type E2EChatDetails = E2EChat & {
+  userPersona: string;
+};
+
 type E2EModelPreset = {
   id: string;
   label: string;
@@ -428,6 +432,85 @@ test("chat model switch preserves stored key and runtime settings when preset ha
     expect(latestSettingsPut.value?.maxTokens).toBe(1200);
     expect(latestSettingsPut.value?.topP).toBe(0.9);
     expect(latestSettingsPut.value).not.toHaveProperty("apiKey");
+  } finally {
+    await request.delete(`/api/chats/${chat.id}`);
+    await request.delete(`/api/characters/${character.id}`);
+  }
+});
+
+test("chat custom config saves prefix prompt and suffix from memory settings", async ({
+  page,
+  request
+}) => {
+  const suffix = Date.now();
+  const characterName = `Custom Config Character ${suffix}`;
+  const chatTitle = `Custom Config Chat ${suffix}`;
+  const customConfig = {
+    prefix: "Treat the next prompt as a session-specific preface.",
+    prompt: "The user is a field analyst who keeps private notes.",
+    suffix: "Prefer crisp answers and preserve the established dynamic."
+  };
+
+  const characterResponse = await request.post("/api/characters", {
+    data: {
+      name: characterName,
+      prefix: "Stay concise.",
+      prompt: "A temporary character for custom config coverage.",
+      suffix: "Reply directly."
+    }
+  });
+  expect(characterResponse.ok()).toBeTruthy();
+  const character = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data;
+  if (!character) {
+    throw new Error("Character creation did not return data");
+  }
+
+  const chatResponse = await request.post("/api/chats", {
+    data: {
+      title: chatTitle,
+      mode: "single",
+      characterIds: [character.id]
+    }
+  });
+  expect(chatResponse.ok()).toBeTruthy();
+  const chat = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data;
+  if (!chat) {
+    throw new Error("Chat creation did not return data");
+  }
+
+  try {
+    await page.goto("/");
+    await page.getByRole("button", { name: chatTitle }).click();
+    await page.locator("button[aria-expanded]").click();
+
+    const settingsPopover = page.locator("div.custom-scrollbar.absolute.right-0.top-10");
+    const customConfigSection = settingsPopover.locator("div.border-t").nth(0);
+    await customConfigSection.getByRole("button").first().click();
+
+    await customConfigSection.locator("textarea").nth(0).fill(customConfig.prefix);
+    await customConfigSection.locator("textarea").nth(1).fill(customConfig.prompt);
+    await customConfigSection.locator("textarea").nth(2).fill(customConfig.suffix);
+    await customConfigSection.getByRole("button").first().click();
+
+    await expect(page.getByRole("status")).toBeVisible();
+    await expect(customConfigSection.getByText(customConfig.prefix)).toBeVisible();
+    await expect(customConfigSection.getByText(customConfig.prompt)).toBeVisible();
+    await expect(customConfigSection.getByText(customConfig.suffix)).toBeVisible();
+
+    const storedChatResponse = await request.get(`/api/chats/${chat.id}`);
+    expect(storedChatResponse.ok()).toBeTruthy();
+    const storedChat = ((await storedChatResponse.json()) as ApiDataResponse<E2EChatDetails>).data;
+    expect(storedChat?.userPersona).toContain('"type":"user-custom-config"');
+    expect(storedChat?.userPersona).toContain(customConfig.prefix);
+    expect(storedChat?.userPersona).toContain(customConfig.prompt);
+    expect(storedChat?.userPersona).toContain(customConfig.suffix);
+
+    await page.reload();
+    await page.getByRole("button", { name: chatTitle }).click();
+    await page.locator("button[aria-expanded]").click();
+    await expect(customConfigSection.getByText(customConfig.prefix)).toBeVisible();
+    await expect(customConfigSection.getByText(customConfig.prompt)).toBeVisible();
+    await expect(customConfigSection.getByText(customConfig.suffix)).toBeVisible();
   } finally {
     await request.delete(`/api/chats/${chat.id}`);
     await request.delete(`/api/characters/${character.id}`);

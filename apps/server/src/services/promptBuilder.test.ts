@@ -3,6 +3,7 @@ import { after, before, describe, it } from "node:test";
 import { prisma } from "../db.js";
 import { buildPromptContext } from "./promptBuilder.js";
 import { createCharacterExportCard, importCharacterCard } from "./characterCards.js";
+import { serializeUserCustomConfig } from "./userCustomConfig.js";
 
 const ids = {
   characterId: "",
@@ -126,7 +127,11 @@ describe("buildPromptContext", () => {
         mode: "single",
         characterIds: [character.id],
         memoryTurns: 4,
-        userPersona: "The user is roleplaying as a cautious investigator who values truth over comfort.",
+        userPersona: serializeUserCustomConfig({
+          prefix: "The user is roleplaying as a cautious investigator.",
+          prompt: "They value truth over comfort.",
+          suffix: "Keep the relationship tense but cooperative."
+        }),
         userProfileSummary: "User prefers concise technical summaries."
       }
     });
@@ -216,7 +221,13 @@ describe("buildPromptContext", () => {
     const promptText = context.messages.map((message) => message.content).join("\n\n");
 
     assert.match(promptText, /User prefers concise technical summaries/);
-    assert.match(promptText, /The user is roleplaying as a cautious investigator who values truth over comfort\./);
+    assert.match(promptText, /The user is roleplaying as a cautious investigator\./);
+    assert.match(promptText, /They value truth over comfort\./);
+    assert.match(promptText, /Keep the relationship tense but cooperative\./);
+    assert.match(
+      promptText,
+      /The user is roleplaying as a cautious investigator\.[\s\S]*They value truth over comfort\.[\s\S]*Keep the relationship tense but cooperative\./
+    );
     assert.match(promptText, /Stay grounded\./);
     assert.match(promptText, /A character used by prompt builder tests\./);
     assert.match(promptText, /Reply briefly\./);
@@ -246,6 +257,28 @@ describe("buildPromptContext", () => {
       context.messages.map((message) => message.content).join("\n\n"),
       /User-triggered lore content/
     );
+  });
+
+  it("treats legacy free-form user persona text as the middle custom prompt segment", async () => {
+    const legacyChat = await prisma.chat.create({
+      data: {
+        title: "Legacy User Persona Chat",
+        mode: "single",
+        characterIds: [ids.characterId],
+        memoryTurns: 4,
+        userPersona: "Legacy user persona note.",
+        userProfileSummary: ""
+      }
+    });
+
+    try {
+      const context = await buildPromptContext({ chatId: legacyChat.id });
+      const promptText = context.messages.map((message) => message.content).join("\n\n");
+
+      assert.match(promptText, /Legacy user persona note\./);
+    } finally {
+      await prisma.chat.delete({ where: { id: legacyChat.id } }).catch(() => {});
+    }
   });
 
   it("uses the private chat character when a stale target character is provided", async () => {

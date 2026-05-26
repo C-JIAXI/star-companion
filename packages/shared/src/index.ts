@@ -108,6 +108,95 @@ export interface PaginatedCharactersDTO {
   totalPages: number;
 }
 
+export interface UserCustomConfigDTO {
+  prefix: string;
+  prompt: string;
+  suffix: string;
+}
+
+type UserCustomConfigEnvelope = UserCustomConfigDTO & {
+  type: "user-custom-config";
+  version: 1;
+};
+
+const isUserCustomConfigEnvelope = (value: unknown): value is UserCustomConfigEnvelope => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const envelope = value as Record<string, unknown>;
+  return (
+    envelope.type === "user-custom-config" &&
+    envelope.version === 1 &&
+    typeof envelope.prefix === "string" &&
+    typeof envelope.prompt === "string" &&
+    typeof envelope.suffix === "string"
+  );
+};
+
+export const emptyUserCustomConfig = (): UserCustomConfigDTO => ({
+  prefix: "",
+  prompt: "",
+  suffix: ""
+});
+
+export const normalizeUserCustomConfig = (
+  value?: Partial<UserCustomConfigDTO> | null
+): UserCustomConfigDTO => ({
+  prefix: value?.prefix ?? "",
+  prompt: value?.prompt ?? "",
+  suffix: value?.suffix ?? ""
+});
+
+export const parseUserCustomConfig = (value?: string | null): UserCustomConfigDTO => {
+  const raw = value ?? "";
+
+  if (!raw.trim()) {
+    return emptyUserCustomConfig();
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (isUserCustomConfigEnvelope(parsed)) {
+      return normalizeUserCustomConfig(parsed);
+    }
+  } catch {
+    // Legacy free-form userPersona text falls through to prompt body.
+  }
+
+  return {
+    prefix: "",
+    prompt: raw,
+    suffix: ""
+  };
+};
+
+export const hasUserCustomConfigContent = (value?: Partial<UserCustomConfigDTO> | null) => {
+  const normalized = normalizeUserCustomConfig(value);
+  return Boolean(
+    normalized.prefix.trim() || normalized.prompt.trim() || normalized.suffix.trim()
+  );
+};
+
+export const serializeUserCustomConfig = (value?: Partial<UserCustomConfigDTO> | null) => {
+  const normalized = normalizeUserCustomConfig(value);
+
+  if (!hasUserCustomConfigContent(normalized)) {
+    return "";
+  }
+
+  return JSON.stringify({
+    type: "user-custom-config",
+    version: 1,
+    ...normalized
+  } satisfies UserCustomConfigEnvelope);
+};
+
+export const getUserCustomConfigSegments = (value?: string | null) => {
+  const config = parseUserCustomConfig(value);
+  return [config.prefix.trim(), config.prompt.trim(), config.suffix.trim()].filter(Boolean);
+};
+
 export interface ChatDTO {
   id: string;
   title: string;

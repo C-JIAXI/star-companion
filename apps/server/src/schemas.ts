@@ -153,7 +153,7 @@ export const chatCreateSchema = z.object({
   mode: z.enum(["single"]).default("single"),
   characterIds: stringArraySchema,
   memoryTurns: z.number().int().min(1).max(50).default(12),
-  userPersona: z.string().max(4000).default(""),
+  userPersona: z.string().max(12000).default(""),
   userProfileSummary: z.string().default("")
 });
 
@@ -163,7 +163,7 @@ export const chatUpdateSchema = z
     mode: z.enum(["single"]).optional(),
     characterIds: z.array(z.string().trim().min(1)).optional(),
     memoryTurns: z.number().int().min(1).max(50).optional(),
-    userPersona: z.string().max(4000).optional(),
+    userPersona: z.string().max(12000).optional(),
     userProfileSummary: z.string().optional()
   })
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");

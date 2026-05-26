@@ -2,6 +2,7 @@ import type { Character, Message, Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import type { ChatCompletionMessage } from "./completions.js";
 import { resolveCharacterPromptFields } from "./characterCards.js";
+import { getUserCustomConfigSegments } from "./userCustomConfig.js";
 
 type PromptInput = {
   chatId: string;
@@ -224,10 +225,11 @@ export const buildPromptContext = async ({
     character?.name ?? ""
   );
   const lorePrompt = buildLoreSystemPrompt(matchedLoreEntries);
+  const userCustomConfigSegments = getUserCustomConfigSegments(chat?.userPersona);
 
   const systemMessages: ChatCompletionMessage[] = [
     buildCharacterSystemPrompt(character),
-    chat?.userPersona.trim() ?? "",
+    ...userCustomConfigSegments,
     chat?.userProfileSummary.trim() ?? "",
     lorePrompt
   ]

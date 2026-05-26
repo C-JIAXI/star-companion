@@ -12,6 +12,13 @@ import {
   Trash2,
   X
 } from "lucide-react";
+import {
+  emptyUserCustomConfig,
+  hasUserCustomConfigContent,
+  parseUserCustomConfig,
+  serializeUserCustomConfig,
+  type UserCustomConfigDTO
+} from "@local-roleplay/shared";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
@@ -95,7 +102,9 @@ export function ChatPage() {
   > | null>(null);
   const [autoSummarizeUser, setAutoSummarizeUser] = useState(true);
   const [editingPersona, setEditingPersona] = useState(false);
-  const [editingPersonaDraft, setEditingPersonaDraft] = useState("");
+  const [editingPersonaDraft, setEditingPersonaDraft] = useState<UserCustomConfigDTO>(
+    () => emptyUserCustomConfig()
+  );
   const [editingProfile, setEditingProfile] = useState(false);
   const [editingProfileDraft, setEditingProfileDraft] = useState("");
   const [pendingDeleteChat, setPendingDeleteChat] = useState<ChatDTO | null>(null);
@@ -349,6 +358,12 @@ export function ChatPage() {
       ? t("characters.noSearchResults")
       : `${createCharacterRange.start}-${createCharacterRange.end} / ${createCharacterPagination.total}`;
 
+  const activeUserConfig = useMemo(
+    () => parseUserCustomConfig(activeChat?.userPersona),
+    [activeChat?.userPersona]
+  );
+  const hasActiveUserConfig = hasUserCustomConfigContent(activeUserConfig);
+
   const paginationCopy =
     language === "zh-CN"
       ? {
@@ -577,7 +592,7 @@ export function ChatPage() {
   const handleMemorySettingsPointerDownCapture = (event: React.PointerEvent<HTMLDivElement>) => {
     if (editingPersona && personaEditorRef.current && !personaEditorRef.current.contains(event.target as Node)) {
       setEditingPersona(false);
-      setEditingPersonaDraft("");
+      setEditingPersonaDraft(emptyUserCustomConfig());
     }
 
     if (!editingProfile || !profileEditorRef.current) {
@@ -590,7 +605,7 @@ export function ChatPage() {
     }
   };
 
-  const clearUserPersona = async () => {
+  const clearUserConfig = async () => {
     if (!activeChat) {
       return;
     }
@@ -602,15 +617,16 @@ export function ChatPage() {
       const updated = await api.chats.update(activeChat.id, { userPersona: "" });
       applyChatUpdate(updated);
       setEditingPersona(false);
-      setStatus(t("chat.userPersonaCleared"));
+      setEditingPersonaDraft(emptyUserCustomConfig());
+      setStatus(t("chat.userConfigCleared"));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t("chat.failedUpdateUserPersona"));
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdateUserConfig"));
     } finally {
       setLoading(false);
     }
   };
 
-  const saveUserPersona = async () => {
+  const saveUserConfig = async () => {
     if (!activeChat) {
       return;
     }
@@ -619,13 +635,13 @@ export function ChatPage() {
     setError(null);
     setStatus(null);
     try {
-      const userPersona = editingPersonaDraft.trim();
+      const userPersona = serializeUserCustomConfig(editingPersonaDraft);
       const updated = await api.chats.update(activeChat.id, { userPersona });
       applyChatUpdate(updated);
       setEditingPersona(false);
-      setStatus(t("chat.userPersonaSaved"));
+      setStatus(t("chat.userConfigSaved"));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t("chat.failedUpdateUserPersona"));
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdateUserConfig"));
     } finally {
       setLoading(false);
     }
@@ -674,14 +690,14 @@ export function ChatPage() {
     }
   };
 
-  const startEditingPersona = () => {
-    setEditingPersonaDraft(activeChat?.userPersona ?? "");
+  const startEditingUserConfig = () => {
+    setEditingPersonaDraft(parseUserCustomConfig(activeChat?.userPersona));
     setEditingPersona(true);
   };
 
-  const cancelEditingPersona = () => {
+  const cancelEditingUserConfig = () => {
     setEditingPersona(false);
-    setEditingPersonaDraft("");
+    setEditingPersonaDraft(emptyUserCustomConfig());
   };
 
   const startEditingProfile = () => {
@@ -692,6 +708,13 @@ export function ChatPage() {
   const cancelEditingProfile = () => {
     setEditingProfile(false);
     setEditingProfileDraft("");
+  };
+
+  const updateUserConfigDraft = (field: keyof UserCustomConfigDTO, value: string) => {
+    setEditingPersonaDraft((current) => ({
+      ...current,
+      [field]: value
+    }));
   };
 
   const updateAutoSummarizeUser = async (enabled: boolean) => {
@@ -1135,24 +1158,49 @@ export function ChatPage() {
                     <div className="border-t border-white/10 pt-3">
                       <div className="mb-2">
                         <p className="text-sm font-semibold text-slate-100">
-                          {t("chat.userPersonaTitle")}
+                          {t("chat.userConfigTitle")}
                         </p>
                         <p className="mt-1 text-xs leading-5 text-slate-400">
-                          {t("chat.userPersonaHelp")}
+                          {t("chat.userConfigHelp")}
                         </p>
                       </div>
                       {editingPersona ? (
-                        <div ref={personaEditorRef} className="space-y-2">
-                          <textarea
-                            className="min-h-[100px] w-full min-w-0 resize-none rounded-lg border border-white/10 bg-ink-950/50 px-3 py-2.5 text-xs leading-5 text-slate-100 outline-none transition-all placeholder:text-slate-500 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50"
-                            value={editingPersonaDraft}
-                            onChange={(event) => setEditingPersonaDraft(event.target.value)}
-                          />
+                        <div ref={personaEditorRef} className="space-y-3">
+                          <Field label={t("chat.userConfigPrefix")}>
+                            <TextArea
+                              className="!h-24 min-h-[96px] text-xs leading-5"
+                              placeholder={t("chat.userConfigPrefixHelp")}
+                              value={editingPersonaDraft.prefix}
+                              onChange={(event) =>
+                                updateUserConfigDraft("prefix", event.target.value)
+                              }
+                            />
+                          </Field>
+                          <Field label={t("chat.userConfigPrompt")}>
+                            <TextArea
+                              className="!h-28 min-h-[112px] text-xs leading-5"
+                              placeholder={t("chat.userConfigPromptHelp")}
+                              value={editingPersonaDraft.prompt}
+                              onChange={(event) =>
+                                updateUserConfigDraft("prompt", event.target.value)
+                              }
+                            />
+                          </Field>
+                          <Field label={t("chat.userConfigSuffix")}>
+                            <TextArea
+                              className="!h-24 min-h-[96px] text-xs leading-5"
+                              placeholder={t("chat.userConfigSuffixHelp")}
+                              value={editingPersonaDraft.suffix}
+                              onChange={(event) =>
+                                updateUserConfigDraft("suffix", event.target.value)
+                              }
+                            />
+                          </Field>
                           <div className="flex gap-2">
                             <Button
                               className="flex-1 !min-h-[32px] text-xs"
                               disabled={loading}
-                              onClick={() => void saveUserPersona()}
+                              onClick={() => void saveUserConfig()}
                             >
                               {t("common.save")}
                             </Button>
@@ -1160,7 +1208,7 @@ export function ChatPage() {
                               className="!min-h-[32px] px-3 text-xs"
                               disabled={loading}
                               variant="ghost"
-                              onClick={cancelEditingPersona}
+                              onClick={cancelEditingUserConfig}
                             >
                               {t("common.cancel")}
                             </Button>
@@ -1169,12 +1217,35 @@ export function ChatPage() {
                       ) : (
                         <>
                           <div className="rounded-lg border border-white/5 bg-ink-950/55 px-3 py-2 text-xs leading-5 text-slate-400">
-                            {activeChat?.userPersona?.trim() ? (
-                              <p className="custom-scrollbar max-h-28 overflow-y-auto whitespace-pre-wrap pr-1">
-                                {activeChat.userPersona}
-                              </p>
+                            {hasActiveUserConfig ? (
+                              <div className="custom-scrollbar max-h-52 space-y-3 overflow-y-auto pr-1">
+                                {activeUserConfig.prefix.trim() ? (
+                                  <div>
+                                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                      {t("chat.userConfigPrefix")}
+                                    </p>
+                                    <p className="whitespace-pre-wrap">{activeUserConfig.prefix}</p>
+                                  </div>
+                                ) : null}
+                                {activeUserConfig.prompt.trim() ? (
+                                  <div>
+                                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                      {t("chat.userConfigPrompt")}
+                                    </p>
+                                    <p className="whitespace-pre-wrap">{activeUserConfig.prompt}</p>
+                                  </div>
+                                ) : null}
+                                {activeUserConfig.suffix.trim() ? (
+                                  <div>
+                                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                      {t("chat.userConfigSuffix")}
+                                    </p>
+                                    <p className="whitespace-pre-wrap">{activeUserConfig.suffix}</p>
+                                  </div>
+                                ) : null}
+                              </div>
                             ) : (
-                              <p>{t("chat.userPersonaEmpty")}</p>
+                              <p>{t("chat.userConfigEmpty")}</p>
                             )}
                           </div>
                           <div className="mt-2 flex gap-2">
@@ -1182,18 +1253,18 @@ export function ChatPage() {
                               className="flex-1 !min-h-[32px] text-xs"
                               disabled={loading}
                               variant="secondary"
-                              onClick={startEditingPersona}
+                              onClick={startEditingUserConfig}
                             >
-                              {t("chat.editUserPersona")}
+                              {t("chat.editUserConfig")}
                             </Button>
-                            {activeChat?.userPersona?.trim() ? (
+                            {hasActiveUserConfig ? (
                               <Button
                                 className="!min-h-[32px] px-3 text-xs"
                                 disabled={loading}
                                 variant="danger"
-                                onClick={() => void clearUserPersona()}
+                                onClick={() => void clearUserConfig()}
                               >
-                                {t("chat.clearUserPersona")}
+                                {t("chat.clearUserConfig")}
                               </Button>
                             ) : null}
                           </div>
