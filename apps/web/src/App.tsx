@@ -132,9 +132,11 @@ export function App() {
         </aside>
 
         <main className="min-w-0 flex-1 overflow-x-hidden">
-          <header className="sticky top-0 z-10 border-b border-white/5 bg-ink-950/80 px-4 py-4 backdrop-blur-md lg:px-6">
-            <h2 className="text-xl font-bold tracking-tight text-slate-100">{t(active.titleKey)}</h2>
-            <p className="mt-1 text-sm text-slate-400">{t(active.subtitleKey)}</p>
+          <header className="sticky top-0 z-10 bg-ink-950/80 px-4 pt-4 backdrop-blur-md lg:px-6">
+            <div className="rounded-xl border border-white/5 bg-ink-900/80 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-sm">
+              <h2 className="text-xl font-bold tracking-tight text-slate-100">{t(active.titleKey)}</h2>
+              <p className="mt-1 text-sm leading-5 text-slate-400">{t(active.subtitleKey)}</p>
+            </div>
           </header>
           <div className="animate-fade-in p-4 lg:p-6">
             {activeSection === "chat" ? <ChatPage /> : null}
