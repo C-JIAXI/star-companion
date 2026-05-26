@@ -1,0 +1,675 @@
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+  scryptSync,
+  timingSafeEqual
+} from "node:crypto";
+import type { Character, Prisma } from "@prisma/client";
+import { HttpError } from "../lib/http.js";
+
+type LoreTriggerMode = "user" | "assistant" | "both";
+
+export type CharacterLoreEntryRecord = {
+  id: string;
+  keys: string[];
+  content: string;
+  priority: number;
+  triggerMode: LoreTriggerMode;
+  alwaysActive: boolean;
+  enabled: boolean;
+};
+
+export type CharacterPromptFields = {
+  prefix: string;
+  prompt: string;
+  suffix: string;
+  htmlCss: string;
+  loreEntries: CharacterLoreEntryRecord[];
+};
+
+export type ResolvedCharacterRecord = CharacterPromptFields & {
+  name: string;
+  avatar: string | null;
+  visibility: "public" | "private";
+  canViewPrompt: boolean;
+};
+
+type PasswordAccessControl = {
+  version: 1;
+  salt: string;
+  verifier: string;
+};
+
+type PrivateCharacterAccess =
+  | {
+      type: "password";
+      accessControl: PasswordAccessControl;
+    }
+  | {
+      type: "legacy";
+      creatorFingerprint: string;
+    };
+
+export type CharacterExportCard =
+  | {
+      schemaVersion: 1;
+      format: "character-card";
+      visibility: "public";
+      exportedAt?: string;
+      character: {
+        name: string;
+        avatar?: string | null;
+        prefix: string;
+        prompt: string;
+        suffix: string;
+        htmlCss: string;
+        loreEntries: ImportedCharacterLoreEntryInput[];
+      };
+    }
+  | {
+      schemaVersion: 1;
+      format: "character-card";
+      visibility: "private";
+      exportedAt?: string;
+      character: {
+        name: string;
+        avatar?: string | null;
+      };
+      protectedPayload: {
+        version: 1;
+        algorithm: "aes-256-gcm";
+        salt: string;
+        iv: string;
+        tag: string;
+        ciphertext: string;
+        creatorFingerprint?: string;
+      };
+    };
+
+type ImportedCharacterLoreEntryInput = Omit<CharacterLoreEntryRecord, "id"> & { id?: string };
+
+type LegacyCharacterImportSource = {
+  name: string;
+  avatar?: string | null;
+  prefix?: string;
+  prompt?: string;
+  suffix?: string;
+  htmlCss?: string;
+  loreEntries?: ImportedCharacterLoreEntryInput[];
+  description?: string;
+  scenario?: string;
+  systemPrompt?: string;
+};
+
+export type CharacterImportSource = CharacterExportCard | LegacyCharacterImportSource;
+
+type EncryptedPromptPayload = {
+  version: 1;
+  accessControl?: PasswordAccessControl;
+  creatorFingerprint?: string;
+  prefix: string;
+  prompt: string;
+  suffix: string;
+  htmlCss: string;
+  loreEntries: CharacterLoreEntryRecord[];
+};
+
+type StoredPrivateCharacterRecord = {
+  __privateCharacter: {
+    version: 1;
+    algorithm: "aes-256-gcm";
+    iv: string;
+    tag: string;
+    ciphertext: string;
+    accessControl?: PasswordAccessControl;
+    creatorFingerprint?: string;
+  };
+};
+
+const EXPORT_KEY_MATERIAL = "local-roleplay-platform/private-character-export/v1";
+const STORE_KEY_MATERIAL = "local-roleplay-platform/private-character-store/v1";
+
+const toBase64Url = (value: Buffer) => value.toString("base64url");
+
+const fromBase64Url = (value: string) => Buffer.from(value, "base64url");
+
+const localCreatorFingerprint = () =>
+  createHash("sha256")
+    .update(process.env.API_KEY_ENCRYPTION_SECRET ?? "local-roleplay-development-secret")
+    .update(":private-character-owner:v1")
+    .digest("hex");
+
+const storeKey = () =>
+  createHash("sha256")
+    .update(process.env.API_KEY_ENCRYPTION_SECRET ?? "local-roleplay-development-secret")
+    .update(`:${STORE_KEY_MATERIAL}`)
+    .digest();
+
+const exportKey = (salt: string) => scryptSync(EXPORT_KEY_MATERIAL, salt, 32);
+
+const normalizeLoreTriggerMode = (value: unknown): LoreTriggerMode => {
+  if (value === "user" || value === "assistant") {
+    return value;
+  }
+
+  return "both";
+};
+
+const isPasswordAccessControl = (value: unknown): value is PasswordAccessControl => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const accessControl = value as Record<string, unknown>;
+  return (
+    accessControl.version === 1 &&
+    typeof accessControl.salt === "string" &&
+    typeof accessControl.verifier === "string"
+  );
+};
+
+const buildPasswordAccessControl = (password: string): PasswordAccessControl => {
+  const salt = toBase64Url(randomBytes(16));
+  return {
+    version: 1,
+    salt,
+    verifier: toBase64Url(scryptSync(password, salt, 32))
+  };
+};
+
+const verifyPasswordAccessControl = (password: string, accessControl: PasswordAccessControl) => {
+  const actual = scryptSync(password, accessControl.salt, 32);
+  const expected = fromBase64Url(accessControl.verifier);
+
+  if (actual.length !== expected.length) {
+    return false;
+  }
+
+  return timingSafeEqual(actual, expected);
+};
+
+export const toCharacterLoreEntries = (value: unknown): CharacterLoreEntryRecord[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item): CharacterLoreEntryRecord | null => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+
+      const entry = item as Record<string, unknown>;
+      const id = entry.id;
+      const keys = entry.keys;
+      const content = entry.content;
+      const priority = entry.priority;
+
+      if (
+        typeof id !== "string" ||
+        !Array.isArray(keys) ||
+        typeof content !== "string" ||
+        typeof priority !== "number"
+      ) {
+        return null;
+      }
+
+      return {
+        id,
+        keys: keys.filter((key): key is string => typeof key === "string"),
+        content,
+        priority,
+        triggerMode: normalizeLoreTriggerMode(entry.triggerMode),
+        alwaysActive: entry.alwaysActive === true,
+        enabled: entry.enabled !== false
+      };
+    })
+    .filter((entry): entry is CharacterLoreEntryRecord => entry !== null);
+};
+
+const encryptPayload = (payload: EncryptedPromptPayload, key: Buffer) => {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final()
+  ]);
+  const tag = cipher.getAuthTag();
+
+  return {
+    iv: toBase64Url(iv),
+    tag: toBase64Url(tag),
+    ciphertext: toBase64Url(ciphertext)
+  };
+};
+
+const decryptPayload = (encrypted: { iv: string; tag: string; ciphertext: string }, key: Buffer) => {
+  const decipher = createDecipheriv("aes-256-gcm", key, fromBase64Url(encrypted.iv));
+  decipher.setAuthTag(fromBase64Url(encrypted.tag));
+
+  return JSON.parse(
+    Buffer.concat([
+      decipher.update(fromBase64Url(encrypted.ciphertext)),
+      decipher.final()
+    ]).toString("utf8")
+  ) as EncryptedPromptPayload;
+};
+
+const isStoredPrivateCharacterRecord = (value: Prisma.JsonValue): value is StoredPrivateCharacterRecord => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const privateCharacter = candidate.__privateCharacter;
+  if (!privateCharacter || typeof privateCharacter !== "object" || Array.isArray(privateCharacter)) {
+    return false;
+  }
+
+  const envelope = privateCharacter as Record<string, unknown>;
+  return (
+    envelope.version === 1 &&
+    envelope.algorithm === "aes-256-gcm" &&
+    typeof envelope.iv === "string" &&
+    typeof envelope.tag === "string" &&
+    typeof envelope.ciphertext === "string" &&
+    (isPasswordAccessControl(envelope.accessControl) ||
+      typeof envelope.creatorFingerprint === "string")
+  );
+};
+
+const resolvePrivateCharacterAccess = (
+  payload: Pick<EncryptedPromptPayload, "accessControl" | "creatorFingerprint">,
+  envelope: Pick<StoredPrivateCharacterRecord["__privateCharacter"], "accessControl" | "creatorFingerprint">
+): PrivateCharacterAccess => {
+  if (isPasswordAccessControl(payload.accessControl)) {
+    if (
+      isPasswordAccessControl(envelope.accessControl) &&
+      (payload.accessControl.salt !== envelope.accessControl.salt ||
+        payload.accessControl.verifier !== envelope.accessControl.verifier)
+    ) {
+      throw new Error("Stored private character password verifier mismatch");
+    }
+
+    return {
+      type: "password",
+      accessControl: payload.accessControl
+    };
+  }
+
+  if (typeof payload.creatorFingerprint === "string") {
+    if (
+      typeof envelope.creatorFingerprint === "string" &&
+      payload.creatorFingerprint !== envelope.creatorFingerprint
+    ) {
+      throw new Error("Stored private character fingerprint mismatch");
+    }
+
+    return {
+      type: "legacy",
+      creatorFingerprint: payload.creatorFingerprint
+    };
+  }
+
+  if (isPasswordAccessControl(envelope.accessControl)) {
+    return {
+      type: "password",
+      accessControl: envelope.accessControl
+    };
+  }
+
+  if (typeof envelope.creatorFingerprint === "string") {
+    return {
+      type: "legacy",
+      creatorFingerprint: envelope.creatorFingerprint
+    };
+  }
+
+  throw new Error("Unsupported private character access control");
+};
+
+const toEncryptedPromptPayload = (
+  fields: CharacterPromptFields,
+  access: PrivateCharacterAccess
+): EncryptedPromptPayload => ({
+  version: 1,
+  ...(access.type === "password"
+    ? { accessControl: access.accessControl }
+    : { creatorFingerprint: access.creatorFingerprint }),
+  prefix: fields.prefix,
+  prompt: fields.prompt,
+  suffix: fields.suffix,
+  htmlCss: fields.htmlCss,
+  loreEntries: fields.loreEntries
+});
+
+const normalizePromptFields = (value: {
+  prefix?: string | null;
+  prompt?: string | null;
+  suffix?: string | null;
+  htmlCss?: string | null;
+  loreEntries?: unknown;
+}): CharacterPromptFields => ({
+  prefix: value.prefix ?? "",
+  prompt: value.prompt ?? "",
+  suffix: value.suffix ?? "",
+  htmlCss: value.htmlCss ?? "",
+  loreEntries: toCharacterLoreEntries(value.loreEntries)
+});
+
+const decryptStoredPromptFields = (record: StoredPrivateCharacterRecord): {
+  access: PrivateCharacterAccess;
+  fields: CharacterPromptFields;
+} => {
+  const payload = decryptPayload(record.__privateCharacter, storeKey());
+
+  return {
+    access: resolvePrivateCharacterAccess(payload, record.__privateCharacter),
+    fields: normalizePromptFields(payload)
+  };
+};
+
+const buildStoredPrivateCharacterJson = (
+  fields: CharacterPromptFields,
+  access: PrivateCharacterAccess
+): Prisma.InputJsonValue => {
+  const encrypted = encryptPayload(toEncryptedPromptPayload(fields, access), storeKey());
+
+  return {
+    __privateCharacter: {
+      version: 1,
+      algorithm: "aes-256-gcm",
+      ...encrypted,
+      ...(access.type === "password"
+        ? { accessControl: access.accessControl }
+        : { creatorFingerprint: access.creatorFingerprint })
+    }
+  } satisfies StoredPrivateCharacterRecord;
+};
+
+const canViewPrivateCharacter = (access: PrivateCharacterAccess, password?: string) => {
+  if (access.type === "legacy") {
+    return access.creatorFingerprint === localCreatorFingerprint();
+  }
+
+  return Boolean(password && verifyPasswordAccessControl(password, access.accessControl));
+};
+
+const assertPrivateCharacterPassword = (
+  access: PrivateCharacterAccess,
+  password: string | undefined,
+  options: {
+    missingMessage: string;
+    invalidMessage: string;
+    unsupportedMessage?: string;
+  }
+) => {
+  if (access.type === "legacy") {
+    if (access.creatorFingerprint === localCreatorFingerprint()) {
+      return;
+    }
+
+    throw new HttpError(403, options.unsupportedMessage ?? options.invalidMessage);
+  }
+
+  if (!password) {
+    throw new HttpError(400, options.missingMessage);
+  }
+
+  if (!verifyPasswordAccessControl(password, access.accessControl)) {
+    throw new HttpError(403, options.invalidMessage);
+  }
+};
+
+export const resolveCharacterRecord = (
+  character: Pick<Character, "name" | "avatar" | "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries">,
+  password?: string
+): ResolvedCharacterRecord => {
+  if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
+    return {
+      name: character.name,
+      avatar: character.avatar,
+      ...normalizePromptFields(character),
+      visibility: "public",
+      canViewPrompt: true
+    };
+  }
+
+  const { access, fields } = decryptStoredPromptFields(character.loreEntries);
+  const canViewPrompt = canViewPrivateCharacter(access, password);
+
+  return {
+    name: character.name,
+    avatar: character.avatar,
+    prefix: canViewPrompt ? fields.prefix : "",
+    prompt: canViewPrompt ? fields.prompt : "",
+    suffix: canViewPrompt ? fields.suffix : "",
+    htmlCss: canViewPrompt ? fields.htmlCss : "",
+    loreEntries: canViewPrompt ? fields.loreEntries : [],
+    visibility: "private",
+    canViewPrompt
+  };
+};
+
+export const resolveCharacterPromptFields = (
+  character: Pick<Character, "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries">
+): CharacterPromptFields => {
+  if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
+    return normalizePromptFields(character);
+  }
+
+  return decryptStoredPromptFields(character.loreEntries).fields;
+};
+
+export const createCharacterExportCard = (
+  character: Pick<Character, "name" | "avatar" | "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries">,
+  visibility: "public" | "private",
+  password?: string
+): CharacterExportCard => {
+  const promptFields = resolveCharacterPromptFields(character);
+  const existingPrivateRecord = isStoredPrivateCharacterRecord(character.loreEntries)
+    ? decryptStoredPromptFields(character.loreEntries)
+    : null;
+
+  if (visibility === "public") {
+    if (existingPrivateRecord && !canViewPrivateCharacter(existingPrivateRecord.access, password)) {
+      throw new HttpError(
+        403,
+        "Private character password is required to export this character publicly"
+      );
+    }
+
+    return {
+      schemaVersion: 1,
+      format: "character-card",
+      visibility: "public",
+      exportedAt: new Date().toISOString(),
+      character: {
+        name: character.name,
+        avatar: character.avatar,
+        ...promptFields
+      }
+    };
+  }
+
+  if (!password) {
+    throw new HttpError(400, "Private export password is required");
+  }
+
+  if (existingPrivateRecord) {
+    assertPrivateCharacterPassword(existingPrivateRecord.access, password, {
+      missingMessage: "Private export password is required",
+      invalidMessage: "Private character password is invalid",
+      unsupportedMessage:
+        "Only the original creator can re-export this legacy private character card"
+    });
+  }
+
+  const exportAccess: PrivateCharacterAccess = {
+    type: "password",
+    accessControl: buildPasswordAccessControl(password)
+  };
+  const salt = toBase64Url(randomBytes(16));
+  const encrypted = encryptPayload(toEncryptedPromptPayload(promptFields, exportAccess), exportKey(salt));
+
+  return {
+    schemaVersion: 1,
+    format: "character-card",
+    visibility: "private",
+    exportedAt: new Date().toISOString(),
+    character: {
+      name: character.name,
+      avatar: character.avatar
+    },
+    protectedPayload: {
+      version: 1,
+      algorithm: "aes-256-gcm",
+      salt,
+      ...encrypted
+    }
+  };
+};
+
+export const canExportCharacterPublicly = (
+  character: Pick<Character, "loreEntries">,
+  password?: string
+): boolean => {
+  if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
+    return true;
+  }
+
+  return canViewPrivateCharacter(decryptStoredPromptFields(character.loreEntries).access, password);
+};
+
+export const assertCharacterUnlockPassword = (
+  character: Pick<Character, "loreEntries">,
+  password: string
+) => {
+  if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
+    throw new HttpError(400, "Character is not private");
+  }
+
+  const { access } = decryptStoredPromptFields(character.loreEntries);
+  assertPrivateCharacterPassword(access, password, {
+    missingMessage: "Private character password is required",
+    invalidMessage: "Private character password is invalid",
+    unsupportedMessage:
+      "This legacy private character card does not support password unlocking"
+  });
+};
+
+export const importCharacterCard = (
+  source: CharacterImportSource
+): {
+  name: string;
+  avatar: string | null;
+  prefix: string;
+  prompt: string;
+  suffix: string;
+  htmlCss: string;
+  loreEntries: Prisma.InputJsonValue;
+} => {
+  if ("format" in source && source.format === "character-card") {
+    if (source.visibility === "public") {
+      return {
+        name: source.character.name,
+        avatar: source.character.avatar ?? null,
+        prefix: source.character.prefix,
+        prompt: source.character.prompt,
+        suffix: source.character.suffix,
+        htmlCss: source.character.htmlCss,
+        loreEntries: source.character.loreEntries
+      };
+    }
+
+    const decrypted = decryptPayload(source.protectedPayload, exportKey(source.protectedPayload.salt));
+    const access = resolvePrivateCharacterAccess(decrypted, {
+      accessControl: undefined,
+      creatorFingerprint: source.protectedPayload.creatorFingerprint
+    });
+    const fields = normalizePromptFields(decrypted);
+
+    return {
+      name: source.character.name,
+      avatar: source.character.avatar ?? null,
+      prefix: "",
+      prompt: "",
+      suffix: "",
+      htmlCss: "",
+      loreEntries: buildStoredPrivateCharacterJson(fields, access)
+    };
+  }
+
+  const legacy = source as LegacyCharacterImportSource;
+
+  return {
+    name: legacy.name,
+    avatar: legacy.avatar ?? null,
+    prefix: legacy.prefix ?? legacy.systemPrompt ?? "",
+    prompt: legacy.prompt ?? legacy.description ?? "",
+    suffix: legacy.suffix ?? legacy.scenario ?? "",
+    htmlCss: legacy.htmlCss ?? "",
+    loreEntries: legacy.loreEntries ?? []
+  };
+};
+
+export const buildCharacterUpdateData = (
+  character: Pick<Character, "name" | "avatar" | "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries">,
+  updates: {
+    name?: string;
+    avatar?: string | null;
+    prefix?: string;
+    prompt?: string;
+    suffix?: string;
+    htmlCss?: string;
+    loreEntries?: Prisma.InputJsonValue;
+  },
+  password?: string
+): Prisma.CharacterUpdateInput => {
+  if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
+    return {
+      ...updates,
+      loreEntries: updates.loreEntries
+    };
+  }
+
+  const { access, fields } = decryptStoredPromptFields(character.loreEntries);
+  const hasPrivateUpdates =
+    updates.prefix !== undefined ||
+    updates.prompt !== undefined ||
+    updates.suffix !== undefined ||
+    updates.htmlCss !== undefined ||
+    updates.loreEntries !== undefined;
+
+  if (hasPrivateUpdates) {
+    assertPrivateCharacterPassword(access, password, {
+      missingMessage: "Private character password is required to update prompt content",
+      invalidMessage: "Private character password is invalid",
+      unsupportedMessage:
+        "Only the original creator can update prompt content for this legacy private character card"
+    });
+  }
+
+  const nextFields: CharacterPromptFields = hasPrivateUpdates
+    ? {
+        prefix: updates.prefix ?? fields.prefix,
+        prompt: updates.prompt ?? fields.prompt,
+        suffix: updates.suffix ?? fields.suffix,
+        htmlCss: updates.htmlCss ?? fields.htmlCss,
+        loreEntries:
+          updates.loreEntries !== undefined ? toCharacterLoreEntries(updates.loreEntries) : fields.loreEntries
+      }
+    : fields;
+
+  return {
+    name: updates.name,
+    avatar: "avatar" in updates ? updates.avatar : undefined,
+    prefix: "",
+    prompt: "",
+    suffix: "",
+    htmlCss: "",
+    loreEntries: buildStoredPrivateCharacterJson(nextFields, access)
+  };
+};

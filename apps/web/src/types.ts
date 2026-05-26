@@ -1,6 +1,9 @@
 import type {
+  CharacterCardDTO,
   CharacterDTO,
+  CharacterExportMode,
   CharacterLoreEntryDTO,
+  CharacterVisibility,
   ChatDTO,
   ChatMode,
   ChatWithMessagesDTO,
@@ -42,6 +45,15 @@ export type CharacterInput = {
   loreEntries?: (Omit<CharacterLoreEntryDTO, "id"> & { id?: string })[];
 };
 
+export type CharacterCardImportInput =
+  | CharacterCardDTO
+  | (Partial<CharacterInput> & {
+      name: string;
+      description?: string;
+      scenario?: string;
+      systemPrompt?: string;
+    });
+
 export type ChatInput = {
   title: string;
   mode: ChatMode;
@@ -76,8 +88,11 @@ export type SettingsInput = {
 };
 
 export type {
+  CharacterCardDTO,
   CharacterDTO,
+  CharacterExportMode,
   CharacterLoreEntryDTO,
+  CharacterVisibility,
   ChatDTO,
   ChatMode,
   ChatWithMessagesDTO,

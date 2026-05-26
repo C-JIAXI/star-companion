@@ -2,13 +2,16 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { prisma } from "../db.js";
 import { buildPromptContext } from "./promptBuilder.js";
+import { createCharacterExportCard, importCharacterCard } from "./characterCards.js";
 
 const ids = {
   characterId: "",
   foreignCharacterId: "",
   chatId: "",
   loreCharacterId: "",
-  loreChatId: ""
+  loreChatId: "",
+  privateCharacterId: "",
+  privateChatId: ""
 };
 
 describe("buildPromptContext", () => {
@@ -99,6 +102,24 @@ describe("buildPromptContext", () => {
     });
     ids.loreCharacterId = loreCharacter.id;
 
+    const privateCharacterCard = createCharacterExportCard(
+      {
+        name: "Imported Private Character",
+        avatar: null,
+        prefix: "Hidden prefix instruction.",
+        prompt: "Hidden prompt instruction for imported private cards.",
+        suffix: "Hidden suffix instruction.",
+        htmlCss: ".private-card { color: #abc; }",
+        loreEntries: []
+      },
+      "private",
+      "open-sesame"
+    );
+    const privateCharacter = await prisma.character.create({
+      data: importCharacterCard(privateCharacterCard)
+    });
+    ids.privateCharacterId = privateCharacter.id;
+
     const chat = await prisma.chat.create({
       data: {
         title: "Prompt Test Chat",
@@ -120,6 +141,16 @@ describe("buildPromptContext", () => {
       }
     });
     ids.loreChatId = loreChat.id;
+
+    const privateChat = await prisma.chat.create({
+      data: {
+        title: "Imported Private Character Chat",
+        mode: "single",
+        characterIds: [privateCharacter.id],
+        memoryTurns: 4
+      }
+    });
+    ids.privateChatId = privateChat.id;
 
     await prisma.message.createMany({
       data: [
@@ -161,6 +192,9 @@ describe("buildPromptContext", () => {
     if (ids.loreChatId) {
       await prisma.chat.delete({ where: { id: ids.loreChatId } }).catch(() => {});
     }
+    if (ids.privateChatId) {
+      await prisma.chat.delete({ where: { id: ids.privateChatId } }).catch(() => {});
+    }
     if (ids.characterId) {
       await prisma.character.delete({ where: { id: ids.characterId } }).catch(() => {});
     }
@@ -169,6 +203,9 @@ describe("buildPromptContext", () => {
     }
     if (ids.loreCharacterId) {
       await prisma.character.delete({ where: { id: ids.loreCharacterId } }).catch(() => {});
+    }
+    if (ids.privateCharacterId) {
+      await prisma.character.delete({ where: { id: ids.privateCharacterId } }).catch(() => {});
     }
     await prisma.$disconnect();
   });
@@ -221,5 +258,15 @@ describe("buildPromptContext", () => {
     assert.match(promptText, /Stay grounded\./);
     assert.doesNotMatch(promptText, /Prompt Test Foreign Character/);
     assert.doesNotMatch(promptText, /A stale target that must not affect private chats/);
+  });
+
+  it("still builds prompts for imported private characters that hide prompt fields in the UI", async () => {
+    const context = await buildPromptContext({ chatId: ids.privateChatId });
+    const promptText = context.messages.map((message) => message.content).join("\n\n");
+
+    assert.match(promptText, /Hidden prefix instruction\./);
+    assert.match(promptText, /Hidden prompt instruction for imported private cards\./);
+    assert.match(promptText, /Hidden suffix instruction\./);
+    assert.match(promptText, /\.private-card \{ color: #abc; \}/);
   });
 });

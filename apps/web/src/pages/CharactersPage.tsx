@@ -1,11 +1,17 @@
-import { ChevronDown, ChevronLeft, ChevronRight, Copy, Download, FileUp, Plus, Save, Search, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronLeft, ChevronRight, Copy, Download, FileUp, Lock, Plus, Save, Search, Trash2, X } from "lucide-react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { MarkdownEditor } from "../components/MarkdownEditor";
 import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { downloadJson, readFileText } from "../lib/files";
-import type { CharacterDTO, CharacterInput, CharacterLoreEntryDTO } from "../types";
+import type {
+  CharacterCardImportInput,
+  CharacterDTO,
+  CharacterExportMode,
+  CharacterInput,
+  CharacterLoreEntryDTO
+} from "../types";
 import { Button, ConfirmDialog, EmptyState, ErrorNotice, Field, HelpLabel, Panel, SuccessNotice, TextArea, TextInput } from "../components/ui";
 
 const CHARACTER_PAGE_SIZE = 40;
@@ -24,6 +30,7 @@ const blankLoreEntry = (): CharacterLoreEntryDTO & { _localId: string; _collapse
 
 type LoreEntryForm = ReturnType<typeof blankLoreEntry>;
 type EditorSectionId = "prompt" | "html" | "lore";
+type PasswordDialogMode = "unlock" | "export-private" | "export-public";
 
 const HTML_PREVIEW_TEMPLATES = {
   card: `<article class="character-card">
@@ -70,6 +77,72 @@ const blankForm = {
 
 type CharacterForm = typeof blankForm;
 
+function PasswordDialog({
+  title,
+  description,
+  confirmLabel,
+  value,
+  loading,
+  onChange,
+  onCancel,
+  onConfirm
+}: {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  value: string;
+  loading: boolean;
+  onChange: (value: string) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    onConfirm();
+  };
+
+  return (
+    <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 p-3 backdrop-blur-sm sm:p-4">
+      <section
+        aria-labelledby="private-password-dialog-title"
+        className="animate-scale-in flex w-full max-w-md flex-col overflow-hidden rounded-2xl border border-white/10 bg-ink-900 shadow-2xl shadow-black/50"
+        role="dialog"
+      >
+        <form onSubmit={submit}>
+          <div className="space-y-4 p-5 sm:p-6">
+            <div>
+              <h3
+                className="text-lg font-semibold tracking-tight text-slate-100"
+                id="private-password-dialog-title"
+              >
+                {title}
+              </h3>
+              <p className="mt-2 text-sm leading-relaxed text-slate-300">{description}</p>
+            </div>
+            <Field label="密码">
+              <TextInput
+                autoFocus
+                type="password"
+                value={value}
+                placeholder="输入私密角色密码"
+                onChange={(event) => onChange(event.target.value)}
+              />
+            </Field>
+          </div>
+          <div className="flex flex-wrap justify-end gap-3 border-t border-white/10 px-5 py-4 sm:px-6">
+            <Button disabled={loading} type="button" variant="ghost" onClick={onCancel}>
+              取消
+            </Button>
+            <Button disabled={loading || !value} type="submit">
+              {confirmLabel}
+            </Button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 const toForm = (character: CharacterDTO): CharacterForm => ({
   name: character.name,
   avatar: character.avatar ?? "",
@@ -100,15 +173,6 @@ const toInput = (form: CharacterForm): CharacterInput => ({
   loreEntries: form.loreEntries.map(({ _localId, ...entry }) => entry)
 });
 
-type ImportedCharacter = Partial<CharacterInput> & {
-  description?: string;
-  scenario?: string;
-  systemPrompt?: string;
-  avatar?: string | null;
-  htmlCss?: string;
-  loreEntries?: CharacterLoreEntryDTO[];
-};
-
 const emptyCharacterPage = {
   items: [] as CharacterDTO[],
   total: 0,
@@ -130,11 +194,15 @@ export function CharactersPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [exportMode, setExportMode] = useState<CharacterExportMode>("public");
+  const [passwordDialogMode, setPasswordDialogMode] = useState<PasswordDialogMode | null>(null);
+  const [passwordValue, setPasswordValue] = useState("");
   const [activeEditorSection, setActiveEditorSection] = useState<EditorSectionId>("prompt");
   const [previewTemplateId, setPreviewTemplateId] = useState<HtmlPreviewTemplateId>(DEFAULT_HTML_PREVIEW_TEMPLATE);
   const [previewMarkup, setPreviewMarkup] = useState<string>(HTML_PREVIEW_TEMPLATES[DEFAULT_HTML_PREVIEW_TEMPLATE]);
   const creatingRef = useRef(false);
   const characterRequestRef = useRef(0);
+  const unlockedPasswordRef = useRef<Record<string, string>>({});
 
   const htmlPreviewTemplates = useMemo(
     () => [
@@ -155,6 +223,79 @@ export function CharactersPage() {
   );
 
   const selected = selectedCharacter;
+  const isLockedPrivateCharacter = selected?.visibility === "private" && !selected.canViewPrompt;
+
+  const privateCharacterCopy = useMemo(
+    () =>
+      language === "zh-CN"
+        ? {
+            exportPublic: "公开导出",
+            exportPrivate: "私密导出",
+            exportedPublic: "角色卡已公开导出。",
+            exportedPrivate: "角色卡已私密导出。",
+            imported: "角色卡导入完成。",
+            privateOwner: "私密角色卡",
+            privateLocked: "私密角色卡提示词已隐藏",
+            privateLockedHelp: "当前设备不是该私密角色卡的创建者。你可以继续聊天，但无法查看或公开导出提示词内容。",
+            privateSummary: "私密角色内容已隐藏",
+            privatePublicExportBlocked: "只有创建者才能将私密角色卡公开导出。"
+          }
+        : {
+            exportPublic: "Export Public",
+            exportPrivate: "Export Private",
+            exportedPublic: "Character card exported publicly.",
+            exportedPrivate: "Character card exported privately.",
+            imported: "Character card imported.",
+            privateOwner: "Private character card",
+            privateLocked: "Private prompt hidden",
+            privateLockedHelp:
+              "This device is not the creator of this private character card. Chat still works, but prompt content cannot be viewed or publicly exported.",
+            privateSummary: "Private prompt hidden",
+            privatePublicExportBlocked: "Only the creator can publicly export a private character card."
+          },
+    [language]
+  );
+
+  const privatePasswordCopy = useMemo(
+    () =>
+      language === "zh-CN"
+        ? {
+            lockedHelp: "你可以继续聊天，但提示词、HTML 和 lore 内容只有输入密码后才可查看。",
+            unlockAction: "输入密码查看",
+            unlockTitle: "解锁私密角色",
+            unlockDescription: "输入这张私密角色卡的密码后，才能查看或编辑提示词内容。",
+            unlockConfirm: "查看内容",
+            unlockSuccess: "私密角色内容已解锁。",
+            exportPublicBlocked: "私密角色卡公开导出前需要先验证密码。",
+            exportPrivateTitle: "私密导出密码",
+            exportPrivateDescription: "为这次私密导出设置密码。之后只有输入这个密码才能查看提示词内容。",
+            exportPublicTitle: "公开导出密码验证",
+            exportPublicDescription: "输入私密角色卡密码后，才能公开导出其提示词内容。",
+            exportPublicConfirm: "验证并导出",
+            exportPrivateConfirm: "加密并导出"
+          }
+        : {
+            lockedHelp:
+              "Chat still works, but prompt, HTML, and lore content stay hidden until the password is provided.",
+            unlockAction: "Unlock with Password",
+            unlockTitle: "Unlock Private Character",
+            unlockDescription:
+              "Enter the password for this private character card to reveal and edit its prompt content.",
+            unlockConfirm: "Reveal Content",
+            unlockSuccess: "Private character content unlocked.",
+            exportPublicBlocked:
+              "Private characters require password verification before public export.",
+            exportPrivateTitle: "Private Export Password",
+            exportPrivateDescription:
+              "Set the password for this private export. Prompt content can only be viewed again with the same password.",
+            exportPublicTitle: "Password Required for Public Export",
+            exportPublicDescription:
+              "Enter the private character password before exporting its prompt content publicly.",
+            exportPublicConfirm: "Verify and Export",
+            exportPrivateConfirm: "Encrypt and Export"
+          },
+    [language]
+  );
 
   const characterRange = useMemo(() => {
     if (pagination.total === 0) {
@@ -171,11 +312,29 @@ export function CharactersPage() {
       ? t("characters.noSearchResults")
       : `${characterRange.start}-${characterRange.end} / ${pagination.total}`;
 
-  const loadCharacters = async (nextPage = characterPage) => {
+  const resolveCharacterDetail = async (character: CharacterDTO) => {
+    const password = unlockedPasswordRef.current[character.id];
+    if (character.visibility !== "private" || character.canViewPrompt || !password) {
+      return character;
+    }
+
+    try {
+      return await api.characters.unlock(character.id, password);
+    } catch {
+      delete unlockedPasswordRef.current[character.id];
+      return character;
+    }
+  };
+
+  const loadCharacters = async (
+    nextPage = characterPage,
+    nextSearchQuery = searchQuery,
+    nextSelectedId = selectedId
+  ) => {
     const requestId = characterRequestRef.current + 1;
     characterRequestRef.current = requestId;
     const data = await api.characters.page({
-      q: searchQuery,
+      q: nextSearchQuery,
       page: nextPage,
       pageSize: CHARACTER_PAGE_SIZE
     });
@@ -192,20 +351,28 @@ export function CharactersPage() {
     setCharacters(data.items);
     setPagination(data);
 
-    const refreshedSelected = selectedId
-      ? data.items.find((character) => character.id === selectedId) ?? null
+    const refreshedSelected = nextSelectedId
+      ? data.items.find((character) => character.id === nextSelectedId) ?? null
       : null;
 
     if (refreshedSelected) {
-      setSelectedCharacter(refreshedSelected);
-      setForm(toForm(refreshedSelected));
+      const detail = await resolveCharacterDetail(refreshedSelected);
+      if (requestId !== characterRequestRef.current) {
+        return;
+      }
+      setSelectedCharacter(detail);
+      setForm(toForm(detail));
       return;
     }
 
-    if (!selectedId && !creatingRef.current && data.items[0]) {
+    if (!nextSelectedId && !creatingRef.current && data.items[0]) {
+      const detail = await resolveCharacterDetail(data.items[0]);
+      if (requestId !== characterRequestRef.current) {
+        return;
+      }
       setSelectedId(data.items[0].id);
-      setSelectedCharacter(data.items[0]);
-      setForm(toForm(data.items[0]));
+      setSelectedCharacter(detail);
+      setForm(toForm(detail));
     }
   };
 
@@ -227,10 +394,12 @@ export function CharactersPage() {
   const selectCharacter = (character: CharacterDTO) => {
     creatingRef.current = false;
     setSelectedId(character.id);
-    setSelectedCharacter(character);
-    setForm(toForm(character));
     setError(null);
     setStatus(null);
+    void resolveCharacterDetail(character).then((detail) => {
+      setSelectedCharacter(detail);
+      setForm(toForm(detail));
+    });
   };
 
   const resetForm = () => {
@@ -248,15 +417,24 @@ export function CharactersPage() {
     setStatus(null);
     try {
       const editingCharacter = creatingRef.current ? null : selected;
+      const accessPassword =
+        editingCharacter?.visibility === "private"
+          ? unlockedPasswordRef.current[editingCharacter.id]
+          : undefined;
       if (editingCharacter) {
-        await api.characters.update(editingCharacter.id, toInput(form));
+        const updated = await api.characters.update(editingCharacter.id, toInput(form), accessPassword);
+        setSelectedCharacter(updated);
+        setForm(toForm(updated));
+        await loadCharacters(characterPage, searchQuery, updated.id);
       } else {
-        await api.characters.create(toInput(form));
-      }
-      await loadCharacters();
-      if (!editingCharacter) {
+        const created = await api.characters.create(toInput(form));
         creatingRef.current = false;
-        setForm(blankForm);
+        setSearchQuery("");
+        setCharacterPage(1);
+        setSelectedId(created.id);
+        setSelectedCharacter(created);
+        setForm(toForm(created));
+        await loadCharacters(1, "", created.id);
       }
       setStatus(t("characters.saved"));
     } catch (caught) {
@@ -289,7 +467,7 @@ export function CharactersPage() {
   };
 
   const duplicateCharacter = async () => {
-    if (!selected) {
+    if (!selected || isLockedPrivateCharacter) {
       return;
     }
 
@@ -314,9 +492,40 @@ export function CharactersPage() {
     }
   };
 
-  const exportCharacter = () => {
-    if (selected) {
-      downloadJson(`${selected.name || "character"}.json`, selected);
+  const exportCharacter = async () => {
+    if (!selected) {
+      return;
+    }
+
+    if (exportMode === "private") {
+      setPasswordValue("");
+      setPasswordDialogMode("export-private");
+      return;
+    }
+
+    const exportPassword =
+      selected.visibility === "private" ? unlockedPasswordRef.current[selected.id] : undefined;
+    if (selected.visibility === "private" && !exportPassword) {
+      setPasswordValue("");
+      setPasswordDialogMode("export-public");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const card = await api.characters.export(selected.id, exportMode, exportPassword);
+      downloadJson(`${selected.name || "character"}-${exportMode}.json`, card);
+      setStatus(
+        exportMode === "public"
+          ? privateCharacterCopy.exportedPublic
+          : privateCharacterCopy.exportedPrivate
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("characters.failedSave"));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -329,20 +538,17 @@ export function CharactersPage() {
     setError(null);
     setStatus(null);
     try {
-      const parsed = JSON.parse(await readFileText(file)) as ImportedCharacter;
-      if (!parsed.name) {
-        throw new Error(t("characters.importMissingName"));
-      }
-      await api.characters.create({
-        name: parsed.name,
-        avatar: parsed.avatar ?? null,
-        prefix: parsed.prefix ?? parsed.systemPrompt ?? "",
-        prompt: parsed.prompt ?? parsed.description ?? "",
-        suffix: parsed.suffix ?? parsed.scenario ?? "",
-        htmlCss: parsed.htmlCss ?? "",
-        loreEntries: parsed.loreEntries ?? []
-      });
-      await loadCharacters();
+      const parsed = JSON.parse(await readFileText(file)) as CharacterCardImportInput;
+      const imported = await api.characters.import(parsed);
+      creatingRef.current = false;
+      delete unlockedPasswordRef.current[imported.id];
+      setSearchQuery("");
+      setCharacterPage(1);
+      setSelectedId(imported.id);
+      setSelectedCharacter(imported);
+      setForm(toForm(imported));
+      await loadCharacters(1, "", imported.id);
+      setStatus(privateCharacterCopy.imported);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("characters.failedImport"));
     } finally {
@@ -353,6 +559,75 @@ export function CharactersPage() {
   const applyPreviewTemplate = (templateId: HtmlPreviewTemplateId) => {
     setPreviewTemplateId(templateId);
     setPreviewMarkup(HTML_PREVIEW_TEMPLATES[templateId]);
+  };
+
+  const unlockSelectedCharacter = async (password: string) => {
+    if (!selected) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const unlocked = await api.characters.unlock(selected.id, password);
+      unlockedPasswordRef.current[selected.id] = password;
+      setSelectedCharacter(unlocked);
+      setForm(toForm(unlocked));
+      setStatus(privatePasswordCopy.unlockSuccess);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("characters.failedLoad"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submitPasswordDialog = async () => {
+    const password = passwordValue;
+    if (!selected || !passwordDialogMode || !password) {
+      return;
+    }
+
+    if (passwordDialogMode === "unlock") {
+      setPasswordDialogMode(null);
+      setPasswordValue("");
+      await unlockSelectedCharacter(password);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const card = await api.characters.export(
+        selected.id,
+        passwordDialogMode === "export-public" ? "public" : "private",
+        password
+      );
+      if (passwordDialogMode === "export-public") {
+        unlockedPasswordRef.current[selected.id] = password;
+        const unlocked = await api.characters.unlock(selected.id, password);
+        setSelectedCharacter(unlocked);
+        setForm(toForm(unlocked));
+      }
+      downloadJson(
+        `${selected.name || "character"}-${
+          passwordDialogMode === "export-public" ? "public" : "private"
+        }.json`,
+        card
+      );
+      setStatus(
+        passwordDialogMode === "export-public"
+          ? privateCharacterCopy.exportedPublic
+          : privateCharacterCopy.exportedPrivate
+      );
+      setPasswordDialogMode(null);
+      setPasswordValue("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("characters.failedSave"));
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -401,9 +676,23 @@ export function CharactersPage() {
                   <div className={`grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-ink-800 text-sm font-semibold transition-all duration-200 ${selectedId === character.id ? 'ring-2 ring-ember-500/50 ring-offset-2 ring-offset-ink-900' : 'group-hover:scale-105'}`}>
                     {character.avatar ? <img alt="" className="h-full w-full rounded-lg object-cover" src={character.avatar} /> : character.name.slice(0, 2)}
                   </div>
-                  <div className="min-w-0 pt-0.5">
-                    <p className={`truncate font-medium transition-colors ${selectedId === character.id ? 'text-ember-100' : 'text-slate-100 group-hover:text-white'}`}>{character.name}</p>
-                    <p className="mt-1 line-clamp-2 text-xs text-slate-400">{character.prompt || character.prefix || t("common.noDescription")}</p>
+                  <div className="min-w-0 flex-1 pt-0.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className={`min-w-0 flex-1 text-sm font-medium leading-5 transition-colors ${selectedId === character.id ? 'text-ember-100' : 'text-slate-100 group-hover:text-white'}`}>
+                        <span className="line-clamp-2 break-words">{character.name}</span>
+                      </p>
+                      {character.visibility === "private" ? (
+                        <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-amber-400/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-200">
+                          <Lock size={10} />
+                          {language === "zh-CN" ? "私密" : "Private"}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 line-clamp-2 text-xs text-slate-400">
+                      {character.visibility === "private" && !character.canViewPrompt
+                        ? privateCharacterCopy.privateSummary
+                        : character.prompt || character.prefix || t("common.noDescription")}
+                    </p>
                   </div>
                 </div>
               </button>
@@ -448,7 +737,30 @@ export function CharactersPage() {
               {t("common.import")}
               <input className="sr-only" type="file" accept="application/json" onChange={(event) => void importCharacter(event.target.files?.[0])} />
             </label>
-            <Button disabled={!selected} variant="ghost" onClick={exportCharacter} className="!min-h-[36px] !h-9 !px-3 text-xs">
+            <div className="inline-flex rounded-lg border border-white/5 bg-white/5 p-1">
+              {(["public", "private"] as CharacterExportMode[]).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                    exportMode === mode
+                      ? "bg-ember-500 text-ink-950"
+                      : "text-slate-300 hover:bg-white/10 hover:text-slate-100"
+                  }`}
+                  onClick={() => setExportMode(mode)}
+                >
+                  {mode === "public"
+                    ? privateCharacterCopy.exportPublic
+                    : privateCharacterCopy.exportPrivate}
+                </button>
+              ))}
+            </div>
+            <Button
+              disabled={!selected}
+              variant="ghost"
+              onClick={() => void exportCharacter()}
+              className="!min-h-[36px] !h-9 !px-3 text-xs"
+            >
               <Download size={14} />
               {t("common.export")}
             </Button>
@@ -458,6 +770,34 @@ export function CharactersPage() {
         <div className="space-y-8">
           <ErrorNotice message={error} />
           <SuccessNotice message={status} />
+          {selected?.visibility === "private" ? (
+            <div className="rounded-xl border border-amber-400/15 bg-amber-500/8 px-4 py-3 text-sm text-amber-100">
+              <div className="flex items-center gap-2 font-medium">
+                <Lock size={14} />
+                {selected.canViewPrompt
+                  ? privateCharacterCopy.privateOwner
+                  : privateCharacterCopy.privateLocked}
+              </div>
+              {!selected.canViewPrompt ? (
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <p className="text-xs leading-5 text-amber-100/80">
+                    {privatePasswordCopy.lockedHelp}
+                  </p>
+                  <Button
+                    className="!min-h-[32px] !px-3 text-xs"
+                    variant="secondary"
+                    onClick={() => {
+                      setPasswordValue("");
+                      setPasswordDialogMode("unlock");
+                    }}
+                  >
+                    <Lock size={12} />
+                    {privatePasswordCopy.unlockAction}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_148px]">
             <div className="grid gap-5">
               <Field label={t("common.name")}><TextInput value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
@@ -494,102 +834,113 @@ export function CharactersPage() {
           </div>
 
           {activeEditorSection === "prompt" ? (
-            <div className="space-y-7">
-              <Field
-                container="div"
-                label={<HelpLabel label={t("characters.prefix")} description={t("help.characterPrefix")} />}
-              >
-                <MarkdownEditor
-                  value={form.prefix}
-                  onChange={(nextValue) => setForm({ ...form, prefix: nextValue })}
-                  height={180}
-                />
-              </Field>
-              <Field
-                container="div"
-                label={<HelpLabel label={t("characters.prompt")} description={t("help.characterPrompt")} />}
-              >
-                <MarkdownEditor
-                  value={form.prompt}
-                  onChange={(nextValue) => setForm({ ...form, prompt: nextValue })}
-                  height={320}
-                />
-              </Field>
-              <Field
-                container="div"
-                label={<HelpLabel label={t("characters.suffix")} description={t("help.characterSuffix")} />}
-              >
-                <MarkdownEditor
-                  value={form.suffix}
-                  onChange={(nextValue) => setForm({ ...form, suffix: nextValue })}
-                  height={220}
-                />
-              </Field>
-            </div>
+            isLockedPrivateCharacter ? (
+              <EmptyState>{privatePasswordCopy.lockedHelp}</EmptyState>
+            ) : (
+              <div className="space-y-7">
+                <Field
+                  container="div"
+                  label={<HelpLabel label={t("characters.prefix")} description={t("help.characterPrefix")} />}
+                >
+                  <MarkdownEditor
+                    value={form.prefix}
+                    onChange={(nextValue) => setForm({ ...form, prefix: nextValue })}
+                    height={180}
+                  />
+                </Field>
+                <Field
+                  container="div"
+                  label={<HelpLabel label={t("characters.prompt")} description={t("help.characterPrompt")} />}
+                >
+                  <MarkdownEditor
+                    value={form.prompt}
+                    onChange={(nextValue) => setForm({ ...form, prompt: nextValue })}
+                    height={320}
+                  />
+                </Field>
+                <Field
+                  container="div"
+                  label={<HelpLabel label={t("characters.suffix")} description={t("help.characterSuffix")} />}
+                >
+                  <MarkdownEditor
+                    value={form.suffix}
+                    onChange={(nextValue) => setForm({ ...form, suffix: nextValue })}
+                    height={220}
+                  />
+                </Field>
+              </div>
+            )
           ) : null}
 
           {activeEditorSection === "html" ? (
-            <div className="space-y-5">
-              <Field label={<HelpLabel label={t("characters.htmlCss")} description={t("help.characterHtmlCss")} />}>
-                <TextArea value={form.htmlCss} onChange={(event) => setForm({ ...form, htmlCss: event.target.value })} className="!h-[170px] min-h-[170px] font-mono text-xs leading-6" />
-              </Field>
+            isLockedPrivateCharacter ? (
+              <EmptyState>{privatePasswordCopy.lockedHelp}</EmptyState>
+            ) : (
+              <div className="space-y-5">
+                <Field label={<HelpLabel label={t("characters.htmlCss")} description={t("help.characterHtmlCss")} />}>
+                  <TextArea value={form.htmlCss} onChange={(event) => setForm({ ...form, htmlCss: event.target.value })} className="!h-[170px] min-h-[170px] font-mono text-xs leading-6" />
+                </Field>
 
-              <div className="rounded-xl border border-white/5 bg-ink-950/30 p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="space-y-1">
-                    <h4 className="text-sm font-semibold text-slate-100">{t("characters.htmlPreview")}</h4>
-                    <p className="text-xs leading-5 text-slate-500">{t("characters.htmlPreviewHelp")}</p>
+                <div className="rounded-xl border border-white/5 bg-ink-950/30 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="space-y-1">
+                      <h4 className="text-sm font-semibold text-slate-100">{t("characters.htmlPreview")}</h4>
+                      <p className="text-xs leading-5 text-slate-500">{t("characters.htmlPreviewHelp")}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {htmlPreviewTemplates.map((template) => (
+                        <Button
+                          key={template.id}
+                          variant={previewTemplateId === template.id ? "secondary" : "ghost"}
+                          className="!h-8 !min-h-[32px] !px-3 text-xs"
+                          onClick={() => applyPreviewTemplate(template.id)}
+                        >
+                          {template.label}
+                        </Button>
+                      ))}
+                    </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {htmlPreviewTemplates.map((template) => (
-                      <Button
-                        key={template.id}
-                        variant={previewTemplateId === template.id ? "secondary" : "ghost"}
-                        className="!h-8 !min-h-[32px] !px-3 text-xs"
-                        onClick={() => applyPreviewTemplate(template.id)}
-                      >
-                        {template.label}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
 
-                <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                  <Field label={t("characters.htmlPreviewMarkup")}>
-                    <TextArea
-                      className="!h-[180px] min-h-[180px] font-mono text-xs leading-6"
-                      spellCheck={false}
-                      value={previewMarkup}
-                      onChange={(event) => setPreviewMarkup(event.target.value)}
-                    />
-                  </Field>
-                  <Field label={t("characters.htmlPreviewRendered")}>
-                    <div className="custom-scrollbar min-h-[180px] overflow-y-auto rounded-xl border border-white/5 bg-ink-950/60 p-4">
-                      <div className="rounded-2xl border border-white/5 bg-ink-900/70 p-4 shadow-inner shadow-black/20">
-                        <div className="flex items-start gap-3">
-                          <div className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-xl border border-white/10 bg-ink-800 text-sm font-semibold text-ember-100 shadow-black/20">
-                            {form.avatar ? (
-                              <img alt="" className="h-full w-full object-cover" src={form.avatar} />
-                            ) : (
-                              (form.name || t("common.unknown")).slice(0, 2)
-                            )}
-                          </div>
-                          <article className="min-w-0 flex-1 rounded-2xl rounded-bl-sm border border-white/5 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-sm backdrop-blur-sm">
-                            <div className="mb-3 text-xs font-bold tracking-wide text-ember-400">
-                              {form.name || t("common.unknown")}
+                  <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                    <Field label={t("characters.htmlPreviewMarkup")}>
+                      <TextArea
+                        className="!h-[180px] min-h-[180px] font-mono text-xs leading-6"
+                        spellCheck={false}
+                        value={previewMarkup}
+                        onChange={(event) => setPreviewMarkup(event.target.value)}
+                      />
+                    </Field>
+                    <Field label={t("characters.htmlPreviewRendered")}>
+                      <div className="custom-scrollbar min-h-[180px] overflow-y-auto rounded-xl border border-white/5 bg-ink-950/60 p-4">
+                        <div className="rounded-2xl border border-white/5 bg-ink-900/70 p-4 shadow-inner shadow-black/20">
+                          <div className="flex items-start gap-3">
+                            <div className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-xl border border-white/10 bg-ink-800 text-sm font-semibold text-ember-100 shadow-black/20">
+                              {form.avatar ? (
+                                <img alt="" className="h-full w-full object-cover" src={form.avatar} />
+                              ) : (
+                                (form.name || t("common.unknown")).slice(0, 2)
+                              )}
                             </div>
-                            <ScopedHtmlRenderer content={previewMarkup} htmlCss={form.htmlCss} />
-                          </article>
+                            <article className="min-w-0 flex-1 rounded-2xl rounded-bl-sm border border-white/5 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-sm backdrop-blur-sm">
+                              <div className="mb-3 text-xs font-bold tracking-wide text-ember-400">
+                                {form.name || t("common.unknown")}
+                              </div>
+                              <ScopedHtmlRenderer content={previewMarkup} htmlCss={form.htmlCss} />
+                            </article>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </Field>
+                    </Field>
+                  </div>
                 </div>
               </div>
-            </div>
+            )
           ) : null}
 
           {activeEditorSection === "lore" ? (
+          isLockedPrivateCharacter ? (
+            <EmptyState>{privatePasswordCopy.lockedHelp}</EmptyState>
+          ) : (
           <div className="border-t border-white/5 pt-5">
             <div className="mb-3 flex items-center justify-between">
               <p className="text-sm font-semibold text-slate-100">{t("characters.loreEntries")}</p>
@@ -779,10 +1130,11 @@ export function CharactersPage() {
               {t("characters.loreEntryAdd")}
             </Button>
           </div>
+          )
           ) : null}
 
           <div className="flex flex-wrap justify-end gap-3 pt-4 border-t border-white/5">
-            <Button disabled={loading || !selected} variant="secondary" onClick={() => void duplicateCharacter()}>
+            <Button disabled={loading || !selected || isLockedPrivateCharacter} variant="secondary" onClick={() => void duplicateCharacter()}>
               <Copy size={16} />
               {t("characters.duplicate")}
             </Button>
@@ -806,6 +1158,39 @@ export function CharactersPage() {
           title={t("common.delete")}
           onCancel={() => setDeleteConfirmOpen(false)}
           onConfirm={() => void deleteCharacter()}
+        />
+      ) : null}
+      {passwordDialogMode ? (
+        <PasswordDialog
+          confirmLabel={
+            passwordDialogMode === "unlock"
+              ? privatePasswordCopy.unlockConfirm
+              : passwordDialogMode === "export-public"
+                ? privatePasswordCopy.exportPublicConfirm
+                : privatePasswordCopy.exportPrivateConfirm
+          }
+          description={
+            passwordDialogMode === "unlock"
+              ? privatePasswordCopy.unlockDescription
+              : passwordDialogMode === "export-public"
+                ? privatePasswordCopy.exportPublicDescription
+                : privatePasswordCopy.exportPrivateDescription
+          }
+          loading={loading}
+          title={
+            passwordDialogMode === "unlock"
+              ? privatePasswordCopy.unlockTitle
+              : passwordDialogMode === "export-public"
+                ? privatePasswordCopy.exportPublicTitle
+                : privatePasswordCopy.exportPrivateTitle
+          }
+          value={passwordValue}
+          onCancel={() => {
+            setPasswordDialogMode(null);
+            setPasswordValue("");
+          }}
+          onChange={setPasswordValue}
+          onConfirm={() => void submitPasswordDialog()}
         />
       ) : null}
     </div>

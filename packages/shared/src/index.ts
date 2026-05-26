@@ -3,6 +3,7 @@ export const APP_NAME = "Local Roleplay Platform";
 export type ChatMode = "single";
 export type MessageRole = "user" | "assistant" | "system";
 export type AppLanguage = "zh-CN" | "en";
+export type CharacterVisibility = "public" | "private";
 
 export interface ModelPreset {
   id: string;
@@ -45,6 +46,16 @@ export interface CharacterLoreEntryDTO {
   enabled: boolean;
 }
 
+export interface CharacterCardContentDTO {
+  name: string;
+  avatar: string | null;
+  prefix: string;
+  prompt: string;
+  suffix: string;
+  htmlCss: string;
+  loreEntries: CharacterLoreEntryDTO[];
+}
+
 export interface CharacterDTO {
   id: string;
   name: string;
@@ -54,9 +65,40 @@ export interface CharacterDTO {
   suffix: string;
   htmlCss: string;
   loreEntries: CharacterLoreEntryDTO[];
+  visibility: CharacterVisibility;
+  canViewPrompt: boolean;
   createdAt: string;
   updatedAt: string;
 }
+
+export type CharacterExportMode = CharacterVisibility;
+
+export interface PublicCharacterCardDTO {
+  schemaVersion: 1;
+  format: "character-card";
+  visibility: "public";
+  exportedAt: string;
+  character: CharacterCardContentDTO;
+}
+
+export interface PrivateCharacterCardDTO {
+  schemaVersion: 1;
+  format: "character-card";
+  visibility: "private";
+  exportedAt: string;
+  character: Pick<CharacterCardContentDTO, "name" | "avatar">;
+  protectedPayload: {
+    version: 1;
+    algorithm: "aes-256-gcm";
+    salt: string;
+    iv: string;
+    tag: string;
+    ciphertext: string;
+    creatorFingerprint?: string;
+  };
+}
+
+export type CharacterCardDTO = PublicCharacterCardDTO | PrivateCharacterCardDTO;
 
 export interface PaginatedCharactersDTO {
   items: CharacterDTO[];

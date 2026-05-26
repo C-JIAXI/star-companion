@@ -51,7 +51,7 @@ export const listCharactersPage = async ({
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return {
-    items: characters.map(serializeCharacter),
+    items: characters.map((character) => serializeCharacter(character)),
     total,
     page,
     pageSize,

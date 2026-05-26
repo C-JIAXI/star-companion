@@ -47,9 +47,79 @@ export const characterCreateSchema = z.object({
   loreEntries: loreEntriesSchema
 });
 
-export const characterUpdateSchema = characterCreateSchema
-  .partial()
-  .refine((value) => Object.keys(value).length > 0, "At least one field is required");
+const characterUpdateFieldsSchema = characterCreateSchema.partial();
+
+export const characterUpdateSchema = characterUpdateFieldsSchema.refine(
+  (value) => Object.keys(value).length > 0,
+  "At least one field is required"
+);
+
+export const characterUpdateRequestSchema = characterUpdateFieldsSchema
+  .extend({
+    accessPassword: z.string().min(1).optional()
+  })
+  .refine(
+    (value) => Object.keys(value).some((key) => key !== "accessPassword"),
+    "At least one field is required"
+  );
+
+export const characterExportSchema = z.object({
+  visibility: z.enum(["public", "private"]).default("public"),
+  password: z.string().min(1).optional()
+});
+
+export const characterUnlockSchema = z.object({
+  password: z.string().min(1)
+});
+
+const legacyCharacterImportSchema = z.object({
+  name: z.string().trim().min(1),
+  avatar: z.string().trim().nullable().optional(),
+  prefix: z.string().optional(),
+  prompt: z.string().optional(),
+  suffix: z.string().optional(),
+  htmlCss: z.string().optional(),
+  loreEntries: loreEntriesSchema.optional(),
+  description: z.string().optional(),
+  scenario: z.string().optional(),
+  systemPrompt: z.string().optional()
+});
+
+const publicCharacterCardSchema = z.object({
+  schemaVersion: z.literal(1).default(1),
+  format: z.literal("character-card"),
+  visibility: z.literal("public"),
+  exportedAt: z.string().datetime().optional(),
+  character: characterCreateSchema.extend({
+    avatar: z.string().trim().nullable().optional()
+  })
+});
+
+const privateCharacterCardSchema = z.object({
+  schemaVersion: z.literal(1).default(1),
+  format: z.literal("character-card"),
+  visibility: z.literal("private"),
+  exportedAt: z.string().datetime().optional(),
+  character: z.object({
+    name: z.string().trim().min(1),
+    avatar: z.string().trim().nullable().optional()
+  }),
+  protectedPayload: z.object({
+    version: z.literal(1),
+    algorithm: z.literal("aes-256-gcm"),
+    salt: z.string().min(1),
+    iv: z.string().min(1),
+    tag: z.string().min(1),
+    ciphertext: z.string().min(1),
+    creatorFingerprint: z.string().min(1).optional()
+  })
+});
+
+export const characterImportSchema = z.union([
+  publicCharacterCardSchema,
+  privateCharacterCardSchema,
+  legacyCharacterImportSchema
+]);
 
 const toPositiveInt = (fallback: number) =>
   z

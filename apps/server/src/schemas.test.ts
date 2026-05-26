@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { parseBody } from "./lib/http.js";
-import { characterPageQuerySchema, chatUpdateSchema, settingsUpdateSchema } from "./schemas.js";
+import {
+  characterExportSchema,
+  characterImportSchema,
+  characterPageQuerySchema,
+  characterUnlockSchema,
+  chatUpdateSchema,
+  settingsUpdateSchema
+} from "./schemas.js";
 
 describe("chatUpdateSchema", () => {
   it("does not inject create-time defaults into partial chat updates", () => {
@@ -47,5 +54,71 @@ describe("characterPageQuerySchema", () => {
       page: 2,
       pageSize: 100
     });
+  });
+});
+
+describe("characterExportSchema", () => {
+  it("defaults export visibility to public and accepts optional passwords", () => {
+    assert.deepEqual(parseBody(characterExportSchema, {}), {
+      visibility: "public"
+    });
+
+    assert.deepEqual(
+      parseBody(characterExportSchema, {
+        visibility: "private",
+        password: "open-sesame"
+      }),
+      {
+        visibility: "private",
+        password: "open-sesame"
+      }
+    );
+  });
+});
+
+describe("characterUnlockSchema", () => {
+  it("requires a non-empty password", () => {
+    assert.deepEqual(parseBody(characterUnlockSchema, { password: "open-sesame" }), {
+      password: "open-sesame"
+    });
+  });
+});
+
+describe("characterImportSchema", () => {
+  it("accepts public and private character cards", () => {
+    const publicCard = parseBody(characterImportSchema, {
+      schemaVersion: 1,
+      format: "character-card",
+      visibility: "public",
+      character: {
+        name: "Public Card",
+        avatar: null,
+        prefix: "Prefix",
+        prompt: "Prompt",
+        suffix: "Suffix",
+        htmlCss: "",
+        loreEntries: []
+      }
+    });
+    const privateCard = parseBody(characterImportSchema, {
+      schemaVersion: 1,
+      format: "character-card",
+      visibility: "private",
+      character: {
+        name: "Private Card",
+        avatar: null
+      },
+      protectedPayload: {
+        version: 1,
+        algorithm: "aes-256-gcm",
+        salt: "salt",
+        iv: "iv",
+        tag: "tag",
+        ciphertext: "ciphertext"
+      }
+    });
+
+    assert.equal(publicCard.visibility, "public");
+    assert.equal(privateCard.visibility, "private");
   });
 });

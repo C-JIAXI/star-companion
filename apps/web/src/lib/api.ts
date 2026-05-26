@@ -2,7 +2,10 @@ import type {
   ApiEnvelope,
   BackupDTO,
   BackupImportSummaryDTO,
+  CharacterCardDTO,
+  CharacterCardImportInput,
   CharacterDTO,
+  CharacterExportMode,
   CharacterInput,
   ChatDTO,
   ChatInput,
@@ -60,8 +63,23 @@ export const api = {
     },
     create: (input: CharacterInput) =>
       request<CharacterDTO>("/api/characters", { method: "POST", body: input }),
-    update: (id: string, input: Partial<CharacterInput>) =>
-      request<CharacterDTO>(`/api/characters/${id}`, { method: "PUT", body: input }),
+    import: (input: CharacterCardImportInput) =>
+      request<CharacterDTO>("/api/characters/import", { method: "POST", body: input }),
+    export: (id: string, visibility: CharacterExportMode, password?: string) =>
+      request<CharacterCardDTO>(`/api/characters/${id}/export`, {
+        method: "POST",
+        body: password ? { visibility, password } : { visibility }
+      }),
+    unlock: (id: string, password: string) =>
+      request<CharacterDTO>(`/api/characters/${id}/unlock`, {
+        method: "POST",
+        body: { password }
+      }),
+    update: (id: string, input: Partial<CharacterInput>, accessPassword?: string) =>
+      request<CharacterDTO>(`/api/characters/${id}`, {
+        method: "PUT",
+        body: accessPassword ? { ...input, accessPassword } : input
+      }),
     remove: (id: string) => request<void>(`/api/characters/${id}`, { method: "DELETE" })
   },
   chats: {

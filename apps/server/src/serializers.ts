@@ -5,6 +5,7 @@ import type {
   Prisma,
   UserSettings
 } from "@prisma/client";
+import { resolveCharacterRecord } from "./services/characterCards.js";
 
 interface ModelPreset {
   id: string;
@@ -132,48 +133,6 @@ const toLoreMatches = (value: Prisma.JsonValue | null) => {
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
 };
 
-const toLoreEntries = (value: Prisma.JsonValue) => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value
-    .map((item) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) {
-        return null;
-      }
-
-      const entry = item as Record<string, unknown>;
-      const id = entry.id;
-      const keys = entry.keys;
-      const content = entry.content;
-      const priority = entry.priority;
-      const triggerMode = entry.triggerMode;
-      const alwaysActive = entry.alwaysActive;
-      const enabled = entry.enabled;
-
-      if (
-        typeof id !== "string" ||
-        !Array.isArray(keys) ||
-        typeof content !== "string" ||
-        typeof priority !== "number"
-      ) {
-        return null;
-      }
-
-      return {
-        id,
-        keys: keys.filter((key): key is string => typeof key === "string"),
-        content,
-        priority,
-        triggerMode: normalizeLoreTriggerMode(triggerMode),
-        alwaysActive: alwaysActive === true,
-        enabled: enabled !== false
-      };
-    })
-    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
-};
-
 export const serializeSettings = (settings: UserSettings) => ({
   id: settings.id,
   activeProvider: settings.activeProvider,
@@ -192,18 +151,24 @@ export const serializeSettings = (settings: UserSettings) => ({
   updatedAt: toIso(settings.updatedAt)
 });
 
-export const serializeCharacter = (character: Character) => ({
-  id: character.id,
-  name: character.name,
-  avatar: character.avatar,
-  prefix: character.prefix,
-  prompt: character.prompt,
-  suffix: character.suffix,
-  htmlCss: character.htmlCss,
-  loreEntries: toLoreEntries(character.loreEntries),
-  createdAt: toIso(character.createdAt),
-  updatedAt: toIso(character.updatedAt)
-});
+export const serializeCharacter = (character: Character, password?: string) => {
+  const resolved = resolveCharacterRecord(character, password);
+
+  return {
+    id: character.id,
+    name: resolved.name,
+    avatar: resolved.avatar,
+    prefix: resolved.prefix,
+    prompt: resolved.prompt,
+    suffix: resolved.suffix,
+    htmlCss: resolved.htmlCss,
+    loreEntries: resolved.loreEntries,
+    visibility: resolved.visibility,
+    canViewPrompt: resolved.canViewPrompt,
+    createdAt: toIso(character.createdAt),
+    updatedAt: toIso(character.updatedAt)
+  };
+};
 
 export const serializeChat = (chat: Chat) => ({
   id: chat.id,

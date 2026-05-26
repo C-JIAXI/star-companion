@@ -1,6 +1,7 @@
 import type { Character, Message, Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import type { ChatCompletionMessage } from "./completions.js";
+import { resolveCharacterPromptFields } from "./characterCards.js";
 
 type PromptInput = {
   chatId: string;
@@ -63,11 +64,13 @@ const buildCharacterSystemPrompt = (character: Character | null): string => {
     return "";
   }
 
+  const promptFields = resolveCharacterPromptFields(character);
+
   return [
-    character.prefix.trim(),
-    character.prompt.trim(),
-    character.suffix.trim(),
-    character.htmlCss.trim()
+    promptFields.prefix.trim(),
+    promptFields.prompt.trim(),
+    promptFields.suffix.trim(),
+    promptFields.htmlCss.trim()
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -80,55 +83,6 @@ const formatMessageContent = (message: Message, characterNames: Map<string, stri
 
   const name = characterNames.get(message.characterId);
   return name ? `${name}: ${message.content}` : message.content;
-};
-
-type CharacterLoreEntry = {
-  id: string;
-  keys: string[];
-  content: string;
-  priority: number;
-  triggerMode: string | null;
-  alwaysActive: boolean;
-  enabled: boolean;
-};
-
-const toLoreEntries = (value: Prisma.JsonValue) => {
-  if (!Array.isArray(value)) {
-    return [] as CharacterLoreEntry[];
-  }
-
-  return value
-    .map((item): CharacterLoreEntry | null => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) {
-        return null;
-      }
-
-      const entry = item as Record<string, unknown>;
-      const id = entry.id;
-      const keys = entry.keys;
-      const content = entry.content;
-      const priority = entry.priority;
-
-      if (
-        typeof id !== "string" ||
-        !Array.isArray(keys) ||
-        typeof content !== "string" ||
-        typeof priority !== "number"
-      ) {
-        return null;
-      }
-
-      return {
-        id,
-        keys: keys.filter((key): key is string => typeof key === "string"),
-        content,
-        priority,
-        triggerMode: typeof entry.triggerMode === "string" ? entry.triggerMode : null,
-        alwaysActive: entry.alwaysActive === true,
-        enabled: entry.enabled !== false
-      };
-    })
-    .filter((entry): entry is CharacterLoreEntry => entry !== null);
 };
 
 const matchesContext = (keys: string[], contextText: string) =>
@@ -158,7 +112,15 @@ const buildLoreSystemPrompt = (entries: MatchedLoreEntry[]) => {
 };
 
 const findMatchedLoreEntries = (
-  characterLoreEntries: CharacterLoreEntry[],
+  characterLoreEntries: Array<{
+    id: string;
+    keys: string[];
+    content: string;
+    priority: number;
+    triggerMode: string;
+    alwaysActive: boolean;
+    enabled: boolean;
+  }>,
   recentMessages: Message[],
   characterName: string
 ): MatchedLoreEntry[] => {
@@ -254,9 +216,10 @@ export const buildPromptContext = async ({
     ? await prisma.character.findMany({ where: { id: { in: characterIds } } })
     : [];
   const characterNames = new Map(characters.map((item) => [item.id, item.name]));
+  const promptFields = character ? resolveCharacterPromptFields(character) : null;
 
   const matchedLoreEntries = findMatchedLoreEntries(
-    toLoreEntries(character?.loreEntries ?? []),
+    promptFields?.loreEntries ?? [],
     recentMessages,
     character?.name ?? ""
   );

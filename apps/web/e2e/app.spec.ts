@@ -1,3 +1,7 @@
+import { createCipheriv, randomBytes, scryptSync } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { tmpdir } from "node:os";
 import { expect, test } from "@playwright/test";
 
 type E2ECharacter = {
@@ -32,6 +36,59 @@ type SettingsPutPayload = {
 
 type ApiDataResponse<T> = {
   data?: T;
+};
+
+const createPrivateCharacterCardFile = async (name: string, password: string) => {
+  const salt = randomBytes(16).toString("base64url");
+  const iv = randomBytes(12);
+  const key = scryptSync("local-roleplay-platform/private-character-export/v1", salt, 32);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const passwordSalt = randomBytes(16).toString("base64url");
+  const payload = {
+    version: 1,
+    accessControl: {
+      version: 1,
+      salt: passwordSalt,
+      verifier: scryptSync(password, passwordSalt, 32).toString("base64url")
+    },
+    prefix: "Hidden private prefix.",
+    prompt: "Hidden private prompt.",
+    suffix: "Hidden private suffix.",
+    htmlCss: ".private-card { color: #abc; }",
+    loreEntries: []
+  };
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final()
+  ]);
+  const tag = cipher.getAuthTag();
+  const card = {
+    schemaVersion: 1,
+    format: "character-card",
+    visibility: "private",
+    exportedAt: new Date().toISOString(),
+    character: {
+      name,
+      avatar: null
+    },
+    protectedPayload: {
+      version: 1,
+      algorithm: "aes-256-gcm",
+      salt,
+      iv: iv.toString("base64url"),
+      tag: tag.toString("base64url"),
+      ciphertext: ciphertext.toString("base64url")
+    }
+  };
+
+  const directory = await mkdtemp(path.join(tmpdir(), "private-character-card-"));
+  const filePath = path.join(directory, "card.json");
+  await writeFile(filePath, JSON.stringify(card), "utf8");
+
+  return {
+    directory,
+    filePath
+  };
 };
 
 test("changing language does not immediately reload stale server settings", async ({ page }) => {
@@ -569,6 +626,42 @@ test("chat creation paginates and searches characters before creating a chat", a
       await request.delete(`/api/chats/${chatId}`);
     }
     await Promise.all(createdIds.filter(Boolean).map((id) => request.delete(`/api/characters/${id}`)));
+  }
+});
+
+test("imported private character cards reveal prompt fields only after password unlock", async ({
+  page,
+  request
+}, testInfo) => {
+  testInfo.setTimeout(60_000);
+  const name = `Imported Private Character ${testInfo.project.name} ${Date.now()}`;
+  const password = "open-sesame";
+  const file = await createPrivateCharacterCardFile(name, password);
+  let createdId: string | null = null;
+
+  try {
+    await page.goto("/characters");
+    await page.locator('input[type="file"]').setInputFiles(file.filePath);
+
+    const charactersResponse = await request.get("/api/characters");
+    const characters = ((await charactersResponse.json()) as ApiDataResponse<E2ECharacter[]>).data ?? [];
+    createdId = characters.find((character) => character.name === name)?.id ?? null;
+
+    await expect(page.getByText(name)).toBeVisible();
+    await expect(page.getByRole("button", { name: "导出", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "复制角色", exact: true })).toBeDisabled();
+
+    await page.getByRole("button", { name: /输入密码查看|Unlock with Password/ }).click();
+    await page.getByLabel(/密码|Password/).fill(password);
+    await page.getByRole("button", { name: /查看内容|Reveal Content/ }).click();
+
+    await expect(page.getByRole("button", { name: "复制角色", exact: true })).toBeEnabled();
+    await expect(page.getByText("Hidden private prompt.").first()).toBeVisible();
+  } finally {
+    if (createdId) {
+      await request.delete(`/api/characters/${createdId}`);
+    }
+    await rm(file.directory, { recursive: true, force: true });
   }
 });
 

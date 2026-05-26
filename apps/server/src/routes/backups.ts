@@ -33,7 +33,7 @@ backupsRouter.get(
         schemaVersion: 1,
         exportedAt: new Date().toISOString(),
         settings: serializeSettings(settings),
-        characters: characters.map(serializeCharacter),
+        characters: characters.map((character) => serializeCharacter(character)),
         chats: chats.map(serializeChat),
         messages: messages.map(serializeMessage)
       }

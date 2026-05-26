@@ -1,9 +1,23 @@
 import { Router } from "express";
 import { prisma } from "../db.js";
 import { asyncHandler, HttpError, parseBody, parseQuery, requireParam } from "../lib/http.js";
-import { characterCreateSchema, characterPageQuerySchema, characterUpdateSchema } from "../schemas.js";
+import {
+  characterCreateSchema,
+  characterExportSchema,
+  characterImportSchema,
+  characterPageQuerySchema,
+  characterUnlockSchema,
+  characterUpdateRequestSchema
+} from "../schemas.js";
 import { serializeCharacter } from "../serializers.js";
 import { listCharactersPage } from "../services/characterPaging.js";
+import {
+  assertCharacterUnlockPassword,
+  buildCharacterUpdateData,
+  canExportCharacterPublicly,
+  createCharacterExportCard,
+  importCharacterCard
+} from "../services/characterCards.js";
 
 export const charactersRouter = Router();
 
@@ -14,7 +28,7 @@ charactersRouter.get(
       orderBy: { updatedAt: "desc" }
     });
 
-    response.json({ ok: true, data: characters.map(serializeCharacter) });
+    response.json({ ok: true, data: characters.map((character) => serializeCharacter(character)) });
   })
 );
 
@@ -38,6 +52,60 @@ charactersRouter.post(
   })
 );
 
+charactersRouter.post(
+  "/import",
+  asyncHandler(async (request, response) => {
+    const body = parseBody(characterImportSchema, request.body);
+    const character = await prisma.character.create({
+      data: importCharacterCard(body)
+    });
+
+    response.status(201).json({ ok: true, data: serializeCharacter(character) });
+  })
+);
+
+charactersRouter.post(
+  "/:id/export",
+  asyncHandler(async (request, response) => {
+    const id = requireParam(request, "id");
+    const body = parseBody(characterExportSchema, request.body);
+    const character = await prisma.character.findUnique({ where: { id } });
+
+    if (!character) {
+      throw new HttpError(404, "Character not found");
+    }
+
+    if (body.visibility === "public" && !canExportCharacterPublicly(character, body.password)) {
+      throw new HttpError(403, "Private character password is required to export this character publicly");
+    }
+
+    response.json({
+      ok: true,
+      data: createCharacterExportCard(character, body.visibility, body.password)
+    });
+  })
+);
+
+charactersRouter.post(
+  "/:id/unlock",
+  asyncHandler(async (request, response) => {
+    const id = requireParam(request, "id");
+    const body = parseBody(characterUnlockSchema, request.body);
+    const character = await prisma.character.findUnique({ where: { id } });
+
+    if (!character) {
+      throw new HttpError(404, "Character not found");
+    }
+
+    assertCharacterUnlockPassword(character, body.password);
+
+    response.json({
+      ok: true,
+      data: serializeCharacter(character, body.password)
+    });
+  })
+);
+
 charactersRouter.get(
   "/:id",
   asyncHandler(async (request, response) => {
@@ -56,14 +124,21 @@ charactersRouter.put(
   "/:id",
   asyncHandler(async (request, response) => {
     const id = requireParam(request, "id");
-    const body = parseBody(characterUpdateSchema, request.body);
+    const body = parseBody(characterUpdateRequestSchema, request.body);
+    const existing = await prisma.character.findUnique({ where: { id } });
+
+    if (!existing) {
+      throw new HttpError(404, "Character not found");
+    }
+
+    const { accessPassword, ...updates } = body;
 
     const character = await prisma.character.update({
       where: { id },
-      data: body
+      data: buildCharacterUpdateData(existing, updates, accessPassword)
     });
 
-    response.json({ ok: true, data: serializeCharacter(character) });
+    response.json({ ok: true, data: serializeCharacter(character, accessPassword) });
   })
 );
 
