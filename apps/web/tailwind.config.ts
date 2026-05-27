@@ -40,6 +40,7 @@ export default {
         "fade-in": "fadeIn 0.2s ease-out",
         "slide-up": "slideUp 0.3s ease-out",
         "scale-in": "scaleIn 0.2s ease-out",
+        "modal-enter": "modalEnter 0.3s cubic-bezier(0.16, 1, 0.3, 1)",
       },
       keyframes: {
         fadeIn: {
@@ -53,7 +54,11 @@ export default {
         scaleIn: {
           "0%": { opacity: "0", transform: "scale(0.95)" },
           "100%": { opacity: "1", transform: "scale(1)" },
-        }
+        },
+        modalEnter: {
+          "0%": { opacity: "0", transform: "scale(0.96) translateY(12px)" },
+          "100%": { opacity: "1", transform: "scale(1) translateY(0)" },
+        },
       }
     }
   },

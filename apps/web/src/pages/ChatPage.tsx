@@ -4,14 +4,10 @@ import {
   ChevronRight,
   Check,
   FileText,
-  MessageSquarePlus,
-  RefreshCw,
-  Search,
   Send,
   Settings,
   Sparkles,
   StopCircle,
-  Trash2,
   User,
   X
 } from "lucide-react";
@@ -39,7 +35,17 @@ import type {
   SettingsInput,
   TokenUsageDTO
 } from "../types";
-import { Badge, Button, ConfirmDialog, EmptyState, ErrorNotice, Field, Modal, Panel, SuccessNotice, TextArea, TextInput } from "../components/ui";
+import {
+  Button,
+  ConfirmDialog,
+  EmptyState,
+  ErrorNotice,
+  Modal,
+  Panel,
+  SuccessNotice,
+  TextArea,
+  TextInput
+} from "../components/ui";
 import {
   AssistantMessageBubble,
   StreamingBubble,
@@ -49,31 +55,18 @@ import {
 import { MarkdownEditor } from "../components/MarkdownEditor";
 
 const MESSAGES_PER_PAGE = 30;
-const CREATE_CHAT_CHARACTER_PAGE_SIZE = 40;
 
-const emptyCreateCharacterPage = {
-  items: [] as CharacterDTO[],
-  total: 0,
-  page: 1,
-  pageSize: CREATE_CHAT_CHARACTER_PAGE_SIZE,
-  totalPages: 1
-};
-
-export function ChatPage() {
+export function ChatPage({
+  selectedChatId,
+  onChatsChanged
+}: {
+  selectedChatId: string | null;
+  onChatsChanged: () => void;
+}) {
   const { language, t } = useI18n();
   const showMessageAvatars = useAppStore((state) => state.showMessageAvatars);
-  const [mobilePane, setMobilePane] = useState<"chats" | "messages" | "create">("messages");
   const [characters, setCharacters] = useState<CharacterDTO[]>([]);
-  const [createCharacters, setCreateCharacters] = useState<CharacterDTO[]>([]);
-  const [createCharacterSearch, setCreateCharacterSearch] = useState("");
-  const [createCharacterPage, setCreateCharacterPage] = useState(1);
-  const [createCharacterPagination, setCreateCharacterPagination] = useState(emptyCreateCharacterPage);
-  const [selectedCreateCharacter, setSelectedCreateCharacter] = useState<CharacterDTO | null>(null);
-  const [chats, setChats] = useState<ChatDTO[]>([]);
-  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [activeChat, setActiveChat] = useState<ChatWithMessagesDTO | null>(null);
-  const [title, setTitle] = useState("");
-  const [characterIds, setCharacterIds] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingCharacterId, setStreamingCharacterId] = useState<string | null>(null);
@@ -110,15 +103,16 @@ export function ChatPage() {
     () => emptyUserCustomConfig()
   );
   const [editingProfileDraft, setEditingProfileDraft] = useState("");
-  const [pendingDeleteChat, setPendingDeleteChat] = useState<ChatDTO | null>(null);
   const [pendingDeleteMessage, setPendingDeleteMessage] = useState<MessageDTO | null>(null);
+  const [titleEditing, setTitleEditing] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
   const [messagePage, setMessagePage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const streamingBufferRef = useRef("");
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
-  const createCharacterRequestRef = useRef(0);
   const paginationStateRef = useRef<{ chatId: string | null; totalPages: number }>({
     chatId: null,
     totalPages: 1
@@ -145,7 +139,6 @@ export function ChatPage() {
   };
 
   const applyChatUpdate = (updated: ChatDTO) => {
-    setChats((current) => current.map((chat) => (chat.id === updated.id ? updated : chat)));
     setActiveChat((current) =>
       current && current.id === updated.id
         ? {
@@ -154,12 +147,31 @@ export function ChatPage() {
           }
         : current
     );
+    onChatsChanged();
+  };
+
+  const commitTitleRename = async () => {
+    if (!activeChat) {
+      return;
+    }
+    const trimmed = titleDraft.trim();
+    setTitleEditing(false);
+    if (!trimmed || trimmed === activeChat.title) {
+      return;
+    }
+    try {
+      const updated = await api.chats.update(activeChat.id, { title: trimmed });
+      applyChatUpdate(updated);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdate"));
+    }
   };
 
   const onMessageHandlersRef = useRef<{
     upsertMessage: (message: MessageDTO) => void;
     setStreamingContent: (value: React.SetStateAction<string>) => void;
-  }>({ upsertMessage: () => {}, setStreamingContent: () => {} });
+    chatsChanged: () => void;
+  }>({ upsertMessage: () => {}, setStreamingContent: () => {}, chatsChanged: () => {} });
 
   const { send: sendWs, connect, disconnect, isConnected } = useWebSocket({
     onMessage(message) {
@@ -218,6 +230,7 @@ export function ChatPage() {
         setStreamingCharacterId(null);
         streamingBufferRef.current = "";
         setLoading(false);
+        handlers.chatsChanged();
         return;
       }
 
@@ -236,9 +249,10 @@ export function ChatPage() {
   useEffect(() => {
     onMessageHandlersRef.current = {
       upsertMessage,
-      setStreamingContent
+      setStreamingContent,
+      chatsChanged: onChatsChanged
     };
-  }, [upsertMessage, setStreamingContent]);
+  }, [upsertMessage, setStreamingContent, onChatsChanged]);
 
   useEffect(() => {
     if (!activeRequestId) {
@@ -313,11 +327,6 @@ export function ChatPage() {
     return Array.from(books.values());
   };
 
-  const getCharacterInitials = (name: string | undefined) => {
-    const trimmed = name?.trim();
-    return trimmed ? trimmed.slice(0, 2) : t("common.unknown").slice(0, 2);
-  };
-
   const totalMessagePages = useMemo(() => {
     const totalMessages = activeChat?.messages.length ?? 0;
     return Math.max(1, Math.ceil(totalMessages / MESSAGES_PER_PAGE));
@@ -346,21 +355,6 @@ export function ChatPage() {
     return { start, end, total: totalMessages };
   }, [activeChat?.messages.length, pagedMessages.length, safeMessagePage]);
 
-  const createCharacterRange = useMemo(() => {
-    if (createCharacterPagination.total === 0) {
-      return { start: 0, end: 0 };
-    }
-
-    const start = (createCharacterPagination.page - 1) * createCharacterPagination.pageSize + 1;
-    const end = Math.min(start + createCharacterPagination.items.length - 1, createCharacterPagination.total);
-    return { start, end };
-  }, [createCharacterPagination]);
-
-  const createCharacterPaginationCopy =
-    createCharacterPagination.total === 0
-      ? t("characters.noSearchResults")
-      : `${createCharacterRange.start}-${createCharacterRange.end} / ${createCharacterPagination.total}`;
-
   const paginationCopy =
     language === "zh-CN"
       ? {
@@ -378,12 +372,8 @@ export function ChatPage() {
           range: `Showing ${pageRange.start}-${pageRange.end} of ${pageRange.total}`
         };
 
-  const loadBase = async () => {
-    const [chatData, settings] = await Promise.all([
-      api.chats.list(),
-      api.settings.get()
-    ]);
-    setChats(chatData);
+  const loadSettings = async () => {
+    const settings = await api.settings.get();
     setSettingsModels(settings.models ?? []);
     setRuntimeSettings({
       activeProvider: settings.activeProvider,
@@ -398,9 +388,6 @@ export function ChatPage() {
     useAppStore.getState().setShowMessageAvatars(settings.showMessageAvatars);
     if (settings.models?.length) {
       setActiveModelId(settings.models[0].id);
-    }
-    if (!selectedChatId && chatData[0]) {
-      setSelectedChatId(chatData[0].id);
     }
   };
 
@@ -423,39 +410,10 @@ export function ChatPage() {
   };
 
   useEffect(() => {
-    void loadBase().catch((caught: unknown) =>
+    void loadSettings().catch((caught: unknown) =>
       setError(caught instanceof Error ? caught.message : t("chat.failedLoad"))
     );
   }, [t]);
-
-  useEffect(() => {
-    const requestId = createCharacterRequestRef.current + 1;
-    createCharacterRequestRef.current = requestId;
-
-    void api.characters
-      .page({
-        q: createCharacterSearch,
-        page: createCharacterPage,
-        pageSize: CREATE_CHAT_CHARACTER_PAGE_SIZE
-      })
-      .then((data) => {
-        if (requestId !== createCharacterRequestRef.current) {
-          return;
-        }
-
-        if (data.items.length === 0 && data.total > 0 && data.page > 1) {
-          setCreateCharacterPage(data.page - 1);
-          return;
-        }
-
-        setCreateCharacters(data.items);
-        setCreateCharacterPagination(data);
-        mergeCharacterCache(data.items);
-      })
-      .catch((caught: unknown) =>
-        setError(caught instanceof Error ? caught.message : t("characters.failedLoad"))
-      );
-  }, [createCharacterPage, createCharacterSearch, t]);
 
   useEffect(() => {
     void loadChat(selectedChatId).catch((caught: unknown) =>
@@ -520,35 +478,6 @@ export function ChatPage() {
     const timeoutId = window.setTimeout(() => setStatus(null), 2200);
     return () => window.clearTimeout(timeoutId);
   }, [status]);
-
-  const toggleCharacter = (character: CharacterDTO) => {
-    setCharacterIds((current) => (current.includes(character.id) ? [] : [character.id]));
-    setSelectedCreateCharacter((current) => (current?.id === character.id ? null : character));
-    mergeCharacterCache([character]);
-  };
-
-  const createChat = async () => {
-    setLoading(true);
-    setError(null);
-    setStatus(null);
-    try {
-      const chat = await api.chats.create({
-        title: title.trim(),
-        mode: "single",
-        characterIds
-      });
-      setTitle("");
-      setCharacterIds([]);
-      setSelectedCreateCharacter(null);
-      setSelectedChatId(chat.id);
-      setMobilePane("messages");
-      await loadBase();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t("chat.failedCreate"));
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const openMemorySettings = () => {
     if (!activeChat) {
@@ -718,13 +647,7 @@ export function ChatPage() {
             }
           : current
       );
-      setChats((current) =>
-        current.map((chat) =>
-          chat.id === updated.id
-            ? { ...chat, memoryTurns: updated.memoryTurns }
-            : chat
-        )
-      );
+      onChatsChanged();
       setMemorySettingsOpen(false);
       setShowMemoryDialog(false);
       setStatus(t("chat.chatSettingsSaved"));
@@ -786,27 +709,6 @@ export function ChatPage() {
     } catch (caught) {
       setActiveModelId(previousModelId);
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdateMemory"));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const deleteChat = async () => {
-    if (!pendingDeleteChat) {
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    setStatus(null);
-    try {
-      await api.chats.remove(pendingDeleteChat.id);
-      setPendingDeleteChat(null);
-      setSelectedChatId(null);
-      setActiveChat(null);
-      await loadBase();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t("chat.failedDelete"));
     } finally {
       setLoading(false);
     }
@@ -959,99 +861,46 @@ export function ChatPage() {
 
   return (
     <>
-    <div className="mb-5 grid grid-cols-3 gap-1 rounded-xl border border-white/10 bg-ink-900/80 p-1 xl:hidden">
-      {[
-        { key: "chats", label: t("chat.chats") },
-        { key: "messages", label: t("chat.messageStream") },
-        { key: "create", label: t("chat.createChat") }
-      ].map((item) => (
-        <button
-          className={`min-h-10 rounded-lg px-2 text-xs font-medium transition-colors ${
-            mobilePane === item.key
-              ? "bg-ember-500 text-ink-950 shadow-md shadow-ember-500/20"
-              : "text-slate-300 hover:bg-white/10 hover:text-slate-100"
-          }`}
-          key={item.key}
-          type="button"
-          onClick={() => setMobilePane(item.key as "chats" | "messages" | "create")}
-        >
-          {item.label}
-        </button>
-      ))}
-    </div>
-    <div className="grid min-w-0 gap-8 xl:h-[calc(100vh-112px)] xl:min-h-0 xl:grid-cols-[300px_minmax(0,1fr)_300px] 2xl:grid-cols-[340px_minmax(0,1fr)_320px]">
-      <div
-        className={
-          mobilePane === "chats"
-            ? "block min-w-0 xl:h-full xl:min-h-0"
-            : "hidden min-w-0 xl:block xl:h-full xl:min-h-0"
-        }
-      >
-      <Panel
-        title={t("chat.chats")}
-        action={
-          <Button variant="secondary" onClick={() => void loadBase()} className="!min-h-[32px] !h-8 !px-3 text-xs">
-            <RefreshCw size={14} />
-            {t("common.refresh")}
-          </Button>
-        }
-      >
-        <div className="max-h-[calc(100vh-220px)] space-y-3 overflow-y-auto pr-1 xl:h-[calc(100%-40px)] xl:max-h-none">
-          <ErrorNotice message={error} />
-          <SuccessNotice message={status} />
-          {chats.length === 0 ? (
-            <EmptyState>{t("chat.noChats")}</EmptyState>
-          ) : (
-            chats.map((chat) => (
-              <div
-                className={`group w-full cursor-pointer rounded-xl border p-4 text-left text-sm transition-all duration-200 ${
-                  selectedChatId === chat.id
-                    ? "border-ember-500/50 bg-ember-500/10 shadow-md shadow-ember-500/5"
-                    : "border-white/5 bg-white/5 hover:border-white/10 hover:bg-white/10"
-                }`}
-                key={chat.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  setSelectedChatId(chat.id);
-                  setMobilePane("messages");
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    setSelectedChatId(chat.id);
-                    setMobilePane("messages");
-                  }
-                }}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className={`truncate font-medium transition-colors ${selectedChatId === chat.id ? 'text-ember-100' : 'text-slate-100 group-hover:text-white'}`}>{chat.title}</p>
-                    <p className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-400">
-                      <span className="opacity-50">{t("chat.boundCharacters", { count: chat.characterIds.length })}</span>
-                    </p>
-                  </div>
-                  <Button className="!h-8 !min-h-8 !w-8 !p-0 opacity-0 transition-opacity group-hover:opacity-100" variant="ghost" onClick={(event) => { event.stopPropagation(); setPendingDeleteChat(chat); }}>
-                    <Trash2 size={14} className="text-rose-400" />
-                  </Button>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </Panel>
-      </div>
+    <div className="grid min-w-0 gap-8 xl:h-[calc(100vh-112px)] xl:min-h-0">
 
-      <div
-        className={
-          mobilePane === "messages"
-            ? "block min-w-0 xl:h-full xl:min-h-0"
-            : "hidden min-w-0 xl:block xl:h-full xl:min-h-0"
-        }
-      >
+      <div className="block min-w-0 xl:h-full xl:min-h-0">
       <Panel
         className="flex min-h-0 flex-col"
-        title={activeChat?.title ?? t("chat.messageStream")}
+        title={
+          titleEditing && activeChat ? (
+            <input
+              ref={titleInputRef}
+              className="w-full rounded bg-transparent px-1 py-0.5 text-sm font-semibold tracking-wide text-slate-100 outline-none ring-1 ring-white/10 focus:ring-ember-500/50"
+              value={titleDraft}
+              onChange={(event) => setTitleDraft(event.target.value)}
+              onBlur={() => void commitTitleRename()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void commitTitleRename();
+                }
+                if (event.key === "Escape") {
+                  setTitleEditing(false);
+                }
+              }}
+            />
+          ) : (
+            <span
+              className="cursor-pointer rounded px-1 py-0.5 hover:bg-white/5"
+              title={t("chat.renameHint")}
+              onClick={() => {
+                if (!activeChat) {
+                  return;
+                }
+                setTitleDraft(activeChat.title);
+                setTitleEditing(true);
+                setTimeout(() => titleInputRef.current?.focus(), 0);
+              }}
+            >
+              {activeChat?.title ?? t("chat.messageStream")}
+            </span>
+          )
+        }
         action={
           activeChat ? (
             <div className="relative" ref={memorySettingsRef}>
@@ -1138,16 +987,13 @@ export function ChatPage() {
           <EmptyState>{t("chat.selectOrCreate")}</EmptyState>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="mb-5 flex shrink-0 flex-wrap items-center gap-2 border-b border-white/5 pb-5">
-              {activeChat.characterIds.map((id) => (
-                <Badge key={id}>{characterMap.get(id)?.name ?? t("common.unknown")}</Badge>
-              ))}
-            </div>
+            <ErrorNotice message={error} />
+            <SuccessNotice message={status} />
 
             <div
               ref={messageViewportRef}
               data-testid="chat-message-viewport"
-              className="custom-scrollbar min-h-[320px] h-[min(62dvh,42rem)] overflow-y-auto overscroll-contain scroll-smooth rounded-2xl border border-white/5 bg-ink-950/30 p-5 space-y-7 xl:h-0 xl:min-h-0 xl:flex-1"
+              className="custom-scrollbar min-h-[320px] h-[min(62dvh,42rem)] overflow-y-auto overscroll-contain scroll-smooth rounded-2xl p-5 space-y-7 xl:h-0 xl:min-h-0 xl:flex-1 max-w-2xl mx-auto"
             >
               {activeChat.messages.length > MESSAGES_PER_PAGE ? (
                 <div
@@ -1243,7 +1089,8 @@ export function ChatPage() {
               ) : null}
             </div>
 
-            <div className="sticky bottom-3 mt-4 grid min-w-0 shrink-0 grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-xl border border-white/5 bg-ink-950/95 p-2 shadow-xl shadow-black/30 backdrop-blur-sm xl:static xl:bg-ink-950/40 xl:shadow-none">
+            <div className="shrink-0">
+              <div className="max-w-2xl mx-auto grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-xl border border-white/5 bg-ink-950/95 p-2 shadow-xl shadow-black/30 backdrop-blur-sm xl:bg-ink-950/40 xl:shadow-none">
               <TextInput
                 className="min-w-0 border-0 bg-transparent focus:bg-transparent focus:ring-0"
                 placeholder={t("chat.writeMessage")}
@@ -1261,124 +1108,9 @@ export function ChatPage() {
                 <Button className="!min-h-[38px]" disabled={loading || !draft.trim()} onClick={() => void sendMessage()}><Send size={16} />{t("chat.send")}</Button>
               )}
             </div>
+            </div>
           </div>
         )}
-      </Panel>
-      </div>
-
-      <div
-        className={
-          mobilePane === "create"
-            ? "block min-w-0 xl:h-full xl:min-h-0"
-            : "hidden min-w-0 xl:block xl:h-full xl:min-h-0"
-        }
-      >
-      <Panel
-        title={t("chat.createChat")}
-        action={<MessageSquarePlus size={16} className="text-slate-400" />}
-      >
-        <div className="space-y-5">
-          <Field label={t("chat.title")}><TextInput value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
-          <div className="space-y-3">
-            <p className="text-sm font-medium text-slate-300">{t("nav.characters")}</p>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
-              <TextInput
-                className="pl-9"
-                placeholder={t("characters.searchPlaceholder")}
-                value={createCharacterSearch}
-                onChange={(event) => {
-                  setCreateCharacterSearch(event.target.value);
-                  setCreateCharacterPage(1);
-                }}
-              />
-            </div>
-            {selectedCreateCharacter && !createCharacters.some((character) => character.id === selectedCreateCharacter.id) ? (
-              <label
-                className="grid min-h-[72px] cursor-pointer grid-cols-[auto_40px_minmax(0,1fr)] items-center gap-3 rounded-xl border border-ember-500/30 bg-ember-500/5 px-3 py-2.5 text-sm transition-all duration-200 hover:bg-white/10"
-              >
-                <input checked type="radio" name="character-select" onChange={() => toggleCharacter(selectedCreateCharacter)} className="rounded-full border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50" />
-                <span className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg border border-ember-400/40 bg-ember-500/10 text-xs font-semibold text-ember-100">
-                  {selectedCreateCharacter.avatar ? (
-                    <img alt="" className="h-full w-full object-cover" src={selectedCreateCharacter.avatar} />
-                  ) : (
-                    getCharacterInitials(selectedCreateCharacter.name)
-                  )}
-                </span>
-                <span className="min-w-0 truncate text-[13px] font-medium leading-5 text-ember-100">
-                  {selectedCreateCharacter.name}
-                </span>
-              </label>
-            ) : null}
-            {createCharacters.length === 0 && createCharacterPagination.total === 0 && !createCharacterSearch.trim() ? (
-              <EmptyState>{t("chat.createCharactersFirst")}</EmptyState>
-            ) : createCharacters.length === 0 ? (
-              <EmptyState>{t("characters.noSearchResults")}</EmptyState>
-            ) : (
-              <div className="custom-scrollbar max-h-[420px] space-y-2.5 overflow-y-auto pr-1">
-                {createCharacters.map((character) => (
-                  <label
-                    className={`grid min-h-[72px] cursor-pointer grid-cols-[auto_40px_minmax(0,1fr)] items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition-all duration-200 hover:bg-white/10 ${
-                      characterIds.includes(character.id)
-                        ? "border-ember-500/30 bg-ember-500/5"
-                        : "border-white/5 bg-white/5"
-                    }`}
-                    key={character.id}
-                  >
-                    <input checked={characterIds.includes(character.id)} type="radio" name="character-select" onChange={() => toggleCharacter(character)} className="rounded-full border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50" />
-                    <span className={`grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg border text-xs font-semibold ${
-                      characterIds.includes(character.id)
-                        ? "border-ember-400/40 bg-ember-500/10 text-ember-100"
-                        : "border-white/10 bg-ink-800 text-slate-200"
-                    }`}>
-                      {character.avatar ? (
-                        <img alt="" className="h-full w-full object-cover" src={character.avatar} />
-                      ) : (
-                        getCharacterInitials(character.name)
-                      )}
-                    </span>
-                    <span
-                      className={`min-w-0 truncate text-[13px] leading-5 ${
-                        characterIds.includes(character.id) ? "font-medium text-ember-100" : "text-slate-200"
-                      }`}
-                    >
-                      {character.name}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            )}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/5 pt-3 text-xs text-slate-400">
-              <span>{createCharacterPaginationCopy}</span>
-              <div className="flex items-center gap-2">
-                <Button
-                  className="!min-h-[32px] !px-3 text-xs"
-                  data-testid="create-chat-character-page-prev"
-                  disabled={loading || createCharacterPagination.page <= 1}
-                  variant="secondary"
-                  onClick={() => setCreateCharacterPage((current) => Math.max(1, current - 1))}
-                >
-                  <ChevronLeft size={14} />
-                  {language === "zh-CN" ? "上一页" : "Previous"}
-                </Button>
-                <Button
-                  className="!min-h-[32px] !px-3 text-xs"
-                  data-testid="create-chat-character-page-next"
-                  disabled={loading || createCharacterPagination.page >= createCharacterPagination.totalPages}
-                  variant="secondary"
-                  onClick={() => setCreateCharacterPage((current) => Math.min(createCharacterPagination.totalPages, current + 1))}
-                >
-                  {language === "zh-CN" ? "下一页" : "Next"}
-                  <ChevronRight size={14} />
-                </Button>
-              </div>
-            </div>
-          </div>
-          <Button disabled={loading || !title.trim() || characterIds.length === 0} onClick={() => void createChat()} className="w-full">
-            <MessageSquarePlus size={16} />
-            {t("chat.createChat")}
-          </Button>
-        </div>
       </Panel>
       </div>
     </div>
@@ -1438,17 +1170,6 @@ export function ChatPage() {
           </div>
         </section>
       </div>
-    ) : null}
-    {pendingDeleteChat ? (
-      <ConfirmDialog
-        cancelLabel={t("common.cancel")}
-        confirmLabel={t("common.delete")}
-        loading={loading}
-        message={t("chat.deleteChatConfirm", { title: pendingDeleteChat.title })}
-        title={t("chat.deleteChatTitle")}
-        onCancel={() => setPendingDeleteChat(null)}
-        onConfirm={() => void deleteChat()}
-      />
     ) : null}
     {pendingDeleteMessage ? (
       <ConfirmDialog
@@ -1589,20 +1310,18 @@ export function ChatPage() {
     {showMemoryDialog ? (
       <Modal title={t("chat.memorySettings")} onClose={closeMemoryDialog}>
         <div className="space-y-4">
-          <Field label={t("chat.memorySettings")} labelClassName="!text-sm !font-semibold !text-slate-100">
-            <TextInput
-              min={1}
-              max={50}
-              type="number"
-              value={memoryDraft}
-              onChange={(event) => setMemoryDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  void updateMemory();
-                }
-              }}
-            />
-          </Field>
+          <TextInput
+            min={1}
+            max={50}
+            type="number"
+            value={memoryDraft}
+            onChange={(event) => setMemoryDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                void updateMemory();
+              }
+            }}
+          />
           <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
             {t("chat.memoryHelp")}
           </p>

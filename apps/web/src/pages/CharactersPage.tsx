@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronLeft, ChevronRight, Copy, Download, FileUp, Lock, Plus, Save, Search, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Download, FileUp, Lock, Plus, Save, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { MarkdownEditor } from "../components/MarkdownEditor";
 import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
@@ -181,7 +181,7 @@ const emptyCharacterPage = {
   totalPages: 1
 };
 
-export function CharactersPage() {
+export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => void }) {
   const { language, t } = useI18n();
   const [characters, setCharacters] = useState<CharacterDTO[]>([]);
   const [characterPage, setCharacterPage] = useState(1);
@@ -365,14 +365,8 @@ export function CharactersPage() {
       return;
     }
 
-    if (!nextSelectedId && !creatingRef.current && data.items[0]) {
-      const detail = await resolveCharacterDetail(data.items[0]);
-      if (requestId !== characterRequestRef.current) {
-        return;
-      }
-      setSelectedId(data.items[0].id);
-      setSelectedCharacter(detail);
-      setForm(toForm(detail));
+    if (!nextSelectedId && !creatingRef.current) {
+      return;
     }
   };
 
@@ -438,7 +432,12 @@ export function CharactersPage() {
       }
       setStatus(t("characters.saved"));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t("characters.failedSave"));
+      const message = caught instanceof Error ? caught.message : "";
+      if (message.includes("password is required")) {
+        setError(t("characters.privatePasswordRequired"));
+      } else {
+        setError(message || t("characters.failedSave"));
+      }
     } finally {
       setLoading(false);
     }
@@ -461,32 +460,6 @@ export function CharactersPage() {
       await loadCharacters();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("characters.failedDelete"));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const duplicateCharacter = async () => {
-    if (!selected || isLockedPrivateCharacter) {
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    setStatus(null);
-    try {
-      const duplicated = await api.characters.create({
-        ...toInput(toForm(selected)),
-        name: `${selected.name} ${t("characters.copySuffix")}`,
-        loreEntries: (selected.loreEntries ?? []).map(({ id: _id, ...rest }) => rest)
-      });
-      await loadCharacters();
-      setSelectedId(duplicated.id);
-      setSelectedCharacter(duplicated);
-      setForm(toForm(duplicated));
-      setStatus(t("characters.duplicated"));
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t("characters.failedSave"));
     } finally {
       setLoading(false);
     }
@@ -631,17 +604,451 @@ export function CharactersPage() {
   };
 
   return (
-    <div className="grid gap-8 xl:grid-cols-[320px_minmax(0,1fr)] 2xl:grid-cols-[360px_minmax(0,1fr)]">
-      <Panel
-        className="h-fit xl:sticky xl:top-24"
-        title={t("nav.characters")}
-        action={
-          <Button variant="secondary" onClick={resetForm} className="!h-9 !min-h-[36px] !px-3 text-xs">
-            <Plus size={14} />
-            {t("common.new")}
-          </Button>
-        }
-      >
+    <>
+      <div className="mb-4 flex items-center gap-3">
+        <h2 className="min-w-0 truncate text-sm font-semibold text-slate-100">
+          {selectedId ? selectedCharacter?.name ?? t("characters.edit") : t("characters.create")}
+        </h2>
+        <Button variant="secondary" onClick={resetForm} className="!h-9 !min-h-[36px] !px-3 text-xs ml-auto">
+          <Plus size={14} />
+          {t("common.new")}
+        </Button>
+        <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg bg-white/5 px-3 text-xs font-medium text-slate-200 transition-colors hover:bg-white/10 focus-within:ring-2 focus-within:ring-white/20">
+          <FileUp size={14} />
+          {t("common.import")}
+          <input className="sr-only" type="file" accept="application/json" onChange={(event) => void importCharacter(event.target.files?.[0])} />
+        </label>
+      </div>
+
+      {selectedId && selectedCharacter ? (
+        <div className="space-y-4">
+          <button
+            className="flex items-center gap-1.5 text-xs font-medium text-slate-400 transition-colors hover:text-slate-200"
+            type="button"
+            onClick={() => {
+              setSelectedId(null);
+              setSelectedCharacter(null);
+              setForm(blankForm);
+              creatingRef.current = false;
+            }}
+          >
+            <ChevronLeft size={14} />
+            {language === "zh-CN" ? "返回角色列表" : "Back to characters"}
+          </button>
+
+          <Panel
+            className="p-5 sm:p-6"
+            title={t("characters.edit")}
+            action={
+              <>
+                <div className="inline-flex rounded-lg border border-white/5 bg-white/5 p-1">
+                  {(["public", "private"] as CharacterExportMode[]).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                        exportMode === mode
+                          ? "bg-ember-500 text-ink-950"
+                          : "text-slate-300 hover:bg-white/10 hover:text-slate-100"
+                      }`}
+                      onClick={() => setExportMode(mode)}
+                    >
+                      {mode === "public"
+                        ? privateCharacterCopy.exportPublic
+                        : privateCharacterCopy.exportPrivate}
+                    </button>
+                  ))}
+                </div>
+                <Button
+                  disabled={!selected}
+                  variant="ghost"
+                  onClick={() => void exportCharacter()}
+                  className="!min-h-[36px] !h-9 !px-3 text-xs"
+                >
+                  <Download size={14} />
+                  {t("common.export")}
+                </Button>
+              </>
+            }
+          >
+          <div className="space-y-8">
+            <ErrorNotice message={error} />
+            <SuccessNotice message={status} />
+            {selected?.visibility === "private" ? (
+              <div className="rounded-xl border border-amber-400/15 bg-amber-500/8 px-4 py-3 text-sm text-amber-100">
+                <div className="flex items-center gap-2 font-medium">
+                  <Lock size={14} />
+                  {selected.canViewPrompt
+                    ? privateCharacterCopy.privateOwner
+                    : privateCharacterCopy.privateLocked}
+                </div>
+                {!selected.canViewPrompt ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    <p className="text-xs leading-5 text-amber-100/80">
+                      {privatePasswordCopy.lockedHelp}
+                    </p>
+                    <Button
+                      className="!min-h-[32px] !px-3 text-xs"
+                      variant="secondary"
+                      onClick={() => {
+                        setPasswordValue("");
+                        setPasswordDialogMode("unlock");
+                      }}
+                    >
+                      <Lock size={12} />
+                      {privatePasswordCopy.unlockAction}
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_148px]">
+              <div className="grid gap-5">
+                <Field label={t("common.name")}><TextInput value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
+                <Field label={t("characters.avatarUrl")}><TextInput value={form.avatar} onChange={(event) => setForm({ ...form, avatar: event.target.value })} /></Field>
+              </div>
+              <div className="grid min-h-[148px] place-items-center rounded-2xl border border-white/5 bg-ink-950/40 p-4">
+                <div className="grid h-24 w-24 place-items-center overflow-hidden rounded-2xl bg-ink-800 text-lg font-semibold text-slate-300 ring-1 ring-white/10">
+                  {form.avatar ? (
+                    <img alt="" className="h-full w-full object-cover" src={form.avatar} />
+                  ) : (
+                    (form.name || t("common.unknown")).slice(0, 2)
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex rounded-xl border border-white/5 bg-ink-900/80 p-1">
+              {editorSections.map((section) => (
+                <button
+                  key={section.id}
+                  type="button"
+                  className={`min-h-[36px] flex-1 whitespace-nowrap rounded-lg px-2 text-xs font-medium transition-colors sm:min-h-[40px] sm:px-4 sm:text-sm ${
+                    activeEditorSection === section.id
+                      ? "bg-ember-500 text-ink-950 shadow-sm shadow-ember-500/20"
+                      : "text-slate-300 hover:bg-ink-800/75"
+                  }`}
+                  onClick={() => setActiveEditorSection(section.id)}
+                >
+                  {section.label}
+                </button>
+              ))}
+            </div>
+
+            {activeEditorSection === "prompt" ? (
+              isLockedPrivateCharacter ? (
+                <EmptyState>{privatePasswordCopy.lockedHelp}</EmptyState>
+              ) : (
+                <div className="space-y-7">
+                  <Field
+                    container="div"
+                    label={<HelpLabel label={t("characters.prefix")} description={t("help.characterPrefix")} />}
+                  >
+                    <MarkdownEditor
+                      value={form.prefix}
+                      onChange={(nextValue) => setForm({ ...form, prefix: nextValue })}
+                      height={180}
+                    />
+                  </Field>
+                  <Field
+                    container="div"
+                    label={<HelpLabel label={t("characters.prompt")} description={t("help.characterPrompt")} />}
+                  >
+                    <MarkdownEditor
+                      value={form.prompt}
+                      onChange={(nextValue) => setForm({ ...form, prompt: nextValue })}
+                      height={320}
+                    />
+                  </Field>
+                  <Field
+                    container="div"
+                    label={<HelpLabel label={t("characters.suffix")} description={t("help.characterSuffix")} />}
+                  >
+                    <MarkdownEditor
+                      value={form.suffix}
+                      onChange={(nextValue) => setForm({ ...form, suffix: nextValue })}
+                      height={220}
+                    />
+                  </Field>
+                </div>
+              )
+            ) : null}
+
+            {activeEditorSection === "html" ? (
+              isLockedPrivateCharacter ? (
+                <EmptyState>{privatePasswordCopy.lockedHelp}</EmptyState>
+              ) : (
+                <div className="space-y-5">
+                  <Field label={<HelpLabel label={t("characters.htmlCss")} description={t("help.characterHtmlCss")} />}>
+                    <TextArea value={form.htmlCss} onChange={(event) => setForm({ ...form, htmlCss: event.target.value })} className="!h-[170px] min-h-[170px] font-mono text-xs leading-6" />
+                  </Field>
+
+                  <div className="rounded-xl border border-white/5 bg-ink-950/30 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="space-y-1">
+                        <h4 className="text-sm font-semibold text-slate-100">{t("characters.htmlPreview")}</h4>
+                        <p className="text-xs leading-5 text-slate-500">{t("characters.htmlPreviewHelp")}</p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {htmlPreviewTemplates.map((template) => (
+                          <Button
+                            key={template.id}
+                            variant={previewTemplateId === template.id ? "secondary" : "ghost"}
+                            className="!h-8 !min-h-[32px] !px-3 text-xs"
+                            onClick={() => applyPreviewTemplate(template.id)}
+                          >
+                            {template.label}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                      <Field label={t("characters.htmlPreviewMarkup")}>
+                        <TextArea
+                          className="!h-[180px] min-h-[180px] font-mono text-xs leading-6"
+                          spellCheck={false}
+                          value={previewMarkup}
+                          onChange={(event) => setPreviewMarkup(event.target.value)}
+                        />
+                      </Field>
+                      <Field label={t("characters.htmlPreviewRendered")}>
+                        <div className="custom-scrollbar min-h-[180px] overflow-y-auto rounded-xl border border-white/5 bg-ink-950/60 p-4">
+                          <div className="rounded-2xl border border-white/5 bg-ink-900/70 p-4 shadow-inner shadow-black/20">
+                            <div className="flex items-start gap-3">
+                              <div className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-xl border border-white/10 bg-ink-800 text-sm font-semibold text-ember-100 shadow-black/20">
+                                {form.avatar ? (
+                                  <img alt="" className="h-full w-full object-cover" src={form.avatar} />
+                                ) : (
+                                  (form.name || t("common.unknown")).slice(0, 2)
+                                )}
+                              </div>
+                              <article className="min-w-0 flex-1 rounded-2xl rounded-bl-sm border border-white/5 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-sm backdrop-blur-sm">
+                                <div className="mb-3 text-xs font-bold tracking-wide text-ember-400">
+                                  {form.name || t("common.unknown")}
+                                </div>
+                                <ScopedHtmlRenderer content={previewMarkup} htmlCss={form.htmlCss} />
+                              </article>
+                            </div>
+                          </div>
+                        </div>
+                      </Field>
+                    </div>
+                  </div>
+                </div>
+              )
+            ) : null}
+
+            {activeEditorSection === "lore" ? (
+            isLockedPrivateCharacter ? (
+              <EmptyState>{privatePasswordCopy.lockedHelp}</EmptyState>
+            ) : (
+            <div className="border-t border-white/5 pt-5">
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-sm font-semibold text-slate-100">{t("characters.loreEntries")}</p>
+                <span className="text-xs text-slate-500">
+                  {t("characters.loreEntryCount", { count: form.loreEntries.filter((e) => e.enabled).length })}
+                  {" · "}
+                  {t("characters.loreEntryCount", { count: form.loreEntries.length })}
+                </span>
+              </div>
+              {form.loreEntries.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-white/10 px-4 py-6 text-center">
+                  <p className="text-sm text-slate-400">{t("characters.loreEntryEmpty")}</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {form.loreEntries.map((entry, index) => (
+                    <div
+                      className={`rounded-xl border transition-colors ${
+                        entry.enabled
+                          ? "border-white/10 bg-ink-950/40"
+                          : "border-white/5 bg-ink-950/20 opacity-60"
+                      }`}
+                      key={entry._localId}
+                    >
+                      <div
+                        className="flex cursor-pointer items-center justify-between gap-2 px-4 py-3 select-none"
+                        onClick={() => {
+                          const next = [...form.loreEntries];
+                          next[index] = { ...entry, _collapsed: !entry._collapsed };
+                          setForm({ ...form, loreEntries: next });
+                        }}
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <ChevronDown
+                            className={`shrink-0 text-slate-500 transition-transform duration-200 ${
+                              entry._collapsed ? "-rotate-90" : ""
+                            }`}
+                            size={14}
+                          />
+                          {entry.keys.length > 0 ? (
+                            <span className="truncate text-xs font-medium text-amber-200/80">
+                              {entry.keys.join(", ")}
+                            </span>
+                          ) : (
+                            <span className="whitespace-nowrap text-xs font-medium text-slate-500">
+                              {t("characters.loreEntryIndex", { index: index + 1 })}
+                            </span>
+                          )}
+                          {entry._collapsed && entry.content ? (
+                            <span className="hidden truncate text-xs text-slate-500 opacity-60 sm:inline">
+                              — {entry.content}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <label
+                            className="flex cursor-pointer items-center gap-1.5 rounded-lg px-1.5 py-1 text-xs text-slate-400 transition-colors hover:bg-white/5"
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <input
+                              checked={entry.enabled}
+                              type="checkbox"
+                              className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                              onChange={() => {
+                                const next = [...form.loreEntries];
+                                next[index] = { ...entry, enabled: !entry.enabled };
+                                setForm({ ...form, loreEntries: next });
+                              }}
+                            />
+                            {t("common.enabled")}
+                          </label>
+                          <button
+                            className="rounded-lg p-1 text-slate-500 transition-colors hover:bg-red-500/10 hover:text-red-400"
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              const next = form.loreEntries.filter((_, i) => i !== index);
+                              setForm({ ...form, loreEntries: next });
+                            }}
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      </div>
+                      <div
+                        className={`overflow-hidden transition-all duration-200 ease-out ${
+                          entry._collapsed
+                            ? "max-h-0 border-t-0 opacity-0"
+                            : "max-h-[1000px] border-t border-white/5 opacity-100"
+                        }`}
+                      >
+                        <div className="px-4 pb-4 pt-3">
+                          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_140px]">
+                            <div className="space-y-3">
+                              <Field label={t("characters.loreEntryKeys")}>
+                                <TextInput
+                                  placeholder={t("characters.loreEntryKeysPlaceholder")}
+                                  value={entry.keys.join(", ")}
+                                  onChange={(event) => {
+                                    const keys = event.target.value
+                                      .split(/[,，]/)
+                                      .map((k) => k.trim())
+                                      .filter(Boolean);
+                                    const next = [...form.loreEntries];
+                                    next[index] = { ...entry, keys };
+                                    setForm({ ...form, loreEntries: next });
+                                  }}
+                                />
+                              </Field>
+                              <Field container="div" label={t("characters.loreEntryContent")}>
+                                <MarkdownEditor
+                                  height={180}
+                                  value={entry.content}
+                                  onChange={(nextValue) => {
+                                    const next = [...form.loreEntries];
+                                    next[index] = { ...entry, content: nextValue };
+                                    setForm({ ...form, loreEntries: next });
+                                  }}
+                                />
+                              </Field>
+                            </div>
+                            <div className="space-y-3">
+                              <Field label={t("common.priority")}>
+                                <TextInput
+                                  type="number"
+                                  value={String(entry.priority)}
+                                  onChange={(event) => {
+                                    const next = [...form.loreEntries];
+                                    next[index] = {
+                                      ...entry,
+                                      priority: Math.max(0, Number(event.target.value) || 0)
+                                    };
+                                    setForm({ ...form, loreEntries: next });
+                                  }}
+                                />
+                              </Field>
+                              <Field label={t("characters.loreEntryTriggerMode")}>
+                                <select
+                                  className="w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-2 text-sm text-slate-200 focus:border-ember-500/50 focus:outline-none focus:ring-1 focus:ring-ember-500/30"
+                                  value={entry.triggerMode}
+                                  onChange={(event) => {
+                                    const next = [...form.loreEntries];
+                                    next[index] = {
+                                      ...entry,
+                                      triggerMode: event.target.value as "user" | "assistant" | "both"
+                                    };
+                                    setForm({ ...form, loreEntries: next });
+                                  }}
+                                >
+                                  <option value="both">{t("characters.loreEntryTriggerBoth")}</option>
+                                  <option value="user">{t("characters.loreEntryTriggerUser")}</option>
+                                  <option value="assistant">{t("characters.loreEntryTriggerAssistant")}</option>
+                                </select>
+                              </Field>
+                              <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-400">
+                                <input
+                                  checked={entry.alwaysActive}
+                                  type="checkbox"
+                                  className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                                  onChange={() => {
+                                    const next = [...form.loreEntries];
+                                    next[index] = { ...entry, alwaysActive: !entry.alwaysActive };
+                                    setForm({ ...form, loreEntries: next });
+                                  }}
+                                />
+                                {t("characters.loreEntryAlwaysActive")}
+                              </label>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <Button
+                className="mt-3 w-full !min-h-[36px]"
+                variant="secondary"
+                onClick={() =>
+                  setForm({
+                    ...form,
+                    loreEntries: [...form.loreEntries, blankLoreEntry()]
+                  })
+                }
+              >
+                <Plus size={14} />
+                {t("characters.loreEntryAdd")}
+              </Button>
+            </div>
+            )
+            ) : null}
+
+            <div className="flex flex-wrap justify-end gap-3 pt-4 border-t border-white/5">
+              <Button disabled={loading || !selected} variant="danger" onClick={() => setDeleteConfirmOpen(true)}>
+                <Trash2 size={16} />
+                {t("common.delete")}
+              </Button>
+              <Button disabled={loading || !form.name.trim()} onClick={() => void saveCharacter()}>
+                <Save size={16} />
+                {t("common.save")}
+              </Button>
+            </div>
+          </div>
+        </Panel>
+        </div>
+      ) : (
         <div className="space-y-4">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
@@ -655,500 +1062,106 @@ export function CharactersPage() {
               }}
             />
           </div>
-          {characters.length === 0 && pagination.total === 0 && !searchQuery.trim() ? (
-            <EmptyState>{t("characters.noCharacters")}</EmptyState>
-          ) : characters.length === 0 ? (
-            <EmptyState>{t("characters.noSearchResults")}</EmptyState>
-          ) : (
-            <div className="custom-scrollbar max-h-[38rem] space-y-3 overflow-y-auto pr-1">
-            {characters.map((character) => (
-              <button
-                className={`group w-full rounded-xl border p-4 text-left text-sm transition-all duration-200 ${
-                  selectedId === character.id
-                    ? "border-ember-500/50 bg-ember-500/10 shadow-md shadow-ember-500/5"
-                    : "border-white/5 bg-white/5 hover:border-white/10 hover:bg-white/10"
-                }`}
-                key={character.id}
-                type="button"
-                onClick={() => selectCharacter(character)}
-              >
-                <div className="flex items-start gap-4">
-                  <div className={`grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-ink-800 text-sm font-semibold transition-all duration-200 ${selectedId === character.id ? 'ring-2 ring-ember-500/50 ring-offset-2 ring-offset-ink-900' : 'group-hover:scale-105'}`}>
-                    {character.avatar ? <img alt="" className="h-full w-full rounded-lg object-cover" src={character.avatar} /> : character.name.slice(0, 2)}
-                  </div>
-                  <div className="min-w-0 flex-1 pt-0.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className={`min-w-0 flex-1 text-sm font-medium leading-5 transition-colors ${selectedId === character.id ? 'text-ember-100' : 'text-slate-100 group-hover:text-white'}`}>
-                        <span className="line-clamp-2 break-words">{character.name}</span>
-                      </p>
-                      {character.visibility === "private" ? (
-                        <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-amber-400/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-200">
-                          <Lock size={10} />
-                          {language === "zh-CN" ? "私密" : "Private"}
-                        </span>
-                      ) : null}
-                    </div>
-                    <p className="mt-1 line-clamp-2 text-xs text-slate-400">
-                      {character.visibility === "private" && !character.canViewPrompt
-                        ? privateCharacterCopy.privateSummary
-                        : character.prompt || character.prefix || t("common.noDescription")}
-                    </p>
-                  </div>
-                </div>
-              </button>
-            ))}
-            </div>
-          )}
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/5 pt-3 text-xs text-slate-400">
-            <span>{characterPaginationCopy}</span>
-            <div className="flex items-center gap-2">
-              <Button
-                className="!min-h-[32px] !px-3 text-xs"
-                data-testid="characters-page-prev"
-                disabled={loading || pagination.page <= 1}
-                variant="secondary"
-                onClick={() => setCharacterPage((current) => Math.max(1, current - 1))}
-              >
-                <ChevronLeft size={14} />
-                {language === "zh-CN" ? "上一页" : "Previous"}
-              </Button>
-              <Button
-                className="!min-h-[32px] !px-3 text-xs"
-                data-testid="characters-page-next"
-                disabled={loading || pagination.page >= pagination.totalPages}
-                variant="secondary"
-                onClick={() => setCharacterPage((current) => Math.min(pagination.totalPages, current + 1))}
-              >
-                {language === "zh-CN" ? "下一页" : "Next"}
-                <ChevronRight size={14} />
-              </Button>
-            </div>
-          </div>
-        </div>
-      </Panel>
 
-      <Panel
-        className="p-5 sm:p-6"
-        title={selected ? t("characters.edit") : t("characters.create")}
-        action={
-          <div className="flex flex-wrap gap-2">
-            <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg bg-white/5 px-3 text-xs font-medium text-slate-200 transition-colors hover:bg-white/10 focus-within:ring-2 focus-within:ring-white/20">
-              <FileUp size={14} />
-              {t("common.import")}
-              <input className="sr-only" type="file" accept="application/json" onChange={(event) => void importCharacter(event.target.files?.[0])} />
-            </label>
-            <div className="inline-flex rounded-lg border border-white/5 bg-white/5 p-1">
-              {(["public", "private"] as CharacterExportMode[]).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
-                    exportMode === mode
-                      ? "bg-ember-500 text-ink-950"
-                      : "text-slate-300 hover:bg-white/10 hover:text-slate-100"
-                  }`}
-                  onClick={() => setExportMode(mode)}
-                >
-                  {mode === "public"
-                    ? privateCharacterCopy.exportPublic
-                    : privateCharacterCopy.exportPrivate}
-                </button>
-              ))}
-            </div>
-            <Button
-              disabled={!selected}
-              variant="ghost"
-              onClick={() => void exportCharacter()}
-              className="!min-h-[36px] !h-9 !px-3 text-xs"
-            >
-              <Download size={14} />
-              {t("common.export")}
-            </Button>
-          </div>
-        }
-      >
-        <div className="space-y-8">
           <ErrorNotice message={error} />
           <SuccessNotice message={status} />
-          {selected?.visibility === "private" ? (
-            <div className="rounded-xl border border-amber-400/15 bg-amber-500/8 px-4 py-3 text-sm text-amber-100">
-              <div className="flex items-center gap-2 font-medium">
-                <Lock size={14} />
-                {selected.canViewPrompt
-                  ? privateCharacterCopy.privateOwner
-                  : privateCharacterCopy.privateLocked}
-              </div>
-              {!selected.canViewPrompt ? (
-                <div className="mt-3 flex flex-wrap items-center gap-3">
-                  <p className="text-xs leading-5 text-amber-100/80">
-                    {privatePasswordCopy.lockedHelp}
-                  </p>
-                  <Button
-                    className="!min-h-[32px] !px-3 text-xs"
-                    variant="secondary"
-                    onClick={() => {
-                      setPasswordValue("");
-                      setPasswordDialogMode("unlock");
-                    }}
-                  >
-                    <Lock size={12} />
-                    {privatePasswordCopy.unlockAction}
-                  </Button>
-                </div>
-              ) : null}
+
+          {characters.length === 0 && pagination.total === 0 && !searchQuery.trim() ? (
+            <div className="flex items-center justify-center py-16">
+              <EmptyState>{t("characters.noCharacters")}</EmptyState>
             </div>
-          ) : null}
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_148px]">
-            <div className="grid gap-5">
-              <Field label={t("common.name")}><TextInput value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
-              <Field label={t("characters.avatarUrl")}><TextInput value={form.avatar} onChange={(event) => setForm({ ...form, avatar: event.target.value })} /></Field>
+          ) : characters.length === 0 ? (
+            <div className="flex items-center justify-center py-16">
+              <EmptyState>{t("characters.noSearchResults")}</EmptyState>
             </div>
-            <div className="grid min-h-[148px] place-items-center rounded-2xl border border-white/5 bg-ink-950/40 p-4">
-              <div className="grid h-24 w-24 place-items-center overflow-hidden rounded-2xl bg-ink-800 text-lg font-semibold text-slate-300 ring-1 ring-white/10">
-                {form.avatar ? (
-                  <img alt="" className="h-full w-full object-cover" src={form.avatar} />
-                ) : (
-                  (form.name || t("common.unknown")).slice(0, 2)
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-white/5 bg-ink-950/25 p-2">
-            <div className="grid grid-cols-3 gap-2.5">
-              {editorSections.map((section) => (
-                <button
-                  key={section.id}
-                  type="button"
-                  className={`min-h-11 rounded-xl px-4 py-2.5 text-sm font-medium transition-colors ${
-                    activeEditorSection === section.id
-                      ? "bg-ember-500 text-ink-950 shadow-sm shadow-ember-500/20"
-                      : "text-slate-300 hover:bg-white/5 hover:text-slate-100"
-                  }`}
-                  onClick={() => setActiveEditorSection(section.id)}
-                >
-                  {section.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {activeEditorSection === "prompt" ? (
-            isLockedPrivateCharacter ? (
-              <EmptyState>{privatePasswordCopy.lockedHelp}</EmptyState>
-            ) : (
-              <div className="space-y-7">
-                <Field
-                  container="div"
-                  label={<HelpLabel label={t("characters.prefix")} description={t("help.characterPrefix")} />}
-                >
-                  <MarkdownEditor
-                    value={form.prefix}
-                    onChange={(nextValue) => setForm({ ...form, prefix: nextValue })}
-                    height={180}
-                  />
-                </Field>
-                <Field
-                  container="div"
-                  label={<HelpLabel label={t("characters.prompt")} description={t("help.characterPrompt")} />}
-                >
-                  <MarkdownEditor
-                    value={form.prompt}
-                    onChange={(nextValue) => setForm({ ...form, prompt: nextValue })}
-                    height={320}
-                  />
-                </Field>
-                <Field
-                  container="div"
-                  label={<HelpLabel label={t("characters.suffix")} description={t("help.characterSuffix")} />}
-                >
-                  <MarkdownEditor
-                    value={form.suffix}
-                    onChange={(nextValue) => setForm({ ...form, suffix: nextValue })}
-                    height={220}
-                  />
-                </Field>
-              </div>
-            )
-          ) : null}
-
-          {activeEditorSection === "html" ? (
-            isLockedPrivateCharacter ? (
-              <EmptyState>{privatePasswordCopy.lockedHelp}</EmptyState>
-            ) : (
-              <div className="space-y-5">
-                <Field label={<HelpLabel label={t("characters.htmlCss")} description={t("help.characterHtmlCss")} />}>
-                  <TextArea value={form.htmlCss} onChange={(event) => setForm({ ...form, htmlCss: event.target.value })} className="!h-[170px] min-h-[170px] font-mono text-xs leading-6" />
-                </Field>
-
-                <div className="rounded-xl border border-white/5 bg-ink-950/30 p-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="space-y-1">
-                      <h4 className="text-sm font-semibold text-slate-100">{t("characters.htmlPreview")}</h4>
-                      <p className="text-xs leading-5 text-slate-500">{t("characters.htmlPreviewHelp")}</p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {htmlPreviewTemplates.map((template) => (
-                        <Button
-                          key={template.id}
-                          variant={previewTemplateId === template.id ? "secondary" : "ghost"}
-                          className="!h-8 !min-h-[32px] !px-3 text-xs"
-                          onClick={() => applyPreviewTemplate(template.id)}
-                        >
-                          {template.label}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                    <Field label={t("characters.htmlPreviewMarkup")}>
-                      <TextArea
-                        className="!h-[180px] min-h-[180px] font-mono text-xs leading-6"
-                        spellCheck={false}
-                        value={previewMarkup}
-                        onChange={(event) => setPreviewMarkup(event.target.value)}
-                      />
-                    </Field>
-                    <Field label={t("characters.htmlPreviewRendered")}>
-                      <div className="custom-scrollbar min-h-[180px] overflow-y-auto rounded-xl border border-white/5 bg-ink-950/60 p-4">
-                        <div className="rounded-2xl border border-white/5 bg-ink-900/70 p-4 shadow-inner shadow-black/20">
-                          <div className="flex items-start gap-3">
-                            <div className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-xl border border-white/10 bg-ink-800 text-sm font-semibold text-ember-100 shadow-black/20">
-                              {form.avatar ? (
-                                <img alt="" className="h-full w-full object-cover" src={form.avatar} />
-                              ) : (
-                                (form.name || t("common.unknown")).slice(0, 2)
-                              )}
-                            </div>
-                            <article className="min-w-0 flex-1 rounded-2xl rounded-bl-sm border border-white/5 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-sm backdrop-blur-sm">
-                              <div className="mb-3 text-xs font-bold tracking-wide text-ember-400">
-                                {form.name || t("common.unknown")}
-                              </div>
-                              <ScopedHtmlRenderer content={previewMarkup} htmlCss={form.htmlCss} />
-                            </article>
-                          </div>
-                        </div>
-                      </div>
-                    </Field>
-                  </div>
-                </div>
-              </div>
-            )
-          ) : null}
-
-          {activeEditorSection === "lore" ? (
-          isLockedPrivateCharacter ? (
-            <EmptyState>{privatePasswordCopy.lockedHelp}</EmptyState>
           ) : (
-          <div className="border-t border-white/5 pt-5">
-            <div className="mb-3 flex items-center justify-between">
-              <p className="text-sm font-semibold text-slate-100">{t("characters.loreEntries")}</p>
-              <span className="text-xs text-slate-500">
-                {t("characters.loreEntryCount", { count: form.loreEntries.filter((e) => e.enabled).length })}
-                {" · "}
-                {t("characters.loreEntryCount", { count: form.loreEntries.length })}
-              </span>
-            </div>
-            {form.loreEntries.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-white/10 px-4 py-6 text-center">
-                <p className="text-sm text-slate-400">{t("characters.loreEntryEmpty")}</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {form.loreEntries.map((entry, index) => (
+            <>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                {characters.map((character) => (
                   <div
-                    className={`rounded-xl border transition-colors ${
-                      entry.enabled
-                        ? "border-white/10 bg-ink-950/40"
-                        : "border-white/5 bg-ink-950/20 opacity-60"
-                    }`}
-                    key={entry._localId}
+                    className="group rounded-xl border border-white/5 bg-white/5 p-4 text-sm transition-all duration-200 hover:border-white/10 hover:bg-white/10"
+                    key={character.id}
                   >
-                    <div
-                      className="flex cursor-pointer items-center justify-between gap-2 px-4 py-3 select-none"
-                      onClick={() => {
-                        const next = [...form.loreEntries];
-                        next[index] = { ...entry, _collapsed: !entry._collapsed };
-                        setForm({ ...form, loreEntries: next });
-                      }}
-                    >
-                      <div className="flex min-w-0 items-center gap-2">
-                        <ChevronDown
-                          className={`shrink-0 text-slate-500 transition-transform duration-200 ${
-                            entry._collapsed ? "-rotate-90" : ""
-                          }`}
-                          size={14}
-                        />
-                        {entry.keys.length > 0 ? (
-                          <span className="truncate text-xs font-medium text-amber-200/80">
-                            {entry.keys.join(", ")}
-                          </span>
+                    <div className="flex flex-col items-center gap-3">
+                      <div className="grid h-20 w-20 shrink-0 place-items-center overflow-hidden rounded-2xl bg-ink-800 text-lg font-semibold text-slate-300 ring-1 ring-white/5 transition-all duration-200 group-hover:scale-105 group-hover:ring-ember-500/30">
+                        {character.avatar ? (
+                          <img alt="" className="h-full w-full object-cover" src={character.avatar} />
                         ) : (
-                          <span className="whitespace-nowrap text-xs font-medium text-slate-500">
-                            {t("characters.loreEntryIndex", { index: index + 1 })}
-                          </span>
+                          character.name.slice(0, 2)
                         )}
-                        {entry._collapsed && entry.content ? (
-                          <span className="hidden truncate text-xs text-slate-500 opacity-60 sm:inline">
-                            — {entry.content}
-                          </span>
-                        ) : null}
                       </div>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <label
-                          className="flex cursor-pointer items-center gap-1.5 rounded-lg px-1.5 py-1 text-xs text-slate-400 transition-colors hover:bg-white/5"
-                          onClick={(event) => event.stopPropagation()}
-                        >
-                          <input
-                            checked={entry.enabled}
-                            type="checkbox"
-                            className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
-                            onChange={() => {
-                              const next = [...form.loreEntries];
-                              next[index] = { ...entry, enabled: !entry.enabled };
-                              setForm({ ...form, loreEntries: next });
-                            }}
-                          />
-                          {t("common.enabled")}
-                        </label>
-                        <button
-                          className="rounded-lg p-1 text-slate-500 transition-colors hover:bg-red-500/10 hover:text-red-400"
-                          type="button"
+                      <div className="min-w-0 w-full text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <p className="truncate font-medium text-slate-100 group-hover:text-white">
+                            {character.name}
+                          </p>
+                          {character.visibility === "private" ? (
+                            <Lock size={11} className="shrink-0 text-amber-400" />
+                          ) : null}
+                        </div>
+                        <p className="mt-1.5 line-clamp-3 text-xs leading-5 text-slate-400">
+                          {character.visibility === "private" && !character.canViewPrompt
+                            ? privateCharacterCopy.privateSummary
+                            : character.prompt || character.prefix || t("common.noDescription")}
+                        </p>
+                      </div>
+                      <div className="flex w-full items-center justify-center gap-2 pt-1">
+                        <Button
+                          className="!min-h-[32px] !h-8 flex-1 !px-3 text-xs"
                           onClick={(event) => {
                             event.stopPropagation();
-                            const next = form.loreEntries.filter((_, i) => i !== index);
-                            setForm({ ...form, loreEntries: next });
+                            onPlay(character.id);
                           }}
                         >
-                          <X size={14} />
-                        </button>
-                      </div>
-                    </div>
-                    <div
-                      className={`overflow-hidden transition-all duration-200 ease-out ${
-                        entry._collapsed
-                          ? "max-h-0 border-t-0 opacity-0"
-                          : "max-h-[1000px] border-t border-white/5 opacity-100"
-                      }`}
-                    >
-                      <div className="px-4 pb-4 pt-3">
-                        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_140px]">
-                          <div className="space-y-3">
-                            <Field label={t("characters.loreEntryKeys")}>
-                              <TextInput
-                                placeholder={t("characters.loreEntryKeysPlaceholder")}
-                                value={entry.keys.join(", ")}
-                                onChange={(event) => {
-                                  const keys = event.target.value
-                                    .split(/[,，]/)
-                                    .map((k) => k.trim())
-                                    .filter(Boolean);
-                                  const next = [...form.loreEntries];
-                                  next[index] = { ...entry, keys };
-                                  setForm({ ...form, loreEntries: next });
-                                }}
-                              />
-                            </Field>
-                            <Field container="div" label={t("characters.loreEntryContent")}>
-                              <MarkdownEditor
-                                height={180}
-                                value={entry.content}
-                                onChange={(nextValue) => {
-                                  const next = [...form.loreEntries];
-                                  next[index] = { ...entry, content: nextValue };
-                                  setForm({ ...form, loreEntries: next });
-                                }}
-                              />
-                            </Field>
-                          </div>
-                          <div className="space-y-3">
-                            <Field label={t("common.priority")}>
-                              <TextInput
-                                type="number"
-                                value={String(entry.priority)}
-                                onChange={(event) => {
-                                  const next = [...form.loreEntries];
-                                  next[index] = {
-                                    ...entry,
-                                    priority: Math.max(0, Number(event.target.value) || 0)
-                                  };
-                                  setForm({ ...form, loreEntries: next });
-                                }}
-                              />
-                            </Field>
-                            <Field label={t("characters.loreEntryTriggerMode")}>
-                              <select
-                                className="w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-2 text-sm text-slate-200 focus:border-ember-500/50 focus:outline-none focus:ring-1 focus:ring-ember-500/30"
-                                value={entry.triggerMode}
-                                onChange={(event) => {
-                                  const next = [...form.loreEntries];
-                                  next[index] = {
-                                    ...entry,
-                                    triggerMode: event.target.value as "user" | "assistant" | "both"
-                                  };
-                                  setForm({ ...form, loreEntries: next });
-                                }}
-                              >
-                                <option value="both">{t("characters.loreEntryTriggerBoth")}</option>
-                                <option value="user">{t("characters.loreEntryTriggerUser")}</option>
-                                <option value="assistant">{t("characters.loreEntryTriggerAssistant")}</option>
-                              </select>
-                            </Field>
-                            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-400">
-                              <input
-                                checked={entry.alwaysActive}
-                                type="checkbox"
-                                className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
-                                onChange={() => {
-                                  const next = [...form.loreEntries];
-                                  next[index] = { ...entry, alwaysActive: !entry.alwaysActive };
-                                  setForm({ ...form, loreEntries: next });
-                                }}
-                              />
-                              {t("characters.loreEntryAlwaysActive")}
-                            </label>
-                          </div>
-                        </div>
+                          <Sparkles size={14} />
+                          {t("characters.play")}
+                        </Button>
+                        <Button
+                          className="!min-h-[32px] !h-8 flex-1 !px-3 text-xs"
+                          variant="secondary"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            selectCharacter(character);
+                          }}
+                        >
+                          <Settings size={14} />
+                          {t("common.edit")}
+                        </Button>
                       </div>
                     </div>
                   </div>
                 ))}
               </div>
-            )}
-            <Button
-              className="mt-3 w-full !min-h-[36px]"
-              variant="secondary"
-              onClick={() =>
-                setForm({
-                  ...form,
-                  loreEntries: [...form.loreEntries, blankLoreEntry()]
-                })
-              }
-            >
-              <Plus size={14} />
-              {t("characters.loreEntryAdd")}
-            </Button>
-          </div>
-          )
-          ) : null}
 
-          <div className="flex flex-wrap justify-end gap-3 pt-4 border-t border-white/5">
-            <Button disabled={loading || !selected || isLockedPrivateCharacter} variant="secondary" onClick={() => void duplicateCharacter()}>
-              <Copy size={16} />
-              {t("characters.duplicate")}
-            </Button>
-            <Button disabled={loading || !selected} variant="danger" onClick={() => setDeleteConfirmOpen(true)}>
-              <Trash2 size={16} />
-              {t("common.delete")}
-            </Button>
-            <Button disabled={loading || !form.name.trim()} onClick={() => void saveCharacter()}>
-              <Save size={16} />
-              {t("common.save")}
-            </Button>
-          </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-3 text-xs text-slate-400">
+                <span>{characterPaginationCopy}</span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    className="!min-h-[32px] !px-3 text-xs"
+                    data-testid="characters-page-prev"
+                    disabled={loading || pagination.page <= 1}
+                    variant="secondary"
+                    onClick={() => setCharacterPage((current) => Math.max(1, current - 1))}
+                  >
+                    <ChevronLeft size={14} />
+                    {language === "zh-CN" ? "上一页" : "Previous"}
+                  </Button>
+                  <Button
+                    className="!min-h-[32px] !px-3 text-xs"
+                    data-testid="characters-page-next"
+                    disabled={loading || pagination.page >= pagination.totalPages}
+                    variant="secondary"
+                    onClick={() => setCharacterPage((current) => Math.min(pagination.totalPages, current + 1))}
+                  >
+                    {language === "zh-CN" ? "下一页" : "Next"}
+                    <ChevronRight size={14} />
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
-      </Panel>
+      )}
       {deleteConfirmOpen && selected ? (
         <ConfirmDialog
           cancelLabel={t("common.cancel")}
@@ -1193,6 +1206,6 @@ export function CharactersPage() {
           onConfirm={() => void submitPasswordDialog()}
         />
       ) : null}
-    </div>
+    </>
   );
 }

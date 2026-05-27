@@ -10,10 +10,11 @@ chatsRouter.get(
   "/",
   asyncHandler(async (_request, response) => {
     const chats = await prisma.chat.findMany({
-      orderBy: { updatedAt: "desc" }
+      orderBy: { updatedAt: "desc" },
+      include: { _count: { select: { messages: true } } }
     });
 
-    response.json({ ok: true, data: chats.map(serializeChat) });
+    response.json({ ok: true, data: chats.map((chat) => serializeChat(chat, chat._count.messages)) });
   })
 );
 
@@ -58,10 +59,11 @@ chatsRouter.put(
 
     const chat = await prisma.chat.update({
       where: { id },
-      data: body
+      data: body,
+      include: { _count: { select: { messages: true } } }
     });
 
-    response.json({ ok: true, data: serializeChat(chat) });
+    response.json({ ok: true, data: serializeChat(chat, chat._count.messages) });
   })
 );
 

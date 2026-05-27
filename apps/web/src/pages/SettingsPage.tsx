@@ -538,8 +538,8 @@ export function SettingsPage() {
         </div>
       </section>
 
-      <div className="custom-scrollbar overflow-x-auto">
-        <div className={`inline-flex min-w-max rounded-xl border p-1 ${settingsPanelClassName}`}>
+      <div>
+        <div className={`flex rounded-xl border p-1 ${settingsPanelClassName}`}>
           {([
             ["runtime", copy.runtimeTitle],
             ["presets", copy.presetsTitle],
@@ -550,7 +550,7 @@ export function SettingsPage() {
             return (
               <button
                 key={section}
-                className={`min-h-[40px] rounded-lg px-4 text-sm font-medium whitespace-nowrap transition-colors ${
+                className={`min-h-[36px] flex-1 whitespace-nowrap rounded-lg px-2 text-xs font-medium transition-colors sm:min-h-[40px] sm:px-4 sm:text-sm ${
                   active
                     ? "bg-ember-500 text-ink-950 shadow-sm shadow-ember-500/20"
                     : "text-slate-300 hover:bg-ink-800/75"

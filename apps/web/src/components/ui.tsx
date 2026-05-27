@@ -24,9 +24,9 @@ export function Panel({
     <section
       className={`animate-fade-in h-full min-w-0 rounded-xl border border-white/5 bg-ink-900/80 p-4 shadow-lg shadow-black/20 backdrop-blur-sm transition-all ${className}`}
     >
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold tracking-wide text-slate-100">{title}</h3>
-        {action}
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h3 className="min-w-0 text-sm font-semibold tracking-wide text-slate-100">{title}</h3>
+        {action ? <div className="flex shrink-0 items-center gap-1">{action}</div> : null}
       </div>
       {children}
     </section>
@@ -197,15 +197,38 @@ export function EmptyState({ children }: { children: ReactNode }) {
 }
 
 export function ErrorNotice({ message }: { message: string | null }) {
-  if (!message) {
+  const [mounted, setMounted] = useState(false);
+  const [visible, setVisible] = useState(Boolean(message));
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!message) {
+      setVisible(false);
+      return;
+    }
+
+    setVisible(true);
+    const timer = window.setTimeout(() => setVisible(false), 2400);
+    return () => window.clearTimeout(timer);
+  }, [message]);
+
+  if (!mounted || !message || !visible) {
     return null;
   }
 
-  return (
-    <div className="animate-fade-in rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-200 shadow-sm flex items-start gap-2">
-      <AlertTriangle size={16} className="mt-0.5 shrink-0 text-rose-400" />
-      <span>{message}</span>
-    </div>
+  return createPortal(
+    <div
+      aria-live="assertive"
+      className="animate-fade-in pointer-events-none fixed right-4 top-4 z-[70] flex min-h-[44px] w-[calc(100vw-2rem)] max-w-sm items-start gap-3 rounded-xl border border-rose-500/25 bg-ink-900/95 px-4 py-3 text-sm font-medium text-slate-100 shadow-2xl shadow-black/40 backdrop-blur-md sm:w-auto sm:min-w-[300px]"
+      role="alert"
+    >
+      <AlertTriangle size={18} className="mt-0.5 shrink-0 text-rose-400" />
+      <span className="leading-5">{message}</span>
+    </div>,
+    document.body
   );
 }
 
@@ -253,6 +276,57 @@ export function Badge({ children }: { children: ReactNode }) {
   );
 }
 
+export function Drawer({
+  open,
+  onClose,
+  children,
+  title
+}: {
+  open: boolean;
+  onClose: () => void;
+  children: ReactNode;
+  title?: ReactNode;
+}) {
+  return createPortal(
+    <div
+      className={`fixed inset-0 z-40 transition-all duration-300 xl:hidden ${
+        open ? "" : "pointer-events-none"
+      }`}
+    >
+      <div
+        className={`absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${
+          open ? "opacity-100" : "opacity-0"
+        }`}
+        onClick={onClose}
+      />
+      <div
+        className={`absolute inset-y-0 left-0 z-10 flex w-80 max-w-[85vw] flex-col border-r border-white/10 bg-ink-900 shadow-2xl shadow-black/70 transition-transform duration-300 ease-out will-change-transform ${
+          open ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        {title ? (
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/[0.06] px-5 py-4">
+            <h3 className="min-w-0 truncate text-sm font-semibold tracking-wide text-slate-100">
+              {title}
+            </h3>
+            <button
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-slate-500 transition-all duration-200 hover:bg-white/10 hover:text-slate-200 active:scale-90"
+              type="button"
+              onClick={onClose}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        ) : null}
+        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-4">
+          {children}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 export function Modal({
   title,
   children,
@@ -282,25 +356,28 @@ export function Modal({
 
   return (
     <div
-      className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 p-3 backdrop-blur-sm sm:p-4"
+      className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/70 p-3 backdrop-blur-md transition-[opacity,backdrop-filter] duration-300 will-change-[opacity] sm:p-5"
       onClick={onClose}
     >
       <section
-        className="animate-scale-in flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/10 bg-ink-900 shadow-2xl shadow-black/50 sm:max-h-[calc(100dvh-2rem)]"
+        className="animate-modal-enter flex max-h-[calc(100dvh-2rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)]"
         role="dialog"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-white/10 px-5 py-4 sm:px-6">
-          <h3 className="text-lg font-semibold tracking-tight text-slate-100">{title}</h3>
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/[0.06] px-5 py-3.5 sm:px-6 sm:py-4">
+          <h3 className="min-w-0 truncate text-base font-semibold tracking-tight text-slate-100">
+            {title}
+          </h3>
           <button
-            className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/5 hover:text-slate-200"
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-slate-500 transition-all duration-200 hover:bg-white/10 hover:text-slate-200 active:scale-90"
             type="button"
+            aria-label="Close"
             onClick={onClose}
           >
-            <X size={18} />
+            <X size={16} />
           </button>
         </div>
-        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-5 sm:p-6">
+        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-4 sm:px-6 sm:pb-6">
           {children}
         </div>
       </section>
@@ -328,20 +405,20 @@ export function ConfirmDialog({
   onConfirm: () => void;
 }) {
   return (
-    <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 p-3 backdrop-blur-sm sm:p-4">
+    <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/70 p-3 backdrop-blur-md transition-[opacity,backdrop-filter] duration-300 will-change-[opacity] sm:p-5">
       <section
         aria-labelledby="confirm-dialog-title"
-        className="animate-scale-in flex max-h-[calc(100dvh-1.5rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-white/10 bg-ink-900 shadow-2xl shadow-black/50 sm:max-h-[calc(100dvh-2rem)]"
+        className="animate-modal-enter flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)]"
         role="dialog"
       >
-        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-5 sm:p-6">
+        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-5 sm:px-6 sm:pb-5 sm:pt-6">
         <div className="flex gap-4">
-          <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-rose-500/15 text-rose-400 ring-4 ring-rose-500/5">
-            <AlertTriangle size={20} />
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-rose-500/15 text-rose-400 ring-4 ring-rose-500/5 sm:h-12 sm:w-12">
+            <AlertTriangle size={18} />
           </div>
-          <div className="min-w-0 pt-1">
+          <div className="min-w-0 pt-0.5 sm:pt-1">
             <h3
-              className="text-lg font-semibold tracking-tight text-slate-100"
+              className="text-base font-semibold tracking-tight text-slate-100 sm:text-lg"
               id="confirm-dialog-title"
             >
               {title}
@@ -351,7 +428,7 @@ export function ConfirmDialog({
         </div>
         </div>
 
-        <div className="flex shrink-0 flex-wrap justify-end gap-3 border-t border-white/10 px-5 py-4 sm:px-6">
+        <div className="flex shrink-0 flex-wrap justify-end gap-3 border-t border-white/[0.06] px-5 py-4 sm:px-6">
           <Button disabled={loading} variant="ghost" onClick={onCancel}>
             {cancelLabel}
           </Button>

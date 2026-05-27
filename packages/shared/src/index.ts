@@ -202,6 +202,7 @@ export interface ChatDTO {
   title: string;
   mode: ChatMode;
   characterIds: string[];
+  messageCount: number;
   memoryTurns: number;
   userPersona: string;
   userProfileSummary: string;
