@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle, HelpCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle, HelpCircle, X } from "lucide-react";
 import { forwardRef, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type {
@@ -250,6 +250,61 @@ export function Badge({ children }: { children: ReactNode }) {
     <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-xs font-medium text-slate-300 transition-colors hover:bg-white/10">
       {children}
     </span>
+  );
+}
+
+export function Modal({
+  title,
+  children,
+  onClose
+}: {
+  title: ReactNode;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 p-3 backdrop-blur-sm sm:p-4"
+      onClick={onClose}
+    >
+      <section
+        className="animate-scale-in flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/10 bg-ink-900 shadow-2xl shadow-black/50 sm:max-h-[calc(100dvh-2rem)]"
+        role="dialog"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-white/10 px-5 py-4 sm:px-6">
+          <h3 className="text-lg font-semibold tracking-tight text-slate-100">{title}</h3>
+          <button
+            className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/5 hover:text-slate-200"
+            type="button"
+            onClick={onClose}
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-5 sm:p-6">
+          {children}
+        </div>
+      </section>
+    </div>
   );
 }
 

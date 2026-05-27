@@ -1,7 +1,9 @@
 import {
+  BrainCircuit,
   ChevronLeft,
   ChevronRight,
   Check,
+  FileText,
   MessageSquarePlus,
   RefreshCw,
   Search,
@@ -10,11 +12,11 @@ import {
   Sparkles,
   StopCircle,
   Trash2,
+  User,
   X
 } from "lucide-react";
 import {
   emptyUserCustomConfig,
-  hasUserCustomConfigContent,
   parseUserCustomConfig,
   serializeUserCustomConfig,
   type UserCustomConfigDTO
@@ -37,13 +39,14 @@ import type {
   SettingsInput,
   TokenUsageDTO
 } from "../types";
-import { Badge, Button, ConfirmDialog, EmptyState, ErrorNotice, Field, Panel, SuccessNotice, TextArea, TextInput } from "../components/ui";
+import { Badge, Button, ConfirmDialog, EmptyState, ErrorNotice, Field, Modal, Panel, SuccessNotice, TextArea, TextInput } from "../components/ui";
 import {
   AssistantMessageBubble,
   StreamingBubble,
   SystemNotification,
   UserMessageBubble
 } from "../components/messages";
+import { MarkdownEditor } from "../components/MarkdownEditor";
 
 const MESSAGES_PER_PAGE = 30;
 const CREATE_CHAT_CHARACTER_PAGE_SIZE = 40;
@@ -80,8 +83,6 @@ export function ChatPage() {
   const [memorySettingsOpen, setMemorySettingsOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState("12");
   const memorySettingsRef = useRef<HTMLDivElement | null>(null);
-  const personaEditorRef = useRef<HTMLDivElement | null>(null);
-  const profileEditorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -101,11 +102,13 @@ export function ChatPage() {
     "activeProvider" | "apiBaseUrl" | "model" | "temperature" | "maxTokens" | "topP" | "language"
   > | null>(null);
   const [autoSummarizeUser, setAutoSummarizeUser] = useState(true);
-  const [editingPersona, setEditingPersona] = useState(false);
+  const [showUserConfigDialog, setShowUserConfigDialog] = useState(false);
+  const [showUserProfileDialog, setShowUserProfileDialog] = useState(false);
+  const [showModelDialog, setShowModelDialog] = useState(false);
+  const [showMemoryDialog, setShowMemoryDialog] = useState(false);
   const [editingPersonaDraft, setEditingPersonaDraft] = useState<UserCustomConfigDTO>(
     () => emptyUserCustomConfig()
   );
-  const [editingProfile, setEditingProfile] = useState(false);
   const [editingProfileDraft, setEditingProfileDraft] = useState("");
   const [pendingDeleteChat, setPendingDeleteChat] = useState<ChatDTO | null>(null);
   const [pendingDeleteMessage, setPendingDeleteMessage] = useState<MessageDTO | null>(null);
@@ -358,12 +361,6 @@ export function ChatPage() {
       ? t("characters.noSearchResults")
       : `${createCharacterRange.start}-${createCharacterRange.end} / ${createCharacterPagination.total}`;
 
-  const activeUserConfig = useMemo(
-    () => parseUserCustomConfig(activeChat?.userPersona),
-    [activeChat?.userPersona]
-  );
-  const hasActiveUserConfig = hasUserCustomConfigContent(activeUserConfig);
-
   const paginationCopy =
     language === "zh-CN"
       ? {
@@ -589,41 +586,8 @@ export function ChatPage() {
     });
   };
 
-  const handleMemorySettingsPointerDownCapture = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (editingPersona && personaEditorRef.current && !personaEditorRef.current.contains(event.target as Node)) {
-      setEditingPersona(false);
-      setEditingPersonaDraft(emptyUserCustomConfig());
-    }
-
-    if (!editingProfile || !profileEditorRef.current) {
-      return;
-    }
-
-    if (!profileEditorRef.current.contains(event.target as Node)) {
-      setEditingProfile(false);
-      setEditingProfileDraft("");
-    }
-  };
-
-  const clearUserConfig = async () => {
-    if (!activeChat) {
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    setStatus(null);
-    try {
-      const updated = await api.chats.update(activeChat.id, { userPersona: "" });
-      applyChatUpdate(updated);
-      setEditingPersona(false);
-      setEditingPersonaDraft(emptyUserCustomConfig());
-      setStatus(t("chat.userConfigCleared"));
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t("chat.failedUpdateUserConfig"));
-    } finally {
-      setLoading(false);
-    }
+  const handleMemorySettingsPointerDownCapture = (_event: React.PointerEvent<HTMLDivElement>) => {
+    // no-op: editing now uses modal dialogs
   };
 
   const saveUserConfig = async () => {
@@ -638,30 +602,10 @@ export function ChatPage() {
       const userPersona = serializeUserCustomConfig(editingPersonaDraft);
       const updated = await api.chats.update(activeChat.id, { userPersona });
       applyChatUpdate(updated);
-      setEditingPersona(false);
+      setShowUserConfigDialog(false);
       setStatus(t("chat.userConfigSaved"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdateUserConfig"));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const clearUserProfileSummary = async () => {
-    if (!activeChat) {
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    setStatus(null);
-    try {
-      const updated = await api.chats.update(activeChat.id, { userProfileSummary: "" });
-      applyChatUpdate(updated);
-      setEditingProfile(false);
-      setStatus(t("chat.userProfileCleared"));
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t("chat.failedUpdateUserProfile"));
     } finally {
       setLoading(false);
     }
@@ -681,7 +625,7 @@ export function ChatPage() {
         userProfileSummary: summary
       });
       applyChatUpdate(updated);
-      setEditingProfile(false);
+      setShowUserProfileDialog(false);
       setStatus(t("chat.userProfileSaved"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdateUserProfile"));
@@ -692,22 +636,43 @@ export function ChatPage() {
 
   const startEditingUserConfig = () => {
     setEditingPersonaDraft(parseUserCustomConfig(activeChat?.userPersona));
-    setEditingPersona(true);
+    setShowUserConfigDialog(true);
+    setMemorySettingsOpen(false);
   };
 
   const cancelEditingUserConfig = () => {
-    setEditingPersona(false);
+    setShowUserConfigDialog(false);
     setEditingPersonaDraft(emptyUserCustomConfig());
   };
 
   const startEditingProfile = () => {
     setEditingProfileDraft(activeChat?.userProfileSummary ?? "");
-    setEditingProfile(true);
+    setShowUserProfileDialog(true);
+    setMemorySettingsOpen(false);
   };
 
   const cancelEditingProfile = () => {
-    setEditingProfile(false);
+    setShowUserProfileDialog(false);
     setEditingProfileDraft("");
+  };
+
+  const openModelDialog = () => {
+    setShowModelDialog(true);
+    setMemorySettingsOpen(false);
+  };
+
+  const closeModelDialog = () => {
+    setShowModelDialog(false);
+  };
+
+  const openMemoryDialog = () => {
+    setMemoryDraft(String(activeChat?.memoryTurns ?? 12));
+    setShowMemoryDialog(true);
+    setMemorySettingsOpen(false);
+  };
+
+  const closeMemoryDialog = () => {
+    setShowMemoryDialog(false);
   };
 
   const updateUserConfigDraft = (field: keyof UserCustomConfigDTO, value: string) => {
@@ -761,6 +726,7 @@ export function ChatPage() {
         )
       );
       setMemorySettingsOpen(false);
+      setShowMemoryDialog(false);
       setStatus(t("chat.chatSettingsSaved"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdateMemory"));
@@ -1100,267 +1066,67 @@ export function ChatPage() {
               </Button>
               {memorySettingsOpen ? (
                 <div
-                  className="custom-scrollbar absolute right-0 top-10 z-20 max-h-80 w-72 overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-3.5 shadow-xl shadow-black/30 backdrop-blur-md sm:max-h-[calc(100dvh-22rem)]"
+                  className="custom-scrollbar absolute right-0 top-10 z-20 max-h-80 w-56 overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-3.5 shadow-xl shadow-black/30 backdrop-blur-md sm:max-h-[calc(100dvh-22rem)]"
                   onPointerDownCapture={handleMemorySettingsPointerDownCapture}
                 >
                   {settingsModels.length > 0 ? (
                     <div className="mb-3 border-b border-white/10 pb-3">
-                      <p className="mb-2 text-sm font-semibold text-slate-100">
-                        {t("chat.modelSwitchTitle")}
-                      </p>
-                      <div className="space-y-1.5">
-                        {settingsModels.map((model) => (
-                          <button
-                            className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
-                              activeModelId === model.id
-                                ? "bg-ember-500/15 text-ember-200 ring-1 ring-ember-500/30"
-                                : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
-                            }`}
-                            disabled={loading}
-                            key={model.id}
-                            type="button"
-                            onClick={() => void switchModel(model)}
-                          >
-                            <Sparkles
-                              size={14}
-                              className={activeModelId === model.id ? "text-ember-300" : "text-slate-500"}
-                            />
-                            <span className="min-w-0 flex-1 truncate font-medium">
-                              {model.label || model.model}
-                            </span>
-                            <span className="ml-auto shrink-0 text-[11px] font-medium text-slate-500">
-                              {model.provider}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
+                      <button
+                        className="flex w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200"
+                        type="button"
+                        onClick={openModelDialog}
+                      >
+                        <span>{t("chat.modelSwitchTitle")}</span>
+                        <Sparkles size={15} className="text-slate-400" />
+                      </button>
                     </div>
                   ) : null}
 
-                  <div className="space-y-3">
-                    <Field label={t("chat.memorySettings")} labelClassName="!text-sm !font-semibold !text-slate-100">
-                      <TextInput
-                        min={1}
-                        max={50}
-                        type="number"
-                        value={memoryDraft}
-                        onChange={(event) => setMemoryDraft(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            void updateMemory();
-                          }
-                        }}
-                      />
-                    </Field>
-                    <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
-                      {t("chat.memoryHelp")}
-                    </p>
-                    <div className="border-t border-white/10 pt-3">
-                      <div className="mb-2">
-                        <p className="text-sm font-semibold text-slate-100">
-                          {t("chat.userConfigTitle")}
-                        </p>
-                        <p className="mt-1 text-xs leading-5 text-slate-400">
-                          {t("chat.userConfigHelp")}
-                        </p>
-                      </div>
-                      {editingPersona ? (
-                        <div ref={personaEditorRef} className="space-y-3">
-                          <Field label={t("chat.userConfigPrefix")}>
-                            <TextArea
-                              className="!h-24 min-h-[96px] text-xs leading-5"
-                              placeholder={t("chat.userConfigPrefixHelp")}
-                              value={editingPersonaDraft.prefix}
-                              onChange={(event) =>
-                                updateUserConfigDraft("prefix", event.target.value)
-                              }
-                            />
-                          </Field>
-                          <Field label={t("chat.userConfigPrompt")}>
-                            <TextArea
-                              className="!h-28 min-h-[112px] text-xs leading-5"
-                              placeholder={t("chat.userConfigPromptHelp")}
-                              value={editingPersonaDraft.prompt}
-                              onChange={(event) =>
-                                updateUserConfigDraft("prompt", event.target.value)
-                              }
-                            />
-                          </Field>
-                          <Field label={t("chat.userConfigSuffix")}>
-                            <TextArea
-                              className="!h-24 min-h-[96px] text-xs leading-5"
-                              placeholder={t("chat.userConfigSuffixHelp")}
-                              value={editingPersonaDraft.suffix}
-                              onChange={(event) =>
-                                updateUserConfigDraft("suffix", event.target.value)
-                              }
-                            />
-                          </Field>
-                          <div className="flex gap-2">
-                            <Button
-                              className="flex-1 !min-h-[32px] text-xs"
-                              disabled={loading}
-                              onClick={() => void saveUserConfig()}
-                            >
-                              {t("common.save")}
-                            </Button>
-                            <Button
-                              className="!min-h-[32px] px-3 text-xs"
-                              disabled={loading}
-                              variant="ghost"
-                              onClick={cancelEditingUserConfig}
-                            >
-                              {t("common.cancel")}
-                            </Button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="rounded-lg border border-white/5 bg-ink-950/55 px-3 py-2 text-xs leading-5 text-slate-400">
-                            {hasActiveUserConfig ? (
-                              <div className="custom-scrollbar max-h-52 space-y-3 overflow-y-auto pr-1">
-                                {activeUserConfig.prefix.trim() ? (
-                                  <div>
-                                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                      {t("chat.userConfigPrefix")}
-                                    </p>
-                                    <p className="whitespace-pre-wrap">{activeUserConfig.prefix}</p>
-                                  </div>
-                                ) : null}
-                                {activeUserConfig.prompt.trim() ? (
-                                  <div>
-                                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                      {t("chat.userConfigPrompt")}
-                                    </p>
-                                    <p className="whitespace-pre-wrap">{activeUserConfig.prompt}</p>
-                                  </div>
-                                ) : null}
-                                {activeUserConfig.suffix.trim() ? (
-                                  <div>
-                                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                      {t("chat.userConfigSuffix")}
-                                    </p>
-                                    <p className="whitespace-pre-wrap">{activeUserConfig.suffix}</p>
-                                  </div>
-                                ) : null}
-                              </div>
-                            ) : (
-                              <p>{t("chat.userConfigEmpty")}</p>
-                            )}
-                          </div>
-                          <div className="mt-2 flex gap-2">
-                            <Button
-                              className="flex-1 !min-h-[32px] text-xs"
-                              disabled={loading}
-                              variant="secondary"
-                              onClick={startEditingUserConfig}
-                            >
-                              {t("chat.editUserConfig")}
-                            </Button>
-                            {hasActiveUserConfig ? (
-                              <Button
-                                className="!min-h-[32px] px-3 text-xs"
-                                disabled={loading}
-                                variant="danger"
-                                onClick={() => void clearUserConfig()}
-                              >
-                                {t("chat.clearUserConfig")}
-                              </Button>
-                            ) : null}
-                          </div>
-                        </>
-                      )}
+                  <div className="border-b border-white/10 pb-3">
+                    <button
+                      className="flex w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200"
+                      type="button"
+                      onClick={openMemoryDialog}
+                    >
+                      <span>{t("chat.memorySettings")}</span>
+                      <BrainCircuit size={15} className="text-slate-400" />
+                    </button>
+                  </div>
+
+                  <div className="border-b border-white/10 pb-3 pt-3">
+                    <button
+                      className="flex w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200"
+                      type="button"
+                      onClick={startEditingUserConfig}
+                    >
+                      <span>{t("chat.userConfigTitle")}</span>
+                      <FileText size={15} className="text-slate-400" />
+                    </button>
+                  </div>
+
+                  <div className="pt-3">
+                    <button
+                      className="flex w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200"
+                      type="button"
+                      onClick={startEditingProfile}
+                    >
+                      <span>{t("chat.userProfileTitle")}</span>
+                      <User size={15} className="text-slate-400" />
+                    </button>
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-slate-100">
+                        {t("chat.autoSummarizeUser")}
+                      </p>
+                      <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-400">
+                        <input
+                          checked={autoSummarizeUser}
+                          type="checkbox"
+                          className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                          onChange={(event) => void updateAutoSummarizeUser(event.target.checked)}
+                        />
+                        {t("chat.autoSummarizeUser")}
+                      </label>
                     </div>
-                    <div className="border-t border-white/10 pt-3">
-                      <div className="mb-2">
-                        <p className="text-sm font-semibold text-slate-100">
-                          {t("chat.userProfileTitle")}
-                        </p>
-                        <p className="mt-1 text-xs leading-5 text-slate-400">
-                          {t("chat.userProfileHelp")}
-                        </p>
-                      </div>
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <p className="text-sm font-semibold text-slate-100">
-                          {t("chat.autoSummarizeUser")}
-                        </p>
-                        <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-400">
-                          <input
-                            checked={autoSummarizeUser}
-                            type="checkbox"
-                            className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
-                            onChange={(event) => void updateAutoSummarizeUser(event.target.checked)}
-                          />
-                          {t("chat.autoSummarizeUser")}
-                        </label>
-                      </div>
-                      {editingProfile ? (
-                        <div ref={profileEditorRef} className="space-y-2">
-                          <textarea
-                            className="min-h-[100px] w-full min-w-0 resize-none rounded-lg border border-white/10 bg-ink-950/50 px-3 py-2.5 text-xs leading-5 text-slate-100 outline-none transition-all placeholder:text-slate-500 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50"
-                            value={editingProfileDraft}
-                            onChange={(event) => setEditingProfileDraft(event.target.value)}
-                          />
-                          <div className="flex gap-2">
-                            <Button
-                              className="flex-1 !min-h-[32px] text-xs"
-                              disabled={loading}
-                              onClick={() => void saveUserProfileSummary()}
-                            >
-                              {t("common.save")}
-                            </Button>
-                            <Button
-                              className="!min-h-[32px] px-3 text-xs"
-                              disabled={loading}
-                              variant="ghost"
-                              onClick={cancelEditingProfile}
-                            >
-                              {t("common.cancel")}
-                            </Button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="rounded-lg border border-white/5 bg-ink-950/55 px-3 py-2 text-xs leading-5 text-slate-400">
-                            {activeChat?.userProfileSummary?.trim() ? (
-                              <p className="custom-scrollbar max-h-28 overflow-y-auto whitespace-pre-wrap pr-1">
-                                {activeChat.userProfileSummary}
-                              </p>
-                            ) : (
-                              <p>{t("chat.userProfileEmpty")}</p>
-                            )}
-                            {activeChat?.userProfileUpdatedAt ? (
-                              <p className="mt-2 text-[11px] text-slate-500">
-                                {t("chat.userProfileUpdated")}
-                              </p>
-                            ) : null}
-                          </div>
-                          <div className="mt-2 flex gap-2">
-                            <Button
-                              className="flex-1 !min-h-[32px] text-xs"
-                              disabled={loading}
-                              variant="secondary"
-                              onClick={startEditingProfile}
-                            >
-                              {t("chat.editUserProfile")}
-                            </Button>
-                            {activeChat?.userProfileSummary?.trim() ? (
-                              <Button
-                                className="!min-h-[32px] px-3 text-xs"
-                                disabled={loading}
-                                variant="danger"
-                                onClick={() => void clearUserProfileSummary()}
-                              >
-                                {t("chat.clearUserProfile")}
-                              </Button>
-                            ) : null}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                    <Button className="w-full !min-h-[34px]" disabled={loading} onClick={() => void updateMemory()}>
-                      {t("common.save")}
-                    </Button>
                   </div>
                 </div>
               ) : null}
@@ -1694,6 +1460,171 @@ export function ChatPage() {
         onCancel={() => setPendingDeleteMessage(null)}
         onConfirm={() => void deleteMessage()}
       />
+    ) : null}
+    {showUserConfigDialog ? (
+      <Modal title={t("chat.userConfigTitle")} onClose={cancelEditingUserConfig}>
+        <div className="space-y-4">
+          <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
+            {t("chat.userConfigHelp")}
+          </p>
+          <div className="space-y-5">
+            <div className="space-y-2">
+              <p className="text-sm font-semibold text-slate-300">
+                {t("chat.userConfigPrefix")}
+              </p>
+              <MarkdownEditor
+                height={200}
+                placeholder={t("chat.userConfigPrefixHelp")}
+                value={editingPersonaDraft.prefix}
+                onChange={(nextValue) => updateUserConfigDraft("prefix", nextValue)}
+              />
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-semibold text-slate-300">
+                {t("chat.userConfigPrompt")}
+              </p>
+              <MarkdownEditor
+                height={200}
+                placeholder={t("chat.userConfigPromptHelp")}
+                value={editingPersonaDraft.prompt}
+                onChange={(nextValue) => updateUserConfigDraft("prompt", nextValue)}
+              />
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-semibold text-slate-300">
+                {t("chat.userConfigSuffix")}
+              </p>
+              <MarkdownEditor
+                height={200}
+                placeholder={t("chat.userConfigSuffixHelp")}
+                value={editingPersonaDraft.suffix}
+                onChange={(nextValue) => updateUserConfigDraft("suffix", nextValue)}
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button
+              className="!min-h-[36px]"
+              disabled={loading}
+              variant="ghost"
+              onClick={cancelEditingUserConfig}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              className="!min-h-[36px]"
+              disabled={loading}
+              onClick={() => void saveUserConfig()}
+            >
+              {t("common.save")}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    ) : null}
+    {showUserProfileDialog ? (
+      <Modal title={t("chat.userProfileTitle")} onClose={cancelEditingProfile}>
+        <div className="space-y-4">
+          <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
+            {t("chat.userProfileHelp")}
+          </p>
+          <MarkdownEditor
+            height={300}
+            value={editingProfileDraft}
+            onChange={(nextValue) => setEditingProfileDraft(nextValue)}
+          />
+          <div className="flex justify-end gap-3">
+            <Button
+              className="!min-h-[36px]"
+              disabled={loading}
+              variant="ghost"
+              onClick={cancelEditingProfile}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              className="!min-h-[36px]"
+              disabled={loading}
+              onClick={() => void saveUserProfileSummary()}
+            >
+              {t("common.save")}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    ) : null}
+    {showModelDialog ? (
+      <Modal title={t("chat.modelSwitchTitle")} onClose={closeModelDialog}>
+        <div className="space-y-1.5">
+          {settingsModels.map((model) => (
+            <button
+              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
+                activeModelId === model.id
+                  ? "bg-ember-500/15 text-ember-200 ring-1 ring-ember-500/30"
+                  : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+              }`}
+              disabled={loading}
+              key={model.id}
+              type="button"
+              onClick={() => {
+                void switchModel(model);
+                closeModelDialog();
+              }}
+            >
+              <Sparkles
+                size={14}
+                className={activeModelId === model.id ? "text-ember-300" : "text-slate-500"}
+              />
+              <span className="min-w-0 flex-1 truncate font-medium">
+                {model.label || model.model}
+              </span>
+              <span className="ml-auto shrink-0 text-[11px] font-medium text-slate-500">
+                {model.provider}
+              </span>
+            </button>
+          ))}
+        </div>
+      </Modal>
+    ) : null}
+    {showMemoryDialog ? (
+      <Modal title={t("chat.memorySettings")} onClose={closeMemoryDialog}>
+        <div className="space-y-4">
+          <Field label={t("chat.memorySettings")} labelClassName="!text-sm !font-semibold !text-slate-100">
+            <TextInput
+              min={1}
+              max={50}
+              type="number"
+              value={memoryDraft}
+              onChange={(event) => setMemoryDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  void updateMemory();
+                }
+              }}
+            />
+          </Field>
+          <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
+            {t("chat.memoryHelp")}
+          </p>
+          <div className="flex justify-end gap-3">
+            <Button
+              className="!min-h-[36px]"
+              disabled={loading}
+              variant="ghost"
+              onClick={closeMemoryDialog}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              className="!min-h-[36px]"
+              disabled={loading}
+              onClick={() => void updateMemory()}
+            >
+              {t("common.save")}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     ) : null}
     </>
   );
