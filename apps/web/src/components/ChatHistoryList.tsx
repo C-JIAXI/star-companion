@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, History, MessageSquarePlus, Pencil, Search, Settings, Sparkles, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, History, MessageSquarePlus, Pencil, Search, Settings, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n";
@@ -344,12 +344,12 @@ export function ChatHistoryList({
                         ) : (
                           <ChevronRight size={14} className="shrink-0 text-slate-500" />
                         )}
-                        <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-lg bg-ink-800 text-[10px] font-semibold text-slate-300">
-                          {group.characterAvatar ? (
-                            <img alt="" className="h-full w-full object-cover" src={group.characterAvatar} />
-                          ) : (
-                            <Sparkles size={12} className="text-ember-400" />
-                          )}
+                        <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-lg bg-ink-800">
+                          <img
+                            alt=""
+                            className="h-full w-full object-cover"
+                            src={group.characterAvatar || "/placeholder-cover.png"}
+                          />
                         </span>
                         <span className="min-w-0 flex-1 truncate font-medium text-slate-200">
                           {group.characterName}

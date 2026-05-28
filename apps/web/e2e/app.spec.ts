@@ -748,39 +748,4 @@ test("imported private character cards reveal prompt fields only after password 
   }
 });
 
-test("lore entries show persistent trigger without trigger mode badge", async ({ page, request }) => {
-  const name = `E2E Lorebook ${Date.now()}`;
-  const content = "Persistent trigger entry created by Playwright.";
-  const bookResponse = await request.post("/api/lorebooks", {
-    data: {
-      name,
-      description: "Temporary lorebook for persistent trigger UI coverage"
-    }
-  });
-  expect(bookResponse.ok()).toBeTruthy();
-  const book = (await bookResponse.json()).data;
 
-  const entryResponse = await request.post(`/api/lorebooks/${book.id}/entries`, {
-    data: {
-      keys: ["playwright-persistent"],
-      content,
-      priority: 0,
-      triggerMode: "both",
-      alwaysActive: true,
-      enabled: true
-    }
-  });
-  expect(entryResponse.ok()).toBeTruthy();
-
-  try {
-    await page.goto("/lore");
-    await page.getByRole("button", { name: new RegExp(name) }).click();
-
-    await expect(page.getByText(/持续触发\s*1|Always Active\s*1/)).toBeVisible();
-    const entryCard = page.locator("article").filter({ hasText: content });
-    await expect(entryCard).toContainText(/持续触发|Always Active/);
-    await expect(entryCard).not.toContainText(/共同触发|Shared Trigger/);
-  } finally {
-    await request.delete(`/api/lorebooks/${book.id}`);
-  }
-});

@@ -176,7 +176,7 @@ export function App() {
         </div>
       </Drawer>
 
-      <div className="mx-auto flex min-h-screen max-w-[1600px] flex-col lg:flex-row">
+      <div className="mx-auto flex h-screen max-w-[1600px] flex-col lg:flex-row">
         <aside className="border-b border-white/5 bg-ink-900/50 backdrop-blur-xl lg:sticky lg:top-0 lg:flex lg:h-screen lg:w-56 lg:flex-col lg:border-b-0 lg:border-r">
           <div className="flex shrink-0 items-center justify-between gap-3 p-3 lg:mb-6 lg:pb-0">
             <button
@@ -230,14 +230,14 @@ export function App() {
           </div>
         </aside>
 
-        <main className="min-w-0 flex-1 overflow-x-hidden">
+        <main className="flex min-w-0 flex-1 flex-col min-h-0 overflow-hidden">
           <header className="hidden lg:block sticky top-0 z-10 bg-ink-950/80 px-4 pt-4 backdrop-blur-md lg:px-6">
             <div className="rounded-xl border border-white/5 bg-ink-900/80 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-sm">
               <h2 className="text-xl font-bold tracking-tight text-slate-100">{t(active.titleKey)}</h2>
               <p className="mt-1 text-sm leading-5 text-slate-400">{t(active.subtitleKey)}</p>
             </div>
           </header>
-          <div className="animate-fade-in p-4 lg:p-6">
+          <div className="animate-fade-in flex-1 min-h-0 overflow-y-auto p-2 sm:p-4 lg:p-6">
             {activeSection === "chat" ? (
               <ChatPage
                 selectedChatId={selectedChatId}

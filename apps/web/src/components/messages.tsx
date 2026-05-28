@@ -1,4 +1,6 @@
 import { ChevronLeft, ChevronRight, Copy, RotateCcw } from "lucide-react";
+import { Marked } from "marked";
+import { useMemo } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import type { MessageDTO, TokenUsageDTO } from "../types";
@@ -14,6 +16,25 @@ type TriggeredLorebook = {
 };
 
 const FLUSH_INTERVAL_MS = 40;
+
+const MARKDOWN_PATTERN = /(?:^|\n)```/;
+
+function renderMarkdown(content: string): string {
+  const renderer = {
+    code({ text, lang }: { text: string; lang?: string }) {
+      const language = lang || "";
+      const escaped = text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+      return `<div class="roleplay-code-block"><div class="roleplay-code-header"><span class="roleplay-code-lang-text">${language}</span><button class="roleplay-code-copy" aria-label="Copy code">Copy</button></div><pre><code class="language-${language}">${escaped}</code></pre></div>`;
+    }
+  };
+
+  const instance = new Marked({ renderer, breaks: true });
+  return instance.parse(content) as string;
+}
+
 function MessageBody({
   content,
   htmlCss,
@@ -25,7 +46,21 @@ function MessageBody({
   align?: "left" | "right";
   renderHtml?: boolean;
 }) {
-  if (renderHtml && containsRenderableHtml(content)) {
+  const hasMarkdown = MARKDOWN_PATTERN.test(content);
+  const hasHtml = renderHtml && containsRenderableHtml(content);
+
+  const renderedContent = useMemo(() => {
+    if (hasMarkdown) {
+      return renderMarkdown(content);
+    }
+    return null;
+  }, [content, hasMarkdown]);
+
+  if (renderedContent !== null) {
+    return <ScopedHtmlRenderer content={renderedContent} htmlCss={htmlCss} />;
+  }
+
+  if (hasHtml) {
     return <ScopedHtmlRenderer content={content} htmlCss={htmlCss} />;
   }
 
@@ -50,18 +85,18 @@ function Avatar({
   return (
     <div
       data-testid="message-avatar"
-      className={`grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl border text-xs font-bold shadow-md ${
+      className={`grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl border shadow-md ${
         align === "right"
-          ? "order-2 border-ember-300/40 bg-ink-950/20 text-ink-950 shadow-ember-500/10"
-          : "order-1 border-white/10 bg-ink-800 text-ember-100 shadow-black/20"
+          ? "order-2 border-ember-300/40 bg-ink-950/20 shadow-ember-500/10"
+          : "order-1 border-white/10 bg-ink-800 shadow-black/20"
       } ${className}`}
       title={name}
     >
-      {avatar ? (
-        <img alt="" className="h-full w-full object-cover" src={avatar} />
-      ) : (
-        <span className="truncate px-1">{name?.slice(0, 2) ?? "??"}</span>
-      )}
+      <img
+        alt=""
+        className="h-full w-full object-cover"
+        src={avatar || "/placeholder-cover.png"}
+      />
     </div>
   );
 }
@@ -87,7 +122,7 @@ function AvatarSlot({
 }
 
 const getBubbleWidthClassName = (showAvatar: boolean) =>
-  showAvatar ? "max-w-[calc(100%-3.25rem)] sm:max-w-[85%]" : "max-w-[85%]";
+  showAvatar ? "max-w-[calc(100%-3.25rem)]" : "max-w-full";
 
 function VariantSwitcher({
   currentIndex,
@@ -125,7 +160,7 @@ function TokenInfo({
   const { t } = useI18n();
 
   return (
-    <div className="mt-3 border-t border-white/5 pt-2">
+    <>
       <p className="text-[11px] font-medium text-slate-500">
         {formatter(usage)}
       </p>
@@ -143,7 +178,7 @@ function TokenInfo({
           ))}
         </div>
       ) : null}
-    </div>
+    </>
   );
 }
 
@@ -162,21 +197,28 @@ export function UserMessageBubble({
   showAvatar,
   onCopy,
   onEdit,
-  onDelete
+  onDelete,
+  onResend
 }: {
   message: MessageDTO;
   showAvatar: boolean;
   onCopy: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onResend: () => void;
 }) {
   const { t } = useI18n();
   const bubbleWidthClassName = getBubbleWidthClassName(showAvatar);
 
   return (
-    <div className={`flex items-start justify-end ${showAvatar ? "gap-3" : "gap-0"}`}>
-      <article className={`order-1 relative ${bubbleWidthClassName} rounded-2xl rounded-br-sm bg-gradient-to-br from-ember-400 to-ember-500 p-4 text-sm text-ink-950 shadow-sm`}>
-        <div className="mb-3 flex items-center justify-end gap-1.5 text-[11px] opacity-100 sm:mb-2 sm:text-xs">
+    <div className={`flex items-start justify-start ${showAvatar ? "gap-3" : "gap-0"}`}>
+      <AvatarSlot align="left" name="You" showAvatar={showAvatar} />
+      <article className={`order-1 relative ${bubbleWidthClassName} rounded-2xl rounded-bl-sm bg-gradient-to-br from-ember-400 to-ember-500 p-3 sm:p-4 text-sm text-ink-950 shadow-sm`}>
+        <MessageBody align="left" content={message.content} renderHtml={false} />
+        <div className="mt-3 flex items-center justify-start gap-1.5 text-[11px] sm:text-xs">
+          <button className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-ink-900/70 hover:underline" type="button" onClick={onResend}>
+            <RotateCcw size={12} />{t("chat.resend")}
+          </button>
           <button className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-ink-900/70 hover:underline" type="button" onClick={onCopy}>
             <Copy size={12} />{t("common.copy")}
           </button>
@@ -187,9 +229,7 @@ export function UserMessageBubble({
             {t("common.delete")}
           </button>
         </div>
-        <MessageBody align="right" content={message.content} renderHtml={false} />
       </article>
-      <AvatarSlot align="right" className="order-2" name="You" showAvatar={showAvatar} />
     </div>
   );
 }
@@ -227,34 +267,38 @@ export function AssistantMessageBubble({
   const bubbleWidthClassName = getBubbleWidthClassName(showAvatar);
 
   return (
-    <div className={`flex items-start justify-start ${showAvatar ? "gap-3" : "gap-0"}`}>
-      <AvatarSlot avatar={avatar} showAvatar={showAvatar} />
-      <article className={`order-1 relative ${bubbleWidthClassName} rounded-2xl rounded-bl-sm border border-white/5 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-sm backdrop-blur-sm`}>
-        <div className="mb-3 flex flex-wrap items-center justify-start gap-1.5 text-[11px] opacity-100 sm:mb-2 sm:text-xs">
-          {message.variants.length > 1 ? (
-            <VariantSwitcher
-              currentIndex={message.activeVariantIndex}
-              total={message.variants.length}
-              onPrev={onVariantPrev}
-              onNext={onVariantNext}
-            />
-          ) : null}
-          <button className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline" type="button" onClick={onCopy}>
-            <Copy size={12} />{t("common.copy")}
-          </button>
-          <button className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline disabled:opacity-40" type="button" disabled={disableRegenerate} onClick={onRegenerate}>
-            <RotateCcw size={12} />{t("chat.regenerate")}
-          </button>
-          <button className="whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline" type="button" onClick={onEdit}>
-            {t("common.edit")}
-          </button>
-          <button className="whitespace-nowrap font-medium text-rose-400 hover:text-rose-300 hover:underline" type="button" onClick={onDelete}>
-            {t("common.delete")}
-          </button>
-        </div>
+    <div className={`flex items-start justify-end ${showAvatar ? "gap-3" : "gap-0"}`}>
+      <article className={`order-1 relative self-start ${bubbleWidthClassName} overflow-hidden rounded-2xl rounded-br-sm border border-white/5 bg-ink-800/80 p-3 sm:p-4 text-sm text-slate-100 shadow-sm backdrop-blur-sm`}>
         <MessageBody content={message.content} htmlCss={htmlCss} />
-        <TokenInfo usage={message.tokenUsage} formatter={tokenUsageFormatter} lorebooks={triggeredLorebooks} />
+        <div className="mt-3 border-t border-white/5 pt-2">
+          <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11px] sm:text-xs">
+            <TokenInfo usage={message.tokenUsage} formatter={tokenUsageFormatter} lorebooks={triggeredLorebooks} />
+            <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+              {message.variants.length > 1 ? (
+                <VariantSwitcher
+                  currentIndex={message.activeVariantIndex}
+                  total={message.variants.length}
+                  onPrev={onVariantPrev}
+                  onNext={onVariantNext}
+                />
+              ) : null}
+              <button className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline" type="button" onClick={onCopy}>
+                <Copy size={12} />{t("common.copy")}
+              </button>
+              <button className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline disabled:opacity-40" type="button" disabled={disableRegenerate} onClick={onRegenerate}>
+                <RotateCcw size={12} />{t("chat.regenerate")}
+              </button>
+              <button className="whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline" type="button" onClick={onEdit}>
+                {t("common.edit")}
+              </button>
+              <button className="whitespace-nowrap font-medium text-rose-400 hover:text-rose-300 hover:underline" type="button" onClick={onDelete}>
+                {t("common.delete")}
+              </button>
+            </div>
+          </div>
+        </div>
       </article>
+      <AvatarSlot avatar={avatar} className="order-2" showAvatar={showAvatar} />
     </div>
   );
 }
@@ -299,9 +343,8 @@ export function StreamingBubble({
   }, []);
 
   return (
-    <div className={`flex items-start justify-start ${showAvatar ? "gap-3" : "gap-0"}`}>
-      <AvatarSlot avatar={characterAvatar} showAvatar={showAvatar} />
-      <article className={`order-1 ${bubbleWidthClassName} animate-fade-in rounded-2xl rounded-bl-sm border border-ember-500/20 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-md backdrop-blur-sm`}>
+    <div className={`flex items-start justify-end ${showAvatar ? "gap-3" : "gap-0"}`}>
+      <article className={`order-1 self-start ${bubbleWidthClassName} animate-fade-in overflow-hidden rounded-2xl rounded-br-sm border border-ember-500/20 bg-ink-800/80 p-3 sm:p-4 text-sm text-slate-100 shadow-md backdrop-blur-sm`}>
         {displayedContent ? (
           <MessageBody content={displayedContent} htmlCss={htmlCss} />
         ) : (
@@ -312,6 +355,7 @@ export function StreamingBubble({
           </div>
         )}
       </article>
+      <AvatarSlot avatar={characterAvatar} className="order-2" showAvatar={showAvatar} />
     </div>
   );
 }

@@ -112,11 +112,23 @@ export function ChatPage({
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const streamingBufferRef = useRef("");
+  const draftTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
   const paginationStateRef = useRef<{ chatId: string | null; totalPages: number }>({
     chatId: null,
     totalPages: 1
   });
+
+  const autoResizeDraftTextArea = () => {
+    const el = draftTextAreaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  };
+
+  useEffect(() => {
+    autoResizeDraftTextArea();
+  }, [draft]);
 
   const upsertMessage = (message: MessageDTO) => {
     setActiveChat((current) => {
@@ -739,6 +751,11 @@ export function ChatPage({
       setStreamingCharacterId(null);
       streamingBufferRef.current = "";
       setDraft("");
+      requestAnimationFrame(() => {
+        if (draftTextAreaRef.current) {
+          draftTextAreaRef.current.style.height = "auto";
+        }
+      });
       sendWs(payload);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedSend"));
@@ -805,6 +822,38 @@ export function ChatPage({
     }
   };
 
+  const resendMessage = async (message: MessageDTO) => {
+    if (!activeChat) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      if (!isConnected) {
+        throw new Error(t("chat.websocketFailed"));
+      }
+      const requestId = generateId();
+      const payload: GenerationClientMessage = {
+        type: "generate",
+        requestId,
+        chatId: activeChat.id,
+        content: message.content,
+        targetCharacterId: null
+      };
+      setActiveRequestId(requestId);
+      setStreamingContent("");
+      setStreamingCharacterId(null);
+      streamingBufferRef.current = "";
+      sendWs(payload);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedSend"));
+      setLoading(false);
+      setActiveRequestId(null);
+    }
+  };
+
   const switchVariant = async (message: MessageDTO, direction: -1 | 1) => {
     if (message.variants.length <= 1) {
       return;
@@ -854,16 +903,26 @@ export function ChatPage({
       return;
     }
 
-    await api.messages.remove(pendingDeleteMessage.id);
+    const messages = activeChat?.messages ?? [];
+    const targetIndex = messages.findIndex((m) => m.id === pendingDeleteMessage.id);
+    const isUser = pendingDeleteMessage.role === "user";
+
+    if (isUser && targetIndex >= 0) {
+      const toDelete = messages.slice(targetIndex);
+      await Promise.all(toDelete.map((m) => api.messages.remove(m.id)));
+    } else {
+      await api.messages.remove(pendingDeleteMessage.id);
+    }
+
     await loadChat(pendingDeleteMessage.chatId);
     setPendingDeleteMessage(null);
   };
 
   return (
     <>
-    <div className="grid min-w-0 gap-8 xl:h-[calc(100vh-112px)] xl:min-h-0">
+    <div className="grid min-w-0 h-full min-h-0">
 
-      <div className="block min-w-0 xl:h-full xl:min-h-0">
+      <div className="block min-w-0 h-full min-h-0">
       <Panel
         className="flex min-h-0 flex-col"
         title={
@@ -993,12 +1052,13 @@ export function ChatPage({
             <div
               ref={messageViewportRef}
               data-testid="chat-message-viewport"
-              className="custom-scrollbar min-h-[320px] h-[min(62dvh,42rem)] overflow-y-auto overscroll-contain scroll-smooth rounded-2xl p-5 space-y-7 xl:h-0 xl:min-h-0 xl:flex-1 max-w-2xl mx-auto"
+              className="custom-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-auto scroll-smooth"
             >
+              <div className="mx-auto max-w-2xl space-y-4 rounded-2xl p-2 sm:space-y-7 sm:p-5">
               {activeChat.messages.length > MESSAGES_PER_PAGE ? (
                 <div
                   data-testid="chat-message-pagination"
-                  className="sticky top-0 z-10 -mx-5 -mt-5 mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-white/5 bg-ink-900/90 px-5 pb-3 pt-5 backdrop-blur-md"
+                  className="sticky top-0 z-10 -mx-2 -mt-2 mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-white/5 bg-ink-900/90 px-2 pb-3 pt-2 backdrop-blur-md sm:-mx-5 sm:-mt-5 sm:px-5 sm:pt-5"
                 >
                   <div className="min-w-0">
                     <p className="text-xs font-semibold text-slate-200">{paginationCopy.page}</p>
@@ -1050,6 +1110,7 @@ export function ChatPage({
                         onCopy={() => void copyMessage(message)}
                         onEdit={() => startEditingMessage(message)}
                         onDelete={() => setPendingDeleteMessage(message)}
+                        onResend={() => void resendMessage(message)}
                       />
                     );
                   }
@@ -1087,17 +1148,23 @@ export function ChatPage({
                   content={streamingContent}
                 />
               ) : null}
+              </div>
             </div>
 
             <div className="shrink-0">
-              <div className="max-w-2xl mx-auto grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-xl border border-white/5 bg-ink-950/95 p-2 shadow-xl shadow-black/30 backdrop-blur-sm xl:bg-ink-950/40 xl:shadow-none">
-              <TextInput
-                className="min-w-0 border-0 bg-transparent focus:bg-transparent focus:ring-0"
+              <div className="max-w-2xl mx-auto grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-2 rounded-xl border border-white/5 bg-ink-950/95 p-2 shadow-xl shadow-black/30 backdrop-blur-sm xl:bg-ink-950/40 xl:shadow-none">
+              <TextArea
+                ref={draftTextAreaRef}
+                className="min-h-[40px] max-h-[200px] !resize-none border-0 bg-transparent py-2 focus:bg-transparent focus:ring-0"
+                style={{ height: "auto" }}
                 placeholder={t("chat.writeMessage")}
+                rows={1}
                 value={draft}
+                onInput={autoResizeDraftTextArea}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter") {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
                     void sendMessage();
                   }
                 }}

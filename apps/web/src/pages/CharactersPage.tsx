@@ -35,28 +35,28 @@ type PasswordDialogMode = "unlock" | "export-private" | "export-public";
 const HTML_PREVIEW_TEMPLATES = {
   card: `<article class="character-card">
   <header class="character-card__header">
-    <small class="character-card__eyebrow">Aurora Archive</small>
-    <h2 class="character-card__title">遐蝶</h2>
+    <small class="character-card__eyebrow">Profile</small>
+    <h2 class="character-card__title">Character Name</h2>
   </header>
-  <p class="character-card__body">雪停之前，先把话慢慢说完。风声会替我们守住多余的秘密。</p>
+  <p class="character-card__body">A short character description or introduction that sets the tone and context for interactions.</p>
   <ul class="character-card__tags">
-    <li>低语</li>
-    <li>雪夜</li>
-    <li>陪伴</li>
+    <li>tag one</li>
+    <li>tag two</li>
+    <li>tag three</li>
   </ul>
 </article>`,
   dialogue: `<section class="dialogue-shell">
-  <p class="dialogue-shell__speaker">阿格莱雅</p>
-  <blockquote class="dialogue-shell__line">远道而来的贵客，风已顺着金丝带来了你的讯息。欢迎来到奥赫玛。</blockquote>
-  <p class="dialogue-shell__note">适合带旁白、分段对白和角色名。</p>
+  <p class="dialogue-shell__speaker">Character Name</p>
+  <blockquote class="dialogue-shell__line">A spoken line or quote from the character, wrapped in a blockquote for emphasis.</blockquote>
+  <p class="dialogue-shell__note">Narration or stage direction shown after the dialogue.</p>
 </section>`,
   dossier: `<section class="dossier-panel">
-  <h3>行动摘要</h3>
+  <h3>Summary</h3>
   <table>
     <tbody>
-      <tr><th>地点</th><td>日光庭</td></tr>
-      <tr><th>状态</th><td>观察中</td></tr>
-      <tr><th>备注</th><td>情绪稳定，愿意继续对话。</td></tr>
+      <tr><th>Field</th><td>Value or description</td></tr>
+      <tr><th>Status</th><td>Active</td></tr>
+      <tr><th>Notes</th><td>Additional context or remarks.</td></tr>
     </tbody>
   </table>
 </section>`
@@ -708,12 +708,12 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                 <Field label={t("characters.avatarUrl")}><TextInput value={form.avatar} onChange={(event) => setForm({ ...form, avatar: event.target.value })} /></Field>
               </div>
               <div className="grid min-h-[148px] place-items-center rounded-2xl border border-white/5 bg-ink-950/40 p-4">
-                <div className="grid h-24 w-24 place-items-center overflow-hidden rounded-2xl bg-ink-800 text-lg font-semibold text-slate-300 ring-1 ring-white/10">
-                  {form.avatar ? (
-                    <img alt="" className="h-full w-full object-cover" src={form.avatar} />
-                  ) : (
-                    (form.name || t("common.unknown")).slice(0, 2)
-                  )}
+                <div className="grid h-24 w-24 place-items-center overflow-hidden rounded-2xl bg-ink-800 ring-1 ring-white/10">
+                  <img
+                    alt=""
+                    className="h-full w-full object-cover"
+                    src={form.avatar || "/placeholder-cover.png"}
+                  />
                 </div>
               </div>
             </div>
@@ -813,23 +813,19 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                         />
                       </Field>
                       <Field label={t("characters.htmlPreviewRendered")}>
-                        <div className="custom-scrollbar min-h-[180px] overflow-y-auto rounded-xl border border-white/5 bg-ink-950/60 p-4">
-                          <div className="rounded-2xl border border-white/5 bg-ink-900/70 p-4 shadow-inner shadow-black/20">
-                            <div className="flex items-start gap-3">
-                              <div className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-xl border border-white/10 bg-ink-800 text-sm font-semibold text-ember-100 shadow-black/20">
-                                {form.avatar ? (
-                                  <img alt="" className="h-full w-full object-cover" src={form.avatar} />
-                                ) : (
-                                  (form.name || t("common.unknown")).slice(0, 2)
-                                )}
-                              </div>
-                              <article className="min-w-0 flex-1 rounded-2xl rounded-bl-sm border border-white/5 bg-ink-800/80 p-4 text-sm text-slate-100 shadow-sm backdrop-blur-sm">
-                                <div className="mb-3 text-xs font-bold tracking-wide text-ember-400">
-                                  {form.name || t("common.unknown")}
-                                </div>
-                                <ScopedHtmlRenderer content={previewMarkup} htmlCss={form.htmlCss} />
-                              </article>
-                            </div>
+                        <div className="custom-scrollbar flex min-h-[180px] items-start justify-end gap-3 overflow-y-auto rounded-xl border border-white/5 bg-ink-950/60 p-4">
+                          <article className="order-1 relative self-start max-w-[calc(100%-3.25rem)] overflow-hidden rounded-2xl rounded-br-sm border border-white/5 bg-ink-800/80 p-3 sm:p-4 text-sm text-slate-100 shadow-sm backdrop-blur-sm">
+                            <ScopedHtmlRenderer content={previewMarkup} htmlCss={form.htmlCss} />
+                          </article>
+                          <div
+                            className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl border text-xs font-bold shadow-md order-2 border-ember-300/40 bg-ink-950/20 text-ink-950 shadow-ember-500/10"
+                            title={form.name || t("common.unknown")}
+                          >
+                            {form.avatar ? (
+                              <img alt="" className="h-full w-full object-cover" src={form.avatar} />
+                            ) : (
+                              <span className="truncate px-1">{(form.name || t("common.unknown")).slice(0, 2)}</span>
+                            )}
                           </div>
                         </div>
                       </Field>
@@ -1082,24 +1078,23 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                     className="group rounded-xl border border-white/5 bg-white/5 p-4 text-sm transition-all duration-200 hover:border-white/10 hover:bg-white/10"
                     key={character.id}
                   >
-                    <div className="flex flex-col items-center gap-3">
-                      <div className="grid h-20 w-20 shrink-0 place-items-center overflow-hidden rounded-2xl bg-ink-800 text-lg font-semibold text-slate-300 ring-1 ring-white/5 transition-all duration-200 group-hover:scale-105 group-hover:ring-ember-500/30">
-                        {character.avatar ? (
-                          <img alt="" className="h-full w-full object-cover" src={character.avatar} />
-                        ) : (
-                          character.name.slice(0, 2)
-                        )}
-                      </div>
-                      <div className="min-w-0 w-full text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <p className="truncate font-medium text-slate-100 group-hover:text-white">
-                            {character.name}
-                          </p>
+                    <div className="flex flex-col gap-3">
+                      <div className="relative h-40 w-full overflow-hidden rounded-xl bg-ink-800 ring-1 ring-white/5 transition-all duration-200 group-hover:ring-ember-500/30">
+                        <img
+                          alt=""
+                          className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                          src={character.avatar || "/placeholder-cover.png"}
+                        />
+                        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+                        <p className="absolute bottom-2 left-3 right-3 truncate text-sm font-semibold text-white drop-shadow-md">
+                          {character.name}
                           {character.visibility === "private" ? (
-                            <Lock size={11} className="shrink-0 text-amber-400" />
+                            <Lock size={11} className="ml-1.5 inline-block shrink-0 text-amber-400" />
                           ) : null}
-                        </div>
-                        <p className="mt-1.5 line-clamp-3 text-xs leading-5 text-slate-400">
+                        </p>
+                      </div>
+                      <div className="min-w-0 w-full">
+                        <p className="line-clamp-2 text-xs leading-5 text-slate-400">
                           {character.visibility === "private" && !character.canViewPrompt
                             ? privateCharacterCopy.privateSummary
                             : character.prompt || character.prefix || t("common.noDescription")}

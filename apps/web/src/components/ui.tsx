@@ -22,9 +22,9 @@ export function Panel({
 }) {
   return (
     <section
-      className={`animate-fade-in h-full min-w-0 rounded-xl border border-white/5 bg-ink-900/80 p-4 shadow-lg shadow-black/20 backdrop-blur-sm transition-all ${className}`}
+      className={`animate-fade-in h-full min-w-0 overflow-hidden rounded-xl border border-white/5 bg-ink-900/80 p-2 sm:p-4 shadow-lg shadow-black/20 backdrop-blur-sm transition-all ${className}`}
     >
-      <div className="mb-3 flex items-center justify-between gap-2">
+      <div className="mb-2 flex items-center justify-between gap-2 sm:mb-3">
         <h3 className="min-w-0 text-sm font-semibold tracking-wide text-slate-100">{title}</h3>
         {action ? <div className="flex shrink-0 items-center gap-1">{action}</div> : null}
       </div>

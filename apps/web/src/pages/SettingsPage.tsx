@@ -693,7 +693,7 @@ export function SettingsPage() {
                       }
                     />
                     <span className="text-sm text-slate-200">
-                      {language === "zh-CN" ? "在聊天消息中显示角色与用户头像" : "Show user and character avatars in chat messages"}
+                      {language === "zh-CN" ? "在聊天消息中显示角色与用户封面" : "Show user and character covers in chat messages"}
                     </span>
                   </label>
                 </Field>
