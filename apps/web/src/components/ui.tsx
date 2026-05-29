@@ -24,9 +24,9 @@ export function Panel({
     <section
       className={`animate-fade-in h-full min-w-0 overflow-hidden rounded-xl border border-white/5 bg-ink-900/80 p-2 sm:p-4 shadow-lg shadow-black/20 backdrop-blur-sm transition-all ${className}`}
     >
-      <div className="mb-2 flex items-center justify-between gap-2 sm:mb-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 sm:mb-3">
         <h3 className="min-w-0 text-sm font-semibold tracking-wide text-slate-100">{title}</h3>
-        {action ? <div className="flex shrink-0 items-center gap-1">{action}</div> : null}
+        {action ? <div className="flex min-w-0 shrink items-center gap-1">{action}</div> : null}
       </div>
       {children}
     </section>
@@ -53,7 +53,7 @@ export function Button({
 
   return (
     <button
-      className={`inline-flex min-h-[40px] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg px-4 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-ink-950 active:scale-95 disabled:pointer-events-none disabled:opacity-50 ${variants[variant]} ${className}`}
+      className={`inline-flex min-h-[40px] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg px-4 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-ink-950 active:scale-95 disabled:pointer-events-none disabled:opacity-50 sm:min-h-[44px] ${variants[variant]} ${className}`}
       type="button"
       {...props}
     />
@@ -167,7 +167,7 @@ export function HelpLabel({ label, description }: { label: ReactNode; descriptio
 export function TextInput({ className = "", ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
-      className={`min-h-[40px] w-full min-w-0 rounded-lg border border-white/10 bg-ink-950/50 px-3 text-sm text-slate-100 outline-none transition-all placeholder:text-slate-500 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50 ${className}`}
+      className={`min-h-[40px] w-full min-w-0 rounded-lg border border-white/10 bg-ink-950/50 px-3 text-sm text-slate-100 outline-none transition-all placeholder:text-slate-500 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50 sm:min-h-[44px] ${className}`}
       {...props}
     />
   );
@@ -178,7 +178,7 @@ export const TextArea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
     return (
       <textarea
         ref={ref}
-        className={`custom-scrollbar h-[320px] w-full min-w-0 resize-none overflow-y-auto rounded-lg border border-white/10 bg-ink-950/50 px-3 py-2.5 text-sm text-slate-100 outline-none transition-all placeholder:text-slate-500 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50 ${className}`}
+        className={`custom-scrollbar h-[320px] w-full min-w-0 resize-none overflow-y-auto rounded-lg border border-white/10 bg-ink-950/50 px-3 py-2.5 text-sm leading-normal text-slate-100 outline-none transition-all placeholder:text-slate-500 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50 ${className}`}
         style={style}
         {...props}
       />
@@ -289,7 +289,7 @@ export function Drawer({
 }) {
   return createPortal(
     <div
-      className={`fixed inset-0 z-40 transition-all duration-300 xl:hidden ${
+      className={`fixed inset-0 z-40 transition-all duration-300 lg:hidden ${
         open ? "" : "pointer-events-none"
       }`}
     >
@@ -300,7 +300,7 @@ export function Drawer({
         onClick={onClose}
       />
       <div
-        className={`absolute inset-y-0 left-0 z-10 flex w-80 max-w-[85vw] flex-col border-r border-white/10 bg-ink-900 shadow-2xl shadow-black/70 transition-transform duration-300 ease-out will-change-transform ${
+        className={`absolute inset-y-0 left-0 z-10 flex w-[80vw] max-w-[320px] flex-col border-r border-white/10 bg-ink-900 shadow-2xl shadow-black/70 transition-transform duration-300 ease-out will-change-transform safe-area-top safe-area-bottom ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -310,7 +310,7 @@ export function Drawer({
               {title}
             </h3>
             <button
-              className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-slate-500 transition-all duration-200 hover:bg-white/10 hover:text-slate-200 active:scale-90"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-500 transition-all duration-200 hover:bg-white/10 hover:text-slate-200 active:scale-90 sm:h-9 sm:w-9"
               type="button"
               onClick={onClose}
             >
@@ -360,7 +360,7 @@ export function Modal({
       onClick={onClose}
     >
       <section
-        className="animate-modal-enter flex max-h-[calc(100dvh-2rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)]"
+        className="animate-modal-enter flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)]"
         role="dialog"
         onClick={(event) => event.stopPropagation()}
       >
@@ -369,7 +369,7 @@ export function Modal({
             {title}
           </h3>
           <button
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-slate-500 transition-all duration-200 hover:bg-white/10 hover:text-slate-200 active:scale-90"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-500 transition-all duration-200 hover:bg-white/10 hover:text-slate-200 active:scale-90 sm:h-9 sm:w-9"
             type="button"
             aria-label="Close"
             onClick={onClose}
@@ -405,10 +405,10 @@ export function ConfirmDialog({
   onConfirm: () => void;
 }) {
   return (
-    <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/70 p-3 backdrop-blur-md transition-[opacity,backdrop-filter] duration-300 will-change-[opacity] sm:p-5">
+    <div className="animate-fade-in fixed inset-0 z-50 grid place-items-end sm:place-items-center bg-black/70 p-0 sm:p-3 backdrop-blur-md transition-[opacity,backdrop-filter] duration-300 will-change-[opacity] sm:p-5">
       <section
         aria-labelledby="confirm-dialog-title"
-        className="animate-modal-enter flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)]"
+        className="animate-modal-enter flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-white/[0.06] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)] safe-area-bottom"
         role="dialog"
       >
         <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-5 sm:px-6 sm:pb-5 sm:pt-6">
@@ -428,7 +428,7 @@ export function ConfirmDialog({
         </div>
         </div>
 
-        <div className="flex shrink-0 flex-wrap justify-end gap-3 border-t border-white/[0.06] px-5 py-4 sm:px-6">
+        <div className="flex shrink-0 flex-col sm:flex-row sm:flex-wrap sm:justify-end gap-3 border-t border-white/[0.06] px-5 py-4 sm:px-6">
           <Button disabled={loading} variant="ghost" onClick={onCancel}>
             {cancelLabel}
           </Button>

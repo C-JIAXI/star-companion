@@ -3,6 +3,7 @@ import { prisma } from "../db.js";
 import {
   generationRequestSchema,
   regenerateRequestSchema,
+  resendRequestSchema,
   stopGenerationRequestSchema
 } from "../schemas.js";
 import { serializeMessage } from "../serializers.js";
@@ -113,30 +114,62 @@ const streamAssistantReply = async ({
     }
   }
 
-  if (assistantContent.trim()) {
-    assistantContent = stripThinkingTags(assistantContent);
-    tokenUsage ??= estimateTokenUsage(context.messages, assistantContent);
-    const message = targetMessageId
-      ? await updateAssistantVariant(targetMessageId, assistantContent, tokenUsage, context.matchedLoreEntries)
-      : await createAssistantMessage(
-          chatId,
-          characterId,
-          assistantContent,
-          tokenUsage,
-          context.matchedLoreEntries
-        );
+  if (stopped) {
+    if (assistantContent.trim()) {
+      assistantContent = stripThinkingTags(assistantContent);
+      tokenUsage ??= estimateTokenUsage(context.messages, assistantContent);
+      const message = targetMessageId
+        ? await updateAssistantVariant(targetMessageId, assistantContent, tokenUsage, context.matchedLoreEntries)
+        : await createAssistantMessage(
+            chatId,
+            characterId,
+            assistantContent,
+            tokenUsage,
+            context.matchedLoreEntries
+          );
 
-    await prisma.chat.update({
-      where: { id: chatId },
-      data: { updatedAt: new Date() }
-    });
+      await prisma.chat.update({
+        where: { id: chatId },
+        data: { updatedAt: new Date() }
+      });
 
-    sendJson(socket, {
-      type: "assistant_message",
-      requestId,
-      message: serializeMessage(message)
-    });
+      sendJson(socket, {
+        type: "assistant_message",
+        requestId,
+        message: serializeMessage(message)
+      });
+    }
+
+    return stopped;
   }
+
+  assistantContent = stripThinkingTags(assistantContent);
+
+  if (!assistantContent.trim()) {
+    throw new Error("Model returned an empty response. If max tokens is very low, try increasing it.");
+  }
+
+  tokenUsage ??= estimateTokenUsage(context.messages, assistantContent);
+  const message = targetMessageId
+    ? await updateAssistantVariant(targetMessageId, assistantContent, tokenUsage, context.matchedLoreEntries)
+    : await createAssistantMessage(
+        chatId,
+        characterId,
+        assistantContent,
+        tokenUsage,
+        context.matchedLoreEntries
+      );
+
+  await prisma.chat.update({
+    where: { id: chatId },
+    data: { updatedAt: new Date() }
+  });
+
+  sendJson(socket, {
+    type: "assistant_message",
+    requestId,
+    message: serializeMessage(message)
+  });
 
   return stopped;
 };
@@ -313,6 +346,107 @@ const handleRegenerate = async (socket: WebSocket, rawMessage: unknown) => {
   }
 };
 
+const handleResend = async (socket: WebSocket, rawMessage: unknown) => {
+  const parsed = resendRequestSchema.safeParse(rawMessage);
+  if (!parsed.success) {
+    sendJson(socket, { type: "error", error: "Invalid resend request" });
+    return;
+  }
+
+  const request = parsed.data;
+  const abortController = new AbortController();
+  controllers.set(request.requestId, abortController);
+
+  try {
+    const targetMessage = await prisma.message.findUnique({ where: { id: request.messageId } });
+    if (!targetMessage || targetMessage.role !== "user") {
+      throw new Error("User message not found");
+    }
+
+    const subsequentMessages = await prisma.message.findMany({
+      where: {
+        chatId: targetMessage.chatId,
+        createdAt: { gte: targetMessage.createdAt }
+      },
+      orderBy: { createdAt: "asc" }
+    });
+
+    await prisma.message.deleteMany({
+      where: { id: { in: subsequentMessages.map((m) => m.id) } }
+    });
+
+    const chat = await prisma.chat.findUnique({ where: { id: targetMessage.chatId } });
+    if (!chat) {
+      throw new Error("Chat not found");
+    }
+
+    const userMessage = await prisma.message.create({
+      data: {
+        chatId: targetMessage.chatId,
+        role: "user",
+        content: targetMessage.content,
+        variants: [],
+        activeVariantIndex: 0
+      }
+    });
+
+    await prisma.chat.update({
+      where: { id: targetMessage.chatId },
+      data: { updatedAt: new Date() }
+    });
+
+    sendJson(socket, { type: "generation_started", requestId: request.requestId });
+    sendJson(socket, {
+      type: "user_message",
+      requestId: request.requestId,
+      message: serializeMessage(userMessage)
+    });
+
+    const characterIds = toStringArray(chat.characterIds);
+    const characterId = characterIds[0] ?? null;
+
+    const stopped = await streamAssistantReply({
+      socket,
+      requestId: request.requestId,
+      chatId: targetMessage.chatId,
+      characterId,
+      abortController,
+      index: 0,
+      total: 1
+    });
+
+    if (!stopped) {
+      try {
+        const settings = await getOrCreateSettings();
+        const updatedChat = await updateUserProfileFromChat({
+          chatId: targetMessage.chatId,
+          settings
+        });
+        if (updatedChat) {
+          sendJson(socket, {
+            type: "user_profile_updated",
+            requestId: request.requestId,
+            summary: updatedChat.userProfileSummary,
+            updatedAt: updatedChat.userProfileUpdatedAt?.toISOString() ?? null
+          });
+        }
+      } catch {
+        // User profile memory is a best-effort enhancement and must not break chat generation.
+      }
+    }
+
+    sendJson(socket, {
+      type: stopped ? "generation_stopped" : "generation_done",
+      requestId: request.requestId
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Resend failed";
+    sendJson(socket, { type: "error", requestId: request.requestId, error: message });
+  } finally {
+    controllers.delete(request.requestId);
+  }
+};
+
 const handleStop = (socket: WebSocket, rawMessage: unknown) => {
   const parsed = stopGenerationRequestSchema.safeParse(rawMessage);
   if (!parsed.success) {
@@ -349,6 +483,11 @@ export const attachChatSocket = (wsServer: WebSocketServer, appName: string) => 
 
         if (messageType === "regenerate") {
           void handleRegenerate(socket, parsed);
+          return;
+        }
+
+        if (messageType === "resend") {
+          void handleResend(socket, parsed);
           return;
         }
 

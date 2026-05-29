@@ -66,7 +66,7 @@ describe("character private cards", () => {
     assert.equal(hidden.prefix, "");
     assert.equal(hidden.prompt, "");
     assert.equal(hidden.suffix, "");
-    assert.equal(hidden.htmlCss, "");
+    assert.equal(hidden.htmlCss, baseCharacter.htmlCss);
     assert.deepEqual(hidden.loreEntries, []);
 
     assert.equal(unlocked.canViewPrompt, true);

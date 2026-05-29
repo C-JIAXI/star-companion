@@ -70,6 +70,7 @@ export type CharacterExportCard =
       character: {
         name: string;
         avatar?: string | null;
+        description: string;
         prefix: string;
         prompt: string;
         suffix: string;
@@ -86,6 +87,7 @@ export type CharacterExportCard =
       character: {
         name: string;
         avatar?: string | null;
+        description?: string;
         quickReplies?: ImportedQuickReplyInput[];
       };
       protectedPayload: {
@@ -498,7 +500,7 @@ export const resolveCharacterRecord = (
     prefix: canViewPrompt ? fields.prefix : "",
     prompt: canViewPrompt ? fields.prompt : "",
     suffix: canViewPrompt ? fields.suffix : "",
-    htmlCss: canViewPrompt ? fields.htmlCss : "",
+    htmlCss: fields.htmlCss,
     loreEntries: canViewPrompt ? fields.loreEntries : [],
     visibility: "private",
     canViewPrompt
@@ -516,7 +518,7 @@ export const resolveCharacterPromptFields = (
 };
 
 export const createCharacterExportCard = (
-  character: Pick<Character, "name" | "avatar" | "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries" | "quickReplies">,
+  character: Pick<Character, "name" | "avatar" | "description" | "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries" | "quickReplies">,
   visibility: "public" | "private",
   password?: string
 ): CharacterExportCard => {
@@ -542,6 +544,7 @@ export const createCharacterExportCard = (
       character: {
         name: character.name,
         avatar: character.avatar,
+        description: character.description,
         ...promptFields,
         quickReplies
       }
@@ -576,6 +579,7 @@ export const createCharacterExportCard = (
     character: {
       name: character.name,
       avatar: character.avatar,
+      description: character.description,
       quickReplies
     },
     protectedPayload: {
@@ -620,6 +624,7 @@ export const importCharacterCard = (
 ): {
   name: string;
   avatar: string | null;
+  description: string;
   prefix: string;
   prompt: string;
   suffix: string;
@@ -632,6 +637,7 @@ export const importCharacterCard = (
       return {
         name: source.character.name,
         avatar: source.character.avatar ?? null,
+        description: source.character.description ?? "",
         prefix: source.character.prefix,
         prompt: source.character.prompt,
         suffix: source.character.suffix,
@@ -651,6 +657,7 @@ export const importCharacterCard = (
     return {
       name: source.character.name,
       avatar: source.character.avatar ?? null,
+      description: source.character.description ?? "",
       prefix: "",
       prompt: "",
       suffix: "",
@@ -665,8 +672,9 @@ export const importCharacterCard = (
   return {
     name: legacy.name,
     avatar: legacy.avatar ?? null,
+    description: legacy.description ?? "",
     prefix: legacy.prefix ?? legacy.systemPrompt ?? "",
-    prompt: legacy.prompt ?? legacy.description ?? "",
+    prompt: legacy.prompt ?? "",
     suffix: legacy.suffix ?? legacy.scenario ?? "",
     htmlCss: legacy.htmlCss ?? "",
     loreEntries: legacy.loreEntries ?? [],
@@ -732,6 +740,7 @@ export const buildCharacterUpdateData = (
     prompt: "",
     suffix: "",
     htmlCss: "",
-    loreEntries: buildStoredPrivateCharacterJson(nextFields, access)
+    loreEntries: buildStoredPrivateCharacterJson(nextFields, access),
+    quickReplies: updates.quickReplies
   };
 };

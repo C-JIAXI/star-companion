@@ -88,7 +88,7 @@ export default function MarkdownEditorInner({
           className: "roleplay-md-preview"
         }}
       />
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/5 px-3 py-2 text-[11px] text-slate-500">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/5 px-3 py-2 text-xs text-slate-500">
         <div className="flex items-center gap-3">
           <span>{t("markdown.characters")}: {stats.length}</span>
           <span>{t("markdown.lines")}: {stats.lineCount}</span>

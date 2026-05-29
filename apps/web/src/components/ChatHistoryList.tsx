@@ -259,11 +259,11 @@ export function ChatHistoryList({
   return (
     <>
       <button
-        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-slate-400 transition-all duration-200 hover:bg-white/5 hover:text-slate-200"
+        className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium text-slate-400 transition-all duration-200 hover:bg-white/5 hover:text-slate-200 min-h-[32px]"
         type="button"
         onClick={handleOpen}
       >
-        <History size={16} />
+        <History size={14} />
         <span>{t("chat.history")}</span>
       </button>
 
@@ -282,7 +282,7 @@ export function ChatHistoryList({
                 {manageMode && filteredChats.length > 0 ? (
                   <>
                     <button
-                      className="rounded-md px-1.5 py-1 text-[11px] font-medium text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200"
+                      className="rounded-md px-1.5 py-1 text-xs font-medium text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200"
                       type="button"
                       onClick={toggleSelectAll}
                     >
@@ -292,7 +292,7 @@ export function ChatHistoryList({
                     </button>
                     {selectedIds.size > 0 ? (
                       <button
-                        className="flex items-center gap-1 rounded-md bg-rose-500/15 px-1.5 py-1 text-[11px] font-medium text-rose-400 transition-colors hover:bg-rose-500/25"
+                        className="flex items-center gap-1 rounded-md bg-rose-500/15 px-1.5 py-1 text-xs font-medium text-rose-400 transition-colors hover:bg-rose-500/25"
                         type="button"
                         onClick={() => setBatchDeleteConfirm(true)}
                       >
@@ -305,7 +305,7 @@ export function ChatHistoryList({
                 ) : null}
                 {filteredChats.length > 0 ? (
                   <button
-                    className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200"
+                    className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200"
                     type="button"
                     onClick={toggleManage}
                   >
@@ -352,12 +352,12 @@ export function ChatHistoryList({
 
                             return (
                               <div
-                                className={`group flex cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-left text-[13px] transition-all duration-200 ${
+                                className={`group flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition-all duration-200 min-h-[36px] ${
                                   isSelected
                                     ? "bg-ember-500/20 text-ember-100"
                                     : isCurrent
                                       ? "bg-white/5 text-ember-100"
-                                      : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                                      : "text-slate-400 hover:bg-white/5 hover:text-slate-200 active:bg-white/[0.08]"
                                 }`}
                                 key={chat.id}
                                 role="button"
@@ -394,7 +394,7 @@ export function ChatHistoryList({
                                 {renamingId === chat.id ? (
                                   <input
                                     ref={renameInputRef}
-                                    className="min-w-0 flex-1 bg-transparent px-1 py-0.5 text-[13px] text-slate-200 outline-none ring-1 ring-ember-500/50 rounded"
+                                    className="min-w-0 flex-1 bg-transparent px-1 py-0.5 text-sm text-slate-200 outline-none ring-1 ring-ember-500/50 rounded"
                                     value={renameValue}
                                     onChange={(event) => setRenameValue(event.target.value)}
                                     onBlur={() => void commitRename()}
@@ -414,7 +414,7 @@ export function ChatHistoryList({
                                 )}
                                 {!manageMode && renamingId !== chat.id ? (
                                   <button
-                                    className="grid h-6 w-6 shrink-0 place-items-center rounded text-slate-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-white/10 hover:text-slate-300 transition-all"
+                                    className="grid h-6 w-6 shrink-0 place-items-center rounded text-slate-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-white/10 hover:text-slate-300 active:bg-white/20 transition-all"
                                     type="button"
                                     onClick={(event) => {
                                       event.stopPropagation();
@@ -426,7 +426,7 @@ export function ChatHistoryList({
                                 ) : null}
                                 {!manageMode && renamingId !== chat.id ? (
                                   <button
-                                    className="grid h-6 w-6 shrink-0 place-items-center rounded text-slate-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-rose-500/15 hover:text-rose-400 transition-all"
+                                    className="grid h-6 w-6 shrink-0 place-items-center rounded text-slate-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-rose-500/15 hover:text-rose-400 active:bg-rose-500/25 transition-all"
                                     type="button"
                                     onClick={(event) => {
                                       event.stopPropagation();

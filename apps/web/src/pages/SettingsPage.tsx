@@ -188,7 +188,7 @@ function SummaryCard({
 
   return (
     <div className={`rounded-xl px-4 py-3 ${toneClassName}`}>
-      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">{label}</div>
+      <div className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">{label}</div>
       <div className="mt-2 min-w-0 break-words text-sm font-semibold leading-6 text-slate-100">
         {value}
       </div>
@@ -498,7 +498,7 @@ export function SettingsPage() {
 
           <div className={`flex h-full flex-col gap-4 rounded-xl p-4 ${settingsSurfaceClassName}`}>
             <div className="space-y-2">
-              <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">
+              <div className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
                 {copy.changesStatus}
               </div>
               <div
@@ -550,10 +550,10 @@ export function SettingsPage() {
             return (
               <button
                 key={section}
-                className={`min-h-[36px] flex-1 whitespace-nowrap rounded-lg px-2 text-xs font-medium transition-colors sm:min-h-[40px] sm:px-4 sm:text-sm ${
+                className={`min-h-[48px] flex-1 whitespace-nowrap rounded-lg px-2 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
                   active
                     ? "bg-ember-500 text-ink-950 shadow-sm shadow-ember-500/20"
-                    : "text-slate-300 hover:bg-ink-800/75"
+                    : "text-slate-300 hover:bg-ink-800/75 active:bg-ink-800/90"
                 }`}
                 type="button"
                 onClick={() => setActiveSection(section)}

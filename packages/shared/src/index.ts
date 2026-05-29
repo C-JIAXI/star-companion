@@ -297,6 +297,11 @@ export type GenerationClientMessage =
       messageId: string;
     }
   | {
+      type: "resend";
+      requestId: string;
+      messageId: string;
+    }
+  | {
       type: "stop";
       requestId: string;
     };

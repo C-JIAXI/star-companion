@@ -41,7 +41,7 @@ export function ChatGroupHeader({
       <span className="min-w-0 flex-1 truncate font-medium text-slate-200">
         {characterName}
       </span>
-      <span className="shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-slate-500">
+      <span className="shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-xs text-slate-500">
         {chatCount}
       </span>
     </button>

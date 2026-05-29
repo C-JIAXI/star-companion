@@ -50,6 +50,7 @@ import {
 } from "../components/ui";
 import {
   AssistantMessageBubble,
+  ErrorBubble,
   StreamingBubble,
   SystemNotification,
   UserMessageBubble
@@ -128,6 +129,7 @@ export function ChatPage({
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const [messagePage, setMessagePage] = useState(1);
   const [error, setError] = useState<string | null>(null);
+  const [generationError, setGenerationError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
@@ -244,6 +246,7 @@ export function ChatPage({
         setStreamingContent("");
         setStreamingCharacterId(null);
         streamingBufferRef.current = "";
+        setGenerationError(null);
         return;
       }
 
@@ -268,6 +271,7 @@ export function ChatPage({
 
       if (msg.type === "error") {
         setError(msg.error);
+        setGenerationError(msg.error);
         setActiveRequestId(null);
         setStreamingContent("");
         setStreamingCharacterId(null);
@@ -445,10 +449,12 @@ export function ChatPage({
   const loadChat = async (id: string | null) => {
     if (!id) {
       setActiveChat(null);
+      setGenerationError(null);
       return;
     }
     const chat = await api.chats.get(id);
     setActiveChat(chat);
+    setGenerationError(null);
     setMemoryDraft(String(chat.memoryTurns));
 
     const missingCharacterIds = chat.characterIds.filter((characterId) => !characterMap.has(characterId));
@@ -891,23 +897,49 @@ export function ChatPage({
       if (!isConnected) {
         throw new Error(t("chat.websocketFailed"));
       }
+
+      const messages = activeChat.messages;
+      const targetIndex = messages.findIndex((m) => m.id === message.id);
+      if (targetIndex >= 0) {
+        const toDeleteIds = new Set(messages.slice(targetIndex).map((m) => m.id));
+        setActiveChat((current) =>
+          current && current.id === activeChat.id
+            ? { ...current, messages: current.messages.filter((m) => !toDeleteIds.has(m.id)) }
+            : current
+        );
+      }
+
       const requestId = generateId();
       const payload: GenerationClientMessage = {
-        type: "generate",
+        type: "resend",
         requestId,
-        chatId: activeChat.id,
-        content: message.content,
-        targetCharacterId: null
+        messageId: message.id
       };
       setActiveRequestId(requestId);
       setStreamingContent("");
       setStreamingCharacterId(null);
       streamingBufferRef.current = "";
+      setIsNearBottom(true);
       sendWs(payload);
+      requestAnimationFrame(() => scrollToBottom());
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedSend"));
       setLoading(false);
       setActiveRequestId(null);
+    }
+  };
+
+  const retryGeneration = () => {
+    if (!activeChat || activeChat.messages.length === 0) {
+      setGenerationError(null);
+      return;
+    }
+    const lastMessage = activeChat.messages[activeChat.messages.length - 1];
+    setGenerationError(null);
+    if (lastMessage.role === "user") {
+      void resendMessage(lastMessage);
+    } else if (lastMessage.role === "assistant") {
+      void regenerateMessage(lastMessage);
     }
   };
 
@@ -973,20 +1005,22 @@ export function ChatPage({
 
     await loadChat(pendingDeleteMessage.chatId);
     setPendingDeleteMessage(null);
+    setIsNearBottom(true);
+    requestAnimationFrame(() => scrollToBottom());
   };
 
   return (
     <>
-    <div className="grid min-w-0 h-full min-h-0">
+    <div className="flex flex-col h-full min-h-0 min-w-0">
 
-      <div className="block min-w-0 h-full min-h-0">
       <Panel
-        className="flex min-h-0 flex-col"
+        className="flex flex-col h-full min-h-0 min-w-0"
         title={
           titleEditing && activeChat ? (
             <input
               ref={titleInputRef}
-              className="w-full rounded bg-transparent px-1 py-0.5 text-sm font-semibold tracking-wide text-slate-100 outline-none ring-1 ring-white/10 focus:ring-ember-500/50"
+              className="chat-input w-full rounded bg-transparent px-1 py-0.5 text-sm font-semibold tracking-wide text-slate-100 outline-none border-none focus:outline-none focus:ring-0"
+              style={{ WebkitUserSelect: "none", userSelect: "none" }}
               value={titleDraft}
               onChange={(event) => setTitleDraft(event.target.value)}
               onBlur={() => void commitTitleRename()}
@@ -1002,7 +1036,8 @@ export function ChatPage({
             />
           ) : (
             <span
-              className="cursor-pointer rounded px-1 py-0.5 hover:bg-white/5"
+              className="cursor-pointer rounded px-1 py-0.5 hover:bg-white/5 outline-none focus:outline-none focus:ring-0"
+              style={{ WebkitUserSelect: "none", userSelect: "none" }}
               title={t("chat.renameHint")}
               onClick={() => {
                 if (!activeChat) {
@@ -1031,58 +1066,58 @@ export function ChatPage({
               </Button>
               {memorySettingsOpen ? (
                 <div
-                  className="custom-scrollbar absolute right-0 top-10 z-20 max-h-80 w-56 overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-3.5 shadow-xl shadow-black/30 backdrop-blur-md sm:max-h-[calc(100dvh-22rem)]"
+                  className="custom-scrollbar absolute right-0 top-10 z-20 max-h-80 w-56 overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-3 shadow-xl shadow-black/30 backdrop-blur-md sm:max-h-[calc(100dvh-22rem)]"
                   onPointerDownCapture={handleMemorySettingsPointerDownCapture}
                 >
                   {settingsModels.length > 0 ? (
-                    <div className="mb-3 border-b border-white/10 pb-3">
+                    <div className="mb-2 border-b border-white/10 pb-2">
                       <button
-                        className="flex w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200"
+                        className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
                         type="button"
                         onClick={openModelDialog}
                       >
                         <span>{t("chat.modelSwitchTitle")}</span>
-                        <Sparkles size={15} className="text-slate-400" />
+                        <Sparkles size={14} className="text-slate-400" />
                       </button>
                     </div>
                   ) : null}
 
-                  <div className="border-b border-white/10 pb-3">
+                  <div className="border-b border-white/10 pb-2">
                     <button
-                      className="flex w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200"
+                      className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
                       type="button"
                       onClick={openMemoryDialog}
                     >
                       <span>{t("chat.memorySettings")}</span>
-                      <BrainCircuit size={15} className="text-slate-400" />
+                      <BrainCircuit size={14} className="text-slate-400" />
                     </button>
                   </div>
 
-                  <div className="border-b border-white/10 pb-3 pt-3">
+                  <div className="border-b border-white/10 pb-2 pt-2">
                     <button
-                      className="flex w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200"
+                      className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
                       type="button"
                       onClick={startEditingUserConfig}
                     >
                       <span>{t("chat.userConfigTitle")}</span>
-                      <FileText size={15} className="text-slate-400" />
+                      <FileText size={14} className="text-slate-400" />
                     </button>
                   </div>
 
-                  <div className="pt-3">
+                  <div className="pt-2">
                     <button
-                      className="flex w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200"
+                      className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
                       type="button"
                       onClick={startEditingProfile}
                     >
                       <span>{t("chat.userProfileTitle")}</span>
-                      <User size={15} className="text-slate-400" />
+                      <User size={14} className="text-slate-400" />
                     </button>
-                    <div className="mt-2 flex items-center justify-between gap-2">
-                      <p className="text-sm font-semibold text-slate-100">
+                    <div className="mt-1.5 flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold text-slate-100">
                         {t("chat.autoSummarizeUser")}
                       </p>
-                      <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-400">
+                      <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-slate-400">
                         <input
                           checked={autoSummarizeUser}
                           type="checkbox"
@@ -1119,11 +1154,11 @@ export function ChatPage({
                 >
                   <div className="min-w-0">
                     <p className="text-xs font-semibold text-slate-200">{paginationCopy.page}</p>
-                    <p className="mt-1 text-[11px] text-slate-500">{paginationCopy.range}</p>
+                    <p className="mt-1 text-xs text-slate-500">{paginationCopy.range}</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <Button
-                      className="!min-h-[32px] !px-3 text-xs"
+                      className="!min-h-[48px] !px-3 text-xs"
                       data-testid="chat-page-prev"
                       disabled={safeMessagePage <= 1}
                       variant="secondary"
@@ -1133,7 +1168,7 @@ export function ChatPage({
                       {paginationCopy.previous}
                     </Button>
                     <Button
-                      className="!min-h-[32px] !px-3 text-xs"
+                      className="!min-h-[48px] !px-3 text-xs"
                       data-testid="chat-page-next"
                       disabled={safeMessagePage >= totalMessagePages}
                       variant="secondary"
@@ -1206,6 +1241,18 @@ export function ChatPage({
                   content={streamingContent}
                 />
               ) : null}
+              {generationError && !activeRequestId && safeMessagePage >= totalMessagePages ? (
+                <ErrorBubble
+                  key="generation-error"
+                  characterAvatar={
+                    streamingCharacterId ? characterMap.get(streamingCharacterId)?.avatar : activeChat?.messages.length ? characterMap.get(activeChat.messages[activeChat.messages.length - 1].characterId ?? "")?.avatar : null
+                  }
+                  showAvatar={showMessageAvatars}
+                  error={generationError}
+                  onRetry={retryGeneration}
+                  onDismiss={() => setGenerationError(null)}
+                />
+              ) : null}
               </div>
               {!isNearBottom ? (
                 <button
@@ -1222,10 +1269,10 @@ export function ChatPage({
 
             <div className="shrink-0">
               {activeQuickReplies.length > 0 ? (
-                <div className="max-w-2xl mx-auto mb-1.5 px-1">
+                <div className="max-w-2xl mx-auto mb-1 px-1">
                   <button
                     type="button"
-                    className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 transition-colors hover:text-slate-300"
+                    className="inline-flex h-6 items-center gap-1 text-xs font-medium text-slate-500 transition-colors hover:text-slate-300 active:text-slate-200"
                     onClick={toggleQuickReplies}
                   >
                     <ChevronDown
@@ -1242,12 +1289,12 @@ export function ChatPage({
                       transition: "max-height 300ms ease-out, opacity 300ms ease-out"
                     }}
                   >
-                    <div className="mt-1 flex flex-wrap gap-1.5">
+                    <div className="mt-0.5 flex flex-wrap gap-1">
                       {activeQuickReplies.map((qr) => (
                         <button
                           key={qr.id}
                           type="button"
-                          className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-ink-950/80 px-2.5 py-1 text-xs font-medium text-slate-300 transition-colors hover:border-ember-500/40 hover:bg-ink-900 hover:text-slate-100"
+                          className="inline-flex h-7 items-center gap-1 rounded-md border border-white/10 bg-ink-950/80 px-2 text-xs font-medium text-slate-300 transition-colors hover:border-ember-500/40 hover:bg-ink-900 hover:text-slate-100 active:bg-ink-800"
                           onClick={() => setDraft((current) => current ? `${current}\n${qr.content}` : qr.content)}
                         >
                           {qr.label}
@@ -1257,11 +1304,11 @@ export function ChatPage({
                   </div>
                 </div>
               ) : null}
-              <div className="max-w-2xl mx-auto rounded-xl border border-white/5 bg-ink-950/95 p-2 shadow-xl shadow-black/30 backdrop-blur-sm xl:bg-ink-950/40 xl:shadow-none">
-              <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
+              <div className="max-w-2xl mx-auto rounded-xl border border-white/5 bg-ink-950/95 p-1.5 sm:p-2 shadow-xl shadow-black/30 backdrop-blur-sm xl:bg-ink-950/40 xl:shadow-none">
+              <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-1.5 sm:gap-2">
               <TextArea
                 ref={draftTextAreaRef}
-                className="min-h-[40px] max-h-[200px] !resize-none border-0 bg-transparent py-2 focus:bg-transparent focus:ring-0"
+                className="chat-input !h-10 max-h-[200px] !resize-none border-0 bg-transparent !px-2 !py-[11px] !text-sm leading-[1.4] focus:bg-transparent focus:ring-0 sm:!h-11 sm:!py-3"
                 style={{ height: "auto" }}
                 placeholder={t("chat.writeMessage")}
                 rows={1}
@@ -1276,9 +1323,9 @@ export function ChatPage({
                 }}
               />
               {activeRequestId ? (
-                <Button className="!min-h-[38px]" variant="danger" onClick={stopGeneration}><StopCircle size={16} />{t("chat.stop")}</Button>
+                <Button className="!min-h-[40px] sm:!min-h-[44px]" variant="danger" onClick={stopGeneration}><StopCircle size={16} />{t("chat.stop")}</Button>
               ) : (
-                <Button className="!min-h-[38px]" disabled={loading || !draft.trim()} onClick={() => void sendMessage()}><Send size={16} />{t("chat.send")}</Button>
+                <Button className="!min-h-[40px] sm:!min-h-[44px]" disabled={loading || !draft.trim()} onClick={() => void sendMessage()}><Send size={16} />{t("chat.send")}</Button>
               )}
               </div>
             </div>
@@ -1286,13 +1333,12 @@ export function ChatPage({
           </div>
         )}
       </Panel>
-      </div>
     </div>
     {editingMessage ? (
-      <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="animate-fade-in fixed inset-0 z-50 grid place-items-end sm:place-items-center bg-black/60 backdrop-blur-sm p-0 sm:p-4">
         <section
           aria-labelledby="edit-message-title"
-          className="animate-scale-in w-full max-w-2xl rounded-2xl border border-white/10 bg-ink-900 p-6 shadow-2xl shadow-black/50"
+          className="animate-scale-in w-full max-w-2xl rounded-t-2xl sm:rounded-2xl border border-white/10 bg-ink-900 p-6 shadow-2xl shadow-black/50 safe-area-bottom max-h-[90vh] sm:max-h-[85vh] overflow-y-auto"
           role="dialog"
         >
           <div className="flex items-start justify-between gap-4">
@@ -1304,7 +1350,7 @@ export function ChatPage({
             </div>
             <button
               aria-label={t("common.cancel")}
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/5 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200"
+              className="grid h-[48px] w-[48px] shrink-0 place-items-center rounded-full bg-white/5 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200"
               type="button"
               onClick={cancelEditingMessage}
             >
@@ -1473,7 +1519,7 @@ export function ChatPage({
               <span className="min-w-0 flex-1 truncate font-medium">
                 {model.label || model.model}
               </span>
-              <span className="ml-auto shrink-0 text-[11px] font-medium text-slate-500">
+              <span className="ml-auto shrink-0 text-xs font-medium text-slate-500">
                 {model.provider}
               </span>
             </button>

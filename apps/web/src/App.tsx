@@ -9,6 +9,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { ChatHistoryList } from "./components/ChatHistoryList";
 import { Drawer } from "./components/ui";
 import { useAppStore } from "./store/useAppStore";
+import { useMobileViewport } from "./lib/useMobileViewport";
 import type { AppSection } from "./types";
 
 const navItems = [
@@ -60,6 +61,8 @@ export function App() {
   const { t } = useI18n();
   const active = sectionMeta[activeSection];
   const [showMobileNav, setShowMobileNav] = useState(false);
+  
+  useMobileViewport();
 
   useEffect(() => {
     const syncFromLocation = () => {
@@ -127,7 +130,7 @@ export function App() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-ink-950 text-slate-100 selection:bg-ember-500/30">
+    <div className="h-dvh bg-ink-950 text-slate-100 selection:bg-ember-500/30 safe-area-top safe-area-bottom transition-[height] duration-200">
       <Drawer
         open={showMobileNav}
         onClose={() => setShowMobileNav(false)}
@@ -150,7 +153,7 @@ export function App() {
 
                 return (
                   <button
-                    className={`group flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-all duration-200 ${
+                    className={`group flex min-h-[44px] items-center gap-3 rounded-lg px-3 text-sm font-medium transition-all duration-200 sm:min-h-[48px] ${
                       selected
                         ? "bg-ember-500/15 text-ember-100 ring-1 ring-ember-500/30"
                         : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
@@ -176,36 +179,28 @@ export function App() {
         </div>
       </Drawer>
 
-      <div className="mx-auto flex h-screen max-w-[1600px] flex-col lg:flex-row">
-        <aside className="border-b border-white/5 bg-ink-900/50 backdrop-blur-xl lg:sticky lg:top-0 lg:flex lg:h-screen lg:w-56 lg:flex-col lg:border-b-0 lg:border-r">
+      <div className="mx-auto flex h-full max-w-[1600px] flex-col lg:flex-row">
+        <aside className="hidden lg:sticky lg:top-0 lg:flex lg:h-full lg:w-56 lg:flex-col lg:border-r lg:border-white/5 lg:bg-ink-900/50 lg:backdrop-blur-xl">
           <div className="flex shrink-0 items-center justify-between gap-3 p-3 lg:mb-6 lg:pb-0">
-            <button
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200 lg:hidden"
-              type="button"
-              aria-label="Toggle navigation"
-              onClick={() => setShowMobileNav(true)}
-            >
-              <Menu size={18} />
-            </button>
             <div className="flex items-center gap-3 min-w-0">
               <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-ember-400 to-ember-600 text-ink-950 shadow-md shadow-ember-500/20">
                 <Sparkles size={18} />
               </div>
-              <div className="min-w-0 hidden sm:block lg:block">
+              <div className="min-w-0">
                 <h1 className="truncate text-sm font-bold tracking-tight text-white">{APP_NAME}</h1>
                 <p className="truncate text-xs font-medium text-slate-400">{t("app.tagline")}</p>
               </div>
             </div>
           </div>
 
-          <nav className="hidden shrink-0 px-3 lg:flex lg:flex-col lg:gap-1">
+          <nav className="shrink-0 px-3 flex flex-col gap-1">
             {navItems.map((item) => {
               const Icon = item.icon;
               const selected = activeSection === item.id;
 
               return (
                 <button
-                  className={`group flex min-h-10 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-all duration-200 ${
+                  className={`group flex min-h-[40px] items-center gap-2 rounded-lg px-3 text-sm font-medium transition-all duration-200 sm:min-h-[44px] ${
                     selected
                       ? "bg-ember-500/15 text-ember-100 ring-1 ring-ember-500/30"
                       : "bg-transparent text-slate-400 hover:bg-white/5 hover:text-slate-200"
@@ -221,7 +216,7 @@ export function App() {
             })}
           </nav>
 
-          <div className="hidden min-h-0 flex-1 flex-col overflow-y-auto border-t border-white/5 px-3 pt-4 lg:flex lg:mt-4">
+          <div className="min-h-0 flex-1 flex-col overflow-y-auto border-t border-white/5 px-3 pt-4 mt-4 flex">
             <ChatHistoryList
               selectedChatId={selectedChatId}
               onSelectChat={handleSelectChat}
@@ -231,6 +226,27 @@ export function App() {
         </aside>
 
         <main className="flex min-w-0 flex-1 flex-col min-h-0 overflow-hidden">
+          <header className="lg:hidden sticky top-0 z-30 flex items-center justify-between gap-2 bg-ink-950/95 px-3 py-2 backdrop-blur-md safe-area-top sm:px-4 sm:py-3">
+            <button
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200 sm:h-11 sm:w-11"
+              type="button"
+              aria-label="Toggle navigation"
+              onClick={() => setShowMobileNav(true)}
+            >
+              <Menu size={20} />
+            </button>
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-ember-400 to-ember-600 text-ink-950 shadow-md shadow-ember-500/20 sm:h-8 sm:w-8">
+                <Sparkles size={14} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h1 className="truncate text-sm font-bold tracking-tight text-white">{APP_NAME}</h1>
+              </div>
+            </div>
+            {activeSection !== "chat" ? null : (
+              <div className="w-10 sm:w-11" />
+            )}
+          </header>
           <header className="hidden lg:block sticky top-0 z-10 bg-ink-950/80 px-4 pt-4 backdrop-blur-md lg:px-6">
             <div className="rounded-xl border border-white/5 bg-ink-900/80 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-sm">
               <h2 className="text-xl font-bold tracking-tight text-slate-100">{t(active.titleKey)}</h2>

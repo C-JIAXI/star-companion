@@ -115,7 +115,9 @@ const privateCharacterCardSchema = z.object({
   exportedAt: z.string().datetime().optional(),
   character: z.object({
     name: z.string().trim().min(1),
-    avatar: z.string().trim().nullable().optional()
+    avatar: z.string().trim().nullable().optional(),
+    description: z.string().optional(),
+    quickReplies: quickRepliesSchema.optional()
   }),
   protectedPayload: z.object({
     version: z.literal(1),
@@ -250,6 +252,12 @@ export const generationRequestSchema = z.object({
 
 export const regenerateRequestSchema = z.object({
   type: z.literal("regenerate"),
+  requestId: z.string().min(1),
+  messageId: idSchema
+});
+
+export const resendRequestSchema = z.object({
+  type: z.literal("resend"),
   requestId: z.string().min(1),
   messageId: idSchema
 });

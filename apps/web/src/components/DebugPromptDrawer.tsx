@@ -32,9 +32,9 @@ function CollapsibleSection({
   return (
     <div className={isSub ? "ml-1" : ""}>
       <button
-        className={`flex w-full items-center gap-1.5 text-left transition-colors hover:text-slate-200 ${
+        className={`flex min-h-[44px] w-full items-center gap-1.5 text-left transition-colors hover:text-slate-200 active:text-slate-100 ${
           isSub
-            ? "text-[11px] font-medium text-slate-400"
+            ? "text-xs font-medium text-slate-400"
             : "text-xs font-semibold uppercase tracking-wider text-slate-400"
         }`}
         type="button"
@@ -65,12 +65,12 @@ function LoreEntryList({ entries }: { entries: CharacterLoreEntryDTO[] }) {
         <div key={entry.id} className="rounded border border-white/5 bg-white/[0.02] p-2 text-xs space-y-1">
           <div className="flex flex-wrap items-center gap-1">
             {entry.keys.map((key) => (
-              <span key={key} className="inline-block rounded-full bg-ember-500/15 px-1.5 py-0.5 text-[10px] font-medium text-ember-300">
+              <span key={key} className="inline-block rounded-full bg-ember-500/15 px-1.5 py-0.5 text-xs font-medium text-ember-300">
                 {key}
               </span>
             ))}
             {entry.alwaysActive && (
-              <span className="inline-block rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
+              <span className="inline-block rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-xs font-medium text-emerald-300">
                 always
               </span>
             )}
@@ -90,16 +90,16 @@ function MatchedLoreEntryList({ entries }: { entries: MatchedLoreEntryDTO[] }) {
         <div key={entry.id} className="rounded border border-white/5 bg-white/[0.02] p-2 text-xs space-y-1">
           <div className="flex flex-wrap items-center gap-1">
             {entry.keys.map((key) => (
-              <span key={key} className="inline-block rounded-full bg-ember-500/15 px-1.5 py-0.5 text-[10px] font-medium text-ember-300">
+              <span key={key} className="inline-block rounded-full bg-ember-500/15 px-1.5 py-0.5 text-xs font-medium text-ember-300">
                 {key}
               </span>
             ))}
             {entry.alwaysActive && (
-              <span className="inline-block rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
+              <span className="inline-block rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-xs font-medium text-emerald-300">
                 always
               </span>
             )}
-            <span className="inline-block rounded-full bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-medium text-sky-300">
+            <span className="inline-block rounded-full bg-sky-500/15 px-1.5 py-0.5 text-xs font-medium text-sky-300">
               {entry.scope}
             </span>
           </div>
@@ -166,13 +166,25 @@ export function DebugPromptDrawer({
   const messageLoreMatches = debugMessage?.loreMatches ?? [];
   const hasMessageLore = messageLoreMatches.length > 0;
 
+  const precedingUserMessage = debugMessage && activeChat
+    ? (() => {
+        const messages = activeChat.messages;
+        const idx = messages.findIndex((m) => m.id === debugMessage.id);
+        if (idx <= 0) return null;
+        for (let i = idx - 1; i >= 0; i--) {
+          if (messages[i].role === "user") return messages[i];
+        }
+        return null;
+      })()
+    : null;
+
   const content = (
     <div
-      className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/70 p-3 backdrop-blur-md sm:p-5"
+      className="animate-fade-in fixed inset-0 z-50 grid place-items-end sm:place-items-center bg-black/70 p-0 sm:p-3 backdrop-blur-md sm:p-5"
       onClick={onClose}
     >
       <section
-        className="animate-modal-enter flex max-h-[calc(100dvh-2rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)]"
+        className="animate-modal-enter flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-white/[0.06] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)] safe-area-bottom"
         role="dialog"
         onClick={(event) => event.stopPropagation()}
       >
@@ -181,7 +193,7 @@ export function DebugPromptDrawer({
             {t("debug.title")}
           </h3>
           <button
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-slate-500 transition-all duration-200 hover:bg-white/10 hover:text-slate-200 active:scale-90"
+            className="grid h-[48px] w-[48px] shrink-0 place-items-center rounded-lg text-slate-500 transition-all duration-200 hover:bg-white/10 hover:text-slate-200 active:scale-90"
             type="button"
             onClick={onClose}
           >
@@ -190,6 +202,9 @@ export function DebugPromptDrawer({
         </div>
 
         <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-4 sm:px-6 sm:pb-6 space-y-4">
+          <p className="text-xs leading-5 text-slate-500">
+            {t("debug.intro")}
+          </p>
           <CollapsibleSection
             id="character"
             title={t("debug.characterPrompt")}
@@ -239,6 +254,22 @@ export function DebugPromptDrawer({
               )
             ) : (
               <EmptyHint text={t("debug.noCharacter")} />
+            )}
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            id="userMessage"
+            title={t("debug.userMessage")}
+            defaultOpen={false}
+            collapsed={isCollapsed("userMessage")}
+            onToggle={toggleSection}
+          >
+            {precedingUserMessage ? (
+              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-300">
+                {precedingUserMessage.content}
+              </p>
+            ) : (
+              <EmptyHint text={t("debug.noUserMessage")} />
             )}
           </CollapsibleSection>
 

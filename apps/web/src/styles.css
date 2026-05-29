@@ -11,6 +11,23 @@
     --custom-scrollbar-radius: 999px;
     --custom-scrollbar-thumb: #313847;
     --custom-scrollbar-thumb-hover: #485369;
+    --safe-area-inset-top: env(safe-area-inset-top, 0px);
+    --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-area-inset-left: env(safe-area-inset-left, 0px);
+    --safe-area-inset-right: env(safe-area-inset-right, 0px);
+    font-size: 16px;
+  }
+
+  @media (max-width: 768px) {
+    :root {
+      font-size: 14px;
+    }
+  }
+
+  @media (max-width: 375px) {
+    :root {
+      font-size: 13px;
+    }
   }
 
   body {
@@ -19,12 +36,45 @@
     margin: 0;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: touch;
   }
 
-  /* Custom Scrollbar for better UI */
+  @supports (padding: max(0px)) {
+    body {
+      padding-top: max(0px, var(--safe-area-inset-top));
+      padding-bottom: max(0px, var(--safe-area-inset-bottom));
+      padding-left: max(0px, var(--safe-area-inset-left));
+      padding-right: max(0px, var(--safe-area-inset-right));
+    }
+  }
+
+  @media (max-width: 768px) {
+    html,
+    body {
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    #root {
+      width: 100%;
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+    }
+  }
+
   ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
+  }
+
+  @media (max-width: 768px) {
+    ::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
   }
 
   ::-webkit-scrollbar-track {
@@ -58,9 +108,35 @@
     font: inherit;
   }
 
-  /* Smooth scrolling */
   html {
     scroll-behavior: smooth;
+  }
+
+  @media (hover: none) and (pointer: coarse) {
+    * {
+      -webkit-tap-highlight-color: transparent;
+    }
+  }
+
+  input:not(.chat-input),
+  textarea:not(.chat-input),
+  select:not(.chat-input) {
+    font-size: 14px !important;
+  }
+
+  @media (max-width: 768px) {
+    input:focus,
+    textarea:focus,
+    select:focus {
+      scroll-margin-top: 100px;
+    }
+  }
+
+  .keyboard-open {
+    overflow: hidden !important;
+    position: fixed !important;
+    width: 100% !important;
+    height: var(--vvh, 100dvh) !important;
   }
 }
 
@@ -121,4 +197,88 @@
 .animate-slide-up {
   animation: slide-up 0.2s ease-in;
   overflow: hidden;
+}
+
+.touch-target {
+  min-height: 48px;
+  min-width: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .hover-interactive:hover {
+    background-color: transparent;
+  }
+
+  .hover-interactive:active {
+    background-color: rgba(255, 255, 255, 0.05);
+    transform: scale(0.98);
+    transition: transform 0.1s ease;
+  }
+}
+
+.mobile-full-width {
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+.safe-area-top {
+  padding-top: var(--safe-area-inset-top);
+}
+
+.safe-area-bottom {
+  padding-bottom: var(--safe-area-inset-bottom);
+}
+
+.safe-area-left {
+  padding-left: var(--safe-area-inset-left);
+}
+
+.safe-area-right {
+  padding-right: var(--safe-area-inset-right);
+}
+
+@supports (padding: max(0px)) {
+  .safe-area-top {
+    padding-top: max(0.75rem, var(--safe-area-inset-top));
+  }
+
+  .safe-area-bottom {
+    padding-bottom: max(0.75rem, var(--safe-area-inset-bottom));
+  }
+}
+
+.keyboard-open {
+  height: 100dvh;
+  height: -webkit-fill-available;
+}
+
+@supports not (height: 100dvh) {
+  .keyboard-safe-height {
+    height: calc(var(--vh, 1vh) * 100);
+  }
+}
+
+@media (orientation: portrait) {
+  .portrait-full-height {
+    height: 100dvh;
+    height: 100svh;
+  }
+}
+
+@media (orientation: landscape) {
+  .landscape-full-height {
+    height: 100dvh;
+    height: 100svh;
+  }
+}
+
+@supports not (height: 100dvh) {
+  .dvh-fallback {
+    height: 100vh;
+    height: -webkit-fill-available;
+  }
 }

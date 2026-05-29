@@ -741,7 +741,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
               <div className="grid gap-5">
                 <Field label={t("common.name")}><TextInput value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
                 <Field label={t("characters.avatarUrl")}><TextInput value={form.avatar} onChange={(event) => setForm({ ...form, avatar: event.target.value })} /></Field>
-                <Field label={t("characters.description")}><TextArea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} className="!h-[100px] min-h-[100px]" /></Field>
+                <Field label={t("characters.description")}><TextArea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} className="chat-input !h-[100px] min-h-[100px] !text-sm" /></Field>
               </div>
               <div className="group overflow-hidden rounded-xl border border-white/5 bg-white/5 p-0 text-sm transition-all duration-200 hover:border-white/10 hover:bg-white/10">
                 <div className="relative aspect-video w-full overflow-hidden bg-ink-800 ring-1 ring-white/5 transition-all duration-200 group-hover:ring-ember-500/30">
@@ -768,10 +768,10 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                 <button
                   key={section.id}
                   type="button"
-                  className={`min-h-[36px] flex-1 whitespace-nowrap rounded-lg px-2 text-xs font-medium transition-colors sm:min-h-[40px] sm:px-4 sm:text-sm ${
+                  className={`min-h-[48px] flex-1 whitespace-nowrap rounded-lg px-2 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
                     activeEditorSection === section.id
                       ? "bg-ember-500 text-ink-950 shadow-sm shadow-ember-500/20"
-                      : "text-slate-300 hover:bg-ink-800/75"
+                      : "text-slate-300 hover:bg-ink-800/75 active:bg-ink-800/90"
                   }`}
                   onClick={() => setActiveEditorSection(section.id)}
                 >
