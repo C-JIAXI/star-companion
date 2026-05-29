@@ -18,6 +18,7 @@ const loreMatchSchema = z.object({
   keys: stringArraySchema,
   content: z.string(),
   priority: z.number().int(),
+  scope: z.enum(["prefix", "prompt", "suffix"]).default("prompt"),
   triggerMode: z.enum(["user", "assistant", "both"]).default("both"),
   alwaysActive: z.boolean().default(false),
   enabled: z.boolean(),
@@ -30,6 +31,7 @@ const loreEntrySchema = z.object({
   keys: stringArraySchema,
   content: z.string().min(1),
   priority: z.number().int().default(0),
+  scope: z.enum(["prefix", "prompt", "suffix"]).default("prompt"),
   triggerMode: z.enum(["user", "assistant", "both"]).default("both"),
   alwaysActive: z.boolean().default(false),
   enabled: z.boolean().default(true)
@@ -37,14 +39,24 @@ const loreEntrySchema = z.object({
 
 const loreEntriesSchema = z.array(loreEntrySchema).default([]);
 
+const quickReplySchema = z.object({
+  id: z.string().min(1).optional(),
+  label: z.string().min(1),
+  content: z.string().min(1)
+});
+
+const quickRepliesSchema = z.array(quickReplySchema).default([]);
+
 export const characterCreateSchema = z.object({
   name: z.string().trim().min(1),
   avatar: z.string().trim().nullable().optional(),
+  description: z.string().default(""),
   prefix: z.string().default(""),
   prompt: z.string().default(""),
   suffix: z.string().default(""),
   htmlCss: z.string().default(""),
-  loreEntries: loreEntriesSchema
+  loreEntries: loreEntriesSchema,
+  quickReplies: quickRepliesSchema
 });
 
 const characterUpdateFieldsSchema = characterCreateSchema.partial();
@@ -80,6 +92,7 @@ const legacyCharacterImportSchema = z.object({
   suffix: z.string().optional(),
   htmlCss: z.string().optional(),
   loreEntries: loreEntriesSchema.optional(),
+  quickReplies: quickRepliesSchema.optional(),
   description: z.string().optional(),
   scenario: z.string().optional(),
   systemPrompt: z.string().optional()
@@ -269,6 +282,7 @@ const backupCharacterSchema = characterCreateSchema
     suffix: character.suffix || character.scenario || "",
     htmlCss: character.htmlCss ?? "",
     loreEntries: character.loreEntries ?? [],
+    quickReplies: character.quickReplies ?? [],
     createdAt: character.createdAt,
     updatedAt: character.updatedAt
   }));

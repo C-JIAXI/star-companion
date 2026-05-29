@@ -35,6 +35,7 @@ describe("buildPromptContext", () => {
             keys: ["user-key"],
             content: "User-triggered lore content.",
             priority: 4,
+            scope: "prompt",
             triggerMode: "user",
             alwaysActive: false,
             enabled: true
@@ -44,6 +45,7 @@ describe("buildPromptContext", () => {
             keys: ["assistant-key"],
             content: "Assistant-triggered lore content.",
             priority: 3,
+            scope: "prompt",
             triggerMode: "assistant",
             alwaysActive: false,
             enabled: true
@@ -53,6 +55,7 @@ describe("buildPromptContext", () => {
             keys: ["shared-key"],
             content: "Shared-triggered lore content.",
             priority: 2,
+            scope: "prompt",
             triggerMode: "both",
             alwaysActive: false,
             enabled: true
@@ -62,6 +65,7 @@ describe("buildPromptContext", () => {
             keys: [],
             content: "Persistent lore content.",
             priority: 1,
+            scope: "prompt",
             triggerMode: "both",
             alwaysActive: true,
             enabled: true
@@ -71,6 +75,7 @@ describe("buildPromptContext", () => {
             keys: ["disabled-key"],
             content: "Disabled lore content.",
             priority: 5,
+            scope: "prompt",
             triggerMode: "both",
             alwaysActive: false,
             enabled: false
@@ -231,7 +236,7 @@ describe("buildPromptContext", () => {
     assert.match(promptText, /Stay grounded\./);
     assert.match(promptText, /A character used by prompt builder tests\./);
     assert.match(promptText, /Reply briefly\./);
-    assert.match(promptText, /\.card \{ color: #fff; \} \.title \{ font-weight: 700; \}/);
+    assert.doesNotMatch(promptText, /\.card \{ color: #fff; \} \.title \{ font-weight: 700; \}/);
     assert.doesNotMatch(promptText, /Global instruction:/);
     assert.doesNotMatch(promptText, /You are writing as the character/);
     assert.doesNotMatch(promptText, /HTML rendering is enabled for this character/);
@@ -300,6 +305,6 @@ describe("buildPromptContext", () => {
     assert.match(promptText, /Hidden prefix instruction\./);
     assert.match(promptText, /Hidden prompt instruction for imported private cards\./);
     assert.match(promptText, /Hidden suffix instruction\./);
-    assert.match(promptText, /\.private-card \{ color: #abc; \}/);
+    assert.doesNotMatch(promptText, /\.private-card \{ color: #abc; \}/);
   });
 });

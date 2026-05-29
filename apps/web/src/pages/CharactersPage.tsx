@@ -1,16 +1,19 @@
-import { ChevronDown, ChevronLeft, ChevronRight, Download, FileUp, Lock, Plus, Save, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Download, FileUp, Lock, Plus, Save, Search, Trash2, X } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { CharacterCard } from "../components/CharacterCard";
 import { MarkdownEditor } from "../components/MarkdownEditor";
 import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { downloadJson, readFileText } from "../lib/files";
+import { usePlaceholderSrc } from "../placeholderImages";
 import type {
   CharacterCardImportInput,
   CharacterDTO,
   CharacterExportMode,
   CharacterInput,
-  CharacterLoreEntryDTO
+  CharacterLoreEntryDTO,
+  QuickReplyDTO
 } from "../types";
 import { Button, ConfirmDialog, EmptyState, ErrorNotice, Field, HelpLabel, Panel, SuccessNotice, TextArea, TextInput } from "../components/ui";
 
@@ -21,6 +24,7 @@ const blankLoreEntry = (): CharacterLoreEntryDTO & { _localId: string; _collapse
   keys: [],
   content: "",
   priority: 0,
+  scope: "prompt",
   triggerMode: "both",
   alwaysActive: false,
   enabled: true,
@@ -29,7 +33,17 @@ const blankLoreEntry = (): CharacterLoreEntryDTO & { _localId: string; _collapse
 });
 
 type LoreEntryForm = ReturnType<typeof blankLoreEntry>;
-type EditorSectionId = "prompt" | "html" | "lore";
+
+const blankQuickReply = (): QuickReplyDTO & { _localId: string; _collapsed: boolean } => ({
+  id: "",
+  label: "",
+  content: "",
+  _localId: Math.random().toString(36).slice(2),
+  _collapsed: false
+});
+
+type QuickReplyForm = ReturnType<typeof blankQuickReply>;
+type EditorSectionId = "prompt" | "html" | "lore" | "quickReplies";
 type PasswordDialogMode = "unlock" | "export-private" | "export-public";
 
 const HTML_PREVIEW_TEMPLATES = {
@@ -68,11 +82,13 @@ const DEFAULT_HTML_PREVIEW_TEMPLATE: HtmlPreviewTemplateId = "card";
 const blankForm = {
   name: "",
   avatar: "",
+  description: "",
   prefix: "",
   prompt: "",
   suffix: "",
   htmlCss: "",
-  loreEntries: [] as LoreEntryForm[]
+  loreEntries: [] as LoreEntryForm[],
+  quickReplies: [] as QuickReplyForm[]
 };
 
 type CharacterForm = typeof blankForm;
@@ -146,6 +162,7 @@ function PasswordDialog({
 const toForm = (character: CharacterDTO): CharacterForm => ({
   name: character.name,
   avatar: character.avatar ?? "",
+  description: character.description,
   prefix: character.prefix,
   prompt: character.prompt,
   suffix: character.suffix,
@@ -155,9 +172,17 @@ const toForm = (character: CharacterDTO): CharacterForm => ({
       keys: entry.keys,
       content: entry.content,
       priority: entry.priority,
+      scope: entry.scope,
       triggerMode: entry.triggerMode,
       alwaysActive: entry.alwaysActive,
       enabled: entry.enabled,
+      _localId: Math.random().toString(36).slice(2),
+      _collapsed: true
+    })),
+  quickReplies: (character.quickReplies ?? []).map((qr) => ({
+      id: qr.id,
+      label: qr.label,
+      content: qr.content,
       _localId: Math.random().toString(36).slice(2),
       _collapsed: true
     }))
@@ -166,11 +191,19 @@ const toForm = (character: CharacterDTO): CharacterForm => ({
 const toInput = (form: CharacterForm): CharacterInput => ({
   name: form.name,
   avatar: form.avatar || null,
+  description: form.description,
   prefix: form.prefix,
   prompt: form.prompt,
   suffix: form.suffix,
   htmlCss: form.htmlCss,
-  loreEntries: form.loreEntries.map(({ _localId, ...entry }) => entry)
+  loreEntries: form.loreEntries.map(({ _localId, ...entry }) => ({
+    ...entry,
+    id: entry.id || crypto.randomUUID()
+  })),
+  quickReplies: form.quickReplies.map(({ _localId, ...qr }) => ({
+    ...qr,
+    id: qr.id || crypto.randomUUID()
+  }))
 });
 
 const emptyCharacterPage = {
@@ -200,9 +233,10 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
   const [activeEditorSection, setActiveEditorSection] = useState<EditorSectionId>("prompt");
   const [previewTemplateId, setPreviewTemplateId] = useState<HtmlPreviewTemplateId>(DEFAULT_HTML_PREVIEW_TEMPLATE);
   const [previewMarkup, setPreviewMarkup] = useState<string>(HTML_PREVIEW_TEMPLATES[DEFAULT_HTML_PREVIEW_TEMPLATE]);
-  const creatingRef = useRef(false);
+  const [isCreating, setIsCreating] = useState(false);
   const characterRequestRef = useRef(0);
   const unlockedPasswordRef = useRef<Record<string, string>>({});
+  const editorCoverSrc = usePlaceholderSrc(form.avatar, selectedId ?? undefined);
 
   const htmlPreviewTemplates = useMemo(
     () => [
@@ -217,7 +251,8 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
     () => [
       { id: "prompt" as const, label: t("characters.editorSectionPrompt") },
       { id: "html" as const, label: t("characters.editorSectionHtml") },
-      { id: "lore" as const, label: t("characters.editorSectionLore") }
+      { id: "lore" as const, label: t("characters.editorSectionLore") },
+      { id: "quickReplies" as const, label: t("characters.editorSectionQuickReplies") }
     ],
     [t]
   );
@@ -365,7 +400,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
       return;
     }
 
-    if (!nextSelectedId && !creatingRef.current) {
+    if (!nextSelectedId && !isCreating) {
       return;
     }
   };
@@ -386,7 +421,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
   }, [status]);
 
   const selectCharacter = (character: CharacterDTO) => {
-    creatingRef.current = false;
+    setIsCreating(false);
     setSelectedId(character.id);
     setError(null);
     setStatus(null);
@@ -397,10 +432,10 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
   };
 
   const resetForm = () => {
-    creatingRef.current = true;
+    setIsCreating(true);
     setSelectedId(null);
     setSelectedCharacter(null);
-    setForm(blankForm);
+    setForm({ ...blankForm });
     setError(null);
     setStatus(null);
   };
@@ -410,7 +445,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
     setError(null);
     setStatus(null);
     try {
-      const editingCharacter = creatingRef.current ? null : selected;
+      const editingCharacter = isCreating ? null : selected;
       const accessPassword =
         editingCharacter?.visibility === "private"
           ? unlockedPasswordRef.current[editingCharacter.id]
@@ -422,7 +457,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
         await loadCharacters(characterPage, searchQuery, updated.id);
       } else {
         const created = await api.characters.create(toInput(form));
-        creatingRef.current = false;
+        setIsCreating(false);
         setSearchQuery("");
         setCharacterPage(1);
         setSelectedId(created.id);
@@ -513,7 +548,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
     try {
       const parsed = JSON.parse(await readFileText(file)) as CharacterCardImportInput;
       const imported = await api.characters.import(parsed);
-      creatingRef.current = false;
+      setIsCreating(false);
       delete unlockedPasswordRef.current[imported.id];
       setSearchQuery("");
       setCharacterPage(1);
@@ -620,7 +655,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
         </label>
       </div>
 
-      {selectedId && selectedCharacter ? (
+      {(isCreating || (selectedId && selectedCharacter)) ? (
         <div className="space-y-4">
           <button
             className="flex items-center gap-1.5 text-xs font-medium text-slate-400 transition-colors hover:text-slate-200"
@@ -628,8 +663,8 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
             onClick={() => {
               setSelectedId(null);
               setSelectedCharacter(null);
-              setForm(blankForm);
-              creatingRef.current = false;
+              setForm({ ...blankForm });
+              setIsCreating(false);
             }}
           >
             <ChevronLeft size={14} />
@@ -702,18 +737,28 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                 ) : null}
               </div>
             ) : null}
-            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_148px]">
+            <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
               <div className="grid gap-5">
                 <Field label={t("common.name")}><TextInput value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
                 <Field label={t("characters.avatarUrl")}><TextInput value={form.avatar} onChange={(event) => setForm({ ...form, avatar: event.target.value })} /></Field>
+                <Field label={t("characters.description")}><TextArea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} className="!h-[100px] min-h-[100px]" /></Field>
               </div>
-              <div className="grid min-h-[148px] place-items-center rounded-2xl border border-white/5 bg-ink-950/40 p-4">
-                <div className="grid h-24 w-24 place-items-center overflow-hidden rounded-2xl bg-ink-800 ring-1 ring-white/10">
+              <div className="group overflow-hidden rounded-xl border border-white/5 bg-white/5 p-0 text-sm transition-all duration-200 hover:border-white/10 hover:bg-white/10">
+                <div className="relative aspect-video w-full overflow-hidden bg-ink-800 ring-1 ring-white/5 transition-all duration-200 group-hover:ring-ember-500/30">
                   <img
                     alt=""
-                    className="h-full w-full object-cover"
-                    src={form.avatar || "/placeholder-cover.png"}
+                    className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                    src={editorCoverSrc}
                   />
+                  <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+                  <p className="absolute bottom-2 left-3 right-3 truncate text-sm font-semibold text-white drop-shadow-md">
+                    {form.name || t("common.name")}
+                  </p>
+                </div>
+                <div className="min-w-0 w-full p-4">
+                  <p className="line-clamp-2 text-xs leading-5 text-slate-400">
+                    {form.description || t("common.noDescription")}
+                  </p>
                 </div>
               </div>
             </div>
@@ -1006,6 +1051,24 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                                 />
                                 {t("characters.loreEntryAlwaysActive")}
                               </label>
+                              <Field label={t("characters.loreEntryScope")}>
+                                <select
+                                  className="w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-2 text-sm text-slate-200 focus:border-ember-500/50 focus:outline-none focus:ring-1 focus:ring-ember-500/30"
+                                  value={entry.scope}
+                                  onChange={(event) => {
+                                    const next = [...form.loreEntries];
+                                    next[index] = {
+                                      ...entry,
+                                      scope: event.target.value as "prefix" | "prompt" | "suffix"
+                                    };
+                                    setForm({ ...form, loreEntries: next });
+                                  }}
+                                >
+                                  <option value="prefix">{t("characters.loreEntryScopePrefix")}</option>
+                                  <option value="prompt">{t("characters.loreEntryScopePrompt")}</option>
+                                  <option value="suffix">{t("characters.loreEntryScopeSuffix")}</option>
+                                </select>
+                              </Field>
                             </div>
                           </div>
                         </div>
@@ -1029,6 +1092,108 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
               </Button>
             </div>
             )
+            ) : null}
+
+            {activeEditorSection === "quickReplies" ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-slate-200">{t("characters.quickReplies")}</p>
+              </div>
+              {form.quickReplies.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-white/10 px-4 py-6 text-center">
+                  <p className="text-sm text-slate-400">{t("characters.quickRepliesEmpty")}</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {form.quickReplies.map((qr, index) => (
+                    <div
+                      className="rounded-xl border border-white/10 bg-ink-950/40 transition-colors"
+                      key={qr._localId}
+                    >
+                      <div
+                        className="flex cursor-pointer items-center justify-between gap-2 px-4 py-3 select-none"
+                        onClick={() => {
+                          const next = [...form.quickReplies];
+                          next[index] = { ...qr, _collapsed: !qr._collapsed };
+                          setForm({ ...form, quickReplies: next });
+                        }}
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <ChevronDown
+                            size={14}
+                            className={`shrink-0 text-slate-500 transition-transform duration-200 ${
+                              qr._collapsed ? "-rotate-90" : ""
+                            }`}
+                          />
+                          <span className="truncate text-sm font-medium text-slate-200">
+                            {qr.label || t("characters.quickReplyIndex", { index: index + 1 })}
+                          </span>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <button
+                            className="rounded-lg p-1 text-slate-500 transition-colors hover:bg-red-500/10 hover:text-red-400"
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              const next = form.quickReplies.filter((_, i) => i !== index);
+                              setForm({ ...form, quickReplies: next });
+                            }}
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      </div>
+                      <div
+                        className={`overflow-hidden transition-all duration-200 ease-out ${
+                          qr._collapsed
+                            ? "max-h-0 border-t-0 opacity-0"
+                            : "max-h-[600px] border-t border-white/5 opacity-100"
+                        }`}
+                      >
+                        <div className="px-4 pb-4 pt-3 space-y-3">
+                          <Field label={t("characters.quickReplyLabel")}>
+                            <TextInput
+                              placeholder={t("characters.quickReplyLabelPlaceholder")}
+                              value={qr.label}
+                              onChange={(event) => {
+                                const next = [...form.quickReplies];
+                                next[index] = { ...qr, label: event.target.value };
+                                setForm({ ...form, quickReplies: next });
+                              }}
+                            />
+                          </Field>
+                          <Field container="div" label={t("characters.quickReplyContent")}>
+                            <TextArea
+                              className="!h-[120px] min-h-[120px]"
+                              placeholder={t("characters.quickReplyContentPlaceholder")}
+                              value={qr.content}
+                              onChange={(event) => {
+                                const next = [...form.quickReplies];
+                                next[index] = { ...qr, content: event.target.value };
+                                setForm({ ...form, quickReplies: next });
+                              }}
+                            />
+                          </Field>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <Button
+                className="mt-3 w-full !min-h-[36px]"
+                variant="secondary"
+                onClick={() =>
+                  setForm({
+                    ...form,
+                    quickReplies: [...form.quickReplies, blankQuickReply()]
+                  })
+                }
+              >
+                <Plus size={14} />
+                {t("characters.quickReplyAdd")}
+              </Button>
+            </div>
             ) : null}
 
             <div className="flex flex-wrap justify-end gap-3 pt-4 border-t border-white/5">
@@ -1074,57 +1239,16 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
             <>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                 {characters.map((character) => (
-                  <div
-                    className="group rounded-xl border border-white/5 bg-white/5 p-4 text-sm transition-all duration-200 hover:border-white/10 hover:bg-white/10"
+                  <CharacterCard
                     key={character.id}
-                  >
-                    <div className="flex flex-col gap-3">
-                      <div className="relative h-40 w-full overflow-hidden rounded-xl bg-ink-800 ring-1 ring-white/5 transition-all duration-200 group-hover:ring-ember-500/30">
-                        <img
-                          alt=""
-                          className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                          src={character.avatar || "/placeholder-cover.png"}
-                        />
-                        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
-                        <p className="absolute bottom-2 left-3 right-3 truncate text-sm font-semibold text-white drop-shadow-md">
-                          {character.name}
-                          {character.visibility === "private" ? (
-                            <Lock size={11} className="ml-1.5 inline-block shrink-0 text-amber-400" />
-                          ) : null}
-                        </p>
-                      </div>
-                      <div className="min-w-0 w-full">
-                        <p className="line-clamp-2 text-xs leading-5 text-slate-400">
-                          {character.visibility === "private" && !character.canViewPrompt
-                            ? privateCharacterCopy.privateSummary
-                            : character.prompt || character.prefix || t("common.noDescription")}
-                        </p>
-                      </div>
-                      <div className="flex w-full items-center justify-center gap-2 pt-1">
-                        <Button
-                          className="!min-h-[32px] !h-8 flex-1 !px-3 text-xs"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onPlay(character.id);
-                          }}
-                        >
-                          <Sparkles size={14} />
-                          {t("characters.play")}
-                        </Button>
-                        <Button
-                          className="!min-h-[32px] !h-8 flex-1 !px-3 text-xs"
-                          variant="secondary"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            selectCharacter(character);
-                          }}
-                        >
-                          <Settings size={14} />
-                          {t("common.edit")}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
+                    character={character}
+                    noDescriptionLabel={t("common.noDescription")}
+                    privateSummaryLabel={privateCharacterCopy.privateSummary}
+                    playLabel={t("characters.play")}
+                    editLabel={t("common.edit")}
+                    onPlay={onPlay}
+                    onEdit={selectCharacter}
+                  />
                 ))}
               </div>
 

@@ -3,6 +3,7 @@ import {
   createDecipheriv,
   createHash,
   randomBytes,
+  randomUUID,
   scryptSync,
   timingSafeEqual
 } from "node:crypto";
@@ -16,9 +17,16 @@ export type CharacterLoreEntryRecord = {
   keys: string[];
   content: string;
   priority: number;
+  scope: "prefix" | "prompt" | "suffix";
   triggerMode: LoreTriggerMode;
   alwaysActive: boolean;
   enabled: boolean;
+};
+
+export type QuickReplyRecord = {
+  id: string;
+  label: string;
+  content: string;
 };
 
 export type CharacterPromptFields = {
@@ -32,6 +40,7 @@ export type CharacterPromptFields = {
 export type ResolvedCharacterRecord = CharacterPromptFields & {
   name: string;
   avatar: string | null;
+  description: string;
   visibility: "public" | "private";
   canViewPrompt: boolean;
 };
@@ -66,6 +75,7 @@ export type CharacterExportCard =
         suffix: string;
         htmlCss: string;
         loreEntries: ImportedCharacterLoreEntryInput[];
+        quickReplies: ImportedQuickReplyInput[];
       };
     }
   | {
@@ -76,6 +86,7 @@ export type CharacterExportCard =
       character: {
         name: string;
         avatar?: string | null;
+        quickReplies?: ImportedQuickReplyInput[];
       };
       protectedPayload: {
         version: 1;
@@ -89,6 +100,7 @@ export type CharacterExportCard =
     };
 
 type ImportedCharacterLoreEntryInput = Omit<CharacterLoreEntryRecord, "id"> & { id?: string };
+type ImportedQuickReplyInput = Omit<QuickReplyRecord, "id"> & { id?: string };
 
 type LegacyCharacterImportSource = {
   name: string;
@@ -98,6 +110,7 @@ type LegacyCharacterImportSource = {
   suffix?: string;
   htmlCss?: string;
   loreEntries?: ImportedCharacterLoreEntryInput[];
+  quickReplies?: ImportedQuickReplyInput[];
   description?: string;
   scenario?: string;
   systemPrompt?: string;
@@ -157,6 +170,13 @@ const normalizeLoreTriggerMode = (value: unknown): LoreTriggerMode => {
   return "both";
 };
 
+const normalizeLoreScope = (value: unknown): "prefix" | "prompt" | "suffix" => {
+  if (value === "prefix" || value === "suffix") {
+    return value;
+  }
+  return "prompt";
+};
+
 const isPasswordAccessControl = (value: unknown): value is PasswordAccessControl => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -208,7 +228,7 @@ export const toCharacterLoreEntries = (value: unknown): CharacterLoreEntryRecord
       const priority = entry.priority;
 
       if (
-        typeof id !== "string" ||
+        (!id || typeof id !== "string") ||
         !Array.isArray(keys) ||
         typeof content !== "string" ||
         typeof priority !== "number"
@@ -217,16 +237,46 @@ export const toCharacterLoreEntries = (value: unknown): CharacterLoreEntryRecord
       }
 
       return {
-        id,
+        id: typeof id === "string" && id ? id : randomUUID(),
         keys: keys.filter((key): key is string => typeof key === "string"),
         content,
         priority,
+        scope: normalizeLoreScope(entry.scope),
         triggerMode: normalizeLoreTriggerMode(entry.triggerMode),
         alwaysActive: entry.alwaysActive === true,
         enabled: entry.enabled !== false
       };
     })
     .filter((entry): entry is CharacterLoreEntryRecord => entry !== null);
+};
+
+export const toQuickReplies = (value: unknown): QuickReplyRecord[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item): QuickReplyRecord | null => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+
+      const entry = item as Record<string, unknown>;
+      const id = entry.id;
+      const label = entry.label;
+      const content = entry.content;
+
+      if (typeof label !== "string" || !label || typeof content !== "string" || !content) {
+        return null;
+      }
+
+      return {
+        id: typeof id === "string" && id ? id : randomUUID(),
+        label,
+        content
+      };
+    })
+    .filter((entry): entry is QuickReplyRecord => entry !== null);
 };
 
 const encryptPayload = (payload: EncryptedPromptPayload, key: Buffer) => {
@@ -424,13 +474,14 @@ const assertPrivateCharacterPassword = (
 };
 
 export const resolveCharacterRecord = (
-  character: Pick<Character, "name" | "avatar" | "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries">,
+  character: Pick<Character, "name" | "avatar" | "description" | "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries">,
   password?: string
 ): ResolvedCharacterRecord => {
   if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
     return {
       name: character.name,
       avatar: character.avatar,
+      description: character.description,
       ...normalizePromptFields(character),
       visibility: "public",
       canViewPrompt: true
@@ -443,6 +494,7 @@ export const resolveCharacterRecord = (
   return {
     name: character.name,
     avatar: character.avatar,
+    description: character.description,
     prefix: canViewPrompt ? fields.prefix : "",
     prompt: canViewPrompt ? fields.prompt : "",
     suffix: canViewPrompt ? fields.suffix : "",
@@ -464,7 +516,7 @@ export const resolveCharacterPromptFields = (
 };
 
 export const createCharacterExportCard = (
-  character: Pick<Character, "name" | "avatar" | "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries">,
+  character: Pick<Character, "name" | "avatar" | "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries" | "quickReplies">,
   visibility: "public" | "private",
   password?: string
 ): CharacterExportCard => {
@@ -472,6 +524,7 @@ export const createCharacterExportCard = (
   const existingPrivateRecord = isStoredPrivateCharacterRecord(character.loreEntries)
     ? decryptStoredPromptFields(character.loreEntries)
     : null;
+  const quickReplies = toQuickReplies(character.quickReplies);
 
   if (visibility === "public") {
     if (existingPrivateRecord && !canViewPrivateCharacter(existingPrivateRecord.access, password)) {
@@ -489,7 +542,8 @@ export const createCharacterExportCard = (
       character: {
         name: character.name,
         avatar: character.avatar,
-        ...promptFields
+        ...promptFields,
+        quickReplies
       }
     };
   }
@@ -521,7 +575,8 @@ export const createCharacterExportCard = (
     exportedAt: new Date().toISOString(),
     character: {
       name: character.name,
-      avatar: character.avatar
+      avatar: character.avatar,
+      quickReplies
     },
     protectedPayload: {
       version: 1,
@@ -570,6 +625,7 @@ export const importCharacterCard = (
   suffix: string;
   htmlCss: string;
   loreEntries: Prisma.InputJsonValue;
+  quickReplies: Prisma.InputJsonValue;
 } => {
   if ("format" in source && source.format === "character-card") {
     if (source.visibility === "public") {
@@ -580,7 +636,8 @@ export const importCharacterCard = (
         prompt: source.character.prompt,
         suffix: source.character.suffix,
         htmlCss: source.character.htmlCss,
-        loreEntries: source.character.loreEntries
+        loreEntries: source.character.loreEntries,
+        quickReplies: source.character.quickReplies ?? []
       };
     }
 
@@ -598,7 +655,8 @@ export const importCharacterCard = (
       prompt: "",
       suffix: "",
       htmlCss: "",
-      loreEntries: buildStoredPrivateCharacterJson(fields, access)
+      loreEntries: buildStoredPrivateCharacterJson(fields, access),
+      quickReplies: source.character.quickReplies ?? []
     };
   }
 
@@ -611,20 +669,23 @@ export const importCharacterCard = (
     prompt: legacy.prompt ?? legacy.description ?? "",
     suffix: legacy.suffix ?? legacy.scenario ?? "",
     htmlCss: legacy.htmlCss ?? "",
-    loreEntries: legacy.loreEntries ?? []
+    loreEntries: legacy.loreEntries ?? [],
+    quickReplies: legacy.quickReplies ?? []
   };
 };
 
 export const buildCharacterUpdateData = (
-  character: Pick<Character, "name" | "avatar" | "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries">,
+  character: Pick<Character, "name" | "avatar" | "description" | "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries">,
   updates: {
     name?: string;
     avatar?: string | null;
+    description?: string;
     prefix?: string;
     prompt?: string;
     suffix?: string;
     htmlCss?: string;
     loreEntries?: Prisma.InputJsonValue;
+    quickReplies?: Prisma.InputJsonValue;
   },
   password?: string
 ): Prisma.CharacterUpdateInput => {
@@ -666,6 +727,7 @@ export const buildCharacterUpdateData = (
   return {
     name: updates.name,
     avatar: "avatar" in updates ? updates.avatar : undefined,
+    description: "description" in updates ? updates.description : undefined,
     prefix: "",
     prompt: "",
     suffix: "",

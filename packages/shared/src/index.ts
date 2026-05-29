@@ -41,30 +41,41 @@ export interface CharacterLoreEntryDTO {
   keys: string[];
   content: string;
   priority: number;
+  scope: LoreEntryScope;
   triggerMode: LoreTriggerMode;
   alwaysActive: boolean;
   enabled: boolean;
 }
 
+export interface QuickReplyDTO {
+  id: string;
+  label: string;
+  content: string;
+}
+
 export interface CharacterCardContentDTO {
   name: string;
   avatar: string | null;
+  description: string;
   prefix: string;
   prompt: string;
   suffix: string;
   htmlCss: string;
   loreEntries: CharacterLoreEntryDTO[];
+  quickReplies: QuickReplyDTO[];
 }
 
 export interface CharacterDTO {
   id: string;
   name: string;
   avatar: string | null;
+  description: string;
   prefix: string;
   prompt: string;
   suffix: string;
   htmlCss: string;
   loreEntries: CharacterLoreEntryDTO[];
+  quickReplies: QuickReplyDTO[];
   visibility: CharacterVisibility;
   canViewPrompt: boolean;
   createdAt: string;
@@ -237,6 +248,7 @@ export interface TokenUsageDTO {
 }
 
 export type LoreTriggerMode = "user" | "assistant" | "both";
+export type LoreEntryScope = "prefix" | "prompt" | "suffix";
 
 export interface MatchedLoreEntryDTO {
   id: string;
@@ -245,6 +257,7 @@ export interface MatchedLoreEntryDTO {
   keys: string[];
   content: string;
   priority: number;
+  scope: LoreEntryScope;
   triggerMode: LoreTriggerMode;
   alwaysActive: boolean;
   enabled: boolean;

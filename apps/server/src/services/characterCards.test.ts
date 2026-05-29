@@ -23,6 +23,7 @@ const baseCharacter = {
       keys: ["signal"],
       content: "Hidden lore entry.",
       priority: 1,
+      scope: "prompt" as const,
       triggerMode: "both" as const,
       alwaysActive: false,
       enabled: true

@@ -12,6 +12,7 @@ type PromptInput = {
 };
 
 type LoreTriggerMode = "user" | "assistant" | "both";
+type LoreEntryScope = "prefix" | "prompt" | "suffix";
 
 export type MatchedLoreEntry = {
   id: string;
@@ -20,6 +21,7 @@ export type MatchedLoreEntry = {
   keys: string[];
   content: string;
   priority: number;
+  scope: LoreEntryScope;
   triggerMode: LoreTriggerMode;
   alwaysActive: boolean;
   enabled: boolean;
@@ -44,6 +46,13 @@ const normalizeLoreTriggerMode = (value: string | null | undefined): LoreTrigger
   return "both";
 };
 
+const normalizeLoreScope = (value: string | null | undefined): LoreEntryScope => {
+  if (value === "prefix" || value === "suffix") {
+    return value;
+  }
+  return "prompt";
+};
+
 const resolvePromptCharacterId = (
   chat: { characterIds: Prisma.JsonValue } | null,
   requestedCharacterId?: string | null
@@ -60,18 +69,25 @@ const resolvePromptCharacterId = (
   return chatCharacterIds[0] ?? null;
 };
 
-const buildCharacterSystemPrompt = (character: Character | null): string => {
+const buildCharacterSystemPrompt = (
+  character: Character | null,
+  loreEntries: MatchedLoreEntry[] = []
+): string => {
   if (!character) {
     return "";
   }
 
   const promptFields = resolveCharacterPromptFields(character);
+  const prefixLore = loreEntries.filter((e) => e.scope === "prefix");
+  const promptLore = loreEntries.filter((e) => e.scope === "prompt");
+  const suffixLore = loreEntries.filter((e) => e.scope === "suffix");
+  const loreContents = (entries: MatchedLoreEntry[]) =>
+    entries.map((e) => e.content.trim()).filter(Boolean).join("\n\n");
 
   return [
-    promptFields.prefix.trim(),
-    promptFields.prompt.trim(),
-    promptFields.suffix.trim(),
-    promptFields.htmlCss.trim()
+    [promptFields.prefix.trim(), loreContents(prefixLore)].filter(Boolean).join("\n\n"),
+    [promptFields.prompt.trim(), loreContents(promptLore)].filter(Boolean).join("\n\n"),
+    [promptFields.suffix.trim(), loreContents(suffixLore)].filter(Boolean).join("\n\n")
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -104,20 +120,13 @@ const buildLoreContexts = (recentMessages: Message[]) => {
   } satisfies Record<LoreTriggerMode, string>;
 };
 
-const buildLoreSystemPrompt = (entries: MatchedLoreEntry[]) => {
-  if (entries.length === 0) {
-    return "";
-  }
-
-  return entries.map((entry) => entry.content.trim()).filter(Boolean).join("\n\n");
-};
-
 const findMatchedLoreEntries = (
   characterLoreEntries: Array<{
     id: string;
     keys: string[];
     content: string;
     priority: number;
+    scope?: string;
     triggerMode: string;
     alwaysActive: boolean;
     enabled: boolean;
@@ -155,6 +164,7 @@ const findMatchedLoreEntries = (
       keys: entry.keys,
       content: entry.content,
       priority: entry.priority,
+      scope: normalizeLoreScope(entry.scope),
       triggerMode: normalizeLoreTriggerMode(entry.triggerMode),
       alwaysActive: entry.alwaysActive,
       enabled: entry.enabled
@@ -224,14 +234,12 @@ export const buildPromptContext = async ({
     recentMessages,
     character?.name ?? ""
   );
-  const lorePrompt = buildLoreSystemPrompt(matchedLoreEntries);
   const userCustomConfigSegments = getUserCustomConfigSegments(chat?.userPersona);
 
   const systemMessages: ChatCompletionMessage[] = [
-    buildCharacterSystemPrompt(character),
+    buildCharacterSystemPrompt(character, matchedLoreEntries),
     ...userCustomConfigSegments,
-    chat?.userProfileSummary.trim() ?? "",
-    lorePrompt
+    chat?.userProfileSummary.trim() ?? ""
   ]
     .filter(Boolean)
     .map((content) => ({

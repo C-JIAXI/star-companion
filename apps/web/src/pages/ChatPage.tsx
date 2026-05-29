@@ -1,5 +1,7 @@
 import {
+  ArrowDown,
   BrainCircuit,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Check,
@@ -17,7 +19,7 @@ import {
   serializeUserCustomConfig,
   type UserCustomConfigDTO
 } from "@local-roleplay/shared";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { generateId } from "../lib/uuid";
@@ -53,6 +55,7 @@ import {
   UserMessageBubble
 } from "../components/messages";
 import { MarkdownEditor } from "../components/MarkdownEditor";
+import { DebugPromptDrawer } from "../components/DebugPromptDrawer";
 
 const MESSAGES_PER_PAGE = 30;
 
@@ -99,6 +102,22 @@ export function ChatPage({
   const [showUserProfileDialog, setShowUserProfileDialog] = useState(false);
   const [showModelDialog, setShowModelDialog] = useState(false);
   const [showMemoryDialog, setShowMemoryDialog] = useState(false);
+  const [debugMessage, setDebugMessage] = useState<MessageDTO | null>(null);
+  const [quickRepliesOpen, setQuickRepliesOpen] = useState(() => {
+    try {
+      return localStorage.getItem("chat.quickRepliesOpen") !== "false";
+    } catch {
+      return true;
+    }
+  });
+  const toggleQuickReplies = useCallback(() => {
+    setQuickRepliesOpen((prev) => {
+      try {
+        localStorage.setItem("chat.quickRepliesOpen", String(!prev));
+      } catch {}
+      return !prev;
+    });
+  }, []);
   const [editingPersonaDraft, setEditingPersonaDraft] = useState<UserCustomConfigDTO>(
     () => emptyUserCustomConfig()
   );
@@ -111,6 +130,7 @@ export function ChatPage({
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [isNearBottom, setIsNearBottom] = useState(true);
   const streamingBufferRef = useRef("");
   const draftTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
@@ -290,6 +310,18 @@ export function ChatPage({
     [characters]
   );
 
+  const activeQuickReplies = useMemo(() => {
+    if (!activeChat) {
+      return [];
+    }
+    const characterId = activeChat.characterIds[0];
+    if (!characterId) {
+      return [];
+    }
+    const character = characterMap.get(characterId);
+    return character?.quickReplies ?? [];
+  }, [activeChat, characterMap]);
+
   const mergeCharacterCache = (nextCharacters: CharacterDTO[]) => {
     setCharacters((current) => {
       const byId = new Map(current.map((character) => [character.id, character]));
@@ -299,6 +331,13 @@ export function ChatPage({
       return Array.from(byId.values());
     });
   };
+
+  const scrollToBottom = useCallback(() => {
+    const viewport = messageViewportRef.current;
+    if (viewport) {
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
+    }
+  }, []);
 
   const formatTokenUsage = (usage: TokenUsageDTO | null) => {
     if (!usage) {
@@ -474,6 +513,24 @@ export function ChatPage({
 
     viewport.scrollTop = 0;
   }, [activeChat?.id, safeMessagePage, totalMessagePages]);
+
+  useEffect(() => {
+    const viewport = messageViewportRef.current;
+    if (!viewport) {
+      return;
+    }
+
+    const THRESHOLD = 120;
+
+    const check = () => {
+      const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+      setIsNearBottom(distance <= THRESHOLD);
+    };
+
+    check();
+    viewport.addEventListener("scroll", check, { passive: true });
+    return () => viewport.removeEventListener("scroll", check);
+  }, [activeChat?.id]);
 
   useEffect(
     () => () => {
@@ -1130,6 +1187,7 @@ export function ChatPage({
                       onDelete={() => setPendingDeleteMessage(message)}
                       onVariantPrev={() => void switchVariant(message, -1)}
                       onVariantNext={() => void switchVariant(message, 1)}
+                      onDebug={setDebugMessage}
                       disableRegenerate={Boolean(activeRequestId)}
                     />
                   );
@@ -1149,10 +1207,58 @@ export function ChatPage({
                 />
               ) : null}
               </div>
+              {!isNearBottom ? (
+                <button
+                  type="button"
+                  className="sticky bottom-3 z-20 mx-auto flex items-center gap-1.5 rounded-full border border-white/10 bg-ink-900/90 px-3 py-1.5 text-xs font-medium text-slate-300 shadow-lg shadow-black/30 backdrop-blur-sm transition-colors hover:bg-ink-800 hover:text-slate-100"
+                  style={{ display: "flex", width: "fit-content", marginLeft: "auto", marginRight: "auto" }}
+                  onClick={scrollToBottom}
+                >
+                  <ArrowDown size={14} />
+                  {t("chat.scrollToBottom")}
+                </button>
+              ) : null}
             </div>
 
             <div className="shrink-0">
-              <div className="max-w-2xl mx-auto grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-2 rounded-xl border border-white/5 bg-ink-950/95 p-2 shadow-xl shadow-black/30 backdrop-blur-sm xl:bg-ink-950/40 xl:shadow-none">
+              {activeQuickReplies.length > 0 ? (
+                <div className="max-w-2xl mx-auto mb-1.5 px-1">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 transition-colors hover:text-slate-300"
+                    onClick={toggleQuickReplies}
+                  >
+                    <ChevronDown
+                      size={12}
+                      className={`transition-transform duration-200 ${quickRepliesOpen ? "" : "-rotate-90"}`}
+                    />
+                    {t("chat.quickReplies")}
+                  </button>
+                  <div
+                    className="overflow-hidden"
+                    style={{
+                      maxHeight: quickRepliesOpen ? "200px" : "0px",
+                      opacity: quickRepliesOpen ? 1 : 0,
+                      transition: "max-height 300ms ease-out, opacity 300ms ease-out"
+                    }}
+                  >
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {activeQuickReplies.map((qr) => (
+                        <button
+                          key={qr.id}
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-ink-950/80 px-2.5 py-1 text-xs font-medium text-slate-300 transition-colors hover:border-ember-500/40 hover:bg-ink-900 hover:text-slate-100"
+                          onClick={() => setDraft((current) => current ? `${current}\n${qr.content}` : qr.content)}
+                        >
+                          {qr.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              <div className="max-w-2xl mx-auto rounded-xl border border-white/5 bg-ink-950/95 p-2 shadow-xl shadow-black/30 backdrop-blur-sm xl:bg-ink-950/40 xl:shadow-none">
+              <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
               <TextArea
                 ref={draftTextAreaRef}
                 className="min-h-[40px] max-h-[200px] !resize-none border-0 bg-transparent py-2 focus:bg-transparent focus:ring-0"
@@ -1174,6 +1280,7 @@ export function ChatPage({
               ) : (
                 <Button className="!min-h-[38px]" disabled={loading || !draft.trim()} onClick={() => void sendMessage()}><Send size={16} />{t("chat.send")}</Button>
               )}
+              </div>
             </div>
             </div>
           </div>
@@ -1412,6 +1519,13 @@ export function ChatPage({
         </div>
       </Modal>
     ) : null}
+    <DebugPromptDrawer
+      open={debugMessage !== null}
+      onClose={() => setDebugMessage(null)}
+      activeChat={activeChat}
+      character={activeChat?.characterIds[0] ? characterMap.get(activeChat.characterIds[0]) : undefined}
+      debugMessage={debugMessage}
+    />
     </>
   );
 }

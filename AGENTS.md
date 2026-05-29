@@ -136,6 +136,7 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 
 - `name`
 - `avatar`
+- `description`
 - `prefix`
 - `prompt`
 - `suffix`
@@ -145,7 +146,6 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 说明：
 
 - 当前没有一等字段：
-  - `description`
   - `personality`
   - `scenario`
   - `firstMessage`
@@ -250,9 +250,8 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 1. `README.md` 仍有部分内容引用独立 `lorebooks`，与当前代码和产品边界不一致。
 2. `scripts/smoke-api.mjs` 仍然引用 `/api/lorebooks` 和 `lorebookIds`，与当前实现不一致。
 3. `apps/web/e2e/app.spec.ts` 里仍有 lorebook 相关 E2E，用例当前会失败。
-4. 角色编辑页和 i18n 中仍保留了一些旧角色字段文案，但后端没有对应一等字段。
-5. `schema.prisma` 中关于 API Key 明文保存的注释已经过时，需要后续清理。
-6. `Chat.mode`、`characterIds` 以及部分相关类型带有旧群聊方向的历史痕迹。
+4. `schema.prisma` 中关于 API Key 明文保存的注释已经过时，需要后续清理。
+5. `Chat.mode`、`characterIds` 以及部分相关类型带有旧群聊方向的历史痕迹。
 
 ## 当前验证状态
 
@@ -271,10 +270,10 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 
 如果没有新的用户指令，优先级建议如下：
 
-1. 清理群聊和独立世界书方向留下的旧文档、旧测试、旧字段叙述
-2. 修复并稳定 E2E / smoke tests
-3. 继续打磨单角色聊天体验
-4. 让 README、AGENTS、代码实现保持同步
+1. 修复并稳定 E2E / smoke tests
+2. 继续打磨单角色聊天体验
+3. 让 README、代码实现保持同步
+4. 清理 `firstMessage / exampleDialog / tags` 相关的遗留代码
 
 ## 交付标准
 

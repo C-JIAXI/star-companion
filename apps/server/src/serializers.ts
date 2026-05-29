@@ -26,6 +26,13 @@ const normalizeLoreTriggerMode = (value: unknown): "user" | "assistant" | "both"
   return "both";
 };
 
+const normalizeLoreScope = (value: unknown): "prefix" | "prompt" | "suffix" => {
+  if (value === "prefix" || value === "suffix") {
+    return value;
+  }
+  return "prompt";
+};
+
 const toStringArray = (value: Prisma.JsonValue): string[] => {
   if (!Array.isArray(value)) {
     return [];
@@ -123,6 +130,7 @@ const toLoreMatches = (value: Prisma.JsonValue | null) => {
         keys: keys.filter((key): key is string => typeof key === "string"),
         content,
         priority,
+        scope: normalizeLoreScope(entry.scope),
         triggerMode: normalizeLoreTriggerMode(triggerMode),
         alwaysActive: alwaysActive === true,
         enabled,
@@ -154,15 +162,34 @@ export const serializeSettings = (settings: UserSettings) => ({
 export const serializeCharacter = (character: Character, password?: string) => {
   const resolved = resolveCharacterRecord(character, password);
 
+  const quickRepliesRaw = character.quickReplies as unknown;
+  const quickReplies = Array.isArray(quickRepliesRaw)
+    ? quickRepliesRaw
+        .filter((item): item is Record<string, unknown> => {
+          if (typeof item !== "object" || item === null || Array.isArray(item)) {
+            return false;
+          }
+          return true;
+        })
+        .map((item) => ({
+          id: String((item as Record<string, unknown>).id ?? ""),
+          label: String((item as Record<string, unknown>).label ?? ""),
+          content: String((item as Record<string, unknown>).content ?? "")
+        }))
+        .filter((item) => item.id && item.label && item.content)
+    : [];
+
   return {
     id: character.id,
     name: resolved.name,
     avatar: resolved.avatar,
+    description: resolved.description,
     prefix: resolved.prefix,
     prompt: resolved.prompt,
     suffix: resolved.suffix,
     htmlCss: resolved.htmlCss,
     loreEntries: resolved.loreEntries,
+    quickReplies,
     visibility: resolved.visibility,
     canViewPrompt: resolved.canViewPrompt,
     createdAt: toIso(character.createdAt),

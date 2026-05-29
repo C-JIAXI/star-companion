@@ -1,8 +1,9 @@
-import { ChevronLeft, ChevronRight, Copy, RotateCcw } from "lucide-react";
+import { Bug, ChevronLeft, ChevronRight, Copy, RotateCcw } from "lucide-react";
 import { Marked } from "marked";
-import { useMemo } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
+import { usePlaceholderSrc } from "../placeholderImages";
 import type { MessageDTO, TokenUsageDTO } from "../types";
 import { ScopedHtmlRenderer, containsRenderableHtml } from "./ScopedHtmlRenderer";
 
@@ -82,6 +83,7 @@ function Avatar({
   align?: "left" | "right";
   className?: string;
 }) {
+  const src = usePlaceholderSrc(avatar, name);
   return (
     <div
       data-testid="message-avatar"
@@ -95,7 +97,7 @@ function Avatar({
       <img
         alt=""
         className="h-full w-full object-cover"
-        src={avatar || "/placeholder-cover.png"}
+        src={src}
       />
     </div>
   );
@@ -234,7 +236,7 @@ export function UserMessageBubble({
   );
 }
 
-export function AssistantMessageBubble({
+export const AssistantMessageBubble = memo(function AssistantMessageBubble({
   message,
   avatar,
   showAvatar,
@@ -247,6 +249,7 @@ export function AssistantMessageBubble({
   onDelete,
   onVariantPrev,
   onVariantNext,
+  onDebug,
   disableRegenerate
 }: {
   message: MessageDTO;
@@ -261,10 +264,12 @@ export function AssistantMessageBubble({
   onDelete: () => void;
   onVariantPrev: () => void;
   onVariantNext: () => void;
+  onDebug: (message: MessageDTO) => void;
   disableRegenerate: boolean;
 }) {
   const { t } = useI18n();
   const bubbleWidthClassName = getBubbleWidthClassName(showAvatar);
+  const handleDebug = useCallback(() => onDebug(message), [onDebug, message]);
 
   return (
     <div className={`flex items-start justify-end ${showAvatar ? "gap-3" : "gap-0"}`}>
@@ -288,6 +293,9 @@ export function AssistantMessageBubble({
               <button className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline disabled:opacity-40" type="button" disabled={disableRegenerate} onClick={onRegenerate}>
                 <RotateCcw size={12} />{t("chat.regenerate")}
               </button>
+              <button className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline" type="button" onClick={handleDebug} title={t("debug.open")}>
+                <Bug size={12} />{t("chat.debugPrompt")}
+              </button>
               <button className="whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline" type="button" onClick={onEdit}>
                 {t("common.edit")}
               </button>
@@ -301,7 +309,7 @@ export function AssistantMessageBubble({
       <AvatarSlot avatar={avatar} className="order-2" showAvatar={showAvatar} />
     </div>
   );
-}
+});
 
 export function StreamingBubble({
   characterAvatar,

@@ -12,6 +12,7 @@ import type {
   AppLanguage,
   BackupDTO,
   BackupImportSummaryDTO,
+  LoreEntryScope,
   LoreTriggerMode,
   MatchedLoreEntryDTO,
   MessageDTO,
@@ -19,6 +20,7 @@ import type {
   ModelPreset,
   PaginatedCharactersDTO,
   PublicUserSettingsDTO,
+  QuickReplyDTO,
   TokenUsageDTO
 } from "@local-roleplay/shared";
 
@@ -38,11 +40,13 @@ export type ApiErrorEnvelope = {
 export type CharacterInput = {
   name: string;
   avatar?: string | null;
+  description?: string;
   prefix?: string;
   prompt?: string;
   suffix?: string;
   htmlCss?: string;
   loreEntries?: (Omit<CharacterLoreEntryDTO, "id"> & { id?: string })[];
+  quickReplies?: (Omit<QuickReplyDTO, "id"> & { id?: string })[];
 };
 
 export type CharacterCardImportInput =
@@ -101,6 +105,7 @@ export type {
   AppLanguage,
   BackupDTO,
   BackupImportSummaryDTO,
+  LoreEntryScope,
   LoreTriggerMode,
   MatchedLoreEntryDTO,
   MessageDTO,
@@ -108,5 +113,6 @@ export type {
   ModelPreset,
   PaginatedCharactersDTO,
   PublicUserSettingsDTO,
+  QuickReplyDTO,
   TokenUsageDTO
 };

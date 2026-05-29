@@ -1,9 +1,10 @@
-import { ChevronDown, ChevronRight, History, MessageSquarePlus, Pencil, Search, Settings, Trash2 } from "lucide-react";
+import { History, MessageSquarePlus, Pencil, Search, Settings, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import type { CharacterDTO, ChatDTO } from "../types";
+import { ChatGroupHeader } from "./ChatGroupHeader";
 import { ConfirmDialog, EmptyState, ErrorNotice, Modal, TextInput } from "./ui";
 
 interface CharacterGroup {
@@ -334,30 +335,14 @@ export function ChatHistoryList({
 
                   return (
                     <div key={group.characterId} className="rounded-lg border border-white/5 bg-white/[0.02]">
-                      <button
-                        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors hover:bg-white/5"
-                        type="button"
-                        onClick={() => toggleGroup(group.characterId)}
-                      >
-                        {isExpanded ? (
-                          <ChevronDown size={14} className="shrink-0 text-slate-500" />
-                        ) : (
-                          <ChevronRight size={14} className="shrink-0 text-slate-500" />
-                        )}
-                        <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-lg bg-ink-800">
-                          <img
-                            alt=""
-                            className="h-full w-full object-cover"
-                            src={group.characterAvatar || "/placeholder-cover.png"}
-                          />
-                        </span>
-                        <span className="min-w-0 flex-1 truncate font-medium text-slate-200">
-                          {group.characterName}
-                        </span>
-                        <span className="shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-slate-500">
-                          {group.chats.length}
-                        </span>
-                      </button>
+                      <ChatGroupHeader
+                        characterId={group.characterId}
+                        characterAvatar={group.characterAvatar}
+                        characterName={group.characterName}
+                        chatCount={group.chats.length}
+                        isExpanded={isExpanded}
+                        onToggle={toggleGroup}
+                      />
 
                       {isExpanded ? (
                         <div className="space-y-0.5 border-t border-white/5 px-1 pb-1 pt-1">

@@ -31,16 +31,18 @@ model UserSettings {
 }
 
 model Character {
-  id        String   @id @default(cuid())
-  name      String
-  avatar    String?
-  prefix    String   @default("")
-  prompt    String   @default("")
-  suffix    String   @default("")
-  htmlCss   String   @default("")
-  loreEntries Json   @default("[]")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(cuid())
+  name        String
+  avatar      String?
+  description String   @default("")
+  prefix      String   @default("")
+  prompt      String   @default("")
+  suffix      String   @default("")
+  htmlCss      String   @default("")
+  loreEntries  Json     @default("[]")
+  quickReplies Json     @default("[]")
+  createdAt    DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   messages Message[]
 }
