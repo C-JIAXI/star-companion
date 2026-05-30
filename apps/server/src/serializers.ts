@@ -188,6 +188,7 @@ export const serializeCharacter = (character: Character, password?: string) => {
     prompt: resolved.prompt,
     suffix: resolved.suffix,
     htmlCss: resolved.htmlCss,
+    openingHtml: resolved.openingHtml,
     loreEntries: resolved.loreEntries,
     quickReplies,
     visibility: resolved.visibility,

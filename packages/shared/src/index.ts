@@ -61,6 +61,7 @@ export interface CharacterCardContentDTO {
   prompt: string;
   suffix: string;
   htmlCss: string;
+  openingHtml: string;
   loreEntries: CharacterLoreEntryDTO[];
   quickReplies: QuickReplyDTO[];
 }
@@ -74,6 +75,7 @@ export interface CharacterDTO {
   prompt: string;
   suffix: string;
   htmlCss: string;
+  openingHtml: string;
   loreEntries: CharacterLoreEntryDTO[];
   quickReplies: QuickReplyDTO[];
   visibility: CharacterVisibility;

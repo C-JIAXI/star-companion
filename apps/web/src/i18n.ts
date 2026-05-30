@@ -150,6 +150,10 @@ const zhCN = {
   "characters.htmlTemplateDossier": "摘要",
   "characters.editorSectionPrompt": "提示词",
   "characters.editorSectionHtml": "内置 CSS",
+  "characters.editorSectionOpening": "开场 HTML",
+  "characters.openingHtml": "开场 HTML",
+  "characters.openingHtmlPlaceholder": "输入完整的 HTML 内容，首次进入对话时会以 iframe 展示",
+  "characters.openingHtmlPreview": "预览",
   "characters.editorSectionLore": "世界书",
   "characters.searchPlaceholder": "搜索角色名称或提示词",
   "characters.suffix": "后置词",
@@ -231,6 +235,9 @@ const zhCN = {
     "只在 AI 输出 HTML 片段时生效。前端会将这段 CSS 限定在当前角色消息内部，可用于控制卡片、标题、列表和 class 类名的展示。请让模型输出安全的 HTML fragment，不要包含 script 或 style 标签。",
   "help.characterSuffix":
     "放在角色提示词之后的补充说明，适合写输出格式、禁忌、结尾规则或临场约束。",
+  "help.characterOpeningHtml":
+    "完整的 HTML 内容，首次进入对话时会以 iframe 展示。用户发送第一条消息后自动销毁。适合用作开场动画、角色介绍页面或互动序幕。",
+  "chat.openingHtmlStart": "开始对话",
   "markdown.write": "编辑",
   "markdown.preview": "预览",
   "markdown.heading": "标题",
@@ -442,6 +449,10 @@ const en: Record<keyof typeof zhCN, string> = {
   "characters.htmlTemplateDossier": "Summary",
   "characters.editorSectionPrompt": "Prompt",
   "characters.editorSectionHtml": "Built-in CSS",
+  "characters.editorSectionOpening": "Opening HTML",
+  "characters.openingHtml": "Opening HTML",
+  "characters.openingHtmlPlaceholder": "Enter full HTML content to display as an iframe when first entering the chat",
+  "characters.openingHtmlPreview": "Preview",
   "characters.editorSectionLore": "Lore",
   "characters.searchPlaceholder": "Search character name or prompt",
   "characters.suffix": "Suffix",
@@ -531,6 +542,9 @@ const en: Record<keyof typeof zhCN, string> = {
     "Applied only when the AI returns an HTML fragment. The frontend scopes this CSS to the current character message so it can style cards, headings, lists, and class-based layouts without affecting the rest of the app. Ask the model for safe HTML fragments only, without script or style tags.",
   "help.characterSuffix":
     "Supplementary instructions placed after the character prompt. Suitable for output formatting, taboos, closing rules, and situational constraints.",
+  "help.characterOpeningHtml":
+    "Full HTML content displayed as an iframe when first entering the chat. Automatically destroyed after the user sends the first message. Suitable for opening animations, character introduction pages, or interactive prologues.",
+  "chat.openingHtmlStart": "Start Chat",
   "markdown.write": "Write",
   "markdown.preview": "Preview",
   "markdown.heading": "Heading",

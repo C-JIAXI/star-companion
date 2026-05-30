@@ -55,6 +55,7 @@ export const characterCreateSchema = z.object({
   prompt: z.string().default(""),
   suffix: z.string().default(""),
   htmlCss: z.string().default(""),
+  openingHtml: z.string().default(""),
   loreEntries: loreEntriesSchema,
   quickReplies: quickRepliesSchema
 });
@@ -117,6 +118,7 @@ const privateCharacterCardSchema = z.object({
     name: z.string().trim().min(1),
     avatar: z.string().trim().nullable().optional(),
     description: z.string().optional(),
+    openingHtml: z.string().optional(),
     quickReplies: quickRepliesSchema.optional()
   }),
   protectedPayload: z.object({
@@ -289,6 +291,7 @@ const backupCharacterSchema = characterCreateSchema
     prompt: character.prompt || character.description || "",
     suffix: character.suffix || character.scenario || "",
     htmlCss: character.htmlCss ?? "",
+    openingHtml: character.openingHtml ?? "",
     loreEntries: character.loreEntries ?? [],
     quickReplies: character.quickReplies ?? [],
     createdAt: character.createdAt,

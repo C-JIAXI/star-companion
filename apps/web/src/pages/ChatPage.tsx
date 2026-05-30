@@ -59,6 +59,7 @@ import { MarkdownEditor } from "../components/MarkdownEditor";
 import { DebugPromptDrawer } from "../components/DebugPromptDrawer";
 
 const MESSAGES_PER_PAGE = 30;
+const GENERATION_ERROR_PREFIX = "[GENERATION_FAILED] ";
 
 export function ChatPage({
   selectedChatId,
@@ -129,7 +130,6 @@ export function ChatPage({
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const [messagePage, setMessagePage] = useState(1);
   const [error, setError] = useState<string | null>(null);
-  const [generationError, setGenerationError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
@@ -140,12 +140,22 @@ export function ChatPage({
     chatId: null,
     totalPages: 1
   });
+  const hasMessagesRef = useRef(false);
 
   const autoResizeDraftTextArea = () => {
     const el = draftTextAreaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 19.6;
+    const maxLines = 6;
+    const maxHeight = lineHeight * maxLines;
+    if (el.scrollHeight <= maxHeight) {
+      el.style.height = `${el.scrollHeight}px`;
+      el.style.overflowY = "hidden";
+    } else {
+      el.style.height = `${maxHeight}px`;
+      el.style.overflowY = "auto";
+    }
   };
 
   useEffect(() => {
@@ -246,7 +256,6 @@ export function ChatPage({
         setStreamingContent("");
         setStreamingCharacterId(null);
         streamingBufferRef.current = "";
-        setGenerationError(null);
         return;
       }
 
@@ -271,7 +280,6 @@ export function ChatPage({
 
       if (msg.type === "error") {
         setError(msg.error);
-        setGenerationError(msg.error);
         setActiveRequestId(null);
         setStreamingContent("");
         setStreamingCharacterId(null);
@@ -324,6 +332,18 @@ export function ChatPage({
     }
     const character = characterMap.get(characterId);
     return character?.quickReplies ?? [];
+  }, [activeChat, characterMap]);
+
+  const activeOpeningHtml = useMemo(() => {
+    if (!activeChat || activeChat.messages.length > 0 || hasMessagesRef.current) {
+      return "";
+    }
+    const characterId = activeChat.characterIds[0];
+    if (!characterId) {
+      return "";
+    }
+    const character = characterMap.get(characterId);
+    return character?.openingHtml?.trim() ?? "";
   }, [activeChat, characterMap]);
 
   const mergeCharacterCache = (nextCharacters: CharacterDTO[]) => {
@@ -449,12 +469,12 @@ export function ChatPage({
   const loadChat = async (id: string | null) => {
     if (!id) {
       setActiveChat(null);
-      setGenerationError(null);
+      hasMessagesRef.current = false;
       return;
     }
     const chat = await api.chats.get(id);
     setActiveChat(chat);
-    setGenerationError(null);
+    hasMessagesRef.current = chat.messages.length > 0;
     setMemoryDraft(String(chat.memoryTurns));
 
     const missingCharacterIds = chat.characterIds.filter((characterId) => !characterMap.has(characterId));
@@ -931,15 +951,20 @@ export function ChatPage({
 
   const retryGeneration = () => {
     if (!activeChat || activeChat.messages.length === 0) {
-      setGenerationError(null);
       return;
     }
     const lastMessage = activeChat.messages[activeChat.messages.length - 1];
-    setGenerationError(null);
     if (lastMessage.role === "user") {
       void resendMessage(lastMessage);
     } else if (lastMessage.role === "assistant") {
       void regenerateMessage(lastMessage);
+    } else {
+      for (let i = activeChat.messages.length - 1; i >= 0; i--) {
+        if (activeChat.messages[i].role === "user") {
+          void resendMessage(activeChat.messages[i]);
+          return;
+        }
+      }
     }
   };
 
@@ -1144,8 +1169,16 @@ export function ChatPage({
             <div
               ref={messageViewportRef}
               data-testid="chat-message-viewport"
-              className="custom-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-auto scroll-smooth"
+              className={`custom-scrollbar min-h-0 flex-1 overscroll-auto scroll-smooth ${activeOpeningHtml ? "overflow-hidden" : "overflow-y-auto"}`}
             >
+              {activeChat.messages.length === 0 && activeOpeningHtml ? (
+                <iframe
+                  title={t("characters.openingHtml")}
+                  srcDoc={activeOpeningHtml}
+                  sandbox="allow-scripts allow-same-origin"
+                  className="w-full h-full border-0"
+                />
+              ) : (
               <div className="mx-auto max-w-2xl space-y-4 rounded-2xl p-2 sm:space-y-7 sm:p-5">
               {activeChat.messages.length > MESSAGES_PER_PAGE ? (
                 <div
@@ -1181,14 +1214,33 @@ export function ChatPage({
                 </div>
               ) : null}
               {activeChat.messages.length === 0 ? (
-                <div className="h-full flex items-center justify-center">
-                  <EmptyState>{t("chat.noMessages")}</EmptyState>
-                </div>
+                  <div className="h-full flex items-center justify-center">
+                    <EmptyState>{t("chat.noMessages")}</EmptyState>
+                  </div>
               ) : (
                 pagedMessages.map((message) => {
                   const isUser = message.role === "user";
                   const isSystem = message.role === "system";
+                  const isErrorSystem = isSystem && message.content.startsWith(GENERATION_ERROR_PREFIX);
                   const character = message.characterId ? characterMap.get(message.characterId) : undefined;
+                  if (isErrorSystem) {
+                    const errorText = message.content.slice(GENERATION_ERROR_PREFIX.length);
+                    const lastAssistant = [...activeChat.messages].reverse().find((m) => m.role === "assistant");
+                    return (
+                      <ErrorBubble
+                        key={message.id}
+                        characterAvatar={lastAssistant?.characterId ? characterMap.get(lastAssistant.characterId)?.avatar : null}
+                        showAvatar={showMessageAvatars}
+                        error={errorText}
+                        onRetry={retryGeneration}
+                        onDismiss={() => void api.messages.remove(message.id).then(() => {
+                          setActiveChat((current) =>
+                            current ? { ...current, messages: current.messages.filter((m) => m.id !== message.id) } : current
+                          );
+                        })}
+                      />
+                    );
+                  }
                   if (isSystem) {
                     return <SystemNotification key={message.id} content={message.content} />;
                   }
@@ -1241,19 +1293,8 @@ export function ChatPage({
                   content={streamingContent}
                 />
               ) : null}
-              {generationError && !activeRequestId && safeMessagePage >= totalMessagePages ? (
-                <ErrorBubble
-                  key="generation-error"
-                  characterAvatar={
-                    streamingCharacterId ? characterMap.get(streamingCharacterId)?.avatar : activeChat?.messages.length ? characterMap.get(activeChat.messages[activeChat.messages.length - 1].characterId ?? "")?.avatar : null
-                  }
-                  showAvatar={showMessageAvatars}
-                  error={generationError}
-                  onRetry={retryGeneration}
-                  onDismiss={() => setGenerationError(null)}
-                />
-              ) : null}
               </div>
+              )}
               {!isNearBottom ? (
                 <button
                   type="button"
@@ -1308,7 +1349,7 @@ export function ChatPage({
               <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-1.5 sm:gap-2">
               <TextArea
                 ref={draftTextAreaRef}
-                className="chat-input !h-10 max-h-[200px] !resize-none border-0 bg-transparent !px-2 !py-[11px] !text-sm leading-[1.4] focus:bg-transparent focus:ring-0 sm:!h-11 sm:!py-3"
+                className="chat-input !resize-none border-0 bg-transparent !px-2 !py-[11px] !text-sm leading-[1.4] focus:bg-transparent focus:ring-0 sm:!py-3"
                 style={{ height: "auto" }}
                 placeholder={t("chat.writeMessage")}
                 rows={1}
@@ -1317,6 +1358,8 @@ export function ChatPage({
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
+                    const hasTouch = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
+                    if (hasTouch && window.innerWidth < 768) return;
                     event.preventDefault();
                     void sendMessage();
                   }
@@ -1335,10 +1378,10 @@ export function ChatPage({
       </Panel>
     </div>
     {editingMessage ? (
-      <div className="animate-fade-in fixed inset-0 z-50 grid place-items-end sm:place-items-center bg-black/60 backdrop-blur-sm p-0 sm:p-4">
+      <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm p-4">
         <section
           aria-labelledby="edit-message-title"
-          className="animate-scale-in w-full max-w-2xl rounded-t-2xl sm:rounded-2xl border border-white/10 bg-ink-900 p-6 shadow-2xl shadow-black/50 safe-area-bottom max-h-[90vh] sm:max-h-[85vh] overflow-y-auto"
+          className="animate-scale-in w-full max-w-2xl rounded-2xl border border-white/10 bg-ink-900 p-6 shadow-2xl shadow-black/50 max-h-[85vh] overflow-y-auto"
           role="dialog"
         >
           <div className="flex items-start justify-between gap-4">

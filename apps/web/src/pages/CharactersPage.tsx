@@ -43,7 +43,7 @@ const blankQuickReply = (): QuickReplyDTO & { _localId: string; _collapsed: bool
 });
 
 type QuickReplyForm = ReturnType<typeof blankQuickReply>;
-type EditorSectionId = "prompt" | "html" | "lore" | "quickReplies";
+type EditorSectionId = "prompt" | "html" | "opening" | "lore" | "quickReplies";
 type PasswordDialogMode = "unlock" | "export-private" | "export-public";
 
 const HTML_PREVIEW_TEMPLATES = {
@@ -87,6 +87,7 @@ const blankForm = {
   prompt: "",
   suffix: "",
   htmlCss: "",
+  openingHtml: "",
   loreEntries: [] as LoreEntryForm[],
   quickReplies: [] as QuickReplyForm[]
 };
@@ -167,6 +168,7 @@ const toForm = (character: CharacterDTO): CharacterForm => ({
   prompt: character.prompt,
   suffix: character.suffix,
   htmlCss: character.htmlCss,
+  openingHtml: character.openingHtml,
   loreEntries: (character.loreEntries ?? []).map((entry) => ({
       id: entry.id,
       keys: entry.keys,
@@ -196,6 +198,7 @@ const toInput = (form: CharacterForm): CharacterInput => ({
   prompt: form.prompt,
   suffix: form.suffix,
   htmlCss: form.htmlCss,
+  openingHtml: form.openingHtml,
   loreEntries: form.loreEntries.map(({ _localId, ...entry }) => ({
     ...entry,
     id: entry.id || crypto.randomUUID()
@@ -251,6 +254,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
     () => [
       { id: "prompt" as const, label: t("characters.editorSectionPrompt") },
       { id: "html" as const, label: t("characters.editorSectionHtml") },
+      { id: "opening" as const, label: t("characters.editorSectionOpening") },
       { id: "lore" as const, label: t("characters.editorSectionLore") },
       { id: "quickReplies" as const, label: t("characters.editorSectionQuickReplies") }
     ],
@@ -876,6 +880,39 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                       </Field>
                     </div>
                   </div>
+                </div>
+              )
+            ) : null}
+
+            {activeEditorSection === "opening" ? (
+              isLockedPrivateCharacter ? (
+                <EmptyState>{privatePasswordCopy.lockedHelp}</EmptyState>
+              ) : (
+                <div className="space-y-5">
+                  <Field label={<HelpLabel label={t("characters.openingHtml")} description={t("help.characterOpeningHtml")} />}>
+                    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                      <TextArea
+                        value={form.openingHtml}
+                        onChange={(event) => setForm({ ...form, openingHtml: event.target.value })}
+                        className="!h-[300px] min-h-[300px] font-mono text-xs leading-6"
+                        placeholder={t("characters.openingHtmlPlaceholder")}
+                      />
+                      {form.openingHtml.trim() ? (
+                        <div className="rounded-lg overflow-hidden border border-white/10 bg-white" style={{ height: 300 }}>
+                          <iframe
+                            title={t("characters.openingHtmlPreview")}
+                            srcDoc={form.openingHtml}
+                            sandbox="allow-scripts allow-same-origin"
+                            className="w-full h-full border-0"
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center rounded-lg border border-dashed border-white/10 bg-ink-950/30" style={{ height: 300 }}>
+                          <p className="text-sm text-slate-500">{t("characters.openingHtmlPlaceholder")}</p>
+                        </div>
+                      )}
+                    </div>
+                  </Field>
                 </div>
               )
             ) : null}

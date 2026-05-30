@@ -1,4 +1,4 @@
-import { AlertTriangle, Bug, ChevronLeft, ChevronRight, Copy, RotateCcw } from "lucide-react";
+import { AlertTriangle, Bug, ChevronLeft, ChevronRight, CircleX, Copy, Pencil, RotateCcw, Trash2 } from "lucide-react";
 import { Marked } from "marked";
 import { memo, useCallback, useMemo } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -217,18 +217,18 @@ export function UserMessageBubble({
       <AvatarSlot align="left" name="You" showAvatar={showAvatar} />
       <article className={`order-1 relative ${bubbleWidthClassName} rounded-2xl rounded-bl-sm bg-gradient-to-br from-ember-400 to-ember-500 p-3 sm:p-4 text-sm text-ink-950 shadow-sm`}>
         <MessageBody align="left" content={message.content} renderHtml={false} />
-        <div className="mt-3 flex items-center justify-start gap-1 sm:gap-1.5 text-xs">
-          <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 whitespace-nowrap font-medium text-ink-900/70 hover:underline active:opacity-70" type="button" onClick={onResend}>
-            <RotateCcw size={12} />{t("chat.resend")}
+        <div className="mt-3 flex items-center justify-start gap-0.5 text-xs">
+          <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70" type="button" onClick={onResend} title={t("chat.resend")}>
+            <RotateCcw size={14} />
           </button>
-          <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 whitespace-nowrap font-medium text-ink-900/70 hover:underline active:opacity-70" type="button" onClick={onCopy}>
-            <Copy size={12} />{t("common.copy")}
+          <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70" type="button" onClick={onCopy} title={t("common.copy")}>
+            <Copy size={14} />
           </button>
-          <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 hover:underline active:opacity-70" type="button" onClick={onEdit}>
-            {t("common.edit")}
+          <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70" type="button" onClick={onEdit} title={t("common.edit")}>
+            <Pencil size={14} />
           </button>
-          <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 hover:underline active:opacity-70" type="button" onClick={onDelete}>
-            {t("common.delete")}
+          <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70" type="button" onClick={onDelete} title={t("common.delete")}>
+            <Trash2 size={14} />
           </button>
         </div>
       </article>
@@ -278,7 +278,7 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
         <div className="mt-3 border-t border-white/5 pt-2">
           <div className="flex flex-wrap items-center justify-between gap-1 sm:gap-1.5 text-xs">
             <TokenInfo usage={message.tokenUsage} formatter={tokenUsageFormatter} lorebooks={triggeredLorebooks} />
-            <div className="flex shrink-0 flex-wrap items-center gap-1 sm:gap-1.5">
+            <div className="flex shrink-0 flex-wrap items-center gap-0.5">
               {message.variants.length > 1 ? (
                 <VariantSwitcher
                   currentIndex={message.activeVariantIndex}
@@ -287,20 +287,20 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
                   onNext={onVariantNext}
                 />
               ) : null}
-              <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline active:text-slate-100" type="button" onClick={onCopy}>
-                <Copy size={12} />{t("common.copy")}
+              <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 active:text-slate-100" type="button" onClick={onCopy} title={t("common.copy")}>
+                <Copy size={14} />
               </button>
-              <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline disabled:opacity-40 active:text-slate-100" type="button" disabled={disableRegenerate} onClick={onRegenerate}>
-                <RotateCcw size={12} />{t("chat.regenerate")}
+              <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 disabled:opacity-40 active:text-slate-100" type="button" disabled={disableRegenerate} onClick={onRegenerate} title={t("chat.regenerate")}>
+                <RotateCcw size={14} />
               </button>
-              <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline active:text-slate-100" type="button" onClick={handleDebug} title={t("debug.open")}>
-                <Bug size={12} />{t("chat.debugPrompt")}
+              <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 active:text-slate-100" type="button" onClick={handleDebug} title={t("debug.open")}>
+                <Bug size={14} />
               </button>
-              <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 hover:underline active:text-slate-100" type="button" onClick={onEdit}>
-                {t("common.edit")}
+              <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 active:text-slate-100" type="button" onClick={onEdit} title={t("common.edit")}>
+                <Pencil size={14} />
               </button>
-              <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-rose-400 hover:text-rose-300 hover:underline active:text-rose-200" type="button" onClick={onDelete}>
-                {t("common.delete")}
+              <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-rose-400 hover:text-rose-300 active:text-rose-200" type="button" onClick={onDelete} title={t("common.delete")}>
+                <Trash2 size={14} />
               </button>
             </div>
           </div>
@@ -394,20 +394,22 @@ export function ErrorBubble({
             <p className="mt-1 break-words text-xs text-rose-300/80">{error}</p>
           </div>
         </div>
-        <div className="mt-3 flex items-center gap-1.5 border-t border-rose-500/15 pt-2 text-xs">
+        <div className="mt-3 flex items-center gap-0.5 border-t border-rose-500/15 pt-2 text-xs">
           <button
-            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 whitespace-nowrap font-medium text-rose-300 hover:text-rose-100 hover:underline active:text-rose-50"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-rose-300 hover:text-rose-100 active:text-rose-50"
             type="button"
             onClick={onRetry}
+            title={t("chat.retry")}
           >
-            <RotateCcw size={12} />{t("chat.retry")}
+            <RotateCcw size={14} />
           </button>
           <button
-            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-rose-300/60 hover:text-rose-200 hover:underline active:text-rose-100"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-rose-300/60 hover:text-rose-200 active:text-rose-100"
             type="button"
             onClick={onDismiss}
+            title={t("common.cancel")}
           >
-            {t("common.cancel")}
+            <CircleX size={14} />
           </button>
         </div>
       </article>

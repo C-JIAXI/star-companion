@@ -45,6 +45,7 @@ export type CharacterInput = {
   prompt?: string;
   suffix?: string;
   htmlCss?: string;
+  openingHtml?: string;
   loreEntries?: (Omit<CharacterLoreEntryDTO, "id"> & { id?: string })[];
   quickReplies?: (Omit<QuickReplyDTO, "id"> & { id?: string })[];
 };

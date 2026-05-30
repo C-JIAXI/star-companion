@@ -12,6 +12,21 @@ import { estimateTokenUsage, streamChatCompletion, type TokenUsage } from "../se
 import { appendVariant, buildPromptContext, type MatchedLoreEntry } from "../services/promptBuilder.js";
 import { updateUserProfileFromChat } from "../services/userProfileMemory.js";
 
+export const GENERATION_ERROR_PREFIX = "[GENERATION_FAILED] ";
+
+const createErrorMessage = async (chatId: string, errorText: string) => {
+  const message = await prisma.message.create({
+    data: {
+      chatId,
+      role: "system",
+      content: `${GENERATION_ERROR_PREFIX}${errorText}`,
+      variants: [],
+      activeVariantIndex: 0
+    }
+  });
+  return serializeMessage(message);
+};
+
 const controllers = new Map<string, AbortController>();
 
 const sendJson = (socket: WebSocket, value: unknown) => {
@@ -146,7 +161,10 @@ const streamAssistantReply = async ({
   assistantContent = stripThinkingTags(assistantContent);
 
   if (!assistantContent.trim()) {
-    throw new Error("Model returned an empty response. If max tokens is very low, try increasing it.");
+    const errorText = "Model returned an empty response. If max tokens is very low, try increasing it.";
+    const errorMessage = await createErrorMessage(chatId, errorText);
+    sendJson(socket, { type: "user_message", requestId, message: errorMessage });
+    throw new Error(errorText);
   }
 
   tokenUsage ??= estimateTokenUsage(context.messages, assistantContent);

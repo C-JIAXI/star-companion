@@ -180,11 +180,11 @@ export function DebugPromptDrawer({
 
   const content = (
     <div
-      className="animate-fade-in fixed inset-0 z-50 grid place-items-end sm:place-items-center bg-black/70 p-0 sm:p-3 backdrop-blur-md sm:p-5"
+      className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/70 p-3 backdrop-blur-md sm:p-5"
       onClick={onClose}
     >
       <section
-        className="animate-modal-enter flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-white/[0.06] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)] safe-area-bottom"
+        className="animate-modal-enter flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)]"
         role="dialog"
         onClick={(event) => event.stopPropagation()}
       >

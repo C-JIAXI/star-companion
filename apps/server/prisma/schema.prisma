@@ -39,6 +39,7 @@ model Character {
   prompt      String   @default("")
   suffix      String   @default("")
   htmlCss      String   @default("")
+  openingHtml  String   @default("")
   loreEntries  Json     @default("[]")
   quickReplies Json     @default("[]")
   createdAt    DateTime @default(now())

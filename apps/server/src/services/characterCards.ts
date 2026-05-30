@@ -41,6 +41,7 @@ export type ResolvedCharacterRecord = CharacterPromptFields & {
   name: string;
   avatar: string | null;
   description: string;
+  openingHtml: string;
   visibility: "public" | "private";
   canViewPrompt: boolean;
 };
@@ -75,6 +76,7 @@ export type CharacterExportCard =
         prompt: string;
         suffix: string;
         htmlCss: string;
+        openingHtml: string;
         loreEntries: ImportedCharacterLoreEntryInput[];
         quickReplies: ImportedQuickReplyInput[];
       };
@@ -88,6 +90,7 @@ export type CharacterExportCard =
         name: string;
         avatar?: string | null;
         description?: string;
+        openingHtml?: string;
         quickReplies?: ImportedQuickReplyInput[];
       };
       protectedPayload: {
@@ -476,7 +479,7 @@ const assertPrivateCharacterPassword = (
 };
 
 export const resolveCharacterRecord = (
-  character: Pick<Character, "name" | "avatar" | "description" | "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries">,
+  character: Pick<Character, "name" | "avatar" | "description" | "prefix" | "prompt" | "suffix" | "htmlCss" | "openingHtml" | "loreEntries">,
   password?: string
 ): ResolvedCharacterRecord => {
   if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
@@ -484,6 +487,7 @@ export const resolveCharacterRecord = (
       name: character.name,
       avatar: character.avatar,
       description: character.description,
+      openingHtml: character.openingHtml ?? "",
       ...normalizePromptFields(character),
       visibility: "public",
       canViewPrompt: true
@@ -497,6 +501,7 @@ export const resolveCharacterRecord = (
     name: character.name,
     avatar: character.avatar,
     description: character.description,
+    openingHtml: character.openingHtml ?? "",
     prefix: canViewPrompt ? fields.prefix : "",
     prompt: canViewPrompt ? fields.prompt : "",
     suffix: canViewPrompt ? fields.suffix : "",
@@ -518,7 +523,7 @@ export const resolveCharacterPromptFields = (
 };
 
 export const createCharacterExportCard = (
-  character: Pick<Character, "name" | "avatar" | "description" | "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries" | "quickReplies">,
+  character: Pick<Character, "name" | "avatar" | "description" | "prefix" | "prompt" | "suffix" | "htmlCss" | "openingHtml" | "loreEntries" | "quickReplies">,
   visibility: "public" | "private",
   password?: string
 ): CharacterExportCard => {
@@ -527,6 +532,7 @@ export const createCharacterExportCard = (
     ? decryptStoredPromptFields(character.loreEntries)
     : null;
   const quickReplies = toQuickReplies(character.quickReplies);
+  const openingHtml = character.openingHtml ?? "";
 
   if (visibility === "public") {
     if (existingPrivateRecord && !canViewPrivateCharacter(existingPrivateRecord.access, password)) {
@@ -546,6 +552,7 @@ export const createCharacterExportCard = (
         avatar: character.avatar,
         description: character.description,
         ...promptFields,
+        openingHtml,
         quickReplies
       }
     };
@@ -580,6 +587,7 @@ export const createCharacterExportCard = (
       name: character.name,
       avatar: character.avatar,
       description: character.description,
+      openingHtml,
       quickReplies
     },
     protectedPayload: {
@@ -629,6 +637,7 @@ export const importCharacterCard = (
   prompt: string;
   suffix: string;
   htmlCss: string;
+  openingHtml: string;
   loreEntries: Prisma.InputJsonValue;
   quickReplies: Prisma.InputJsonValue;
 } => {
@@ -642,6 +651,7 @@ export const importCharacterCard = (
         prompt: source.character.prompt,
         suffix: source.character.suffix,
         htmlCss: source.character.htmlCss,
+        openingHtml: source.character.openingHtml ?? "",
         loreEntries: source.character.loreEntries,
         quickReplies: source.character.quickReplies ?? []
       };
@@ -662,6 +672,7 @@ export const importCharacterCard = (
       prompt: "",
       suffix: "",
       htmlCss: "",
+      openingHtml: source.character.openingHtml ?? "",
       loreEntries: buildStoredPrivateCharacterJson(fields, access),
       quickReplies: source.character.quickReplies ?? []
     };
@@ -677,6 +688,7 @@ export const importCharacterCard = (
     prompt: legacy.prompt ?? "",
     suffix: legacy.suffix ?? legacy.scenario ?? "",
     htmlCss: legacy.htmlCss ?? "",
+    openingHtml: "",
     loreEntries: legacy.loreEntries ?? [],
     quickReplies: legacy.quickReplies ?? []
   };
@@ -692,6 +704,7 @@ export const buildCharacterUpdateData = (
     prompt?: string;
     suffix?: string;
     htmlCss?: string;
+    openingHtml?: string;
     loreEntries?: Prisma.InputJsonValue;
     quickReplies?: Prisma.InputJsonValue;
   },
@@ -736,6 +749,7 @@ export const buildCharacterUpdateData = (
     name: updates.name,
     avatar: "avatar" in updates ? updates.avatar : undefined,
     description: "description" in updates ? updates.description : undefined,
+    openingHtml: updates.openingHtml,
     prefix: "",
     prompt: "",
     suffix: "",
