@@ -1175,7 +1175,7 @@ export function ChatPage({
                 <iframe
                   title={t("characters.openingHtml")}
                   srcDoc={activeOpeningHtml}
-                  sandbox="allow-scripts allow-same-origin"
+                  sandbox="allow-scripts"
                   className="w-full h-full border-0"
                 />
               ) : (

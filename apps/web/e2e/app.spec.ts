@@ -45,16 +45,17 @@ type ApiDataResponse<T> = {
 const createPrivateCharacterCardFile = async (name: string, password: string) => {
   const salt = randomBytes(16).toString("base64url");
   const iv = randomBytes(12);
-  const key = scryptSync("local-roleplay-platform/private-character-export/v1", salt, 32);
+  const key = scryptSync(password, salt, 32);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   const passwordSalt = randomBytes(16).toString("base64url");
+  const accessControl = {
+    version: 1 as const,
+    salt: passwordSalt,
+    verifier: scryptSync(password, passwordSalt, 32).toString("base64url")
+  };
   const payload = {
     version: 1,
-    accessControl: {
-      version: 1,
-      salt: passwordSalt,
-      verifier: scryptSync(password, passwordSalt, 32).toString("base64url")
-    },
+    accessControl,
     prefix: "Hidden private prefix.",
     prompt: "Hidden private prompt.",
     suffix: "Hidden private suffix.",
@@ -81,7 +82,8 @@ const createPrivateCharacterCardFile = async (name: string, password: string) =>
       salt,
       iv: iv.toString("base64url"),
       tag: tag.toString("base64url"),
-      ciphertext: ciphertext.toString("base64url")
+      ciphertext: ciphertext.toString("base64url"),
+      accessControl
     }
   };
 
@@ -725,6 +727,8 @@ test("imported private character cards reveal prompt fields only after password 
   try {
     await page.goto("/characters");
     await page.locator('input[type="file"]').setInputFiles(file.filePath);
+
+    await expect(page.getByText(name)).toBeVisible();
 
     const charactersResponse = await request.get("/api/characters");
     const characters = ((await charactersResponse.json()) as ApiDataResponse<E2ECharacter[]>).data ?? [];

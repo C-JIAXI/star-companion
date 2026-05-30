@@ -3,7 +3,7 @@ import { prisma } from "../db.js";
 import { asyncHandler, parseBody } from "../lib/http.js";
 import { backupImportSchema } from "../schemas.js";
 import {
-  serializeCharacter,
+  serializeCharacterForBackup,
   serializeChat,
   serializeMessage,
   serializeSettings
@@ -33,7 +33,7 @@ backupsRouter.get(
         schemaVersion: 1,
         exportedAt: new Date().toISOString(),
         settings: serializeSettings(settings),
-        characters: characters.map((character) => serializeCharacter(character)),
+        characters: characters.map((character) => serializeCharacterForBackup(character)),
         chats: chats.map(serializeChat),
         messages: messages.map(serializeMessage)
       }

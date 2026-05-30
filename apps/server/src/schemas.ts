@@ -109,6 +109,12 @@ const publicCharacterCardSchema = z.object({
   })
 });
 
+const passwordAccessControlSchema = z.object({
+  version: z.literal(1),
+  salt: z.string().min(1),
+  verifier: z.string().min(1)
+});
+
 const privateCharacterCardSchema = z.object({
   schemaVersion: z.literal(1).default(1),
   format: z.literal("character-card"),
@@ -128,6 +134,7 @@ const privateCharacterCardSchema = z.object({
     iv: z.string().min(1),
     tag: z.string().min(1),
     ciphertext: z.string().min(1),
+    accessControl: passwordAccessControlSchema.optional(),
     creatorFingerprint: z.string().min(1).optional()
   })
 });
@@ -280,6 +287,8 @@ const backupCharacterSchema = characterCreateSchema
     description: z.string().optional(),
     scenario: z.string().optional(),
     systemPrompt: z.string().optional(),
+    loreEntries: z.any().default([]),
+    quickReplies: z.any().default([]),
     createdAt: backupDateSchema,
     updatedAt: backupDateSchema
   })

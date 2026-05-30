@@ -902,7 +902,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                           <iframe
                             title={t("characters.openingHtmlPreview")}
                             srcDoc={form.openingHtml}
-                            sandbox="allow-scripts allow-same-origin"
+                            sandbox="allow-scripts"
                             className="w-full h-full border-0"
                           />
                         </div>

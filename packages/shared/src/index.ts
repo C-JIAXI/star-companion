@@ -107,6 +107,11 @@ export interface PrivateCharacterCardDTO {
     iv: string;
     tag: string;
     ciphertext: string;
+    accessControl?: {
+      version: 1;
+      salt: string;
+      verifier: string;
+    };
     creatorFingerprint?: string;
   };
 }

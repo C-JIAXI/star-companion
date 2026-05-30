@@ -298,13 +298,12 @@ describe("buildPromptContext", () => {
     assert.doesNotMatch(promptText, /A stale target that must not affect private chats/);
   });
 
-  it("still builds prompts for imported private characters that hide prompt fields in the UI", async () => {
+  it("hides prompt fields for imported private characters until password unlock", async () => {
     const context = await buildPromptContext({ chatId: ids.privateChatId });
     const promptText = context.messages.map((message) => message.content).join("\n\n");
 
-    assert.match(promptText, /Hidden prefix instruction\./);
-    assert.match(promptText, /Hidden prompt instruction for imported private cards\./);
-    assert.match(promptText, /Hidden suffix instruction\./);
-    assert.doesNotMatch(promptText, /\.private-card \{ color: #abc; \}/);
+    assert.doesNotMatch(promptText, /Hidden prefix instruction\./);
+    assert.doesNotMatch(promptText, /Hidden prompt instruction for imported private cards\./);
+    assert.doesNotMatch(promptText, /Hidden suffix instruction\./);
   });
 });

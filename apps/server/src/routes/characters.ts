@@ -16,7 +16,8 @@ import {
   buildCharacterUpdateData,
   canExportCharacterPublicly,
   createCharacterExportCard,
-  importCharacterCard
+  importCharacterCard,
+  reEncryptImportedCharacter
 } from "../services/characterCards.js";
 
 export const charactersRouter = Router();
@@ -98,6 +99,20 @@ charactersRouter.post(
     }
 
     assertCharacterUnlockPassword(character, body.password);
+
+    const loreEntries = character.loreEntries as Record<string, unknown> | null;
+    const privateData = loreEntries?.__privateCharacter as Record<string, unknown> | undefined;
+    const isImportedCard = Boolean(privateData?.exportSalt);
+
+    if (isImportedCard) {
+      const reEncrypted = reEncryptImportedCharacter(character, body.password);
+      const updated = await prisma.character.update({
+        where: { id },
+        data: { loreEntries: reEncrypted }
+      });
+      response.json({ ok: true, data: serializeCharacter(updated, body.password) });
+      return;
+    }
 
     response.json({
       ok: true,

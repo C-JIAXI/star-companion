@@ -42,37 +42,39 @@ describe("character private cards", () => {
     );
   });
 
-  it("hides imported private prompt content until the password is provided", () => {
+  it("imports private card without password and hides content until password is provided", () => {
     const exported = createCharacterExportCard(baseCharacter, "private", "open-sesame");
     const imported = importCharacterCard(exported);
+
     const hidden = resolveCharacterRecord({
       ...baseCharacter,
       ...imported
     });
-    const unlocked = resolveCharacterRecord(
-      {
-        ...baseCharacter,
-        ...imported
-      },
-      "open-sesame"
-    );
-    const promptFields = resolveCharacterPromptFields({
-      ...baseCharacter,
-      ...imported
-    });
-
     assert.equal(hidden.visibility, "private");
     assert.equal(hidden.canViewPrompt, false);
     assert.equal(hidden.prefix, "");
     assert.equal(hidden.prompt, "");
     assert.equal(hidden.suffix, "");
-    assert.equal(hidden.htmlCss, baseCharacter.htmlCss);
     assert.deepEqual(hidden.loreEntries, []);
 
+    const wrongPassword = resolveCharacterRecord(
+      { ...baseCharacter, ...imported },
+      "wrong-password"
+    );
+    assert.equal(wrongPassword.canViewPrompt, false);
+
+    const unlocked = resolveCharacterRecord(
+      { ...baseCharacter, ...imported },
+      "open-sesame"
+    );
     assert.equal(unlocked.canViewPrompt, true);
     assert.equal(unlocked.prompt, baseCharacter.prompt);
     assert.deepEqual(unlocked.loreEntries, baseCharacter.loreEntries);
 
+    const promptFields = resolveCharacterPromptFields(
+      { ...baseCharacter, ...imported },
+      "open-sesame"
+    );
     assert.equal(promptFields.prompt, baseCharacter.prompt);
     assert.equal(promptFields.suffix, baseCharacter.suffix);
     assert.deepEqual(promptFields.loreEntries, baseCharacter.loreEntries);
@@ -81,10 +83,6 @@ describe("character private cards", () => {
   it("validates the password before unlocking or publicly exporting private cards", () => {
     const exported = createCharacterExportCard(baseCharacter, "private", "open-sesame");
     const imported = importCharacterCard(exported);
-    const character = {
-      ...baseCharacter,
-      ...imported
-    };
 
     assert.equal(canExportCharacterPublicly({ loreEntries: imported.loreEntries }), false);
     assert.equal(
@@ -103,6 +101,5 @@ describe("character private cards", () => {
     assert.doesNotThrow(() =>
       assertCharacterUnlockPassword({ loreEntries: imported.loreEntries }, "open-sesame")
     );
-    assert.equal(resolveCharacterRecord(character, "wrong-password").canViewPrompt, false);
   });
 });

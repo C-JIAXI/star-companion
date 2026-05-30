@@ -118,7 +118,31 @@ describe("characterImportSchema", () => {
       }
     });
 
+    const privateCardWithAccessControl = parseBody(characterImportSchema, {
+      schemaVersion: 1,
+      format: "character-card",
+      visibility: "private",
+      character: {
+        name: "Private Card With AC",
+        avatar: null
+      },
+      protectedPayload: {
+        version: 1,
+        algorithm: "aes-256-gcm",
+        salt: "salt",
+        iv: "iv",
+        tag: "tag",
+        ciphertext: "ciphertext",
+        accessControl: {
+          version: 1,
+          salt: "ac-salt",
+          verifier: "ac-verifier"
+        }
+      }
+    });
+
     assert.equal(publicCard.visibility, "public");
     assert.equal(privateCard.visibility, "private");
+    assert.equal(privateCardWithAccessControl.visibility, "private");
   });
 });

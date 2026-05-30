@@ -225,3 +225,19 @@ export const serializeMessage = (message: Message) => ({
   createdAt: toIso(message.createdAt),
   updatedAt: toIso(message.updatedAt)
 });
+
+export const serializeCharacterForBackup = (character: Character) => ({
+  id: character.id,
+  name: character.name,
+  avatar: character.avatar,
+  description: character.description,
+  prefix: character.prefix,
+  prompt: character.prompt,
+  suffix: character.suffix,
+  htmlCss: character.htmlCss,
+  openingHtml: character.openingHtml ?? "",
+  loreEntries: character.loreEntries,
+  quickReplies: character.quickReplies,
+  createdAt: toIso(character.createdAt),
+  updatedAt: toIso(character.updatedAt)
+});

@@ -213,7 +213,6 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
    - `prefix`
    - `prompt`
    - `suffix`
-   - `htmlCss`
 2. 聊天级 `userPersona`
 3. 聊天级 `userProfileSummary`
 4. 命中的角色 `loreEntries`
