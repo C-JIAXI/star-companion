@@ -377,31 +377,6 @@ export function ChatPage({
     return usage.estimated ? `${detail} · ${t("chat.tokensEstimated")}` : detail;
   };
 
-  const getTriggeredLorebooks = (message: MessageDTO) => {
-    const books = new Map<string, { id: string; name: string; keys: Set<string>; count: number }>();
-
-    for (const entry of message.loreMatches) {
-      const id = entry.characterId;
-      const existing = books.get(id);
-      const name = entry.characterName?.trim() || entry.keys[0] || t("nav.characters");
-
-      if (existing) {
-        existing.count += 1;
-        entry.keys.forEach((key) => existing.keys.add(key));
-        continue;
-      }
-
-      books.set(id, {
-        id,
-        name,
-        keys: new Set(entry.keys),
-        count: 1
-      });
-    }
-
-    return Array.from(books.values());
-  };
-
   const totalMessagePages = useMemo(() => {
     const totalMessages = activeChat?.messages.length ?? 0;
     return Math.max(1, Math.ceil(totalMessages / MESSAGES_PER_PAGE));
@@ -1267,7 +1242,6 @@ export function ChatPage({
                       showAvatar={showMessageAvatars}
                       htmlCss={character?.htmlCss}
                       tokenUsageFormatter={formatTokenUsage}
-                      triggeredLorebooks={getTriggeredLorebooks(message)}
                       onCopy={() => void copyMessage(message)}
                       onRegenerate={() => void regenerateMessage(message)}
                       onEdit={() => startEditingMessage(message)}

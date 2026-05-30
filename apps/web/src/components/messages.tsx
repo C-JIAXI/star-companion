@@ -9,13 +9,6 @@ import { ScopedHtmlRenderer, containsRenderableHtml } from "./ScopedHtmlRenderer
 
 type TokenUsageFormatter = (usage: TokenUsageDTO | null) => string;
 
-type TriggeredLorebook = {
-  id: string;
-  name: string;
-  keys: Set<string>;
-  count: number;
-};
-
 const FLUSH_INTERVAL_MS = 40;
 
 const MARKDOWN_PATTERN = /(?:^|\n)```/;
@@ -152,35 +145,15 @@ function VariantSwitcher({
 
 function TokenInfo({
   usage,
-  formatter,
-  lorebooks
+  formatter
 }: {
   usage: TokenUsageDTO | null;
   formatter: TokenUsageFormatter;
-  lorebooks?: TriggeredLorebook[];
 }) {
-  const { t } = useI18n();
-
   return (
-    <>
-      <p className="text-xs font-medium text-slate-500">
-        {formatter(usage)}
-      </p>
-      {lorebooks && lorebooks.length > 0 ? (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <span className="text-xs font-medium text-slate-500">{t("chat.triggeredLore")}</span>
-          {lorebooks.map((book) => (
-            <span
-              className="inline-flex max-w-full items-center rounded-full border border-ember-500/20 bg-ember-500/10 px-2 py-0.5 text-xs font-medium text-ember-200"
-              key={book.id}
-            >
-              <span className="truncate">{book.name}</span>
-              {book.count > 1 ? <span className="ml-1 text-ember-200/70">x{book.count}</span> : null}
-            </span>
-          ))}
-        </div>
-      ) : null}
-    </>
+    <p className="text-xs font-medium text-slate-500">
+      {formatter(usage)}
+    </p>
   );
 }
 
@@ -242,7 +215,6 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
   showAvatar,
   htmlCss,
   tokenUsageFormatter,
-  triggeredLorebooks,
   onCopy,
   onRegenerate,
   onEdit,
@@ -257,7 +229,6 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
   showAvatar: boolean;
   htmlCss?: string;
   tokenUsageFormatter: TokenUsageFormatter;
-  triggeredLorebooks: TriggeredLorebook[];
   onCopy: () => void;
   onRegenerate: () => void;
   onEdit: () => void;
@@ -277,7 +248,7 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
         <MessageBody content={message.content} htmlCss={htmlCss} />
         <div className="mt-3 border-t border-white/5 pt-2">
           <div className="flex flex-wrap items-center justify-between gap-1 sm:gap-1.5 text-xs">
-            <TokenInfo usage={message.tokenUsage} formatter={tokenUsageFormatter} lorebooks={triggeredLorebooks} />
+            <TokenInfo usage={message.tokenUsage} formatter={tokenUsageFormatter} />
             <div className="flex shrink-0 flex-wrap items-center gap-0.5">
               {message.variants.length > 1 ? (
                 <VariantSwitcher

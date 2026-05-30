@@ -116,9 +116,7 @@ const toLoreMatches = (value: Prisma.JsonValue | null) => {
         !Array.isArray(keys) ||
         typeof content !== "string" ||
         typeof priority !== "number" ||
-        typeof enabled !== "boolean" ||
-        typeof createdAt !== "string" ||
-        typeof updatedAt !== "string"
+        typeof enabled !== "boolean"
       ) {
         return null;
       }
@@ -134,8 +132,8 @@ const toLoreMatches = (value: Prisma.JsonValue | null) => {
         triggerMode: normalizeLoreTriggerMode(triggerMode),
         alwaysActive: alwaysActive === true,
         enabled,
-        createdAt,
-        updatedAt
+        createdAt: typeof createdAt === "string" ? createdAt : undefined,
+        updatedAt: typeof updatedAt === "string" ? updatedAt : undefined
       };
     })
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));

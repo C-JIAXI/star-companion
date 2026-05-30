@@ -268,8 +268,8 @@ export interface MatchedLoreEntryDTO {
   triggerMode: LoreTriggerMode;
   alwaysActive: boolean;
   enabled: boolean;
-  createdAt: string;
-  updatedAt: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface BackupDTO {

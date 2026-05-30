@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useEffect, useState } from "react";
 import { parseUserCustomConfig } from "@local-roleplay/shared";
 import { useI18n } from "../i18n";
-import type { CharacterDTO, ChatWithMessagesDTO, CharacterLoreEntryDTO, MatchedLoreEntryDTO, MessageDTO } from "../types";
+import type { CharacterDTO, ChatWithMessagesDTO, CharacterLoreEntryDTO, MessageDTO } from "../types";
 
 function EmptyHint({ text }: { text: string }) {
   return <span className="italic text-slate-500">{text}</span>;
@@ -56,12 +56,12 @@ function CollapsibleSection({
   );
 }
 
-function LoreEntryList({ entries }: { entries: CharacterLoreEntryDTO[] }) {
-  const enabled = entries.filter((e) => e.enabled);
-  if (enabled.length === 0) return null;
+function LoreEntryList({ entries, triggeredIds }: { entries: CharacterLoreEntryDTO[]; triggeredIds: Set<string> }) {
+  const matched = entries.filter((e) => e.enabled && triggeredIds.has(e.id));
+  if (matched.length === 0) return null;
   return (
     <div className="mt-2 space-y-2 border-t border-white/5 pt-2">
-      {enabled.map((entry) => (
+      {matched.map((entry) => (
         <div key={entry.id} className="rounded border border-white/5 bg-white/[0.02] p-2 text-xs space-y-1">
           <div className="flex flex-wrap items-center gap-1">
             {entry.keys.map((key) => (
@@ -74,34 +74,6 @@ function LoreEntryList({ entries }: { entries: CharacterLoreEntryDTO[] }) {
                 always
               </span>
             )}
-          </div>
-          <p className="text-slate-400 whitespace-pre-wrap">{entry.content}</p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function MatchedLoreEntryList({ entries }: { entries: MatchedLoreEntryDTO[] }) {
-  if (entries.length === 0) return null;
-  return (
-    <div className="mt-2 space-y-2 border-t border-white/5 pt-2">
-      {entries.map((entry) => (
-        <div key={entry.id} className="rounded border border-white/5 bg-white/[0.02] p-2 text-xs space-y-1">
-          <div className="flex flex-wrap items-center gap-1">
-            {entry.keys.map((key) => (
-              <span key={key} className="inline-block rounded-full bg-ember-500/15 px-1.5 py-0.5 text-xs font-medium text-ember-300">
-                {key}
-              </span>
-            ))}
-            {entry.alwaysActive && (
-              <span className="inline-block rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-xs font-medium text-emerald-300">
-                always
-              </span>
-            )}
-            <span className="inline-block rounded-full bg-sky-500/15 px-1.5 py-0.5 text-xs font-medium text-sky-300">
-              {entry.scope}
-            </span>
           </div>
           <p className="text-slate-400 whitespace-pre-wrap">{entry.content}</p>
         </div>
@@ -164,7 +136,7 @@ export function DebugPromptDrawer({
   const privateCharacter = character && !character.canViewPrompt;
 
   const messageLoreMatches = debugMessage?.loreMatches ?? [];
-  const hasMessageLore = messageLoreMatches.length > 0;
+  const triggeredLoreIds = new Set(messageLoreMatches.map((e) => e.id));
 
   const precedingUserMessage = debugMessage && activeChat
     ? (() => {
@@ -226,7 +198,7 @@ export function DebugPromptDrawer({
                     level={2}
                   >
                     {character.prefix.trim() ? character.prefix : <EmptyHint text="—" />}
-                    <LoreEntryList entries={character.loreEntries.filter((e) => e.scope === "prefix")} />
+                    <LoreEntryList entries={character.loreEntries.filter((e) => e.scope === "prefix")} triggeredIds={triggeredLoreIds} />
                   </CollapsibleSection>
                   <CollapsibleSection
                     id="char-prompt"
@@ -237,7 +209,7 @@ export function DebugPromptDrawer({
                     level={2}
                   >
                     {character.prompt.trim() ? character.prompt : <EmptyHint text="—" />}
-                    <LoreEntryList entries={character.loreEntries.filter((e) => e.scope === "prompt")} />
+                    <LoreEntryList entries={character.loreEntries.filter((e) => e.scope === "prompt")} triggeredIds={triggeredLoreIds} />
                   </CollapsibleSection>
                   <CollapsibleSection
                     id="char-suffix"
@@ -248,7 +220,7 @@ export function DebugPromptDrawer({
                     level={2}
                   >
                     {character.suffix.trim() ? character.suffix : <EmptyHint text="—" />}
-                    <LoreEntryList entries={character.loreEntries.filter((e) => e.scope === "suffix")} />
+                    <LoreEntryList entries={character.loreEntries.filter((e) => e.scope === "suffix")} triggeredIds={triggeredLoreIds} />
                   </CollapsibleSection>
                 </div>
               )
@@ -270,20 +242,6 @@ export function DebugPromptDrawer({
               </p>
             ) : (
               <EmptyHint text={t("debug.noUserMessage")} />
-            )}
-          </CollapsibleSection>
-
-          <CollapsibleSection
-            id="messageLore"
-            title={t("debug.messageLoreMatches")}
-            defaultOpen={false}
-            collapsed={isCollapsed("messageLore")}
-            onToggle={toggleSection}
-          >
-            {hasMessageLore ? (
-              <MatchedLoreEntryList entries={messageLoreMatches} />
-            ) : (
-              <EmptyHint text={t("debug.messageLoreNoMatches")} />
             )}
           </CollapsibleSection>
 

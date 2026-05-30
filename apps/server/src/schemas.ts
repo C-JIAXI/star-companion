@@ -22,8 +22,8 @@ const loreMatchSchema = z.object({
   triggerMode: z.enum(["user", "assistant", "both"]).default("both"),
   alwaysActive: z.boolean().default(false),
   enabled: z.boolean(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime()
+  createdAt: z.string().datetime().optional(),
+  updatedAt: z.string().datetime().optional()
 });
 
 const loreEntrySchema = z.object({
