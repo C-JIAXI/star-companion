@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { asyncHandler, parseBody } from "../lib/http.js";
-import { testModelConnection } from "../services/completions.js";
+import { fetchAvailableModels, testModelConnection } from "../services/completions.js";
 import { settingsUpdateSchema, userProfileUpdateSchema } from "../schemas.js";
 import { serializeSettings } from "../serializers.js";
 import { encryptApiKey, hasStoredApiKey } from "../services/apiKeyVault.js";
@@ -41,6 +41,19 @@ settingsRouter.post(
   asyncHandler(async (_request, response) => {
     const settings = await getOrCreateSettings();
     const result = await testModelConnection(settings);
+
+    response.json({
+      ok: true,
+      data: result
+    });
+  })
+);
+
+settingsRouter.get(
+  "/models",
+  asyncHandler(async (_request, response) => {
+    const settings = await getOrCreateSettings();
+    const result = await fetchAvailableModels(settings);
 
     response.json({
       ok: true,

@@ -97,7 +97,13 @@ export function ChatPage({
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [runtimeSettings, setRuntimeSettings] = useState<Pick<
     PublicUserSettingsDTO,
-    "activeProvider" | "apiBaseUrl" | "model" | "temperature" | "maxTokens" | "topP" | "language"
+    | "activeProvider"
+    | "apiBaseUrl"
+    | "model"
+    | "temperature"
+    | "maxTokens"
+    | "topP"
+    | "language"
   > | null>(null);
   const [autoSummarizeUser, setAutoSummarizeUser] = useState(true);
   const [showUserConfigDialog, setShowUserConfigDialog] = useState(false);
@@ -572,7 +578,9 @@ export function ChatPage({
           setAutoSummarizeUser(settings.autoSummarizeUser);
           if (models.length > 0) {
             const active = models.find(
-              (m) => m.provider === settings.activeProvider && m.model === settings.model
+              (m) =>
+                m.provider === settings.activeProvider &&
+                m.model === settings.model
             );
             setActiveModelId(active?.id ?? models[0].id);
           } else {

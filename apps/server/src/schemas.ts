@@ -233,14 +233,15 @@ export const settingsUpdateSchema = z.object({
   userProfileSummary: z.string().max(4000).optional(),
   models: z
     .array(
-      z.object({
-        id: z.string().min(1),
-        label: z.string().min(1),
-        provider: z.string().min(1),
-        apiBaseUrl: z.string().url(),
-        key: z.string().optional(),
-        model: z.string().min(1)
-      })
+      z
+        .object({
+          id: z.string().min(1),
+          label: z.string().min(1),
+          provider: z.string().min(1),
+          apiBaseUrl: z.string().url(),
+          key: z.string().optional(),
+          model: z.string().min(1)
+        })
     )
     .default([])
 });

@@ -36,6 +36,12 @@ export interface PublicUserSettingsDTO extends UserSettingsDTO {
   hasApiKey: boolean;
 }
 
+export interface AvailableModelsDTO {
+  provider: string;
+  models: string[];
+  checkedAt: string;
+}
+
 export interface CharacterLoreEntryDTO {
   id: string;
   keys: string[];

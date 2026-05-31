@@ -39,6 +39,29 @@ describe("settingsUpdateSchema", () => {
 
     assert.equal(parsed.showMessageAvatars, false);
   });
+
+  it("accepts model presets without runtime-only fields", () => {
+    const parsed = parseBody(settingsUpdateSchema, {
+      activeProvider: "openai-compatible",
+      apiBaseUrl: "https://api.openai.com/v1",
+      model: "gpt-4o-mini",
+      temperature: 0.8,
+      maxTokens: 800,
+      topP: 1,
+      language: "zh-CN",
+      models: [
+        {
+          id: "preset-1",
+          label: "GPT",
+          provider: "openai",
+          apiBaseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini"
+        }
+      ]
+    });
+
+    assert.equal(parsed.models[0]?.model, "gpt-4o-mini");
+  });
 });
 
 describe("characterPageQuerySchema", () => {

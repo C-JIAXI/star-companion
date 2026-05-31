@@ -1,5 +1,6 @@
 import type {
   ApiEnvelope,
+  AvailableModelsDTO,
   BackupDTO,
   BackupImportSummaryDTO,
   CharacterCardDTO,
@@ -111,7 +112,8 @@ export const api = {
     test: () =>
       request<{ reachable: true; model: string; checkedAt: string }>("/api/settings/test", {
         method: "POST"
-      })
+      }),
+    models: () => request<AvailableModelsDTO>("/api/settings/models")
   },
   backups: {
     export: () => request<BackupDTO>("/api/backups/export"),

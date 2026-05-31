@@ -51,14 +51,16 @@ const toModelPresets = (value: Prisma.JsonValue): ModelPreset[] => {
       (item): item is Prisma.JsonObject =>
         typeof item === "object" && item !== null && !Array.isArray(item)
     )
-    .map((item) => ({
-      id: String(item.id ?? ""),
-      label: String(item.label ?? ""),
-      provider: String(item.provider ?? ""),
-      apiBaseUrl: String(item.apiBaseUrl ?? ""),
-      key: typeof item.key === "string" ? item.key : undefined,
-      model: String(item.model ?? "")
-    }));
+    .map((item) => {
+      return {
+        id: String(item.id ?? ""),
+        label: String(item.label ?? ""),
+        provider: String(item.provider ?? ""),
+        apiBaseUrl: String(item.apiBaseUrl ?? ""),
+        key: typeof item.key === "string" ? item.key : undefined,
+        model: String(item.model ?? "")
+      };
+    });
 };
 
 const toTokenUsage = (value: Prisma.JsonValue | null) => {

@@ -52,7 +52,7 @@
 - 后端：Node.js + Express + TypeScript
 - 数据库：SQLite + Prisma
 - 实时能力：WebSocket
-- 模型接入：OpenAI-compatible API
+- 模型接入：OpenAI-compatible API，并支持 Anthropic Claude / Google Gemini 原生适配
 
 目录结构：
 
@@ -131,6 +131,7 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 
 - Prisma 注释里仍有“明文保存”的旧说明，但运行时代码已经使用 `AES-256-GCM` 加密 API Key。
 - 设置接口不会返回 API Key 明文，只会返回 `hasApiKey`。
+- 未识别的 `activeProvider` 默认按 OpenAI-compatible 调用；`anthropic` 和 `google-gemini` 走原生请求/流式响应适配。
 
 ### Character
 
@@ -191,8 +192,8 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 - message variants 切换
 - WebSocket 流式输出
 - 停止生成
-- OpenAI-compatible API 代理
-- 模型预设
+- OpenAI-compatible API 代理，以及 Anthropic Claude / Google Gemini 原生代理
+- 模型预设、供应商模板、模型 ID 批量导入
 - 语言切换
 - 本地备份导入导出
 - 用户画像摘要自动更新

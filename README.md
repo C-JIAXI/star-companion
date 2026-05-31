@@ -15,7 +15,7 @@
 - 消息支持复制、编辑、删除、重新生成和 variants 切换。
 - 世界书支持关键词触发、用户触发、AI 触发、共同触发、持续触发。
 - 聊天可绑定指定世界书，未绑定时不会自动注入世界书。
-- 设置页支持多模型预设、API Key 本地加密、数据备份导入导出。
+- 设置页支持主流供应商模板、多模型预设、任意模型 ID 批量导入、API Key 本地加密、数据备份导入导出。
 - 聊天设置中支持根据用户消息自动整理“用户信息摘要”。
 - 已有 API smoke test 和 Playwright E2E 测试。
 
@@ -130,7 +130,7 @@ npm run db:migrate:deploy
 
 ## 核心数据模型
 
-- `UserSettings`: 模型供应商、API Base URL、加密 API Key、模型参数、界面语言、模型预设、用户信息摘要。
+- `UserSettings`: 模型供应商、API Base URL、加密 API Key、模型 ID、流式输出开关、模型参数、界面语言、模型预设、用户信息摘要。未识别供应商默认按 OpenAI-compatible 调用，`anthropic` 和 `google-gemini` 使用原生适配。
 - `Character`: 名称、头像、前置词、提示词、后置词。
 - `Chat`: 标题、私聊/群聊模式、绑定角色、绑定世界书、记忆轮数。
 - `Message`: 角色、内容、variants、当前 variant、token 使用量、命中的世界书。
@@ -149,6 +149,9 @@ npm run db:migrate:deploy
 6. 当前用户消息。
 
 所有 LLM 请求都通过后端代理，前端不会直接持有或调用 API Key。
+
+模型代理默认兼容 OpenAI Chat Completions 格式；Anthropic Claude 会转换为 Messages API，Google Gemini 会转换为 `generateContent` / `streamGenerateContent`。设置页可以从已保存的供应商配置拉取模型列表，也可以粘贴任意模型 ID 批量生成预设。
+
 
 ## 世界书规则
 

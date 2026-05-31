@@ -3,7 +3,9 @@ import {
   ChevronRight,
   Download,
   FileUp,
+  ListPlus,
   Plus,
+  RefreshCw,
   Save,
   ServerCog,
   Trash2,
@@ -64,6 +66,128 @@ const isValidUrl = (value: string) => {
   }
 };
 
+const providerTemplates = [
+  {
+    id: "openai",
+    label: "OpenAI",
+    provider: "openai",
+    apiBaseUrl: "https://api.openai.com/v1",
+    model: "gpt-4o-mini"
+  },
+  {
+    id: "anthropic",
+    label: "Anthropic Claude",
+    provider: "anthropic",
+    apiBaseUrl: "https://api.anthropic.com/v1",
+    model: "claude-sonnet-4-5"
+  },
+  {
+    id: "google-gemini",
+    label: "Google Gemini",
+    provider: "google-gemini",
+    apiBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    model: "gemini-2.5-flash"
+  },
+  {
+    id: "deepseek",
+    label: "DeepSeek",
+    provider: "deepseek",
+    apiBaseUrl: "https://api.deepseek.com/v1",
+    model: "deepseek-chat"
+  },
+  {
+    id: "qwen",
+    label: "通义千问 / Qwen",
+    provider: "qwen",
+    apiBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    model: "qwen-plus"
+  },
+  {
+    id: "moonshot",
+    label: "Moonshot Kimi",
+    provider: "moonshot",
+    apiBaseUrl: "https://api.moonshot.cn/v1",
+    model: "moonshot-v1-8k"
+  },
+  {
+    id: "zhipu",
+    label: "智谱 GLM",
+    provider: "zhipu",
+    apiBaseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    model: "glm-4-flash"
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    provider: "openrouter",
+    apiBaseUrl: "https://openrouter.ai/api/v1",
+    model: "openai/gpt-4o-mini"
+  },
+  {
+    id: "groq",
+    label: "Groq",
+    provider: "groq",
+    apiBaseUrl: "https://api.groq.com/openai/v1",
+    model: "llama-3.3-70b-versatile"
+  },
+  {
+    id: "ollama",
+    label: "Ollama",
+    provider: "ollama",
+    apiBaseUrl: "http://localhost:11434/v1",
+    model: "llama3.1"
+  },
+  {
+    id: "lm-studio",
+    label: "LM Studio",
+    provider: "lm-studio",
+    apiBaseUrl: "http://localhost:1234/v1",
+    model: "local-model"
+  }
+] as const;
+
+const getProviderTemplateId = (form: SettingsInput) =>
+  providerTemplates.find(
+    (template) =>
+      template.provider === form.activeProvider &&
+      template.apiBaseUrl === form.apiBaseUrl
+  )?.id ?? "custom";
+
+const collectModelIds = (value: unknown): string[] => {
+  if (typeof value === "string") {
+    return value.trim() ? [value.trim().replace(/^models\//, "")] : [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap(collectModelIds);
+  }
+
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+
+  const record = value as Record<string, unknown>;
+  const direct = [record.id, record.model, record.name].flatMap(collectModelIds);
+  const nested = [record.data, record.models].flatMap(collectModelIds);
+  return [...direct, ...nested];
+};
+
+const parseModelImportText = (raw: string) => {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  try {
+    return collectModelIds(JSON.parse(trimmed));
+  } catch {
+    return trimmed
+      .split(/[\n,，;；\t]+/)
+      .map((item) => item.trim().replace(/^models\//, ""))
+      .filter(Boolean);
+  }
+};
+
 const getPresetDisplayName = (preset: ModelPreset, language: AppLanguage) => {
   const label = preset.label.trim();
   if (label) {
@@ -102,9 +226,22 @@ const getPageCopy = (language: AppLanguage) =>
         clearKeyUndo: "保留已保存 Key",
         runtimeBlockTitle: "连接信息",
         samplingBlockTitle: "采样参数",
+        providerTemplate: "供应商模板",
+        customProvider: "自定义供应商",
+        providerTemplateApplied: (name: string) => `已套用供应商模板“${name}”`,
         presetsTitle: "模型预设库",
         presetsHelp: "保存常用组合，聊天页会直接读取这里的预设进行模型切换。",
         addPreset: "添加预设",
+        fetchProviderModels: "从供应商导入",
+        importModels: "导入模型 ID",
+        importModelsTitle: "批量导入任意模型",
+        importModelsHelp:
+          "粘贴模型 ID、逗号分隔列表、JSON 数组，或 OpenAI/Gemini 模型列表响应；会按当前供应商和 Base URL 生成预设。",
+        modelImportPlaceholder:
+          "例如：\ngpt-4o-mini\ngemini-2.5-flash\nclaude-sonnet-4-5\n\n也可以粘贴 { \"data\": [{ \"id\": \"model-id\" }] }",
+        modelImportEmpty: "没有识别到可导入的模型 ID。",
+        modelImportAdded: (count: number) => `已导入 ${count} 个模型预设。`,
+        fetchRequiresSave: "从供应商导入模型前，请先保存当前连接配置和 API Key。",
         applyPreset: "应用到当前配置",
         activePreset: "当前使用",
         presetLabel: "预设名称",
@@ -143,9 +280,22 @@ const getPageCopy = (language: AppLanguage) =>
         clearKeyUndo: "Keep stored key",
         runtimeBlockTitle: "Connection",
         samplingBlockTitle: "Sampling",
+        providerTemplate: "Provider Template",
+        customProvider: "Custom Provider",
+        providerTemplateApplied: (name: string) => `Applied provider template "${name}"`,
         presetsTitle: "Model Presets",
         presetsHelp: "Save reusable provider/model combinations. The chat page reads this list directly for model switching.",
         addPreset: "Add Preset",
+        fetchProviderModels: "Import from Provider",
+        importModels: "Import Model IDs",
+        importModelsTitle: "Bulk Import Any Model",
+        importModelsHelp:
+          "Paste model IDs, comma-separated lists, JSON arrays, or OpenAI/Gemini model-list responses. Presets use the current provider and base URL.",
+        modelImportPlaceholder:
+          "Examples:\ngpt-4o-mini\ngemini-2.5-flash\nclaude-sonnet-4-5\n\nYou can also paste { \"data\": [{ \"id\": \"model-id\" }] }",
+        modelImportEmpty: "No model IDs were recognized.",
+        modelImportAdded: (count: number) => `Imported ${count} model presets.`,
+        fetchRequiresSave: "Save the current connection and API key before importing models from the provider.",
         applyPreset: "Apply to Runtime",
         activePreset: "Active",
         presetLabel: "Preset Name",
@@ -237,6 +387,7 @@ export function SettingsPage() {
   const [pendingDeletePresetId, setPendingDeletePresetId] = useState<string | null>(null);
   const [expandedPresetId, setExpandedPresetId] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSection>("runtime");
+  const [modelImportText, setModelImportText] = useState("");
 
   useEffect(() => {
     void api.settings
@@ -354,7 +505,9 @@ export function SettingsPage() {
         topP: settings.topP,
         language: settings.language,
         models: settings.models ?? [],
-        showMessageAvatars: settings.showMessageAvatars
+        autoSummarizeUser: settings.autoSummarizeUser,
+        showMessageAvatars: settings.showMessageAvatars,
+        userProfileSummary: settings.userProfileSummary ?? ""
       };
 
       setForm(nextForm);
@@ -460,6 +613,90 @@ export function SettingsPage() {
     }));
     setExpandedPresetId(nextPreset.id);
     setActiveSection("presets");
+  };
+
+  const addModelPresets = (modelIds: string[]) => {
+    const uniqueModelIds = [...new Set(modelIds.map((model) => model.trim()).filter(Boolean))];
+
+    if (!uniqueModelIds.length) {
+      setError(copy.modelImportEmpty);
+      return;
+    }
+
+    const existing = new Set(
+      form.models.map(
+        (preset) =>
+          `${preset.provider}\u0000${preset.apiBaseUrl}\u0000${preset.model}`
+      )
+    );
+    const presetsToAdd = uniqueModelIds
+      .filter((model) => {
+        const key = `${form.activeProvider}\u0000${form.apiBaseUrl}\u0000${model}`;
+        if (existing.has(key)) {
+          return false;
+        }
+        existing.add(key);
+        return true;
+      })
+      .map((model) => ({
+        id: generateId(),
+        label: model,
+        provider: form.activeProvider,
+        apiBaseUrl: form.apiBaseUrl,
+        model
+      }));
+
+    if (!presetsToAdd.length) {
+      setError(copy.modelImportEmpty);
+      return;
+    }
+
+    setForm((current) => ({
+      ...current,
+      models: [...current.models, ...presetsToAdd]
+    }));
+    setModelImportText("");
+    setExpandedPresetId(presetsToAdd[0]?.id ?? null);
+    setStatus(copy.modelImportAdded(presetsToAdd.length));
+  };
+
+  const importModelText = () => {
+    addModelPresets(parseModelImportText(modelImportText));
+  };
+
+  const fetchProviderModels = async () => {
+    if (hasUnsavedChanges) {
+      setError(copy.fetchRequiresSave);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+
+    try {
+      const result = await api.settings.models();
+      addModelPresets(result.models);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("settings.connectionFailed"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const applyProviderTemplate = (templateId: string) => {
+    const template = providerTemplates.find((candidate) => candidate.id === templateId);
+    if (!template) {
+      return;
+    }
+
+    setForm((current) => ({
+      ...current,
+      activeProvider: template.provider,
+      apiBaseUrl: template.apiBaseUrl,
+      model: template.model
+    }));
+    setStatus(copy.providerTemplateApplied(template.label));
   };
 
   return (
@@ -582,6 +819,21 @@ export function SettingsPage() {
         >
           <div className="space-y-6">
             <SettingsSectionHeading title={copy.runtimeBlockTitle} description={copy.runtimeHelp} />
+
+            <Field label={copy.providerTemplate}>
+              <select
+                className={selectClassName}
+                value={getProviderTemplateId(form)}
+                onChange={(event) => applyProviderTemplate(event.target.value)}
+              >
+                <option value="custom">{copy.customProvider}</option>
+                {providerTemplates.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
 
             <div className="grid gap-5 md:grid-cols-2">
               <Field
@@ -770,18 +1022,54 @@ export function SettingsPage() {
           className={settingsPanelClassName}
           title={copy.presetsTitle}
           action={
-            <Button
-              className="!min-h-[34px] !px-3 text-xs"
-              variant="secondary"
-              onClick={addPreset}
-            >
-              <Plus size={14} />
-              {copy.addPreset}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                className="!min-h-[34px] !px-3 text-xs"
+                disabled={loading}
+                variant="secondary"
+                onClick={() => void fetchProviderModels()}
+              >
+                <RefreshCw size={14} />
+                {copy.fetchProviderModels}
+              </Button>
+              <Button
+                className="!min-h-[34px] !px-3 text-xs"
+                variant="secondary"
+                onClick={addPreset}
+              >
+                <Plus size={14} />
+                {copy.addPreset}
+              </Button>
+            </div>
           }
         >
           <div className="space-y-4">
             <p className="text-sm leading-6 text-slate-400">{copy.presetsHelp}</p>
+
+            <div className={`rounded-xl p-4 ${settingsSurfaceClassName}`}>
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                <Field label={copy.importModelsTitle}>
+                  <div className="space-y-2">
+                    <p className="text-sm leading-6 text-slate-400">{copy.importModelsHelp}</p>
+                    <textarea
+                      className="min-h-32 w-full resize-y rounded-lg border border-white/10 bg-ink-950/50 px-3 py-2 text-sm text-slate-100 outline-none transition-all placeholder:text-slate-600 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50"
+                      placeholder={copy.modelImportPlaceholder}
+                      value={modelImportText}
+                      onChange={(event) => setModelImportText(event.target.value)}
+                    />
+                  </div>
+                </Field>
+                <Button
+                  className="lg:mb-0"
+                  disabled={!modelImportText.trim()}
+                  variant="secondary"
+                  onClick={importModelText}
+                >
+                  <ListPlus size={16} />
+                  {copy.importModels}
+                </Button>
+              </div>
+            </div>
 
             {form.models.length === 0 ? (
               <div className={`rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-8 text-center text-sm text-slate-500`}>
