@@ -285,10 +285,10 @@ export function DocsPage() {
   return (
     <div
       id="docs-page-root"
-      className="mx-auto flex max-w-5xl flex-col gap-6"
+      className="mx-auto flex max-w-5xl min-w-0 flex-col gap-6"
       data-testid="docs-page-root"
     >
-      <section className="rounded-2xl border border-white/5 bg-ink-900/80 p-5 shadow-lg shadow-black/20 backdrop-blur-sm sm:p-6">
+      <section className="overflow-hidden rounded-2xl border border-white/5 bg-ink-900/80 p-5 shadow-lg shadow-black/20 backdrop-blur-sm sm:p-6">
         <p className="max-w-3xl text-sm leading-7 text-slate-300">{copy.intro}</p>
         <nav className="mt-4 flex flex-wrap gap-2">
           {copy.sections.map((section) => (
@@ -307,7 +307,7 @@ export function DocsPage() {
         <section
           key={section.id}
           id={section.id}
-          className="rounded-2xl border border-white/5 bg-ink-900/80 p-5 shadow-lg shadow-black/20 backdrop-blur-sm sm:p-6"
+          className="overflow-hidden rounded-2xl border border-white/5 bg-ink-900/80 p-5 shadow-lg shadow-black/20 backdrop-blur-sm sm:p-6"
         >
           <div className="max-w-3xl">
             <h3 className="text-lg font-semibold tracking-tight text-slate-100">{section.title}</h3>
@@ -331,11 +331,11 @@ export function DocsPage() {
           ) : null}
 
           {section.kind === "selectors" ? (
-            <div className="mt-5 grid gap-4 xl:grid-cols-2">
+            <div className="mt-5 grid min-w-0 gap-4 xl:grid-cols-2">
               {section.groups.map((group) => (
                 <article
                   key={group.title}
-                  className="rounded-xl border border-white/5 bg-white/[0.03] p-4"
+                  className="min-w-0 rounded-xl border border-white/5 bg-white/[0.03] p-4"
                 >
                   <h4 className="text-sm font-semibold text-slate-100">{group.title}</h4>
                   <div className="mt-3 space-y-3">
@@ -344,7 +344,9 @@ export function DocsPage() {
                         key={item.selector}
                         className="rounded-lg border border-white/5 bg-ink-950/50 px-3 py-2.5"
                       >
-                        <code className="text-xs text-ember-200">{item.selector}</code>
+                        <code className="block overflow-x-auto whitespace-nowrap text-xs text-ember-200">
+                          {item.selector}
+                        </code>
                         <p className="mt-1 text-sm leading-6 text-slate-300">{item.detail}</p>
                       </div>
                     ))}
@@ -355,11 +357,11 @@ export function DocsPage() {
           ) : null}
 
           {section.kind === "examples" ? (
-            <div className="mt-5 grid gap-4 xl:grid-cols-2">
+            <div className="mt-5 grid min-w-0 gap-4 xl:grid-cols-2">
               {section.examples.map((example) => (
                 <article
                   key={example.id}
-                  className="rounded-xl border border-white/5 bg-white/[0.03] p-4"
+                  className="min-w-0 rounded-xl border border-white/5 bg-white/[0.03] p-4"
                 >
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">

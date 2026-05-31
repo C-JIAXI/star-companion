@@ -274,7 +274,7 @@ export function App() {
               <p className="mt-1 text-sm leading-5 text-slate-400">{t(active.subtitleKey)}</p>
             </div>
           </header>
-          <div className="animate-fade-in flex-1 min-h-0 overflow-y-auto p-2 sm:p-4 lg:p-6">
+          <div className="animate-fade-in flex-1 min-h-0 overflow-x-hidden overflow-y-auto p-2 sm:p-4 lg:p-6">
             {activeSection === "chat" ? (
               <ChatPage selectedChatId={selectedChatId} onChatsChanged={triggerChatRefresh} />
             ) : null}

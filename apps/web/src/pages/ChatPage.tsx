@@ -1390,7 +1390,7 @@ export function ChatPage({
                             <div
                               id="chat-pagination"
                               data-testid="chat-message-pagination"
-                              className="sticky top-0 z-10 -mx-2 -mt-2 mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-white/5 bg-ink-900/90 px-2 pb-3 pt-2 backdrop-blur-md sm:-mx-5 sm:-mt-5 sm:px-5 sm:pt-5"
+                              className="sticky top-0 z-10 -mx-2 -mt-2 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-t-2xl border-b border-white/5 bg-ink-900/90 px-2 pb-2 pt-1.5 backdrop-blur-md sm:-mx-5 sm:-mt-5 sm:mb-5 sm:gap-3 sm:px-5 sm:pb-3 sm:pt-5"
                             >
                               <div className="min-w-0">
                                 <p className="text-xs font-semibold text-slate-200">
@@ -1400,9 +1400,9 @@ export function ChatPage({
                                   {paginationCopy.range}
                                 </p>
                               </div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-1.5 sm:gap-2">
                                 <Button
-                                  className="!min-h-[48px] !px-3 text-xs"
+                                  className="!min-h-[36px] !px-2.5 sm:!min-h-[48px] sm:!px-3 text-xs"
                                   data-testid="chat-page-prev"
                                   disabled={safeMessagePage <= 1}
                                   variant="secondary"
@@ -1414,7 +1414,7 @@ export function ChatPage({
                                   {paginationCopy.previous}
                                 </Button>
                                 <Button
-                                  className="!min-h-[48px] !px-3 text-xs"
+                                  className="!min-h-[36px] !px-2.5 sm:!min-h-[48px] sm:!px-3 text-xs"
                                   data-testid="chat-page-next"
                                   disabled={safeMessagePage >= totalMessagePages}
                                   variant="secondary"
