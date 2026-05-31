@@ -44,15 +44,9 @@ export const parseUserCustomConfig = (value?: string | null): UserCustomConfig =
     if (isUserCustomConfigEnvelope(parsed)) {
       return normalizeUserCustomConfig(parsed);
     }
-  } catch {
-    // Legacy free-form userPersona text falls through to prompt body.
-  }
+  } catch {}
 
-  return {
-    prefix: "",
-    prompt: raw,
-    suffix: ""
-  };
+  return emptyUserCustomConfig();
 };
 
 export const serializeUserCustomConfig = (value?: Partial<UserCustomConfig> | null) => {

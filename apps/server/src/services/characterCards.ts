@@ -52,15 +52,7 @@ type PasswordAccessControl = {
   verifier: string;
 };
 
-type PrivateCharacterAccess =
-  | {
-      type: "password";
-      accessControl: PasswordAccessControl;
-    }
-  | {
-      type: "legacy";
-      creatorFingerprint: string;
-    };
+type PrivateCharacterAccess = PasswordAccessControl;
 
 export type CharacterExportCard =
   | {
@@ -100,34 +92,18 @@ export type CharacterExportCard =
         iv: string;
         tag: string;
         ciphertext: string;
-        accessControl?: PasswordAccessControl;
-        creatorFingerprint?: string;
+        accessControl: PasswordAccessControl;
       };
     };
 
 type ImportedCharacterLoreEntryInput = Omit<CharacterLoreEntryRecord, "id"> & { id?: string };
 type ImportedQuickReplyInput = Omit<QuickReplyRecord, "id"> & { id?: string };
 
-type LegacyCharacterImportSource = {
-  name: string;
-  avatar?: string | null;
-  prefix?: string;
-  prompt?: string;
-  suffix?: string;
-  htmlCss?: string;
-  loreEntries?: ImportedCharacterLoreEntryInput[];
-  quickReplies?: ImportedQuickReplyInput[];
-  description?: string;
-  scenario?: string;
-  systemPrompt?: string;
-};
-
-export type CharacterImportSource = CharacterExportCard | LegacyCharacterImportSource;
+export type CharacterImportSource = CharacterExportCard;
 
 type EncryptedPromptPayload = {
   version: 1;
-  accessControl?: PasswordAccessControl;
-  creatorFingerprint?: string;
+  accessControl: PasswordAccessControl;
   prefix: string;
   prompt: string;
   suffix: string;
@@ -142,8 +118,7 @@ type StoredPrivateCharacterRecord = {
     iv: string;
     tag: string;
     ciphertext: string;
-    accessControl?: PasswordAccessControl;
-    creatorFingerprint?: string;
+    accessControl: PasswordAccessControl;
     exportSalt?: string;
   };
 };
@@ -153,12 +128,6 @@ const STORE_KEY_MATERIAL = "local-roleplay-platform/private-character-store/v1";
 const toBase64Url = (value: Buffer) => value.toString("base64url");
 
 const fromBase64Url = (value: string) => Buffer.from(value, "base64url");
-
-const localCreatorFingerprint = () =>
-  createHash("sha256")
-    .update(process.env.API_KEY_ENCRYPTION_SECRET ?? "local-roleplay-development-secret")
-    .update(":private-character-owner:v1")
-    .digest("hex");
 
 const storeKey = () =>
   createHash("sha256")
@@ -331,59 +300,26 @@ const isStoredPrivateCharacterRecord = (value: Prisma.JsonValue): value is Store
     typeof envelope.iv === "string" &&
     typeof envelope.tag === "string" &&
     typeof envelope.ciphertext === "string" &&
-    (isPasswordAccessControl(envelope.accessControl) ||
-      typeof envelope.creatorFingerprint === "string")
+    isPasswordAccessControl(envelope.accessControl)
   );
 };
 
 const resolvePrivateCharacterAccess = (
-  payload: Pick<EncryptedPromptPayload, "accessControl" | "creatorFingerprint">,
-  envelope: Pick<StoredPrivateCharacterRecord["__privateCharacter"], "accessControl" | "creatorFingerprint">
+  payload: Pick<EncryptedPromptPayload, "accessControl">,
+  envelope: Pick<StoredPrivateCharacterRecord["__privateCharacter"], "accessControl">
 ): PrivateCharacterAccess => {
-  if (isPasswordAccessControl(payload.accessControl)) {
-    if (
-      isPasswordAccessControl(envelope.accessControl) &&
-      (payload.accessControl.salt !== envelope.accessControl.salt ||
-        payload.accessControl.verifier !== envelope.accessControl.verifier)
-    ) {
-      throw new Error("Stored private character password verifier mismatch");
-    }
-
-    return {
-      type: "password",
-      accessControl: payload.accessControl
-    };
+  if (!isPasswordAccessControl(payload.accessControl) || !isPasswordAccessControl(envelope.accessControl)) {
+    throw new Error("Unsupported private character access control");
   }
 
-  if (typeof payload.creatorFingerprint === "string") {
-    if (
-      typeof envelope.creatorFingerprint === "string" &&
-      payload.creatorFingerprint !== envelope.creatorFingerprint
-    ) {
-      throw new Error("Stored private character fingerprint mismatch");
-    }
-
-    return {
-      type: "legacy",
-      creatorFingerprint: payload.creatorFingerprint
-    };
+  if (
+    payload.accessControl.salt !== envelope.accessControl.salt ||
+    payload.accessControl.verifier !== envelope.accessControl.verifier
+  ) {
+    throw new Error("Stored private character password verifier mismatch");
   }
 
-  if (isPasswordAccessControl(envelope.accessControl)) {
-    return {
-      type: "password",
-      accessControl: envelope.accessControl
-    };
-  }
-
-  if (typeof envelope.creatorFingerprint === "string") {
-    return {
-      type: "legacy",
-      creatorFingerprint: envelope.creatorFingerprint
-    };
-  }
-
-  throw new Error("Unsupported private character access control");
+  return payload.accessControl;
 };
 
 const toEncryptedPromptPayload = (
@@ -391,9 +327,7 @@ const toEncryptedPromptPayload = (
   access: PrivateCharacterAccess
 ): EncryptedPromptPayload => ({
   version: 1,
-  ...(access.type === "password"
-    ? { accessControl: access.accessControl }
-    : { creatorFingerprint: access.creatorFingerprint }),
+  accessControl: access,
   prefix: fields.prefix,
   prompt: fields.prompt,
   suffix: fields.suffix,
@@ -459,9 +393,7 @@ const buildStoredPrivateCharacterJson = (
       version: 1,
       algorithm: "aes-256-gcm",
       ...encrypted,
-      ...(access.type === "password"
-        ? { accessControl: access.accessControl }
-        : { creatorFingerprint: access.creatorFingerprint })
+      accessControl: access
     }
   } satisfies StoredPrivateCharacterRecord;
 };
@@ -484,11 +416,7 @@ export const reEncryptImportedCharacter = (
 };
 
 const canViewPrivateCharacter = (access: PrivateCharacterAccess, password?: string) => {
-  if (access.type === "legacy") {
-    return access.creatorFingerprint === localCreatorFingerprint();
-  }
-
-  return Boolean(password && verifyPasswordAccessControl(password, access.accessControl));
+  return Boolean(password && verifyPasswordAccessControl(password, access));
 };
 
 const assertPrivateCharacterPassword = (
@@ -497,22 +425,13 @@ const assertPrivateCharacterPassword = (
   options: {
     missingMessage: string;
     invalidMessage: string;
-    unsupportedMessage?: string;
   }
 ) => {
-  if (access.type === "legacy") {
-    if (access.creatorFingerprint === localCreatorFingerprint()) {
-      return;
-    }
-
-    throw new HttpError(403, options.unsupportedMessage ?? options.invalidMessage);
-  }
-
   if (!password) {
     throw new HttpError(400, options.missingMessage);
   }
 
-  if (!verifyPasswordAccessControl(password, access.accessControl)) {
+  if (!verifyPasswordAccessControl(password, access)) {
     throw new HttpError(403, options.invalidMessage);
   }
 };
@@ -644,16 +563,11 @@ export const createCharacterExportCard = (
   if (existingPrivateRecord) {
     assertPrivateCharacterPassword(existingPrivateRecord.access, password, {
       missingMessage: "Private export password is required",
-      invalidMessage: "Private character password is invalid",
-      unsupportedMessage:
-        "Only the original creator can re-export this legacy private character card"
+      invalidMessage: "Private character password is invalid"
     });
   }
 
-  const exportAccess: PrivateCharacterAccess = {
-    type: "password",
-    accessControl: buildPasswordAccessControl(password)
-  };
+  const exportAccess = buildPasswordAccessControl(password);
   const salt = toBase64Url(randomBytes(16));
   const encrypted = encryptPayload(toEncryptedPromptPayload(promptFields, exportAccess), exportKey(password, salt));
 
@@ -674,7 +588,7 @@ export const createCharacterExportCard = (
       algorithm: "aes-256-gcm",
       salt,
       ...encrypted,
-      accessControl: exportAccess.accessControl
+      accessControl: exportAccess
     }
   };
 };
@@ -706,9 +620,7 @@ export const assertCharacterUnlockPassword = (
   const { access } = decryptStoredPromptFields(character.loreEntries, password);
   assertPrivateCharacterPassword(access, password, {
     missingMessage: "Private character password is required",
-    invalidMessage: "Private character password is invalid",
-    unsupportedMessage:
-      "This legacy private character card does not support password unlocking"
+    invalidMessage: "Private character password is invalid"
   });
 };
 
@@ -726,62 +638,44 @@ export const importCharacterCard = (
   loreEntries: Prisma.InputJsonValue;
   quickReplies: Prisma.InputJsonValue;
 } => {
-  if ("format" in source && source.format === "character-card") {
-    if (source.visibility === "public") {
-      return {
-        name: source.character.name,
-        avatar: source.character.avatar ?? null,
-        description: source.character.description ?? "",
-        prefix: source.character.prefix,
-        prompt: source.character.prompt,
-        suffix: source.character.suffix,
-        htmlCss: source.character.htmlCss,
-        openingHtml: source.character.openingHtml ?? "",
-        loreEntries: source.character.loreEntries,
-        quickReplies: source.character.quickReplies ?? []
-      };
-    }
-
-    const { protectedPayload } = source;
-
+  if (source.visibility === "public") {
     return {
       name: source.character.name,
       avatar: source.character.avatar ?? null,
       description: source.character.description ?? "",
-      prefix: "",
-      prompt: "",
-      suffix: "",
-      htmlCss: "",
+      prefix: source.character.prefix,
+      prompt: source.character.prompt,
+      suffix: source.character.suffix,
+      htmlCss: source.character.htmlCss,
       openingHtml: source.character.openingHtml ?? "",
-      loreEntries: {
-        __privateCharacter: {
-          version: 1,
-          algorithm: "aes-256-gcm",
-          iv: protectedPayload.iv,
-          tag: protectedPayload.tag,
-          ciphertext: protectedPayload.ciphertext,
-          accessControl: protectedPayload.accessControl,
-          creatorFingerprint: protectedPayload.creatorFingerprint,
-          exportSalt: protectedPayload.salt
-        }
-      } satisfies StoredPrivateCharacterRecord,
+      loreEntries: source.character.loreEntries,
       quickReplies: source.character.quickReplies ?? []
     };
   }
 
-  const legacy = source as LegacyCharacterImportSource;
+  const { protectedPayload } = source;
 
   return {
-    name: legacy.name,
-    avatar: legacy.avatar ?? null,
-    description: legacy.description ?? "",
-    prefix: legacy.prefix ?? legacy.systemPrompt ?? "",
-    prompt: legacy.prompt ?? "",
-    suffix: legacy.suffix ?? legacy.scenario ?? "",
-    htmlCss: legacy.htmlCss ?? "",
-    openingHtml: "",
-    loreEntries: legacy.loreEntries ?? [],
-    quickReplies: legacy.quickReplies ?? []
+    name: source.character.name,
+    avatar: source.character.avatar ?? null,
+    description: source.character.description ?? "",
+    prefix: "",
+    prompt: "",
+    suffix: "",
+    htmlCss: "",
+    openingHtml: source.character.openingHtml ?? "",
+    loreEntries: {
+      __privateCharacter: {
+        version: 1,
+        algorithm: "aes-256-gcm",
+        iv: protectedPayload.iv,
+        tag: protectedPayload.tag,
+        ciphertext: protectedPayload.ciphertext,
+        accessControl: protectedPayload.accessControl,
+        exportSalt: protectedPayload.salt
+      }
+    } satisfies StoredPrivateCharacterRecord,
+    quickReplies: source.character.quickReplies ?? []
   };
 };
 
@@ -819,9 +713,7 @@ export const buildCharacterUpdateData = (
   if (hasPrivateUpdates) {
     assertPrivateCharacterPassword(access, password, {
       missingMessage: "Private character password is required to update prompt content",
-      invalidMessage: "Private character password is invalid",
-      unsupportedMessage:
-        "Only the original creator can update prompt content for this legacy private character card"
+      invalidMessage: "Private character password is invalid"
     });
   }
 

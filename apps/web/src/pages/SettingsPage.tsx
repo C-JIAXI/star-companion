@@ -151,7 +151,7 @@ const getProviderTemplateId = (form: SettingsInput) =>
     (template) =>
       template.provider === form.activeProvider &&
       template.apiBaseUrl === form.apiBaseUrl
-  )?.id ?? "custom";
+  )?.id;
 
 const collectModelIds = (value: unknown): string[] => {
   if (typeof value === "string") {
@@ -227,8 +227,7 @@ const getPageCopy = (language: AppLanguage) =>
         runtimeBlockTitle: "连接信息",
         samplingBlockTitle: "采样参数",
         providerTemplate: "供应商模板",
-        customProvider: "自定义供应商",
-        providerTemplateApplied: (name: string) => `已套用供应商模板“${name}”`,
+        providerTemplateApplied: (name: string) => `已套用供应商模板"${name}"`,
         presetsTitle: "模型预设库",
         presetsHelp: "保存常用组合，聊天页会直接读取这里的预设进行模型切换。",
         addPreset: "添加预设",
@@ -281,7 +280,6 @@ const getPageCopy = (language: AppLanguage) =>
         runtimeBlockTitle: "Connection",
         samplingBlockTitle: "Sampling",
         providerTemplate: "Provider Template",
-        customProvider: "Custom Provider",
         providerTemplateApplied: (name: string) => `Applied provider template "${name}"`,
         presetsTitle: "Model Presets",
         presetsHelp: "Save reusable provider/model combinations. The chat page reads this list directly for model switching.",
@@ -826,7 +824,6 @@ export function SettingsPage() {
                 value={getProviderTemplateId(form)}
                 onChange={(event) => applyProviderTemplate(event.target.value)}
               >
-                <option value="custom">{copy.customProvider}</option>
                 {providerTemplates.map((template) => (
                   <option key={template.id} value={template.id}>
                     {template.label}

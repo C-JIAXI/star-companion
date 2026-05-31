@@ -5,7 +5,6 @@ import type {
   CharacterLoreEntryDTO,
   CharacterVisibility,
   ChatDTO,
-  ChatMode,
   ChatWithMessagesDTO,
   GenerationClientMessage,
   GenerationServerMessage,
@@ -51,19 +50,11 @@ export type CharacterInput = {
   quickReplies?: (Omit<QuickReplyDTO, "id"> & { id?: string })[];
 };
 
-export type CharacterCardImportInput =
-  | CharacterCardDTO
-  | (Partial<CharacterInput> & {
-      name: string;
-      description?: string;
-      scenario?: string;
-      systemPrompt?: string;
-    });
+export type CharacterCardImportInput = CharacterCardDTO;
 
 export type ChatInput = {
   title: string;
-  mode: ChatMode;
-  characterIds: string[];
+  characterId: string;
   memoryTurns?: number;
   userPersona?: string;
   userProfileSummary?: string;
@@ -100,7 +91,6 @@ export type {
   CharacterLoreEntryDTO,
   CharacterVisibility,
   ChatDTO,
-  ChatMode,
   ChatWithMessagesDTO,
   GenerationClientMessage,
   GenerationServerMessage,

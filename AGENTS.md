@@ -42,7 +42,7 @@
    - 用户 persona
    - 用户画像摘要
    - 命中的角色 `loreEntries`
-6. 代码里仍保留了一些与旧方向有关的历史字段和测试资产，例如 `characterIds`、`mode`、旧 lorebook 测试等。
+6. 代码里仍保留了一些与旧方向有关的历史测试资产，例如旧 lorebook 测试等。
 
 ## 技术栈与目录
 
@@ -153,13 +153,12 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
   - `exampleDialog`
   - `systemPrompt`
   - `tags`
-- 导入角色时会兼容一部分旧字段，并映射到 `prefix/prompt/suffix`。
+- 导入角色与备份数据按当前字段结构处理，不再兼容旧的 `scenario/systemPrompt` 字段映射。
 
 ### Chat
 
 - `title`
-- `mode`
-- `characterIds`
+- `characterId`
 - `memoryTurns`
 - `userPersona`
 - `userProfileSummary`
@@ -168,7 +167,7 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 说明：
 
 - 当前产品边界只支持单角色聊天。
-- `characterIds` 和 `mode` 是现存数据结构的一部分，但不作为群聊功能继续扩展。
+- `characterId` 是聊天绑定角色的唯一来源。
 
 ### Message
 
@@ -251,7 +250,7 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 2. `scripts/smoke-api.mjs` 仍然引用 `/api/lorebooks` 和 `lorebookIds`，与当前实现不一致。
 3. `apps/web/e2e/app.spec.ts` 里仍有 lorebook 相关 E2E，用例当前会失败。
 4. `schema.prisma` 中关于 API Key 明文保存的注释已经过时，需要后续清理。
-5. `Chat.mode`、`characterIds` 以及部分相关类型带有旧群聊方向的历史痕迹。
+5. 仍有部分旧 lorebook 测试与文档残留需要继续清理。
 
 ## 当前验证状态
 

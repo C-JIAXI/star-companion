@@ -262,8 +262,7 @@ test("chat settings can hide avatars and message bubbles do not show sender name
   const chatResponse = await request.post("/api/chats", {
     data: {
       title: chatTitle,
-      mode: "single",
-      characterIds: [character.id]
+      characterId: character.id
     }
   });
   expect(chatResponse.ok()).toBeTruthy();
@@ -412,8 +411,7 @@ test("chat model switch preserves stored key and runtime settings when preset ha
   const chatResponse = await request.post("/api/chats", {
     data: {
       title: chatTitle,
-      mode: "single",
-      characterIds: [character.id]
+      characterId: character.id
     }
   });
   expect(chatResponse.ok()).toBeTruthy();
@@ -470,8 +468,7 @@ test("chat custom config saves prefix prompt and suffix from memory settings", a
   const chatResponse = await request.post("/api/chats", {
     data: {
       title: chatTitle,
-      mode: "single",
-      characterIds: [character.id]
+      characterId: character.id
     }
   });
   expect(chatResponse.ok()).toBeTruthy();
@@ -542,8 +539,7 @@ test("long chats paginate and keep messages inside the scrollable viewport", asy
   const chatResponse = await request.post("/api/chats", {
     data: {
       title: chatTitle,
-      mode: "single",
-      characterIds: [character.id]
+      characterId: character.id
     }
   });
   expect(chatResponse.ok()).toBeTruthy();
@@ -751,5 +747,4 @@ test("imported private character cards reveal prompt fields only after password 
     await rm(file.directory, { recursive: true, force: true });
   }
 });
-
 

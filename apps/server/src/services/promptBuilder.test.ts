@@ -129,8 +129,7 @@ describe("buildPromptContext", () => {
     const chat = await prisma.chat.create({
       data: {
         title: "Prompt Test Chat",
-        mode: "single",
-        characterIds: [character.id],
+        characterId: character.id,
         memoryTurns: 4,
         userPersona: serializeUserCustomConfig({
           prefix: "The user is roleplaying as a cautious investigator.",
@@ -145,8 +144,7 @@ describe("buildPromptContext", () => {
     const loreChat = await prisma.chat.create({
       data: {
         title: "Lore Test Chat",
-        mode: "single",
-        characterIds: [loreCharacter.id],
+        characterId: loreCharacter.id,
         memoryTurns: 4
       }
     });
@@ -155,8 +153,7 @@ describe("buildPromptContext", () => {
     const privateChat = await prisma.chat.create({
       data: {
         title: "Imported Private Character Chat",
-        mode: "single",
-        characterIds: [privateCharacter.id],
+        characterId: privateCharacter.id,
         memoryTurns: 4
       }
     });
@@ -220,7 +217,7 @@ describe("buildPromptContext", () => {
     await prisma.$disconnect();
   });
 
-  it("injects user profile memory and only matching entries from bound lorebooks", async () => {
+  it("injects user profile memory and only matching lore entries from the chat character", async () => {
     const context = await buildPromptContext({ chatId: ids.chatId });
     const matchedContents = context.matchedLoreEntries.map((entry) => entry.content);
     const promptText = context.messages.map((message) => message.content).join("\n\n");
@@ -264,25 +261,24 @@ describe("buildPromptContext", () => {
     );
   });
 
-  it("treats legacy free-form user persona text as the middle custom prompt segment", async () => {
-    const legacyChat = await prisma.chat.create({
+  it("ignores malformed chat user config payloads", async () => {
+    const malformedChat = await prisma.chat.create({
       data: {
-        title: "Legacy User Persona Chat",
-        mode: "single",
-        characterIds: [ids.characterId],
+        title: "Malformed User Persona Chat",
+        characterId: ids.characterId,
         memoryTurns: 4,
-        userPersona: "Legacy user persona note.",
+        userPersona: "not-json",
         userProfileSummary: ""
       }
     });
 
     try {
-      const context = await buildPromptContext({ chatId: legacyChat.id });
+      const context = await buildPromptContext({ chatId: malformedChat.id });
       const promptText = context.messages.map((message) => message.content).join("\n\n");
 
-      assert.match(promptText, /Legacy user persona note\./);
+      assert.doesNotMatch(promptText, /not-json/);
     } finally {
-      await prisma.chat.delete({ where: { id: legacyChat.id } }).catch(() => {});
+      await prisma.chat.delete({ where: { id: malformedChat.id } }).catch(() => {});
     }
   });
 

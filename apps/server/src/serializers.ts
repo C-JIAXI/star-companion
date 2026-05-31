@@ -201,8 +201,7 @@ export const serializeCharacter = (character: Character, password?: string) => {
 export const serializeChat = (chat: Chat, messageCount?: number) => ({
   id: chat.id,
   title: chat.title,
-  mode: "single",
-  characterIds: toStringArray(chat.characterIds),
+  characterId: chat.characterId,
   messageCount: messageCount ?? 0,
   memoryTurns: chat.memoryTurns,
   userPersona: chat.userPersona,

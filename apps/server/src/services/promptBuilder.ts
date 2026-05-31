@@ -53,20 +53,16 @@ const normalizeLoreScope = (value: string | null | undefined): LoreEntryScope =>
   return "prompt";
 };
 
-const resolvePromptCharacterId = (
-  chat: { characterIds: Prisma.JsonValue } | null,
-  requestedCharacterId?: string | null
-) => {
+const resolvePromptCharacterId = (chat: { characterId: string | null } | null, requestedCharacterId?: string | null) => {
   if (!chat) {
     return requestedCharacterId ?? null;
   }
 
-  const chatCharacterIds = toStringArray(chat.characterIds);
-  if (requestedCharacterId && chatCharacterIds.includes(requestedCharacterId)) {
+  if (requestedCharacterId && requestedCharacterId === chat.characterId) {
     return requestedCharacterId;
   }
 
-  return chatCharacterIds[0] ?? null;
+  return chat.characterId;
 };
 
 const buildCharacterSystemPrompt = (
@@ -218,13 +214,13 @@ export const buildPromptContext = async ({
     recentMessages = recentMessages.filter((m) => !excludeMessageIds.includes(m.id));
   }
 
-  const characterIds = [
+  const speakerCharacterIds = [
     ...new Set(
       recentMessages.map((message) => message.characterId).filter((id): id is string => Boolean(id))
     )
   ];
-  const characters = characterIds.length
-    ? await prisma.character.findMany({ where: { id: { in: characterIds } } })
+  const characters = speakerCharacterIds.length
+    ? await prisma.character.findMany({ where: { id: { in: speakerCharacterIds } } })
     : [];
   const characterNames = new Map(characters.map((item) => [item.id, item.name]));
   const promptFields = character ? resolveCharacterPromptFields(character) : null;

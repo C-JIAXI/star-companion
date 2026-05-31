@@ -25,7 +25,7 @@ async function main() {
 
   const chat = await api("/api/chats", {
     method: "POST",
-    body: JSON.stringify({ title: "分页测试对话", characterIds: [character.id] })
+    body: JSON.stringify({ title: "分页测试对话", characterId: character.id })
   });
   console.log(`✅ Created chat: ${chat.id}`);
 

@@ -45,14 +45,14 @@ model Character {
   createdAt    DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  chats    Chat[]
   messages Message[]
 }
 
 model Chat {
   id                  String   @id @default(cuid())
   title               String
-  mode                String   @default("single")
-  characterIds        Json    @default("[]")
+  characterId         String?
   memoryTurns         Int      @default(12)
   /// Explicit user-authored persona / preference notes for this chat.
   userPersona         String   @default("")
@@ -61,7 +61,10 @@ model Chat {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
+  character Character? @relation(fields: [characterId], references: [id], onDelete: SetNull)
   messages Message[]
+
+  @@index([characterId])
 }
 
 model Message {

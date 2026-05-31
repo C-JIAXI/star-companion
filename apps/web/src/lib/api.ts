@@ -23,6 +23,14 @@ type RequestOptions = {
   body?: unknown;
 };
 
+const isJsonResponse = (response: Response) =>
+  response.headers.get("content-type")?.toLowerCase().includes("application/json") ?? false;
+
+const getFallbackErrorMessage = (response: Response) =>
+  response.statusText
+    ? `Request failed: ${response.status} ${response.statusText}`
+    : `Request failed: ${response.status}`;
+
 const request = async <T>(path: string, options: RequestOptions = {}): Promise<T> => {
   const response = await fetch(path, {
     method: options.method ?? "GET",
@@ -34,10 +42,35 @@ const request = async <T>(path: string, options: RequestOptions = {}): Promise<T
     return undefined as T;
   }
 
-  const payload = (await response.json()) as ApiEnvelope<T> | { ok: false; error: string };
+  const rawBody = await response.text();
+  const body = rawBody.trim();
+
+  if (!body) {
+    if (response.ok) {
+      throw new Error(`Empty response received from ${path}`);
+    }
+
+    throw new Error(getFallbackErrorMessage(response));
+  }
+
+  if (!isJsonResponse(response)) {
+    if (!response.ok) {
+      throw new Error(body || getFallbackErrorMessage(response));
+    }
+
+    throw new Error(`Unexpected non-JSON response received from ${path}`);
+  }
+
+  let payload: ApiEnvelope<T> | { ok: false; error: string };
+
+  try {
+    payload = JSON.parse(body) as ApiEnvelope<T> | { ok: false; error: string };
+  } catch {
+    throw new Error(`Invalid JSON response received from ${path}`);
+  }
 
   if (!response.ok || !payload.ok) {
-    const message = "error" in payload ? payload.error : `Request failed: ${response.status}`;
+    const message = "error" in payload ? payload.error : getFallbackErrorMessage(response);
     throw new Error(message);
   }
 

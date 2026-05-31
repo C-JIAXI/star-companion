@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { parseBody } from "./lib/http.js";
 import {
+  backupImportSchema,
   characterExportSchema,
   characterImportSchema,
   characterPageQuerySchema,
@@ -17,7 +18,7 @@ describe("chatUpdateSchema", () => {
     assert.deepEqual(parsed, {
       userPersona: "Roleplay as an engineer."
     });
-    assert.equal("characterIds" in parsed, false);
+    assert.equal("characterId" in parsed, false);
     assert.equal("memoryTurns" in parsed, false);
     assert.equal("userProfileSummary" in parsed, false);
   });
@@ -108,7 +109,7 @@ describe("characterUnlockSchema", () => {
 });
 
 describe("characterImportSchema", () => {
-  it("accepts public and private character cards", () => {
+  it("accepts public and private character cards with password access control", () => {
     const publicCard = parseBody(characterImportSchema, {
       schemaVersion: 1,
       format: "character-card",
@@ -124,24 +125,6 @@ describe("characterImportSchema", () => {
       }
     });
     const privateCard = parseBody(characterImportSchema, {
-      schemaVersion: 1,
-      format: "character-card",
-      visibility: "private",
-      character: {
-        name: "Private Card",
-        avatar: null
-      },
-      protectedPayload: {
-        version: 1,
-        algorithm: "aes-256-gcm",
-        salt: "salt",
-        iv: "iv",
-        tag: "tag",
-        ciphertext: "ciphertext"
-      }
-    });
-
-    const privateCardWithAccessControl = parseBody(characterImportSchema, {
       schemaVersion: 1,
       format: "character-card",
       visibility: "private",
@@ -166,6 +149,61 @@ describe("characterImportSchema", () => {
 
     assert.equal(publicCard.visibility, "public");
     assert.equal(privateCard.visibility, "private");
-    assert.equal(privateCardWithAccessControl.visibility, "private");
+  });
+
+  it("rejects legacy character import payloads and private cards without access control", () => {
+    assert.throws(() =>
+      parseBody(characterImportSchema, {
+        name: "Legacy Card",
+        prompt: "Prompt text",
+        scenario: "Legacy scenario"
+      })
+    );
+
+    assert.throws(() =>
+      parseBody(characterImportSchema, {
+        schemaVersion: 1,
+        format: "character-card",
+        visibility: "private",
+        character: {
+          name: "Private Card",
+          avatar: null
+        },
+        protectedPayload: {
+          version: 1,
+          algorithm: "aes-256-gcm",
+          salt: "salt",
+          iv: "iv",
+          tag: "tag",
+          ciphertext: "ciphertext"
+        }
+      })
+    );
+  });
+});
+
+describe("backupImportSchema", () => {
+  it("rejects legacy backup character fields that do not use prefix/prompt/suffix", () => {
+    assert.throws(() =>
+      parseBody(backupImportSchema, {
+        schemaVersion: 1,
+        mode: "merge",
+        characters: [
+          {
+            name: "Legacy Backup Character",
+            avatar: null,
+            description: "Legacy backup",
+            prompt: "Main prompt",
+            htmlCss: "",
+            loreEntries: [],
+            quickReplies: [],
+            scenario: "Old suffix source",
+            systemPrompt: "Old prefix source"
+          }
+        ],
+        chats: [],
+        messages: []
+      })
+    );
   });
 });

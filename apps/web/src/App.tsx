@@ -119,8 +119,7 @@ export function App() {
     try {
       const chat = await api.chats.create({
         title: "New Chat",
-        mode: "single",
-        characterIds: [characterId]
+        characterId
       });
       setSelectedChatId(chat.id);
       setChatRefreshKey((current) => current + 1);

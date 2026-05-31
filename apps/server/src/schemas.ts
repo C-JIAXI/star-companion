@@ -85,20 +85,6 @@ export const characterUnlockSchema = z.object({
   password: z.string().min(1)
 });
 
-const legacyCharacterImportSchema = z.object({
-  name: z.string().trim().min(1),
-  avatar: z.string().trim().nullable().optional(),
-  prefix: z.string().optional(),
-  prompt: z.string().optional(),
-  suffix: z.string().optional(),
-  htmlCss: z.string().optional(),
-  loreEntries: loreEntriesSchema.optional(),
-  quickReplies: quickRepliesSchema.optional(),
-  description: z.string().optional(),
-  scenario: z.string().optional(),
-  systemPrompt: z.string().optional()
-});
-
 const publicCharacterCardSchema = z.object({
   schemaVersion: z.literal(1).default(1),
   format: z.literal("character-card"),
@@ -134,16 +120,11 @@ const privateCharacterCardSchema = z.object({
     iv: z.string().min(1),
     tag: z.string().min(1),
     ciphertext: z.string().min(1),
-    accessControl: passwordAccessControlSchema.optional(),
-    creatorFingerprint: z.string().min(1).optional()
+    accessControl: passwordAccessControlSchema
   })
 });
 
-export const characterImportSchema = z.union([
-  publicCharacterCardSchema,
-  privateCharacterCardSchema,
-  legacyCharacterImportSchema
-]);
+export const characterImportSchema = z.union([publicCharacterCardSchema, privateCharacterCardSchema]);
 
 const toPositiveInt = (fallback: number) =>
   z
@@ -174,8 +155,7 @@ export const characterPageQuerySchema = z
 
 export const chatCreateSchema = z.object({
   title: z.string().trim().min(1),
-  mode: z.enum(["single"]).default("single"),
-  characterIds: stringArraySchema,
+  characterId: idSchema,
   memoryTurns: z.number().int().min(1).max(50).default(12),
   userPersona: z.string().max(12000).default(""),
   userProfileSummary: z.string().default("")
@@ -184,8 +164,7 @@ export const chatCreateSchema = z.object({
 export const chatUpdateSchema = z
   .object({
     title: z.string().trim().min(1).optional(),
-    mode: z.enum(["single"]).optional(),
-    characterIds: z.array(z.string().trim().min(1)).optional(),
+    characterId: idSchema.nullable().optional(),
     memoryTurns: z.number().int().min(1).max(50).optional(),
     userPersona: z.string().max(12000).optional(),
     userProfileSummary: z.string().optional()
@@ -255,9 +234,7 @@ export const generationRequestSchema = z.object({
   type: z.literal("generate"),
   requestId: z.string().min(1),
   chatId: idSchema,
-  content: z.string().trim().min(1),
-  characterId: idSchema.nullable().optional(),
-  targetCharacterId: idSchema.nullable().optional()
+  content: z.string().trim().min(1)
 });
 
 export const regenerateRequestSchema = z.object({
@@ -281,15 +258,19 @@ const backupDateSchema = z.string().datetime().optional();
 
 const backupSettingsSchema = settingsUpdateSchema.omit({ apiKey: true }).partial();
 
-const backupCharacterSchema = characterCreateSchema
-  .extend({
+const backupCharacterSchema = z
+  .object({
     id: idSchema.optional(),
+    name: z.string().trim().min(1),
     avatar: z.string().trim().nullable().optional(),
-    description: z.string().optional(),
-    scenario: z.string().optional(),
-    systemPrompt: z.string().optional(),
-    loreEntries: z.any().default([]),
-    quickReplies: z.any().default([]),
+    description: z.string(),
+    prefix: z.string(),
+    prompt: z.string(),
+    suffix: z.string(),
+    htmlCss: z.string(),
+    openingHtml: z.string(),
+    loreEntries: loreEntriesSchema,
+    quickReplies: quickRepliesSchema,
     createdAt: backupDateSchema,
     updatedAt: backupDateSchema
   })
@@ -297,19 +278,21 @@ const backupCharacterSchema = characterCreateSchema
     id: character.id,
     name: character.name,
     avatar: character.avatar ?? null,
-    prefix: character.prefix || character.systemPrompt || "",
-    prompt: character.prompt || character.description || "",
-    suffix: character.suffix || character.scenario || "",
-    htmlCss: character.htmlCss ?? "",
-    openingHtml: character.openingHtml ?? "",
-    loreEntries: character.loreEntries ?? [],
-    quickReplies: character.quickReplies ?? [],
+    description: character.description,
+    prefix: character.prefix,
+    prompt: character.prompt,
+    suffix: character.suffix,
+    htmlCss: character.htmlCss,
+    openingHtml: character.openingHtml,
+    loreEntries: character.loreEntries,
+    quickReplies: character.quickReplies,
     createdAt: character.createdAt,
     updatedAt: character.updatedAt
   }));
 
 const backupChatSchema = chatCreateSchema.extend({
   id: idSchema.optional(),
+  characterId: idSchema.nullable(),
   createdAt: backupDateSchema,
   updatedAt: backupDateSchema
 });

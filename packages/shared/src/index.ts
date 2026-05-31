@@ -1,6 +1,5 @@
 export const APP_NAME = "Local Roleplay Platform";
 
-export type ChatMode = "single";
 export type MessageRole = "user" | "assistant" | "system";
 export type AppLanguage = "zh-CN" | "en";
 export type CharacterVisibility = "public" | "private";
@@ -105,7 +104,10 @@ export interface PrivateCharacterCardDTO {
   format: "character-card";
   visibility: "private";
   exportedAt: string;
-  character: Pick<CharacterCardContentDTO, "name" | "avatar">;
+  character: Pick<
+    CharacterCardContentDTO,
+    "name" | "avatar" | "description" | "openingHtml" | "quickReplies"
+  >;
   protectedPayload: {
     version: 1;
     algorithm: "aes-256-gcm";
@@ -113,12 +115,11 @@ export interface PrivateCharacterCardDTO {
     iv: string;
     tag: string;
     ciphertext: string;
-    accessControl?: {
+    accessControl: {
       version: 1;
       salt: string;
       verifier: string;
     };
-    creatorFingerprint?: string;
   };
 }
 
@@ -184,15 +185,9 @@ export const parseUserCustomConfig = (value?: string | null): UserCustomConfigDT
     if (isUserCustomConfigEnvelope(parsed)) {
       return normalizeUserCustomConfig(parsed);
     }
-  } catch {
-    // Legacy free-form userPersona text falls through to prompt body.
-  }
+  } catch {}
 
-  return {
-    prefix: "",
-    prompt: raw,
-    suffix: ""
-  };
+  return emptyUserCustomConfig();
 };
 
 export const hasUserCustomConfigContent = (value?: Partial<UserCustomConfigDTO> | null) => {
@@ -224,8 +219,7 @@ export const getUserCustomConfigSegments = (value?: string | null) => {
 export interface ChatDTO {
   id: string;
   title: string;
-  mode: ChatMode;
-  characterIds: string[];
+  characterId: string | null;
   messageCount: number;
   memoryTurns: number;
   userPersona: string;
@@ -301,8 +295,6 @@ export type GenerationClientMessage =
       requestId: string;
       chatId: string;
       content: string;
-      characterId?: string | null;
-      targetCharacterId?: string | null;
     }
   | {
       type: "regenerate";

@@ -74,11 +74,14 @@ backupsRouter.post(
         const data = {
           name: character.name,
           avatar: character.avatar ?? null,
+          description: character.description,
           prefix: character.prefix,
           prompt: character.prompt,
           suffix: character.suffix,
           htmlCss: character.htmlCss ?? "",
+          openingHtml: character.openingHtml ?? "",
           loreEntries: character.loreEntries ?? [],
+          quickReplies: character.quickReplies ?? [],
           ...importedDates(character)
         };
 
@@ -94,10 +97,16 @@ backupsRouter.post(
       }
 
       for (const chat of backup.chats) {
+        const characterExists = chat.characterId
+          ? await tx.character.findUnique({
+              where: { id: chat.characterId },
+              select: { id: true }
+            })
+          : null;
+
         const data = {
           title: chat.title,
-          mode: chat.mode,
-          characterIds: chat.characterIds,
+          characterId: characterExists?.id ?? null,
           memoryTurns: chat.memoryTurns,
           userPersona: chat.userPersona,
           userProfileSummary: chat.userProfileSummary,

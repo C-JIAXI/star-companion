@@ -35,13 +35,6 @@ const sendJson = (socket: WebSocket, value: unknown) => {
   }
 };
 
-const toStringArray = (value: unknown): string[] => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter((item): item is string => typeof item === "string");
-};
-
 const stripThinkingTags = (content: string): string => {
   let result = content;
   for (const [startTag, endTag] of [["thinking", "/thinking"] as const]) {
@@ -276,8 +269,7 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
       message: serializeMessage(userMessage)
     });
 
-    const characterIds = toStringArray(chat.characterIds);
-    const characterId = characterIds[0] ?? null;
+    const characterId = chat.characterId;
 
     const stopped = await streamAssistantReply({
       socket,
@@ -420,8 +412,7 @@ const handleResend = async (socket: WebSocket, rawMessage: unknown) => {
       message: serializeMessage(userMessage)
     });
 
-    const characterIds = toStringArray(chat.characterIds);
-    const characterId = characterIds[0] ?? null;
+    const characterId = chat.characterId;
 
     const stopped = await streamAssistantReply({
       socket,

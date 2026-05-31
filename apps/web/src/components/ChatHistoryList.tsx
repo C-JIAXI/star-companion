@@ -46,8 +46,8 @@ export function ChatHistoryList({
 
       const allCharacterIds = new Set<string>();
       for (const chat of chatData) {
-        for (const id of chat.characterIds) {
-          allCharacterIds.add(id);
+        if (chat.characterId) {
+          allCharacterIds.add(chat.characterId);
         }
       }
 
@@ -63,6 +63,10 @@ export function ChatHistoryList({
             }
           })
         );
+        const missingIds = entries
+          .filter((entry): entry is readonly [string, null] => entry[1] === null)
+          .map(([id]) => id);
+
         setCharacterCache((prev) => {
           const next = new Map(prev);
           for (const [id, char] of entries) {
@@ -72,6 +76,16 @@ export function ChatHistoryList({
           }
           return next;
         });
+
+        if (missingIds.length > 0) {
+          setChats((prev) =>
+            prev.map((chat) =>
+              chat.characterId && missingIds.includes(chat.characterId)
+                ? { ...chat, characterId: null }
+                : chat
+            )
+          );
+        }
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedLoad"));
@@ -95,7 +109,7 @@ export function ChatHistoryList({
     return activeChats.filter(
       (chat) =>
         chat.title.toLowerCase().includes(q) ||
-        characterCache.get(chat.characterIds[0])?.name.toLowerCase().includes(q)
+        characterCache.get(chat.characterId ?? "")?.name.toLowerCase().includes(q)
     );
   }, [activeChats, searchQuery, characterCache]);
 
@@ -103,7 +117,7 @@ export function ChatHistoryList({
     const map = new Map<string, CharacterGroup>();
 
     for (const chat of filteredChats) {
-      const charId = chat.characterIds[0] ?? "unknown";
+      const charId = chat.characterId ?? "unknown";
       if (!map.has(charId)) {
         const char = characterCache.get(charId);
         map.set(charId, {

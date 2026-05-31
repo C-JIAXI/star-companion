@@ -320,8 +320,15 @@ export function ChatPage({
   }, [activeRequestId]);
 
   useEffect(() => {
-    connect();
-  }, []);
+    const timerId = window.setTimeout(() => {
+      connect();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timerId);
+      disconnect();
+    };
+  }, [connect, disconnect]);
 
   const characterMap = useMemo(
     () => new Map(characters.map((character) => [character.id, character])),
@@ -332,7 +339,7 @@ export function ChatPage({
     if (!activeChat) {
       return [];
     }
-    const characterId = activeChat.characterIds[0];
+    const characterId = activeChat.characterId;
     if (!characterId) {
       return [];
     }
@@ -344,7 +351,7 @@ export function ChatPage({
     if (!activeChat || activeChat.messages.length > 0 || hasMessagesRef.current) {
       return "";
     }
-    const characterId = activeChat.characterIds[0];
+    const characterId = activeChat.characterId;
     if (!characterId) {
       return "";
     }
@@ -458,12 +465,24 @@ export function ChatPage({
     hasMessagesRef.current = chat.messages.length > 0;
     setMemoryDraft(String(chat.memoryTurns));
 
-    const missingCharacterIds = chat.characterIds.filter((characterId) => !characterMap.has(characterId));
+    const missingCharacterIds =
+      chat.characterId && !characterMap.has(chat.characterId) ? [chat.characterId] : [];
     if (missingCharacterIds.length > 0) {
       const fetchedCharacters = await Promise.all(
         missingCharacterIds.map((characterId) => api.characters.get(characterId).catch(() => null))
       );
       mergeCharacterCache(fetchedCharacters.filter((character): character is CharacterDTO => character !== null));
+
+      if (fetchedCharacters.some((character) => character === null)) {
+        setActiveChat((current) =>
+          current && current.id === chat.id
+            ? {
+                ...current,
+                characterId: null
+              }
+            : current
+        );
+      }
     }
   };
 
@@ -538,13 +557,6 @@ export function ChatPage({
     viewport.addEventListener("scroll", check, { passive: true });
     return () => viewport.removeEventListener("scroll", check);
   }, [activeChat?.id]);
-
-  useEffect(
-    () => () => {
-      disconnect();
-    },
-    []
-  );
 
   useEffect(() => {
     if (!status) {
@@ -809,8 +821,7 @@ export function ChatPage({
         type: "generate",
         requestId,
         chatId: activeChat.id,
-        content: draft.trim(),
-        targetCharacterId: null
+        content: draft.trim()
       };
       setActiveRequestId(requestId);
       setStreamingContent("");
@@ -1594,7 +1605,7 @@ export function ChatPage({
       open={debugMessage !== null}
       onClose={() => setDebugMessage(null)}
       activeChat={activeChat}
-      character={activeChat?.characterIds[0] ? characterMap.get(activeChat.characterIds[0]) : undefined}
+      character={activeChat?.characterId ? characterMap.get(activeChat.characterId) : undefined}
       debugMessage={debugMessage}
     />
     </>
