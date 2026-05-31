@@ -5,6 +5,7 @@ import { api } from "./lib/api";
 import { useI18n, type TranslationKey } from "./i18n";
 import { ChatPage } from "./pages/ChatPage";
 import { CharactersPage } from "./pages/CharactersPage";
+import { DocsPage } from "./pages/DocsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ChatHistoryList } from "./components/ChatHistoryList";
 import { Drawer } from "./components/ui";
@@ -23,6 +24,10 @@ const sectionMeta = {
     titleKey: "section.chat.title",
     subtitleKey: "section.chat.subtitle"
   },
+  docs: {
+    titleKey: "section.docs.title",
+    subtitleKey: "section.docs.subtitle"
+  },
   characters: {
     titleKey: "section.characters.title",
     subtitleKey: "section.characters.subtitle"
@@ -34,10 +39,11 @@ const sectionMeta = {
 } satisfies Record<AppSection, { titleKey: TranslationKey; subtitleKey: TranslationKey }>;
 
 const isSection = (value: string): value is AppSection =>
-  value === "chat" || value === "characters" || value === "settings";
+  value === "chat" || value === "docs" || value === "characters" || value === "settings";
 
 const sectionPaths: Record<AppSection, string> = {
   chat: "/",
+  docs: "/docs",
   characters: "/characters",
   settings: "/settings"
 };
@@ -61,7 +67,7 @@ export function App() {
   const { t } = useI18n();
   const active = sectionMeta[activeSection];
   const [showMobileNav, setShowMobileNav] = useState(false);
-  
+
   useMobileViewport();
 
   useEffect(() => {
@@ -103,17 +109,25 @@ export function App() {
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [chatRefreshKey, setChatRefreshKey] = useState(0);
 
-  const handleSelectChat = useCallback((id: string | null) => {
-    setSelectedChatId(id);
-    setShowMobileNav(false);
-    if (id && activeSection !== "chat") {
-      navigate("chat");
-    }
-  }, [activeSection]);
+  const handleSelectChat = useCallback(
+    (id: string | null) => {
+      setSelectedChatId(id);
+      setShowMobileNav(false);
+      if (id && activeSection !== "chat") {
+        navigate("chat");
+      }
+    },
+    [activeSection]
+  );
 
   const triggerChatRefresh = useCallback(() => {
     setChatRefreshKey((current) => current + 1);
   }, []);
+
+  const isNavItemSelected = (section: (typeof navItems)[number]["id"]) =>
+    section === "chat"
+      ? activeSection === "chat" || activeSection === "docs"
+      : activeSection === section;
 
   const handlePlay = useCallback(async (characterId: string) => {
     try {
@@ -124,8 +138,7 @@ export function App() {
       setSelectedChatId(chat.id);
       setChatRefreshKey((current) => current + 1);
       navigate("chat");
-    } catch {
-    }
+    } catch {}
   }, []);
 
   return (
@@ -148,7 +161,7 @@ export function App() {
             <nav className="mt-4 flex flex-col gap-1">
               {navItems.map((item) => {
                 const Icon = item.icon;
-                const selected = activeSection === item.id;
+                const selected = isNavItemSelected(item.id);
 
                 return (
                   <button
@@ -172,6 +185,7 @@ export function App() {
             <ChatHistoryList
               selectedChatId={selectedChatId}
               onSelectChat={handleSelectChat}
+              onOpenDocs={() => navigate("docs")}
               refreshKey={chatRefreshKey}
             />
           </div>
@@ -195,7 +209,7 @@ export function App() {
           <nav className="shrink-0 px-3 flex flex-col gap-1">
             {navItems.map((item) => {
               const Icon = item.icon;
-              const selected = activeSection === item.id;
+              const selected = isNavItemSelected(item.id);
 
               return (
                 <button
@@ -208,7 +222,14 @@ export function App() {
                   type="button"
                   onClick={() => navigate(item.id)}
                 >
-                  <Icon size={18} className={selected ? "text-ember-300" : "text-slate-400 group-hover:text-slate-200 transition-colors"} />
+                  <Icon
+                    size={18}
+                    className={
+                      selected
+                        ? "text-ember-300"
+                        : "text-slate-400 group-hover:text-slate-200 transition-colors"
+                    }
+                  />
                   <span>{t(item.labelKey)}</span>
                 </button>
               );
@@ -219,6 +240,7 @@ export function App() {
             <ChatHistoryList
               selectedChatId={selectedChatId}
               onSelectChat={handleSelectChat}
+              onOpenDocs={() => navigate("docs")}
               refreshKey={chatRefreshKey}
             />
           </div>
@@ -242,24 +264,24 @@ export function App() {
                 <h1 className="truncate text-sm font-bold tracking-tight text-white">{APP_NAME}</h1>
               </div>
             </div>
-            {activeSection !== "chat" ? null : (
-              <div className="w-10 sm:w-11" />
-            )}
+            {activeSection !== "chat" ? null : <div className="w-10 sm:w-11" />}
           </header>
           <header className="hidden lg:block sticky top-0 z-10 bg-ink-950/80 px-4 pt-4 backdrop-blur-md lg:px-6">
             <div className="rounded-xl border border-white/5 bg-ink-900/80 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-sm">
-              <h2 className="text-xl font-bold tracking-tight text-slate-100">{t(active.titleKey)}</h2>
+              <h2 className="text-xl font-bold tracking-tight text-slate-100">
+                {t(active.titleKey)}
+              </h2>
               <p className="mt-1 text-sm leading-5 text-slate-400">{t(active.subtitleKey)}</p>
             </div>
           </header>
           <div className="animate-fade-in flex-1 min-h-0 overflow-y-auto p-2 sm:p-4 lg:p-6">
             {activeSection === "chat" ? (
-              <ChatPage
-                selectedChatId={selectedChatId}
-                onChatsChanged={triggerChatRefresh}
-              />
+              <ChatPage selectedChatId={selectedChatId} onChatsChanged={triggerChatRefresh} />
             ) : null}
-            {activeSection === "characters" ? <CharactersPage onPlay={(characterId) => void handlePlay(characterId)} /> : null}
+            {activeSection === "docs" ? <DocsPage /> : null}
+            {activeSection === "characters" ? (
+              <CharactersPage onPlay={(characterId) => void handlePlay(characterId)} />
+            ) : null}
             {activeSection === "settings" ? <SettingsPage /> : null}
           </div>
         </main>

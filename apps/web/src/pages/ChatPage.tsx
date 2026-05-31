@@ -23,6 +23,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
+import { sanitizeCharacterHtmlCss } from "../lib/characterHtmlCss";
 import { readFileAsDataUrl } from "../lib/files";
 import { generateId } from "../lib/uuid";
 import { useWebSocket } from "../lib/useWebSocket";
@@ -63,6 +64,7 @@ import { DebugPromptDrawer } from "../components/DebugPromptDrawer";
 const MESSAGES_PER_PAGE = 30;
 const GENERATION_ERROR_PREFIX = "[GENERATION_FAILED] ";
 const MAX_CHAT_BACKGROUND_FILE_SIZE = 2 * 1024 * 1024;
+const CHAT_PAGE_STYLE_TAG = "chat-page-character-html-css";
 
 const isSupportedChatBackgroundUrl = (value: string) => {
   const trimmed = value.trim();
@@ -387,6 +389,14 @@ export function ChatPage({
     return character?.openingHtml?.trim() ?? "";
   }, [activeChat, characterMap]);
 
+  const activeCharacterHtmlCss = useMemo(() => {
+    if (!activeChat?.characterId) {
+      return "";
+    }
+
+    return characterMap.get(activeChat.characterId)?.htmlCss ?? "";
+  }, [activeChat?.characterId, characterMap]);
+
   const mergeCharacterCache = (nextCharacters: CharacterDTO[]) => {
     setCharacters((current) => {
       const byId = new Map(current.map((character) => [character.id, character]));
@@ -636,6 +646,27 @@ export function ChatPage({
     const timeoutId = window.setTimeout(() => setStatus(null), 2200);
     return () => window.clearTimeout(timeoutId);
   }, [status]);
+
+  useEffect(() => {
+    const existing = document.head.querySelector<HTMLStyleElement>(
+      `style[data-chat-style-tag="${CHAT_PAGE_STYLE_TAG}"]`
+    );
+    existing?.remove();
+
+    const css = sanitizeCharacterHtmlCss(activeCharacterHtmlCss).trim();
+    if (!css) {
+      return;
+    }
+
+    const styleEl = document.createElement("style");
+    styleEl.setAttribute("data-chat-style-tag", CHAT_PAGE_STYLE_TAG);
+    styleEl.textContent = css;
+    document.head.appendChild(styleEl);
+
+    return () => {
+      styleEl.remove();
+    };
+  }, [activeCharacterHtmlCss]);
 
   const openMemorySettings = () => {
     if (!activeChat) {
@@ -1171,436 +1202,467 @@ export function ChatPage({
 
   return (
     <>
-      <div className="flex flex-col h-full min-h-0 min-w-0">
-        <Panel
-          className="flex flex-col h-full min-h-0 min-w-0"
-          title={
-            titleEditing && activeChat ? (
-              <input
-                ref={titleInputRef}
-                className="chat-input w-full rounded bg-transparent px-1 py-0.5 text-sm font-semibold tracking-wide text-slate-100 outline-none border-none focus:outline-none focus:ring-0"
-                style={{ WebkitUserSelect: "none", userSelect: "none" }}
-                value={titleDraft}
-                onChange={(event) => setTitleDraft(event.target.value)}
-                onBlur={() => void commitTitleRename()}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void commitTitleRename();
-                  }
-                  if (event.key === "Escape") {
-                    setTitleEditing(false);
-                  }
-                }}
-              />
-            ) : (
-              <span
-                className="cursor-pointer rounded px-1 py-0.5 hover:bg-white/5 outline-none focus:outline-none focus:ring-0"
-                style={{ WebkitUserSelect: "none", userSelect: "none" }}
-                title={t("chat.renameHint")}
-                onClick={() => {
-                  if (!activeChat) {
-                    return;
-                  }
-                  setTitleDraft(activeChat.title);
-                  setTitleEditing(true);
-                  setTimeout(() => titleInputRef.current?.focus(), 0);
-                }}
-              >
-                {activeChat?.title ?? t("chat.messageStream")}
-              </span>
-            )
-          }
-          action={
-            activeChat ? (
-              <div className="relative" ref={memorySettingsRef}>
-                <Button
-                  aria-expanded={memorySettingsOpen}
-                  aria-label={t("chat.memorySettings")}
-                  className="!h-8 !min-h-8 !w-8 !p-0"
-                  variant="ghost"
-                  onClick={openMemorySettings}
-                >
-                  <Settings size={15} />
-                </Button>
-                {memorySettingsOpen ? (
-                  <div
-                    className="custom-scrollbar absolute right-0 top-10 z-20 max-h-80 w-56 overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-3 shadow-xl shadow-black/30 backdrop-blur-md sm:max-h-[calc(100dvh-22rem)]"
-                    onPointerDownCapture={handleMemorySettingsPointerDownCapture}
+      <div className="flex flex-col h-full min-h-0 min-w-0" id="chat-page-root">
+        <div className="flex flex-col h-full min-h-0 min-w-0" id="chat-panel">
+          <Panel
+            className="flex flex-col h-full min-h-0 min-w-0"
+            title={
+              <div className="min-w-0" id="chat-title">
+                {titleEditing && activeChat ? (
+                  <input
+                    ref={titleInputRef}
+                    className="chat-input w-full rounded bg-transparent px-1 py-0.5 text-sm font-semibold tracking-wide text-slate-100 outline-none border-none focus:outline-none focus:ring-0"
+                    style={{ WebkitUserSelect: "none", userSelect: "none" }}
+                    value={titleDraft}
+                    onChange={(event) => setTitleDraft(event.target.value)}
+                    onBlur={() => void commitTitleRename()}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void commitTitleRename();
+                      }
+                      if (event.key === "Escape") {
+                        setTitleEditing(false);
+                      }
+                    }}
+                  />
+                ) : (
+                  <span
+                    className="cursor-pointer rounded px-1 py-0.5 hover:bg-white/5 outline-none focus:outline-none focus:ring-0"
+                    style={{ WebkitUserSelect: "none", userSelect: "none" }}
+                    title={t("chat.renameHint")}
+                    onClick={() => {
+                      if (!activeChat) {
+                        return;
+                      }
+                      setTitleDraft(activeChat.title);
+                      setTitleEditing(true);
+                      setTimeout(() => titleInputRef.current?.focus(), 0);
+                    }}
                   >
-                    {settingsModels.length > 0 ? (
-                      <div className="mb-2 border-b border-white/10 pb-2">
+                    {activeChat?.title ?? t("chat.messageStream")}
+                  </span>
+                )}
+              </div>
+            }
+            action={
+              activeChat ? (
+                <div className="relative" ref={memorySettingsRef}>
+                  <Button
+                    aria-expanded={memorySettingsOpen}
+                    aria-label={t("chat.memorySettings")}
+                    className="!h-8 !min-h-8 !w-8 !p-0"
+                    id="chat-settings-trigger"
+                    variant="ghost"
+                    onClick={openMemorySettings}
+                  >
+                    <Settings size={15} />
+                  </Button>
+                  {memorySettingsOpen ? (
+                    <div
+                      className="custom-scrollbar absolute right-0 top-10 z-20 max-h-80 w-56 overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-3 shadow-xl shadow-black/30 backdrop-blur-md sm:max-h-[calc(100dvh-22rem)]"
+                      onPointerDownCapture={handleMemorySettingsPointerDownCapture}
+                    >
+                      {settingsModels.length > 0 ? (
+                        <div className="mb-2 border-b border-white/10 pb-2">
+                          <button
+                            className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
+                            type="button"
+                            onClick={openModelDialog}
+                          >
+                            <span>{t("chat.modelSwitchTitle")}</span>
+                            <Sparkles size={14} className="text-slate-400" />
+                          </button>
+                        </div>
+                      ) : null}
+
+                      <div className="border-b border-white/10 pb-2">
                         <button
                           className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
                           type="button"
-                          onClick={openModelDialog}
+                          onClick={openMemoryDialog}
                         >
-                          <span>{t("chat.modelSwitchTitle")}</span>
-                          <Sparkles size={14} className="text-slate-400" />
+                          <span>{t("chat.memorySettings")}</span>
+                          <BrainCircuit size={14} className="text-slate-400" />
                         </button>
                       </div>
-                    ) : null}
 
-                    <div className="border-b border-white/10 pb-2">
-                      <button
-                        className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
-                        type="button"
-                        onClick={openMemoryDialog}
-                      >
-                        <span>{t("chat.memorySettings")}</span>
-                        <BrainCircuit size={14} className="text-slate-400" />
-                      </button>
-                    </div>
-
-                    <div className="border-b border-white/10 pb-2 pt-2">
-                      <button
-                        className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
-                        type="button"
-                        onClick={openBackgroundDialog}
-                      >
-                        <span>{backgroundCopy.title}</span>
-                        <Image size={14} className="text-slate-400" />
-                      </button>
-                    </div>
-
-                    <div className="border-b border-white/10 pb-2 pt-2">
-                      <button
-                        className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
-                        type="button"
-                        onClick={startEditingUserConfig}
-                      >
-                        <span>{t("chat.userConfigTitle")}</span>
-                        <FileText size={14} className="text-slate-400" />
-                      </button>
-                    </div>
-
-                    <div className="pt-2">
-                      <button
-                        className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
-                        type="button"
-                        onClick={startEditingProfile}
-                      >
-                        <span>{t("chat.userProfileTitle")}</span>
-                        <User size={14} className="text-slate-400" />
-                      </button>
-                      <div className="mt-1.5 flex items-center justify-between gap-2">
-                        <p className="text-xs font-semibold text-slate-100">
-                          {t("chat.autoSummarizeUser")}
-                        </p>
-                        <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-slate-400">
-                          <input
-                            checked={autoSummarizeUser}
-                            type="checkbox"
-                            className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
-                            onChange={(event) => void updateAutoSummarizeUser(event.target.checked)}
-                          />
-                          {t("chat.autoSummarizeUser")}
-                        </label>
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            ) : null
-          }
-        >
-          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
-            {activeBackgroundUrl ? (
-              <div className="pointer-events-none absolute inset-0">
-                <img
-                  alt=""
-                  aria-hidden="true"
-                  className="h-full w-full object-cover"
-                  src={activeBackgroundUrl}
-                />
-                <div className="absolute inset-0 bg-black/35" />
-                <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(12,13,18,0.2),rgba(12,13,18,0.7))]" />
-              </div>
-            ) : (
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(251,146,60,0.08),transparent_38%)]" />
-            )}
-
-            <div className="relative z-10 flex min-h-0 flex-1 flex-col">
-              {!activeChat ? (
-                <EmptyState>{t("chat.selectOrCreate")}</EmptyState>
-              ) : (
-                <div className="flex min-h-0 flex-1 flex-col">
-                  <ErrorNotice message={error} />
-                  <SuccessNotice message={status} />
-
-                  <div
-                    ref={messageViewportRef}
-                    data-testid="chat-message-viewport"
-                    className={`custom-scrollbar min-h-0 flex-1 overscroll-auto scroll-smooth ${activeOpeningHtml ? "overflow-hidden" : "overflow-y-auto"}`}
-                  >
-                    {activeChat.messages.length === 0 && activeOpeningHtml ? (
-                      <iframe
-                        title={t("characters.openingHtml")}
-                        srcDoc={activeOpeningHtml}
-                        sandbox="allow-scripts"
-                        className="w-full h-full border-0"
-                      />
-                    ) : (
-                      <div className="mx-auto max-w-2xl space-y-4 rounded-2xl p-2 sm:space-y-7 sm:p-5">
-                        {activeChat.messages.length > MESSAGES_PER_PAGE ? (
-                          <div
-                            data-testid="chat-message-pagination"
-                            className="sticky top-0 z-10 -mx-2 -mt-2 mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-white/5 bg-ink-900/90 px-2 pb-3 pt-2 backdrop-blur-md sm:-mx-5 sm:-mt-5 sm:px-5 sm:pt-5"
-                          >
-                            <div className="min-w-0">
-                              <p className="text-xs font-semibold text-slate-200">
-                                {paginationCopy.page}
-                              </p>
-                              <p className="mt-1 text-xs text-slate-500">{paginationCopy.range}</p>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                className="!min-h-[48px] !px-3 text-xs"
-                                data-testid="chat-page-prev"
-                                disabled={safeMessagePage <= 1}
-                                variant="secondary"
-                                onClick={() =>
-                                  setMessagePage((current) => Math.max(1, current - 1))
-                                }
-                              >
-                                <ChevronLeft size={14} />
-                                {paginationCopy.previous}
-                              </Button>
-                              <Button
-                                className="!min-h-[48px] !px-3 text-xs"
-                                data-testid="chat-page-next"
-                                disabled={safeMessagePage >= totalMessagePages}
-                                variant="secondary"
-                                onClick={() =>
-                                  setMessagePage((current) =>
-                                    Math.min(totalMessagePages, current + 1)
-                                  )
-                                }
-                              >
-                                {safeMessagePage >= totalMessagePages
-                                  ? paginationCopy.newest
-                                  : paginationCopy.next}
-                                <ChevronRight size={14} />
-                              </Button>
-                            </div>
-                          </div>
-                        ) : null}
-                        {activeChat.messages.length === 0 ? (
-                          <div className="flex h-full items-center justify-center">
-                            <EmptyState>{t("chat.noMessages")}</EmptyState>
-                          </div>
-                        ) : (
-                          pagedMessages.map((message) => {
-                            const isUser = message.role === "user";
-                            const isSystem = message.role === "system";
-                            const isErrorSystem =
-                              isSystem && message.content.startsWith(GENERATION_ERROR_PREFIX);
-                            const character = message.characterId
-                              ? characterMap.get(message.characterId)
-                              : undefined;
-                            if (isErrorSystem) {
-                              const errorText = message.content.slice(
-                                GENERATION_ERROR_PREFIX.length
-                              );
-                              const lastAssistant = [...activeChat.messages]
-                                .reverse()
-                                .find((m) => m.role === "assistant");
-                              return (
-                                <ErrorBubble
-                                  key={message.id}
-                                  characterAvatar={
-                                    lastAssistant?.characterId
-                                      ? characterMap.get(lastAssistant.characterId)?.avatar
-                                      : null
-                                  }
-                                  showAvatar={showMessageAvatars}
-                                  error={errorText}
-                                  onRetry={retryGeneration}
-                                  onDismiss={() =>
-                                    void api.messages.remove(message.id).then(() => {
-                                      setActiveChat((current) =>
-                                        current
-                                          ? {
-                                              ...current,
-                                              messages: current.messages.filter(
-                                                (m) => m.id !== message.id
-                                              )
-                                            }
-                                          : current
-                                      );
-                                    })
-                                  }
-                                />
-                              );
-                            }
-                            if (isSystem) {
-                              return (
-                                <SystemNotification key={message.id} content={message.content} />
-                              );
-                            }
-
-                            if (isUser) {
-                              return (
-                                <UserMessageBubble
-                                  key={message.id}
-                                  message={message}
-                                  showAvatar={showMessageAvatars}
-                                  onCopy={() => void copyMessage(message)}
-                                  onEdit={() => startEditingMessage(message)}
-                                  onDelete={() => setPendingDeleteMessage(message)}
-                                  onResend={() => void resendMessage(message)}
-                                />
-                              );
-                            }
-
-                            return (
-                              <AssistantMessageBubble
-                                key={message.id}
-                                message={message}
-                                avatar={character?.avatar}
-                                showAvatar={showMessageAvatars}
-                                htmlCss={character?.htmlCss}
-                                tokenUsageFormatter={formatTokenUsage}
-                                onCopy={() => void copyMessage(message)}
-                                onRegenerate={() => void regenerateMessage(message)}
-                                onEdit={() => startEditingMessage(message)}
-                                onDelete={() => setPendingDeleteMessage(message)}
-                                onVariantPrev={() => void switchVariant(message, -1)}
-                                onVariantNext={() => void switchVariant(message, 1)}
-                                onDebug={setDebugMessage}
-                                disableRegenerate={Boolean(activeRequestId)}
-                              />
-                            );
-                          })
-                        )}
-                        {activeRequestId &&
-                        streamingCharacterId &&
-                        safeMessagePage >= totalMessagePages ? (
-                          <StreamingBubble
-                            key="streaming"
-                            characterAvatar={
-                              streamingCharacterId
-                                ? characterMap.get(streamingCharacterId)?.avatar
-                                : null
-                            }
-                            showAvatar={showMessageAvatars}
-                            htmlCss={
-                              streamingCharacterId
-                                ? characterMap.get(streamingCharacterId)?.htmlCss
-                                : undefined
-                            }
-                            content={streamingContent}
-                          />
-                        ) : null}
-                      </div>
-                    )}
-                    {!isNearBottom ? (
-                      <button
-                        type="button"
-                        className="sticky bottom-3 z-20 mx-auto flex items-center gap-1.5 rounded-full border border-white/10 bg-ink-900/90 px-3 py-1.5 text-xs font-medium text-slate-300 shadow-lg shadow-black/30 backdrop-blur-sm transition-colors hover:bg-ink-800 hover:text-slate-100"
-                        style={{
-                          display: "flex",
-                          width: "fit-content",
-                          marginLeft: "auto",
-                          marginRight: "auto"
-                        }}
-                        onClick={scrollToBottom}
-                      >
-                        <ArrowDown size={14} />
-                        {t("chat.scrollToBottom")}
-                      </button>
-                    ) : null}
-                  </div>
-
-                  <div className="shrink-0">
-                    {activeQuickReplies.length > 0 ? (
-                      <div className="mx-auto mb-1 max-w-2xl px-1">
+                      <div className="border-b border-white/10 pb-2 pt-2">
                         <button
+                          className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
                           type="button"
-                          className="inline-flex h-6 items-center gap-1 text-xs font-medium text-slate-500 transition-colors hover:text-slate-300 active:text-slate-200"
-                          onClick={toggleQuickReplies}
+                          onClick={openBackgroundDialog}
                         >
-                          <ChevronDown
-                            size={12}
-                            className={`transition-transform duration-200 ${quickRepliesOpen ? "" : "-rotate-90"}`}
-                          />
-                          {t("chat.quickReplies")}
+                          <span>{backgroundCopy.title}</span>
+                          <Image size={14} className="text-slate-400" />
                         </button>
-                        <div
-                          className="overflow-hidden"
-                          style={{
-                            maxHeight: quickRepliesOpen ? "200px" : "0px",
-                            opacity: quickRepliesOpen ? 1 : 0,
-                            transition: "max-height 300ms ease-out, opacity 300ms ease-out"
-                          }}
+                      </div>
+
+                      <div className="border-b border-white/10 pb-2 pt-2">
+                        <button
+                          className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
+                          type="button"
+                          onClick={startEditingUserConfig}
                         >
-                          <div className="mt-0.5 flex flex-wrap gap-1">
-                            {activeQuickReplies.map((qr) => (
-                              <button
-                                key={qr.id}
-                                type="button"
-                                className="inline-flex h-7 items-center gap-1 rounded-md border border-white/10 bg-ink-950/80 px-2 text-xs font-medium text-slate-300 transition-colors hover:border-ember-500/40 hover:bg-ink-900 hover:text-slate-100 active:bg-ink-800"
-                                onClick={() =>
-                                  setDraft((current) =>
-                                    current ? `${current}\n${qr.content}` : qr.content
-                                  )
-                                }
-                              >
-                                {qr.label}
-                              </button>
-                            ))}
-                          </div>
+                          <span>{t("chat.userConfigTitle")}</span>
+                          <FileText size={14} className="text-slate-400" />
+                        </button>
+                      </div>
+
+                      <div className="pt-2">
+                        <button
+                          className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
+                          type="button"
+                          onClick={startEditingProfile}
+                        >
+                          <span>{t("chat.userProfileTitle")}</span>
+                          <User size={14} className="text-slate-400" />
+                        </button>
+                        <div className="mt-1.5 flex items-center justify-between gap-2">
+                          <p className="text-xs font-semibold text-slate-100">
+                            {t("chat.autoSummarizeUser")}
+                          </p>
+                          <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-slate-400">
+                            <input
+                              checked={autoSummarizeUser}
+                              type="checkbox"
+                              className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                              onChange={(event) =>
+                                void updateAutoSummarizeUser(event.target.checked)
+                              }
+                            />
+                            {t("chat.autoSummarizeUser")}
+                          </label>
                         </div>
                       </div>
-                    ) : null}
-                    <div className="mx-auto max-w-2xl rounded-xl border border-white/5 bg-ink-950/95 p-1.5 shadow-xl shadow-black/30 backdrop-blur-sm sm:p-2 xl:bg-ink-950/40 xl:shadow-none">
-                      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-1.5 sm:gap-2">
-                        <TextArea
-                          ref={draftTextAreaRef}
-                          className="chat-input !resize-none border-0 bg-transparent !px-2 !py-[11px] !text-sm leading-[1.4] focus:bg-transparent focus:ring-0 sm:!py-3"
-                          style={{ height: "auto" }}
-                          placeholder={t("chat.writeMessage")}
-                          rows={1}
-                          value={draft}
-                          onInput={autoResizeDraftTextArea}
-                          onChange={(event) => setDraft(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" && !event.shiftKey) {
-                              const hasTouch =
-                                navigator.maxTouchPoints > 0 || "ontouchstart" in window;
-                              if (hasTouch && window.innerWidth < 768) return;
-                              event.preventDefault();
-                              void sendMessage();
-                            }
-                          }}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null
+            }
+          >
+            <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
+              {activeBackgroundUrl ? (
+                <div className="pointer-events-none absolute inset-0">
+                  <img
+                    alt=""
+                    aria-hidden="true"
+                    className="h-full w-full object-cover"
+                    src={activeBackgroundUrl}
+                  />
+                  <div className="absolute inset-0 bg-black/35" />
+                  <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(12,13,18,0.2),rgba(12,13,18,0.7))]" />
+                </div>
+              ) : (
+                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(251,146,60,0.08),transparent_38%)]" />
+              )}
+
+              <div className="relative z-10 flex min-h-0 flex-1 flex-col">
+                {!activeChat ? (
+                  <div id="chat-empty-state">
+                    <EmptyState>{t("chat.selectOrCreate")}</EmptyState>
+                  </div>
+                ) : (
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    <ErrorNotice message={error} />
+                    <SuccessNotice message={status} />
+
+                    <div
+                      id="chat-message-viewport"
+                      ref={messageViewportRef}
+                      data-testid="chat-message-viewport"
+                      className={`custom-scrollbar min-h-0 flex-1 overscroll-auto scroll-smooth ${activeOpeningHtml ? "overflow-hidden" : "overflow-y-auto"}`}
+                    >
+                      {activeChat.messages.length === 0 && activeOpeningHtml ? (
+                        <iframe
+                          id="chat-opening-frame"
+                          title={t("characters.openingHtml")}
+                          srcDoc={activeOpeningHtml}
+                          sandbox="allow-scripts"
+                          className="w-full h-full border-0"
                         />
-                        {activeRequestId ? (
-                          <Button
-                            className="!min-h-[40px] sm:!min-h-[44px]"
-                            variant="danger"
-                            onClick={stopGeneration}
+                      ) : (
+                        <div
+                          className="mx-auto max-w-2xl space-y-4 rounded-2xl p-2 sm:space-y-7 sm:p-5"
+                          id="chat-message-list"
+                        >
+                          {activeChat.messages.length > MESSAGES_PER_PAGE ? (
+                            <div
+                              id="chat-pagination"
+                              data-testid="chat-message-pagination"
+                              className="sticky top-0 z-10 -mx-2 -mt-2 mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-white/5 bg-ink-900/90 px-2 pb-3 pt-2 backdrop-blur-md sm:-mx-5 sm:-mt-5 sm:px-5 sm:pt-5"
+                            >
+                              <div className="min-w-0">
+                                <p className="text-xs font-semibold text-slate-200">
+                                  {paginationCopy.page}
+                                </p>
+                                <p className="mt-1 text-xs text-slate-500">
+                                  {paginationCopy.range}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  className="!min-h-[48px] !px-3 text-xs"
+                                  data-testid="chat-page-prev"
+                                  disabled={safeMessagePage <= 1}
+                                  variant="secondary"
+                                  onClick={() =>
+                                    setMessagePage((current) => Math.max(1, current - 1))
+                                  }
+                                >
+                                  <ChevronLeft size={14} />
+                                  {paginationCopy.previous}
+                                </Button>
+                                <Button
+                                  className="!min-h-[48px] !px-3 text-xs"
+                                  data-testid="chat-page-next"
+                                  disabled={safeMessagePage >= totalMessagePages}
+                                  variant="secondary"
+                                  onClick={() =>
+                                    setMessagePage((current) =>
+                                      Math.min(totalMessagePages, current + 1)
+                                    )
+                                  }
+                                >
+                                  {safeMessagePage >= totalMessagePages
+                                    ? paginationCopy.newest
+                                    : paginationCopy.next}
+                                  <ChevronRight size={14} />
+                                </Button>
+                              </div>
+                            </div>
+                          ) : null}
+                          {activeChat.messages.length === 0 ? (
+                            <div
+                              className="flex h-full items-center justify-center"
+                              id="chat-empty-state"
+                            >
+                              <EmptyState>{t("chat.noMessages")}</EmptyState>
+                            </div>
+                          ) : (
+                            pagedMessages.map((message) => {
+                              const isUser = message.role === "user";
+                              const isSystem = message.role === "system";
+                              const isErrorSystem =
+                                isSystem && message.content.startsWith(GENERATION_ERROR_PREFIX);
+                              const character = message.characterId
+                                ? characterMap.get(message.characterId)
+                                : undefined;
+                              if (isErrorSystem) {
+                                const errorText = message.content.slice(
+                                  GENERATION_ERROR_PREFIX.length
+                                );
+                                const lastAssistant = [...activeChat.messages]
+                                  .reverse()
+                                  .find((m) => m.role === "assistant");
+                                return (
+                                  <ErrorBubble
+                                    key={message.id}
+                                    characterAvatar={
+                                      lastAssistant?.characterId
+                                        ? characterMap.get(lastAssistant.characterId)?.avatar
+                                        : null
+                                    }
+                                    showAvatar={showMessageAvatars}
+                                    error={errorText}
+                                    onRetry={retryGeneration}
+                                    onDismiss={() =>
+                                      void api.messages.remove(message.id).then(() => {
+                                        setActiveChat((current) =>
+                                          current
+                                            ? {
+                                                ...current,
+                                                messages: current.messages.filter(
+                                                  (m) => m.id !== message.id
+                                                )
+                                              }
+                                            : current
+                                        );
+                                      })
+                                    }
+                                  />
+                                );
+                              }
+                              if (isSystem) {
+                                return (
+                                  <SystemNotification key={message.id} content={message.content} />
+                                );
+                              }
+
+                              if (isUser) {
+                                return (
+                                  <UserMessageBubble
+                                    key={message.id}
+                                    message={message}
+                                    showAvatar={showMessageAvatars}
+                                    onCopy={() => void copyMessage(message)}
+                                    onEdit={() => startEditingMessage(message)}
+                                    onDelete={() => setPendingDeleteMessage(message)}
+                                    onResend={() => void resendMessage(message)}
+                                  />
+                                );
+                              }
+
+                              return (
+                                <AssistantMessageBubble
+                                  key={message.id}
+                                  message={message}
+                                  avatar={character?.avatar}
+                                  showAvatar={showMessageAvatars}
+                                  htmlCss={character?.htmlCss}
+                                  tokenUsageFormatter={formatTokenUsage}
+                                  onCopy={() => void copyMessage(message)}
+                                  onRegenerate={() => void regenerateMessage(message)}
+                                  onEdit={() => startEditingMessage(message)}
+                                  onDelete={() => setPendingDeleteMessage(message)}
+                                  onVariantPrev={() => void switchVariant(message, -1)}
+                                  onVariantNext={() => void switchVariant(message, 1)}
+                                  onDebug={setDebugMessage}
+                                  disableRegenerate={Boolean(activeRequestId)}
+                                />
+                              );
+                            })
+                          )}
+                          {activeRequestId &&
+                          streamingCharacterId &&
+                          safeMessagePage >= totalMessagePages ? (
+                            <StreamingBubble
+                              key="streaming"
+                              characterAvatar={
+                                streamingCharacterId
+                                  ? characterMap.get(streamingCharacterId)?.avatar
+                                  : null
+                              }
+                              showAvatar={showMessageAvatars}
+                              htmlCss={
+                                streamingCharacterId
+                                  ? characterMap.get(streamingCharacterId)?.htmlCss
+                                  : undefined
+                              }
+                              content={streamingContent}
+                            />
+                          ) : null}
+                        </div>
+                      )}
+                      {!isNearBottom ? (
+                        <button
+                          id="chat-scroll-bottom"
+                          type="button"
+                          className="sticky bottom-3 z-20 mx-auto flex items-center gap-1.5 rounded-full border border-white/10 bg-ink-900/90 px-3 py-1.5 text-xs font-medium text-slate-300 shadow-lg shadow-black/30 backdrop-blur-sm transition-colors hover:bg-ink-800 hover:text-slate-100"
+                          style={{
+                            display: "flex",
+                            width: "fit-content",
+                            marginLeft: "auto",
+                            marginRight: "auto"
+                          }}
+                          onClick={scrollToBottom}
+                        >
+                          <ArrowDown size={14} />
+                          {t("chat.scrollToBottom")}
+                        </button>
+                      ) : null}
+                    </div>
+
+                    <div className="shrink-0">
+                      {activeQuickReplies.length > 0 ? (
+                        <div className="mx-auto mb-1 max-w-2xl px-1" id="chat-quick-replies">
+                          <button
+                            id="chat-quick-replies-toggle"
+                            type="button"
+                            className="inline-flex h-6 items-center gap-1 text-xs font-medium text-slate-500 transition-colors hover:text-slate-300 active:text-slate-200"
+                            onClick={toggleQuickReplies}
                           >
-                            <StopCircle size={16} />
-                            {t("chat.stop")}
-                          </Button>
-                        ) : (
-                          <Button
-                            className="!min-h-[40px] sm:!min-h-[44px]"
-                            disabled={loading || !draft.trim()}
-                            onClick={() => void sendMessage()}
+                            <ChevronDown
+                              size={12}
+                              className={`transition-transform duration-200 ${quickRepliesOpen ? "" : "-rotate-90"}`}
+                            />
+                            {t("chat.quickReplies")}
+                          </button>
+                          <div
+                            className="overflow-hidden"
+                            style={{
+                              maxHeight: quickRepliesOpen ? "200px" : "0px",
+                              opacity: quickRepliesOpen ? 1 : 0,
+                              transition: "max-height 300ms ease-out, opacity 300ms ease-out"
+                            }}
                           >
-                            <Send size={16} />
-                            {t("chat.send")}
-                          </Button>
-                        )}
+                            <div className="mt-0.5 flex flex-wrap gap-1">
+                              {activeQuickReplies.map((qr) => (
+                                <button
+                                  data-chat-quick-reply=""
+                                  key={qr.id}
+                                  type="button"
+                                  className="inline-flex h-7 items-center gap-1 rounded-md border border-white/10 bg-ink-950/80 px-2 text-xs font-medium text-slate-300 transition-colors hover:border-ember-500/40 hover:bg-ink-900 hover:text-slate-100 active:bg-ink-800"
+                                  onClick={() =>
+                                    setDraft((current) =>
+                                      current ? `${current}\n${qr.content}` : qr.content
+                                    )
+                                  }
+                                >
+                                  {qr.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
+                      <div
+                        className="mx-auto max-w-2xl rounded-xl border border-white/5 bg-ink-950/95 p-1.5 shadow-xl shadow-black/30 backdrop-blur-sm sm:p-2 xl:bg-ink-950/40 xl:shadow-none"
+                        id="chat-composer"
+                      >
+                        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-1.5 sm:gap-2">
+                          <TextArea
+                            ref={draftTextAreaRef}
+                            className="chat-input !resize-none border-0 bg-transparent !px-2 !py-[11px] !text-sm leading-[1.4] focus:bg-transparent focus:ring-0 sm:!py-3"
+                            id="chat-message-input"
+                            style={{ height: "auto" }}
+                            placeholder={t("chat.writeMessage")}
+                            rows={1}
+                            value={draft}
+                            onInput={autoResizeDraftTextArea}
+                            onChange={(event) => setDraft(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" && !event.shiftKey) {
+                                const hasTouch =
+                                  navigator.maxTouchPoints > 0 || "ontouchstart" in window;
+                                if (hasTouch && window.innerWidth < 768) return;
+                                event.preventDefault();
+                                void sendMessage();
+                              }
+                            }}
+                          />
+                          {activeRequestId ? (
+                            <Button
+                              className="!min-h-[40px] sm:!min-h-[44px]"
+                              data-chat-action="stop"
+                              id="chat-primary-action"
+                              variant="danger"
+                              onClick={stopGeneration}
+                            >
+                              <StopCircle size={16} />
+                              {t("chat.stop")}
+                            </Button>
+                          ) : (
+                            <Button
+                              className="!min-h-[40px] sm:!min-h-[44px]"
+                              data-chat-action="send"
+                              id="chat-primary-action"
+                              disabled={loading || !draft.trim()}
+                              onClick={() => void sendMessage()}
+                            >
+                              <Send size={16} />
+                              {t("chat.send")}
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
-          </div>
-        </Panel>
+          </Panel>
+        </div>
       </div>
       {editingMessage ? (
         <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm p-4">

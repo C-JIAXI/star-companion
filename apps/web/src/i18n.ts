@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { useAppStore } from "./store/useAppStore";
 
 const zhCN = {
-  "app.tagline": "本地优先角色扮演实验室",
+  "app.tagline": "本地优先角色扮演工坊",
   "common.addEntry": "添加条目",
   "common.apiKeyStored": "API Key 已保存在本地",
   "common.cancel": "取消",
@@ -32,9 +32,12 @@ const zhCN = {
   "section.characters.title": "角色工坊",
   "section.chat.subtitle": "创建聊天、绑定角色，并通过后端代理流式生成回复。",
   "section.chat.title": "聊天工作台",
+  "section.docs.subtitle": "查看应用内文档、聊天样式选择器和后续教程。",
+  "section.docs.title": "应用文档",
   "section.settings.subtitle": "在本地保存模型配置。所有模型请求都通过后端代理。",
   "section.settings.title": "模型设置",
   "chat.history": "历史",
+  "chat.docs": "文档",
   "chat.renameHint": "点击修改标题",
   "chat.boundCharacters": "{{count}} 个角色",
   "chat.chats": "聊天列表",
@@ -67,14 +70,16 @@ const zhCN = {
   "chat.chatSettingsSaved": "对话设置已保存。",
   "chat.autoSummarizeUser": "自动总结",
   "chat.userPersonaTitle": "用户设定",
-  "chat.userPersonaHelp": "写给当前聊天的手动用户设定，例如你的身份、关系、偏好、边界或角色扮演前提。它会优先于自动推断的用户摘要。",
+  "chat.userPersonaHelp":
+    "写给当前聊天的手动用户设定，例如你的身份、关系、偏好、边界或角色扮演前提。它会优先于自动推断的用户摘要。",
   "chat.userPersonaEmpty": "还没有用户设定。",
   "chat.userPersonaCleared": "用户设定已清空。",
   "chat.editUserPersona": "编辑",
   "chat.userPersonaSaved": "用户设定已保存。",
   "chat.clearUserPersona": "清空用户设定",
   "chat.userConfigTitle": "自定义配置",
-  "chat.userConfigHelp": "为当前聊天单独设置用户前置词、提示词和后置词。它们会按顺序加入系统提示，并优先于自动推断的用户摘要。",
+  "chat.userConfigHelp":
+    "为当前聊天单独设置用户前置词、提示词和后置词。它们会按顺序加入系统提示，并优先于自动推断的用户摘要。",
   "chat.userConfigPrefix": "前置词",
   "chat.userConfigPrompt": "提示词",
   "chat.userConfigSuffix": "后置词",
@@ -98,7 +103,8 @@ const zhCN = {
   "chat.triggeredLore": "触发角色世界书",
   "chat.debugPrompt": "调试",
   "chat.memorySettings": "记忆",
-  "chat.memoryHelp": "控制生成时回看的历史对话轮数。\n1 表示最近 1 轮用户消息和 AI 回复，2 表示最近 2 轮。\n当前正在发送的消息始终会参与生成。",
+  "chat.memoryHelp":
+    "控制生成时回看的历史对话轮数。\n1 表示最近 1 轮用户消息和 AI 回复，2 表示最近 2 轮。\n当前正在发送的消息始终会参与生成。",
   "chat.memoryValue": "记忆：{{count}}",
   "chat.messageStream": "消息流",
   "chat.modelSwitchTitle": "模型切换",
@@ -142,10 +148,12 @@ const zhCN = {
   "characters.prompt": "提示词",
   "characters.htmlCss": "内置css",
   "characters.htmlPreview": "HTML 预览",
-  "characters.htmlPreviewHelp": "下方示例只用于调试当前角色的内置 CSS，不会写入角色卡数据。",
+  "characters.htmlPreviewHelp":
+    "下方示例只用于调试当前角色的内置 CSS，包含 HTML fragment 和 Chat UI 选择器预览，不会写入角色卡数据。",
   "characters.htmlPreviewMarkup": "预览 HTML",
   "characters.htmlPreviewRendered": "渲染结果",
   "characters.htmlTemplateCard": "卡片",
+  "characters.htmlTemplateChatUi": "聊天界面",
   "characters.htmlTemplateDialogue": "对白",
   "characters.htmlTemplateDossier": "摘要",
   "characters.editorSectionPrompt": "提示词",
@@ -176,7 +184,8 @@ const zhCN = {
   "characters.loreEntryScopeSuffix": "后置词",
   "characters.editorSectionQuickReplies": "快捷指令",
   "characters.quickReplies": "快捷回复指令",
-  "characters.quickRepliesEmpty": "还没有快捷指令。添加后会在聊天输入框上方显示，方便快速填充预设内容。",
+  "characters.quickRepliesEmpty":
+    "还没有快捷指令。添加后会在聊天输入框上方显示，方便快速填充预设内容。",
   "characters.quickReplyAdd": "添加指令",
   "characters.quickReplyIndex": "指令 {{index}}",
   "characters.quickReplyLabel": "指令标题",
@@ -232,7 +241,7 @@ const zhCN = {
   "help.characterPrefix": "放在角色提示词之前的高优先级说明，适合写身份边界、语气规则和固定约束。",
   "help.characterPrompt": "角色的主体提示词，适合写人设、背景、目标、行为方式和对话风格。",
   "help.characterHtmlCss":
-    "只在 AI 输出 HTML 片段时生效。前端会将这段 CSS 限定在当前角色消息内部，可用于控制卡片、标题、列表和 class 类名的展示。请让模型输出安全的 HTML fragment，不要包含 script 或 style 标签。",
+    "可用于 2 种场景。第一，AI 输出 HTML fragment 时，前端会将这段 CSS 限定在当前角色消息内部，用于控制卡片、标题、列表和 class 类名。第二，当该角色在聊天页中被激活时，它也可以作用于应用内文档里约定的官方 Chat UI 选择器。请不要包含 script 或 style 标签。",
   "help.characterSuffix":
     "放在角色提示词之后的补充说明，适合写输出格式、禁忌、结尾规则或临场约束。",
   "help.characterOpeningHtml":
@@ -293,7 +302,7 @@ const zhCN = {
 } as const;
 
 const en: Record<keyof typeof zhCN, string> = {
-  "app.tagline": "Local-first roleplay lab",
+  "app.tagline": "Local-first roleplay studio",
   "common.addEntry": "Add Entry",
   "common.apiKeyStored": "API key stored locally",
   "common.cancel": "Cancel",
@@ -319,24 +328,30 @@ const en: Record<keyof typeof zhCN, string> = {
   "nav.characters": "Characters",
   "nav.chat": "Chat",
   "nav.settings": "Settings",
-  "section.characters.subtitle": "Create, edit, delete, import, and export original character cards.",
+  "section.characters.subtitle":
+    "Create, edit, delete, import, and export original character cards.",
   "section.characters.title": "Character Workshop",
-  "section.chat.subtitle": "Create chats, bind characters, and stream responses through the backend proxy.",
+  "section.chat.subtitle":
+    "Create chats, bind characters, and stream responses through the backend proxy.",
   "section.chat.title": "Chat Workbench",
+  "section.docs.subtitle": "Browse in-app docs, chat style selectors, and future tutorials.",
+  "section.docs.title": "App Docs",
   "section.settings.subtitle":
     "Configure your model provider. All model requests are proxied through the backend.",
   "section.settings.title": "Model Settings",
   "chat.history": "History",
+  "chat.docs": "Docs",
   "chat.renameHint": "Click to rename",
   "chat.boundCharacters": "{{count}} character(s)",
   "chat.chats": "Chats",
   "chat.createChat": "Create Chat",
   "chat.createCharactersFirst": "Create characters first, then bind them to chats.",
-  "chat.deleteChatConfirm": "Delete chat \"{{title}}\"?",
+  "chat.deleteChatConfirm": 'Delete chat "{{title}}"?',
   "chat.deleteChatTitle": "Delete Chat",
   "chat.deleteMessageConfirm": "Delete this message?",
   "chat.deleteMessageTitle": "Delete Message",
-  "chat.editMessageHelp": "Adjust the message content here. Saving updates the current chat immediately.",
+  "chat.editMessageHelp":
+    "Adjust the message content here. Saving updates the current chat immediately.",
   "chat.editMessagePrompt": "Edit Message",
   "chat.editMessagePlaceholder": "Enter the revised message content",
   "chat.editMessageTitle": "Edit Message",
@@ -359,7 +374,8 @@ const en: Record<keyof typeof zhCN, string> = {
   "chat.chatSettingsSaved": "Chat settings saved.",
   "chat.autoSummarizeUser": "Auto-summarize",
   "chat.userPersonaTitle": "User Persona",
-  "chat.userPersonaHelp": "Manual user-authored notes for this chat, such as identity, relationship, preferences, boundaries, or RP assumptions. These take priority over inferred profile memory.",
+  "chat.userPersonaHelp":
+    "Manual user-authored notes for this chat, such as identity, relationship, preferences, boundaries, or RP assumptions. These take priority over inferred profile memory.",
   "chat.userPersonaEmpty": "No user persona yet.",
   "chat.userPersonaCleared": "User persona cleared.",
   "chat.editUserPersona": "Edit",
@@ -383,7 +399,8 @@ const en: Record<keyof typeof zhCN, string> = {
   "chat.userConfigSuffixHelp":
     "Use this for output requirements, prohibitions, ending rules, or situational constraints.",
   "chat.userProfileTitle": "User Profile Memory",
-  "chat.userProfileHelp": "This section is inferred from prior conversation and can also be corrected manually.",
+  "chat.userProfileHelp":
+    "This section is inferred from prior conversation and can also be corrected manually.",
   "chat.userProfileEmpty":
     "No user profile summary yet. The system will build one from subsequent messages.",
   "chat.userProfileUpdated": "Updated from recent conversation",
@@ -400,7 +417,7 @@ const en: Record<keyof typeof zhCN, string> = {
   "chat.memoryValue": "Memory: {{count}}",
   "chat.messageStream": "Message Stream",
   "chat.modelSwitchTitle": "Switch Model",
-  "chat.modelSwitched": "Switched to model \"{{label}}\"",
+  "chat.modelSwitched": 'Switched to model "{{label}}"',
   "chat.noChats": "No chats yet. Go to Characters to start one.",
   "chat.scrollToBottom": "Scroll to bottom",
   "chat.noMessages": "This chat has no messages yet.",
@@ -421,7 +438,7 @@ const en: Record<keyof typeof zhCN, string> = {
   "characters.avatarUrl": "Cover URL",
   "characters.description": "Description",
   "characters.create": "Create Character",
-  "characters.deleteConfirm": "Delete character \"{{name}}\"?",
+  "characters.deleteConfirm": 'Delete character "{{name}}"?',
   "characters.copySuffix": "copy",
   "characters.duplicate": "Duplicate Character",
   "characters.duplicated": "Character duplicate created.",
@@ -441,23 +458,26 @@ const en: Record<keyof typeof zhCN, string> = {
   "characters.htmlCss": "Built-in CSS",
   "characters.htmlPreview": "HTML Preview",
   "characters.htmlPreviewHelp":
-    "These samples are only for tuning the current character's built-in CSS and are not saved into the character card.",
+    "These samples are only for tuning the current character's built-in CSS, including HTML fragments and Chat UI selector previews, and are not saved into the character card.",
   "characters.htmlPreviewMarkup": "Preview HTML",
   "characters.htmlPreviewRendered": "Rendered Output",
   "characters.htmlTemplateCard": "Card",
+  "characters.htmlTemplateChatUi": "Chat UI",
   "characters.htmlTemplateDialogue": "Dialogue",
   "characters.htmlTemplateDossier": "Summary",
   "characters.editorSectionPrompt": "Prompt",
   "characters.editorSectionHtml": "Built-in CSS",
   "characters.editorSectionOpening": "Opening HTML",
   "characters.openingHtml": "Opening HTML",
-  "characters.openingHtmlPlaceholder": "Enter full HTML content to display as an iframe when first entering the chat",
+  "characters.openingHtmlPlaceholder":
+    "Enter full HTML content to display as an iframe when first entering the chat",
   "characters.openingHtmlPreview": "Preview",
   "characters.editorSectionLore": "Lore",
   "characters.searchPlaceholder": "Search character name or prompt",
   "characters.suffix": "Suffix",
   "characters.loreEntries": "Character Lore",
-  "characters.loreEntryEmpty": "No lore entries yet. Add entries to inject contextual world info during chat.",
+  "characters.loreEntryEmpty":
+    "No lore entries yet. Add entries to inject contextual world info during chat.",
   "characters.loreEntryAdd": "Add Entry",
   "characters.loreEntryIndex": "Entry {{index}}",
   "characters.loreEntryCount": "{{count}}",
@@ -475,7 +495,8 @@ const en: Record<keyof typeof zhCN, string> = {
   "characters.loreEntryScopeSuffix": "Suffix",
   "characters.editorSectionQuickReplies": "Quick Replies",
   "characters.quickReplies": "Quick Reply Commands",
-  "characters.quickRepliesEmpty": "No quick replies yet. Add commands to show them above the chat input for fast message filling.",
+  "characters.quickRepliesEmpty":
+    "No quick replies yet. Add commands to show them above the chat input for fast message filling.",
   "characters.quickReplyAdd": "Add Command",
   "characters.quickReplyIndex": "Command {{index}}",
   "characters.quickReplyLabel": "Command Label",
@@ -539,7 +560,7 @@ const en: Record<keyof typeof zhCN, string> = {
   "help.characterPrompt":
     "The character's main prompt. Suitable for personality, background, goals, behavior, and dialogue style.",
   "help.characterHtmlCss":
-    "Applied only when the AI returns an HTML fragment. The frontend scopes this CSS to the current character message so it can style cards, headings, lists, and class-based layouts without affecting the rest of the app. Ask the model for safe HTML fragments only, without script or style tags.",
+    "Used in two places. First, when the AI returns an HTML fragment, the frontend scopes this CSS to the current character message so it can style cards, headings, lists, and class-based layouts. Second, when this character is active in chat, the same CSS can target the documented official Chat UI selectors listed in the in-app docs. Do not include script or style tags.",
   "help.characterSuffix":
     "Supplementary instructions placed after the character prompt. Suitable for output formatting, taboos, closing rules, and situational constraints.",
   "help.characterOpeningHtml":
@@ -574,7 +595,8 @@ const en: Record<keyof typeof zhCN, string> = {
   "markdown.exitFullscreen": "Exit fullscreen",
   "debug.open": "Debug Prompt",
   "debug.title": "Prompt Debugger",
-  "debug.intro": "The sections below are listed in the order they are sent to the model, so you can inspect the actual context used for generation.",
+  "debug.intro":
+    "The sections below are listed in the order they are sent to the model, so you can inspect the actual context used for generation.",
   "debug.characterPrompt": "Character Prompt",
   "debug.characterPromptPrivate": "Private character — content hidden",
   "debug.userCustomConfig": "User Custom Config",

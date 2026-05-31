@@ -10,7 +10,7 @@ README 以当前仓库实现为准；如果历史说明与代码不一致，请�
 - 不做群聊。
 - 不做独立 lorebook / world book 页面、API 或 Prisma 模型。
 - 角色上下文补充只通过 `Character.loreEntries`。
-- 当前前端主页面只有 `/`、`/characters`、`/settings`。
+- 当前前端有 3 个主产品页面：`/`、`/characters`、`/settings`，另有 1 个应用内文档页 `/docs`。
 - `Chat` 直接绑定单个 `characterId`。
 
 ## 当前已实现
@@ -28,6 +28,7 @@ README 以当前仓库实现为准；如果历史说明与代码不一致，请�
 - 角色内嵌 `loreEntries` 关键词注入。
 - 聊天气泡头像显示开关。
 - 不同聊天单独设置背景。
+- 应用内文档页 `/docs`，用于承载聊天样式选择器说明和后续教程。
 
 ## 技术栈
 
@@ -97,6 +98,7 @@ npm run dev
 当前页面：
 
 - Chat: `http://localhost:5173/`
+- Docs: `http://localhost:5173/docs`
 - Characters: `http://localhost:5173/characters`
 - Settings: `http://localhost:5173/settings`
 
@@ -213,6 +215,7 @@ HTTP API：
 补充说明：
 
 - 当前角色提示词结构是 `prefix` / `prompt` / `suffix`
+- `Character.htmlCss` 仍用于角色消息内的 HTML fragment；当该角色在聊天页激活时，同一份 CSS 也会作用于应用内文档约定的官方 Chat UI 选择器
 - 当前没有一等持久化字段：`firstMessage`、`exampleDialog`、`tags`、`systemPrompt`
 - 角色导入与备份导入按当前字段结构处理，不再兼容旧的 `scenario` / `systemPrompt` 字段映射
 

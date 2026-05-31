@@ -151,8 +151,173 @@ test("direct routes render their workspace headers", async ({ page }) => {
   await page.goto("/characters");
   await expect(page.getByRole("heading", { name: /角色工坊|Character Studio/ })).toBeVisible();
 
+  await page.goto("/docs");
+  await expect(page.getByRole("heading", { name: /应用文档|App Docs/ })).toBeVisible();
+
   await page.goto("/settings");
   await expect(page.getByRole("heading", { name: /模型设置|Model Settings/ })).toBeVisible();
+});
+
+test("character built-in css previews in the editor and styles only matching chats", async ({
+  page,
+  request
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name === "mobile-chrome",
+    "This flow exercises the desktop sidebar and editor layout."
+  );
+  testInfo.setTimeout(90_000);
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const characterAName = `CSS Character A ${suffix}`;
+  const characterBName = `CSS Character B ${suffix}`;
+  const chatATitle = `CSS Chat A ${suffix}`;
+  const chatBTitle = `CSS Chat B ${suffix}`;
+  const assistantReplyA = "Assistant reply for character CSS coverage.";
+  const assistantReplyB = "Assistant reply that should keep default chat styling.";
+  const customCss = `#chat-composer {
+  background: rgb(17, 24, 39) !important;
+  border: 2px solid rgb(255, 0, 0) !important;
+}
+
+#chat-message-input {
+  color: rgb(34, 197, 94) !important;
+}
+
+[data-chat-message="assistant"] [data-chat-bubble] {
+  background: rgb(12, 34, 56) !important;
+  border-color: rgb(56, 189, 248) !important;
+}`;
+
+  const createCharacter = async (name: string) => {
+    const response = await request.post("/api/characters", {
+      data: {
+        name,
+        prefix: "Stay concise.",
+        prompt: "A temporary character for built-in CSS coverage.",
+        suffix: "Reply directly."
+      }
+    });
+    expect(response.ok()).toBeTruthy();
+    const payload = (await response.json()) as ApiDataResponse<E2ECharacter>;
+    if (!payload.data) {
+      throw new Error("Character creation did not return data");
+    }
+    return payload.data;
+  };
+
+  const createChat = async (title: string, characterId: string) => {
+    const response = await request.post("/api/chats", {
+      data: { title, characterId }
+    });
+    expect(response.ok()).toBeTruthy();
+    const payload = (await response.json()) as ApiDataResponse<E2EChat>;
+    if (!payload.data) {
+      throw new Error("Chat creation did not return data");
+    }
+    return payload.data;
+  };
+
+  const createMessage = async (
+    chatId: string,
+    role: "user" | "assistant",
+    content: string,
+    characterId?: string
+  ) => {
+    const response = await request.post("/api/messages", {
+      data: {
+        chatId,
+        role,
+        content,
+        ...(characterId ? { characterId } : {})
+      }
+    });
+    expect(response.ok()).toBeTruthy();
+  };
+
+  const openHistoryAndSelectChat = async (title: string) => {
+    await page.getByRole("button", { name: /历史|History/ }).click();
+    await page.getByRole("button", { name: title }).click();
+  };
+
+  const characterA = await createCharacter(characterAName);
+  const characterB = await createCharacter(characterBName);
+  const chatA = await createChat(chatATitle, characterA.id);
+  const chatB = await createChat(chatBTitle, characterB.id);
+
+  try {
+    await createMessage(chatA.id, "user", "User prompt for character A.");
+    await createMessage(chatA.id, "assistant", assistantReplyA, characterA.id);
+    await createMessage(chatB.id, "user", "User prompt for character B.");
+    await createMessage(chatB.id, "assistant", assistantReplyB, characterB.id);
+
+    await page.goto("/characters");
+    await page
+      .getByPlaceholder(/搜索角色名称|Search character name or prompt|閹兼粎鍌ㄧ憴鎺曞閸氬秶袨/)
+      .fill(characterAName);
+    const visibleEditButtons = page.locator("button:visible").filter({ hasText: /编辑|Edit/ });
+    await expect(visibleEditButtons).toHaveCount(1);
+    await visibleEditButtons.first().click();
+    await page.getByRole("button", { name: /内置\s*CSS|Built-in CSS/i }).click();
+    await page.getByRole("textbox", { name: /内置\s*css|Built-in CSS/i }).fill(customCss);
+    await page.getByRole("button", { name: /聊天界面|Chat UI/ }).click();
+
+    const previewComposer = page.locator("#chat-composer");
+    const previewInput = page.locator("#chat-message-input");
+    const previewAssistantBubble = page.locator(
+      '[data-chat-message="assistant"] [data-chat-bubble]'
+    );
+
+    await expect(previewComposer).toHaveCSS("background-color", "rgb(17, 24, 39)");
+    await expect(previewComposer).toHaveCSS("border-top-color", "rgb(255, 0, 0)");
+    await expect(previewInput).toHaveCSS("color", "rgb(34, 197, 94)");
+    await expect(previewAssistantBubble).toHaveCSS("background-color", "rgb(12, 34, 56)");
+
+    await page
+      .getByRole("button", { name: /保存|Save/ })
+      .last()
+      .click();
+    await expect(page.getByRole("status")).toContainText(/角色已保存|Character saved/);
+
+    const storedCharacterResponse = await request.get(`/api/characters/${characterA.id}`);
+    expect(storedCharacterResponse.ok()).toBeTruthy();
+    const storedCharacter = (await storedCharacterResponse.json()) as ApiDataResponse<
+      E2ECharacter & { htmlCss?: string }
+    >;
+    expect(storedCharacter.data?.htmlCss).toContain("#chat-composer");
+
+    await page.goto("/");
+    await openHistoryAndSelectChat(chatATitle);
+    await expect(page.getByText(assistantReplyA)).toBeVisible();
+    await expect(page.locator("#chat-composer")).toHaveCSS("background-color", "rgb(17, 24, 39)");
+    await expect(page.locator("#chat-composer")).toHaveCSS("border-top-color", "rgb(255, 0, 0)");
+    await expect(page.locator("#chat-message-input")).toHaveCSS("color", "rgb(34, 197, 94)");
+    await expect(
+      page.locator('[data-chat-message="assistant"] [data-chat-bubble]').first()
+    ).toHaveCSS("background-color", "rgb(12, 34, 56)");
+
+    await openHistoryAndSelectChat(chatBTitle);
+    await expect(page.getByText(assistantReplyB)).toBeVisible();
+    await expect(page.locator("#chat-composer")).not.toHaveCSS(
+      "background-color",
+      "rgb(17, 24, 39)"
+    );
+    await expect(page.locator("#chat-message-input")).not.toHaveCSS("color", "rgb(34, 197, 94)");
+    await expect(
+      page.locator('[data-chat-message="assistant"] [data-chat-bubble]').first()
+    ).not.toHaveCSS("background-color", "rgb(12, 34, 56)");
+
+    await page.locator('[data-testid="chat-docs-entry"]:visible').click();
+    await expect(page).toHaveURL(/\/docs$/);
+    await expect(page.getByTestId("docs-page-root")).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: /聊天样式选择器|Chat Style Selectors/ })
+    ).toBeVisible();
+  } finally {
+    await request.delete(`/api/chats/${chatA.id}`).catch(() => {});
+    await request.delete(`/api/chats/${chatB.id}`).catch(() => {});
+    await request.delete(`/api/characters/${characterA.id}`).catch(() => {});
+    await request.delete(`/api/characters/${characterB.id}`).catch(() => {});
+  }
 });
 
 test("character management can create a character and shows save feedback", async ({
@@ -179,10 +344,17 @@ test("character management can create a character and shows save feedback", asyn
 
   try {
     await page.getByLabel(/名称|Name/).fill(name);
-    await page.getByRole("textbox", { name: /^(前置词|Prefix)/ }).fill("你会保持清晰、稳定的角色边界。");
-    await page.getByRole("textbox", { name: /^(提示词|Prompt)/ }).fill("这是一张用于端到端测试的原创角色卡。");
+    await page
+      .getByRole("textbox", { name: /^(前置词|Prefix)/ })
+      .fill("你会保持清晰、稳定的角色边界。");
+    await page
+      .getByRole("textbox", { name: /^(提示词|Prompt)/ })
+      .fill("这是一张用于端到端测试的原创角色卡。");
     await page.getByRole("textbox", { name: /^(后置词|Suffix)/ }).fill("回复时保持简洁。");
-    await page.getByRole("button", { name: /保存|Save/ }).last().click();
+    await page
+      .getByRole("button", { name: /保存|Save/ })
+      .last()
+      .click();
 
     await expect(page.getByRole("status")).toContainText(/角色已保存|Character saved/);
     await expect
@@ -203,14 +375,21 @@ test("mobile chat layout exposes panel switching", async ({ page }) => {
   await page.goto("/");
 
   await expect(page.getByRole("button", { name: /聊天列表|Chats/ })).toBeVisible();
-  await page.getByRole("button", { name: /创建聊天|Create Chat/ }).first().click();
+  await page
+    .getByRole("button", { name: /创建聊天|Create Chat/ })
+    .first()
+    .click();
   await expect(page.getByRole("heading", { name: /创建聊天|Create Chat/ })).toBeVisible();
 
   await page.getByRole("button", { name: /消息流|Message Stream/ }).click();
   await expect(
     page
       .getByPlaceholder(/输入用户消息|Write a user message/)
-      .or(page.getByText(/选择或创建聊天|Select or create a chat|这段聊天还没有消息|This chat has no messages/))
+      .or(
+        page.getByText(
+          /选择或创建聊天|Select or create a chat|这段聊天还没有消息|This chat has no messages/
+        )
+      )
       .first()
   ).toBeVisible();
 });
@@ -589,9 +768,10 @@ test("character page paginates and searches server-side character results", asyn
   const suffix = `${testInfo.project.name}-${Date.now()}`;
   const prefix = `Bulk Character ${suffix}`;
   const targetName = `${prefix} target`;
-  const createdIds = Array.from({ length: 40 }, (_, index) => `e2e-character-page-${suffix}-${index}`).concat(
-    `e2e-character-page-${suffix}-target`
-  );
+  const createdIds = Array.from(
+    { length: 40 },
+    (_, index) => `e2e-character-page-${suffix}-${index}`
+  ).concat(`e2e-character-page-${suffix}-target`);
 
   try {
     const importResponse = await request.post("/api/backups/import", {
@@ -627,16 +807,22 @@ test("character page paginates and searches server-side character results", asyn
     expect(importResponse.ok()).toBeTruthy();
 
     await page.goto("/characters");
-    await page.getByPlaceholder(/搜索角色名称|鎼滅储瑙掕壊鍚嶇О|Search character name or prompt/).fill(prefix);
+    await page
+      .getByPlaceholder(/搜索角色名称|鎼滅储瑙掕壊鍚嶇О|Search character name or prompt/)
+      .fill(prefix);
     await expect(page.getByTestId("characters-page-next")).toBeEnabled();
     await page.getByTestId("characters-page-next").click();
     await expect(page.getByTestId("characters-page-prev")).toBeEnabled();
 
-    await page.getByPlaceholder(/搜索角色名称|鎼滅储瑙掕壊鍚嶇О|Search character name or prompt/).fill(`server-side-search token ${suffix}`);
+    await page
+      .getByPlaceholder(/搜索角色名称|鎼滅储瑙掕壊鍚嶇О|Search character name or prompt/)
+      .fill(`server-side-search token ${suffix}`);
     await page.getByRole("button", { name: new RegExp(targetName) }).click();
     await expect(page.getByLabel(/名称|鍚嶇О|Name/)).toHaveValue(targetName);
   } finally {
-    await Promise.all(createdIds.filter(Boolean).map((id) => request.delete(`/api/characters/${id}`)));
+    await Promise.all(
+      createdIds.filter(Boolean).map((id) => request.delete(`/api/characters/${id}`))
+    );
   }
 });
 
@@ -649,9 +835,10 @@ test("chat creation paginates and searches characters before creating a chat", a
   const prefix = `Create Chat Character ${suffix}`;
   const targetName = `${prefix} target`;
   const chatTitle = `Paged Character Chat ${suffix}`;
-  const createdIds = Array.from({ length: 40 }, (_, index) => `e2e-create-chat-${suffix}-${index}`).concat(
-    `e2e-create-chat-${suffix}-target`
-  );
+  const createdIds = Array.from(
+    { length: 40 },
+    (_, index) => `e2e-create-chat-${suffix}-${index}`
+  ).concat(`e2e-create-chat-${suffix}-target`);
   let chatId: string | null = null;
 
   try {
@@ -688,15 +875,22 @@ test("chat creation paginates and searches characters before creating a chat", a
     expect(importResponse.ok()).toBeTruthy();
 
     await page.goto("/");
-    await page.getByPlaceholder(/搜索角色名称|Search character name or prompt|鎼滅储瑙掕壊鍚嶇О/).fill(prefix);
+    await page
+      .getByPlaceholder(/搜索角色名称|Search character name or prompt|鎼滅储瑙掕壊鍚嶇О/)
+      .fill(prefix);
     await expect(page.getByTestId("create-chat-character-page-next")).toBeEnabled();
     await page.getByTestId("create-chat-character-page-next").click();
     await expect(page.getByTestId("create-chat-character-page-prev")).toBeEnabled();
 
-    await page.getByPlaceholder(/搜索角色名称|Search character name or prompt|鎼滅储瑙掕壊鍚嶇О/).fill(`unique-search token ${suffix}`);
+    await page
+      .getByPlaceholder(/搜索角色名称|Search character name or prompt|鎼滅储瑙掕壊鍚嶇О/)
+      .fill(`unique-search token ${suffix}`);
     await page.getByText(targetName).click();
     await page.getByLabel(/标题|鏍囬|Title/).fill(chatTitle);
-    await page.getByRole("button", { name: /创建聊天|鍒涘缓鑱婂ぉ|Create Chat/ }).last().click();
+    await page
+      .getByRole("button", { name: /创建聊天|鍒涘缓鑱婂ぉ|Create Chat/ })
+      .last()
+      .click();
     await expect(page.getByRole("button", { name: chatTitle })).toBeVisible();
 
     const chatsResponse = await request.get("/api/chats");
@@ -706,7 +900,9 @@ test("chat creation paginates and searches characters before creating a chat", a
     if (chatId) {
       await request.delete(`/api/chats/${chatId}`);
     }
-    await Promise.all(createdIds.filter(Boolean).map((id) => request.delete(`/api/characters/${id}`)));
+    await Promise.all(
+      createdIds.filter(Boolean).map((id) => request.delete(`/api/characters/${id}`))
+    );
   }
 });
 
@@ -727,7 +923,8 @@ test("imported private character cards reveal prompt fields only after password 
     await expect(page.getByText(name)).toBeVisible();
 
     const charactersResponse = await request.get("/api/characters");
-    const characters = ((await charactersResponse.json()) as ApiDataResponse<E2ECharacter[]>).data ?? [];
+    const characters =
+      ((await charactersResponse.json()) as ApiDataResponse<E2ECharacter[]>).data ?? [];
     createdId = characters.find((character) => character.name === name)?.id ?? null;
 
     await expect(page.getByText(name)).toBeVisible();
@@ -747,4 +944,3 @@ test("imported private character cards reveal prompt fields only after password 
     await rm(file.directory, { recursive: true, force: true });
   }
 });
-

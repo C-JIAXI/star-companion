@@ -1,4 +1,14 @@
-import { AlertTriangle, Bug, ChevronLeft, ChevronRight, CircleX, Copy, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Bug,
+  ChevronLeft,
+  ChevronRight,
+  CircleX,
+  Copy,
+  Pencil,
+  RotateCcw,
+  Trash2
+} from "lucide-react";
 import { Marked } from "marked";
 import { memo, useCallback, useMemo } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -17,10 +27,7 @@ function renderMarkdown(content: string): string {
   const renderer = {
     code({ text, lang }: { text: string; lang?: string }) {
       const language = lang || "";
-      const escaped = text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
+      const escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
       return `<div class="roleplay-code-block"><div class="roleplay-code-header"><span class="roleplay-code-lang-text">${language}</span><button class="roleplay-code-copy" aria-label="Copy code">Copy</button></div><pre><code class="language-${language}">${escaped}</code></pre></div>`;
     }
   };
@@ -59,7 +66,9 @@ function MessageBody({
   }
 
   return (
-    <p className={`whitespace-pre-wrap leading-relaxed ${align === "right" ? "text-right" : "text-left"}`}>
+    <p
+      className={`whitespace-pre-wrap leading-relaxed ${align === "right" ? "text-right" : "text-left"}`}
+    >
       {content}
     </p>
   );
@@ -79,6 +88,7 @@ function Avatar({
   const src = usePlaceholderSrc(avatar, name);
   return (
     <div
+      data-chat-avatar=""
       data-testid="message-avatar"
       className={`grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl border shadow-md ${
         align === "right"
@@ -87,11 +97,7 @@ function Avatar({
       } ${className}`}
       title={name}
     >
-      <img
-        alt=""
-        className="h-full w-full object-cover"
-        src={src}
-      />
+      <img alt="" className="h-full w-full object-cover" src={src} />
     </div>
   );
 }
@@ -132,11 +138,23 @@ function VariantSwitcher({
 }) {
   return (
     <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-ink-950/40 px-2 py-0.5 text-xs">
-      <button className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-full transition-colors hover:bg-white/20 active:bg-white/30" type="button" onClick={onPrev}>
+      <button
+        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-full transition-colors hover:bg-white/20 active:bg-white/30"
+        data-chat-action="variant-prev"
+        type="button"
+        onClick={onPrev}
+      >
         <ChevronLeft size={13} />
       </button>
-      <span className="font-medium">{currentIndex + 1}/{total}</span>
-      <button className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-full transition-colors hover:bg-white/20 active:bg-white/30" type="button" onClick={onNext}>
+      <span className="font-medium">
+        {currentIndex + 1}/{total}
+      </span>
+      <button
+        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-full transition-colors hover:bg-white/20 active:bg-white/30"
+        data-chat-action="variant-next"
+        type="button"
+        onClick={onNext}
+      >
         <ChevronRight size={13} />
       </button>
     </span>
@@ -151,7 +169,7 @@ function TokenInfo({
   formatter: TokenUsageFormatter;
 }) {
   return (
-    <p className="text-xs font-medium text-slate-500">
+    <p className="text-xs font-medium text-slate-500" data-chat-token-info="">
       {formatter(usage)}
     </p>
   );
@@ -159,8 +177,11 @@ function TokenInfo({
 
 export function SystemNotification({ content }: { content: string }) {
   return (
-    <div className="flex justify-center">
-      <div className="shrink-0 rounded-full bg-white/5 px-4 py-1.5 text-xs text-slate-500 select-none">
+    <div className="flex justify-center" data-chat-message="system">
+      <div
+        className="shrink-0 rounded-full bg-white/5 px-4 py-1.5 text-xs text-slate-500 select-none"
+        data-chat-bubble=""
+      >
         {content}
       </div>
     </div>
@@ -186,21 +207,51 @@ export function UserMessageBubble({
   const bubbleWidthClassName = getBubbleWidthClassName(showAvatar);
 
   return (
-    <div className={`flex items-start justify-start ${showAvatar ? "gap-3" : "gap-0"}`}>
+    <div
+      className={`flex items-start justify-start ${showAvatar ? "gap-3" : "gap-0"}`}
+      data-chat-message="user"
+    >
       <AvatarSlot align="left" name="You" showAvatar={showAvatar} />
-      <article className={`order-1 relative ${bubbleWidthClassName} rounded-2xl rounded-bl-sm bg-gradient-to-br from-ember-400 to-ember-500 p-3 sm:p-4 text-sm text-ink-950 shadow-sm`}>
+      <article
+        className={`order-1 relative ${bubbleWidthClassName} rounded-2xl rounded-bl-sm bg-gradient-to-br from-ember-400 to-ember-500 p-3 sm:p-4 text-sm text-ink-950 shadow-sm`}
+        data-chat-bubble=""
+      >
         <MessageBody align="left" content={message.content} renderHtml={false} />
-        <div className="mt-3 flex items-center justify-start gap-0.5 text-xs">
-          <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70" type="button" onClick={onResend} title={t("chat.resend")}>
+        <div className="mt-3 flex items-center justify-start gap-0.5 text-xs" data-chat-actions="">
+          <button
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
+            data-chat-action="resend"
+            type="button"
+            onClick={onResend}
+            title={t("chat.resend")}
+          >
             <RotateCcw size={14} />
           </button>
-          <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70" type="button" onClick={onCopy} title={t("common.copy")}>
+          <button
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
+            data-chat-action="copy"
+            type="button"
+            onClick={onCopy}
+            title={t("common.copy")}
+          >
             <Copy size={14} />
           </button>
-          <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70" type="button" onClick={onEdit} title={t("common.edit")}>
+          <button
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
+            data-chat-action="edit"
+            type="button"
+            onClick={onEdit}
+            title={t("common.edit")}
+          >
             <Pencil size={14} />
           </button>
-          <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70" type="button" onClick={onDelete} title={t("common.delete")}>
+          <button
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
+            data-chat-action="delete"
+            type="button"
+            onClick={onDelete}
+            title={t("common.delete")}
+          >
             <Trash2 size={14} />
           </button>
         </div>
@@ -243,13 +294,19 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
   const handleDebug = useCallback(() => onDebug(message), [onDebug, message]);
 
   return (
-    <div className={`flex items-start justify-end ${showAvatar ? "gap-3" : "gap-0"}`}>
-      <article className={`order-1 relative self-start ${bubbleWidthClassName} overflow-hidden rounded-2xl rounded-br-sm border border-white/5 bg-ink-800/80 p-3 sm:p-4 text-sm text-slate-100 shadow-sm backdrop-blur-sm`}>
+    <div
+      className={`flex items-start justify-end ${showAvatar ? "gap-3" : "gap-0"}`}
+      data-chat-message="assistant"
+    >
+      <article
+        className={`order-1 relative self-start ${bubbleWidthClassName} overflow-hidden rounded-2xl rounded-br-sm border border-white/5 bg-ink-800/80 p-3 sm:p-4 text-sm text-slate-100 shadow-sm backdrop-blur-sm`}
+        data-chat-bubble=""
+      >
         <MessageBody content={message.content} htmlCss={htmlCss} />
         <div className="mt-3 border-t border-white/5 pt-2">
           <div className="flex flex-wrap items-center justify-between gap-1 sm:gap-1.5 text-xs">
             <TokenInfo usage={message.tokenUsage} formatter={tokenUsageFormatter} />
-            <div className="flex shrink-0 flex-wrap items-center gap-0.5">
+            <div className="flex shrink-0 flex-wrap items-center gap-0.5" data-chat-actions="">
               {message.variants.length > 1 ? (
                 <VariantSwitcher
                   currentIndex={message.activeVariantIndex}
@@ -258,19 +315,50 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
                   onNext={onVariantNext}
                 />
               ) : null}
-              <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 active:text-slate-100" type="button" onClick={onCopy} title={t("common.copy")}>
+              <button
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 active:text-slate-100"
+                data-chat-action="copy"
+                type="button"
+                onClick={onCopy}
+                title={t("common.copy")}
+              >
                 <Copy size={14} />
               </button>
-              <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 disabled:opacity-40 active:text-slate-100" type="button" disabled={disableRegenerate} onClick={onRegenerate} title={t("chat.regenerate")}>
+              <button
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 disabled:opacity-40 active:text-slate-100"
+                data-chat-action="regenerate"
+                type="button"
+                disabled={disableRegenerate}
+                onClick={onRegenerate}
+                title={t("chat.regenerate")}
+              >
                 <RotateCcw size={14} />
               </button>
-              <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 active:text-slate-100" type="button" onClick={handleDebug} title={t("debug.open")}>
+              <button
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 active:text-slate-100"
+                data-chat-action="debug"
+                type="button"
+                onClick={handleDebug}
+                title={t("debug.open")}
+              >
                 <Bug size={14} />
               </button>
-              <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 active:text-slate-100" type="button" onClick={onEdit} title={t("common.edit")}>
+              <button
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 active:text-slate-100"
+                data-chat-action="edit"
+                type="button"
+                onClick={onEdit}
+                title={t("common.edit")}
+              >
                 <Pencil size={14} />
               </button>
-              <button className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-rose-400 hover:text-rose-300 active:text-rose-200" type="button" onClick={onDelete} title={t("common.delete")}>
+              <button
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-rose-400 hover:text-rose-300 active:text-rose-200"
+                data-chat-action="delete"
+                type="button"
+                onClick={onDelete}
+                title={t("common.delete")}
+              >
                 <Trash2 size={14} />
               </button>
             </div>
@@ -322,8 +410,14 @@ export function StreamingBubble({
   }, []);
 
   return (
-    <div className={`flex items-start justify-end ${showAvatar ? "gap-3" : "gap-0"}`}>
-      <article className={`order-1 self-start ${bubbleWidthClassName} animate-fade-in overflow-hidden rounded-2xl rounded-br-sm border border-ember-500/20 bg-ink-800/80 p-3 sm:p-4 text-sm text-slate-100 shadow-md backdrop-blur-sm`}>
+    <div
+      className={`flex items-start justify-end ${showAvatar ? "gap-3" : "gap-0"}`}
+      data-chat-message="streaming"
+    >
+      <article
+        className={`order-1 self-start ${bubbleWidthClassName} animate-fade-in overflow-hidden rounded-2xl rounded-br-sm border border-ember-500/20 bg-ink-800/80 p-3 sm:p-4 text-sm text-slate-100 shadow-md backdrop-blur-sm`}
+        data-chat-bubble=""
+      >
         {displayedContent ? (
           <MessageBody content={displayedContent} htmlCss={htmlCss} />
         ) : (
@@ -356,8 +450,14 @@ export function ErrorBubble({
   const bubbleWidthClassName = getBubbleWidthClassName(showAvatar);
 
   return (
-    <div className={`flex items-start justify-end ${showAvatar ? "gap-3" : "gap-0"}`}>
-      <article className={`order-1 self-start ${bubbleWidthClassName} animate-fade-in overflow-hidden rounded-2xl rounded-br-sm border border-rose-500/30 bg-rose-950/30 p-3 sm:p-4 text-sm text-rose-200 shadow-md backdrop-blur-sm`}>
+    <div
+      className={`flex items-start justify-end ${showAvatar ? "gap-3" : "gap-0"}`}
+      data-chat-message="error"
+    >
+      <article
+        className={`order-1 self-start ${bubbleWidthClassName} animate-fade-in overflow-hidden rounded-2xl rounded-br-sm border border-rose-500/30 bg-rose-950/30 p-3 sm:p-4 text-sm text-rose-200 shadow-md backdrop-blur-sm`}
+        data-chat-bubble=""
+      >
         <div className="flex items-start gap-2">
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-rose-400" />
           <div className="min-w-0 flex-1">
@@ -365,9 +465,13 @@ export function ErrorBubble({
             <p className="mt-1 break-words text-xs text-rose-300/80">{error}</p>
           </div>
         </div>
-        <div className="mt-3 flex items-center gap-0.5 border-t border-rose-500/15 pt-2 text-xs">
+        <div
+          className="mt-3 flex items-center gap-0.5 border-t border-rose-500/15 pt-2 text-xs"
+          data-chat-actions=""
+        >
           <button
             className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-rose-300 hover:text-rose-100 active:text-rose-50"
+            data-chat-action="retry"
             type="button"
             onClick={onRetry}
             title={t("chat.retry")}
@@ -376,6 +480,7 @@ export function ErrorBubble({
           </button>
           <button
             className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-rose-300/60 hover:text-rose-200 active:text-rose-100"
+            data-chat-action="dismiss"
             type="button"
             onClick={onDismiss}
             title={t("common.cancel")}

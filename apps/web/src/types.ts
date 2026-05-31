@@ -24,7 +24,7 @@ import type {
   TokenUsageDTO
 } from "@local-roleplay/shared";
 
-export type AppSection = "chat" | "characters" | "settings";
+export type AppSection = "chat" | "docs" | "characters" | "settings";
 
 export type ApiEnvelope<T> = {
   ok: boolean;

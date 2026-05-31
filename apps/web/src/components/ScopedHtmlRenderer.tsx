@@ -1,5 +1,6 @@
 import DOMPurify from "dompurify";
 import { useEffect, useRef } from "react";
+import { sanitizeCharacterHtmlCss } from "../lib/characterHtmlCss";
 
 const RENDERABLE_HTML_PATTERN = /<\/?[a-z][\w:-]*(?:\s[^<>]*)?>/i;
 
@@ -316,6 +317,13 @@ const HTML_ALLOWED_ATTR = [
   "face",
   "href",
   "id",
+  "data-chat-action",
+  "data-chat-actions",
+  "data-chat-avatar",
+  "data-chat-bubble",
+  "data-chat-message",
+  "data-chat-quick-reply",
+  "data-chat-token-info",
   "open",
   "rel",
   "rowspan",
@@ -326,13 +334,6 @@ const HTML_ALLOWED_ATTR = [
 ] as const;
 
 export const containsRenderableHtml = (content: string) => RENDERABLE_HTML_PATTERN.test(content);
-
-const sanitizeCharacterHtmlCss = (css: string) =>
-  css
-    .replace(/<\/?style[^>]*>/gi, "")
-    .replace(/@import[\s\S]*?;/gi, "")
-    .replace(/expression\s*\([^)]*\)/gi, "")
-    .replace(/url\s*\(\s*(['"]?)\s*(?:javascript:|data:text\/html)/gi, "url($1about:blank");
 
 const sanitizeRenderableHtml = (content: string) =>
   DOMPurify.sanitize(content, {
@@ -389,19 +390,15 @@ export function ScopedHtmlRenderer({
       if (face) font.style.fontFamily = face;
     }
 
-    const textWalker = document.createTreeWalker(
-      template.content,
-      NodeFilter.SHOW_TEXT,
-      {
-        acceptNode(node) {
-          const parent = (node as Text).parentElement;
-          if (parent && (parent.tagName === "PRE" || parent.tagName === "CODE")) {
-            return NodeFilter.FILTER_REJECT;
-          }
-          return NodeFilter.FILTER_ACCEPT;
+    const textWalker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = (node as Text).parentElement;
+        if (parent && (parent.tagName === "PRE" || parent.tagName === "CODE")) {
+          return NodeFilter.FILTER_REJECT;
         }
+        return NodeFilter.FILTER_ACCEPT;
       }
-    );
+    });
     const textNodes: Text[] = [];
     while (textWalker.nextNode()) {
       textNodes.push(textWalker.currentNode as Text);
@@ -448,10 +445,5 @@ export function ScopedHtmlRenderer({
     };
   }, [content, htmlCss]);
 
-  return (
-    <div
-      ref={wrapperRef}
-      className={`min-w-0 max-w-full ${className}`}
-    />
-  );
+  return <div ref={wrapperRef} className={`min-w-0 max-w-full ${className}`} />;
 }

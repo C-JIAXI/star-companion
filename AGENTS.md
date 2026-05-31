@@ -28,10 +28,11 @@
 以下内容以当前代码为准，高于历史计划或过时文档。
 
 1. 当前仓库使用 `npm` 脚本组织，不是 `pnpm workspace`。
-2. 前端当前只有 3 个主页面：
+2. 前端当前有 3 个主产品页面 + 1 个应用内文档页：
    - `/` 聊天页
    - `/characters` 角色页
    - `/settings` 设置页
+   - `/docs` 应用内文档页
 3. 当前没有 `/lore` 页面，也没有启用 `/api/lorebooks` 路由。
 4. 角色提示词当前采用三段结构：
    - `prefix`
@@ -153,6 +154,7 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
   - `exampleDialog`
   - `systemPrompt`
   - `tags`
+- `htmlCss` 既可样式化角色消息里的 HTML fragment，也会在该角色激活聊天时作用于应用内文档约定的官方 Chat UI 选择器。
 - 导入角色与备份数据按当前字段结构处理，不再兼容旧的 `scenario/systemPrompt` 字段映射。
 
 ### Chat
