@@ -47,6 +47,33 @@ const quickReplySchema = z.object({
 
 const quickRepliesSchema = z.array(quickReplySchema).default([]);
 
+const isSupportedBackgroundUrl = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return true;
+  }
+
+  if (/^data:image\/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=]+$/.test(trimmed)) {
+    return true;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+};
+
+const backgroundUrlSchema = z
+  .string()
+  .trim()
+  .max(3_000_000)
+  .refine(
+    isSupportedBackgroundUrl,
+    "Background URL must be an https/http image URL or a data image URL."
+  );
+
 export const characterCreateSchema = z.object({
   name: z.string().trim().min(1),
   avatar: z.string().trim().nullable().optional(),
@@ -124,7 +151,10 @@ const privateCharacterCardSchema = z.object({
   })
 });
 
-export const characterImportSchema = z.union([publicCharacterCardSchema, privateCharacterCardSchema]);
+export const characterImportSchema = z.union([
+  publicCharacterCardSchema,
+  privateCharacterCardSchema
+]);
 
 const toPositiveInt = (fallback: number) =>
   z
@@ -156,6 +186,7 @@ export const characterPageQuerySchema = z
 export const chatCreateSchema = z.object({
   title: z.string().trim().min(1),
   characterId: idSchema,
+  backgroundUrl: backgroundUrlSchema.default(""),
   memoryTurns: z.number().int().min(1).max(50).default(12),
   userPersona: z.string().max(12000).default(""),
   userProfileSummary: z.string().default("")
@@ -165,6 +196,7 @@ export const chatUpdateSchema = z
   .object({
     title: z.string().trim().min(1).optional(),
     characterId: idSchema.nullable().optional(),
+    backgroundUrl: backgroundUrlSchema.optional(),
     memoryTurns: z.number().int().min(1).max(50).optional(),
     userPersona: z.string().max(12000).optional(),
     userProfileSummary: z.string().optional()
@@ -212,15 +244,14 @@ export const settingsUpdateSchema = z.object({
   userProfileSummary: z.string().max(4000).optional(),
   models: z
     .array(
-      z
-        .object({
-          id: z.string().min(1),
-          label: z.string().min(1),
-          provider: z.string().min(1),
-          apiBaseUrl: z.string().url(),
-          key: z.string().optional(),
-          model: z.string().min(1)
-        })
+      z.object({
+        id: z.string().min(1),
+        label: z.string().min(1),
+        provider: z.string().min(1),
+        apiBaseUrl: z.string().url(),
+        key: z.string().optional(),
+        model: z.string().min(1)
+      })
     )
     .default([])
 });

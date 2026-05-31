@@ -160,6 +160,7 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 - `title`
 - `characterId`
 - `memoryTurns`
+- `backgroundUrl`
 - `userPersona`
 - `userProfileSummary`
 - `userProfileUpdatedAt`
@@ -189,6 +190,7 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 - 消息编辑、删除、复制
 - assistant 回复重新生成
 - message variants 切换
+- 不同聊天单独设置背景
 - WebSocket 流式输出
 - 停止生成
 - OpenAI-compatible API 代理，以及 Anthropic Claude / Google Gemini 原生代理

@@ -27,6 +27,7 @@ README 以当前仓库实现为准；如果历史说明与代码不一致，请�
 - 用户画像摘要自动更新。
 - 角色内嵌 `loreEntries` 关键词注入。
 - 聊天气泡头像显示开关。
+- 不同聊天单独设置背景。
 
 ## 技术栈
 
@@ -193,6 +194,7 @@ HTTP API：
 - `title`
 - `characterId`
 - `memoryTurns`
+- `backgroundUrl`
 - `userPersona`
 - `userProfileSummary`
 - `userProfileUpdatedAt`

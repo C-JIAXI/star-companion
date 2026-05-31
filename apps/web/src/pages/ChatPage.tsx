@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Check,
   FileText,
+  Image,
   Send,
   Settings,
   Sparkles,
@@ -22,6 +23,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
+import { readFileAsDataUrl } from "../lib/files";
 import { generateId } from "../lib/uuid";
 import { useWebSocket } from "../lib/useWebSocket";
 import { useAppStore } from "../store/useAppStore";
@@ -60,6 +62,25 @@ import { DebugPromptDrawer } from "../components/DebugPromptDrawer";
 
 const MESSAGES_PER_PAGE = 30;
 const GENERATION_ERROR_PREFIX = "[GENERATION_FAILED] ";
+const MAX_CHAT_BACKGROUND_FILE_SIZE = 2 * 1024 * 1024;
+
+const isSupportedChatBackgroundUrl = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return true;
+  }
+
+  if (/^data:image\/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=]+$/.test(trimmed)) {
+    return true;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+};
 
 export function ChatPage({
   selectedChatId,
@@ -84,7 +105,11 @@ export function ChatPage({
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (memorySettingsOpen && memorySettingsRef.current && !memorySettingsRef.current.contains(event.target as Node)) {
+      if (
+        memorySettingsOpen &&
+        memorySettingsRef.current &&
+        !memorySettingsRef.current.contains(event.target as Node)
+      ) {
         setMemorySettingsOpen(false);
       }
     };
@@ -97,19 +122,16 @@ export function ChatPage({
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [runtimeSettings, setRuntimeSettings] = useState<Pick<
     PublicUserSettingsDTO,
-    | "activeProvider"
-    | "apiBaseUrl"
-    | "model"
-    | "temperature"
-    | "maxTokens"
-    | "topP"
-    | "language"
+    "activeProvider" | "apiBaseUrl" | "model" | "temperature" | "maxTokens" | "topP" | "language"
   > | null>(null);
   const [autoSummarizeUser, setAutoSummarizeUser] = useState(true);
   const [showUserConfigDialog, setShowUserConfigDialog] = useState(false);
   const [showUserProfileDialog, setShowUserProfileDialog] = useState(false);
   const [showModelDialog, setShowModelDialog] = useState(false);
   const [showMemoryDialog, setShowMemoryDialog] = useState(false);
+  const [showBackgroundDialog, setShowBackgroundDialog] = useState(false);
+  const [backgroundDraft, setBackgroundDraft] = useState("");
+  const [backgroundInputValue, setBackgroundInputValue] = useState("");
   const [debugMessage, setDebugMessage] = useState<MessageDTO | null>(null);
   const [quickRepliesOpen, setQuickRepliesOpen] = useState(() => {
     try {
@@ -126,8 +148,8 @@ export function ChatPage({
       return !prev;
     });
   }, []);
-  const [editingPersonaDraft, setEditingPersonaDraft] = useState<UserCustomConfigDTO>(
-    () => emptyUserCustomConfig()
+  const [editingPersonaDraft, setEditingPersonaDraft] = useState<UserCustomConfigDTO>(() =>
+    emptyUserCustomConfig()
   );
   const [editingProfileDraft, setEditingProfileDraft] = useState("");
   const [pendingDeleteMessage, setPendingDeleteMessage] = useState<MessageDTO | null>(null);
@@ -142,6 +164,7 @@ export function ChatPage({
   const streamingBufferRef = useRef("");
   const draftTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
+  const backgroundFileInputRef = useRef<HTMLInputElement | null>(null);
   const paginationStateRef = useRef<{ chatId: string | null; totalPages: number }>({
     chatId: null,
     totalPages: 1
@@ -223,7 +246,12 @@ export function ChatPage({
     chatsChanged: () => void;
   }>({ upsertMessage: () => {}, setStreamingContent: () => {}, chatsChanged: () => {} });
 
-  const { send: sendWs, connect, disconnect, isConnected } = useWebSocket({
+  const {
+    send: sendWs,
+    connect,
+    disconnect,
+    isConnected
+  } = useWebSocket({
     onMessage(message) {
       const handlers = onMessageHandlersRef.current;
       const msg = message as GenerationServerMessage;
@@ -435,6 +463,43 @@ export function ChatPage({
           range: `Showing ${pageRange.start}-${pageRange.end} of ${pageRange.total}`
         };
 
+  const backgroundCopy =
+    language === "zh-CN"
+      ? {
+          button: "背景",
+          title: "聊天背景",
+          help: "为当前聊天单独设置背景图。支持 HTTPS 图片地址或上传本地图片（2 MB 以内）。",
+          inputLabel: "背景图地址",
+          inputPlaceholder: "粘贴图片地址；也可以直接上传本地图片",
+          upload: "上传图片",
+          clear: "清除背景",
+          preview: "背景预览",
+          empty: "当前聊天还没有设置背景。",
+          uploaded: "已选择本地图片，保存后生效。",
+          saved: "聊天背景已保存。",
+          invalid: "请输入有效的图片地址，或上传图片文件。",
+          tooLarge: "背景图片需小于 2 MB。",
+          uploadFailed: "读取背景图片失败。"
+        }
+      : {
+          button: "Background",
+          title: "Chat Background",
+          help: "Set a dedicated background image for this chat. Supports HTTPS image URLs or local uploads up to 2 MB.",
+          inputLabel: "Background URL",
+          inputPlaceholder: "Paste an image URL, or upload a local image instead",
+          upload: "Upload Image",
+          clear: "Clear Background",
+          preview: "Preview",
+          empty: "No background is set for this chat yet.",
+          uploaded: "Local image selected. Save to apply it.",
+          saved: "Chat background saved.",
+          invalid: "Enter a valid image URL or upload an image file.",
+          tooLarge: "Background image must be smaller than 2 MB.",
+          uploadFailed: "Failed to read the selected image."
+        };
+  const activeBackgroundUrl = activeChat?.backgroundUrl.trim() ?? "";
+  const usingUploadedBackground = backgroundDraft.startsWith("data:image/");
+
   const loadSettings = async () => {
     const settings = await api.settings.get();
     setSettingsModels(settings.models ?? []);
@@ -471,7 +536,9 @@ export function ChatPage({
       const fetchedCharacters = await Promise.all(
         missingCharacterIds.map((characterId) => api.characters.get(characterId).catch(() => null))
       );
-      mergeCharacterCache(fetchedCharacters.filter((character): character is CharacterDTO => character !== null));
+      mergeCharacterCache(
+        fetchedCharacters.filter((character): character is CharacterDTO => character !== null)
+      );
 
       if (fetchedCharacters.some((character) => character === null)) {
         setActiveChat((current) =>
@@ -500,7 +567,10 @@ export function ChatPage({
 
   useEffect(() => {
     const chatId = activeChat?.id ?? null;
-    const totalPages = Math.max(1, Math.ceil((activeChat?.messages.length ?? 0) / MESSAGES_PER_PAGE));
+    const totalPages = Math.max(
+      1,
+      Math.ceil((activeChat?.messages.length ?? 0) / MESSAGES_PER_PAGE)
+    );
     const previous = paginationStateRef.current;
 
     setMessagePage((current) => {
@@ -590,9 +660,7 @@ export function ChatPage({
           setAutoSummarizeUser(settings.autoSummarizeUser);
           if (models.length > 0) {
             const active = models.find(
-              (m) =>
-                m.provider === settings.activeProvider &&
-                m.model === settings.model
+              (m) => m.provider === settings.activeProvider && m.model === settings.model
             );
             setActiveModelId(active?.id ?? models[0].id);
           } else {
@@ -694,6 +762,22 @@ export function ChatPage({
     setShowMemoryDialog(false);
   };
 
+  const openBackgroundDialog = () => {
+    const currentBackgroundUrl = activeChat?.backgroundUrl ?? "";
+    setBackgroundDraft(currentBackgroundUrl);
+    setBackgroundInputValue(
+      currentBackgroundUrl.startsWith("data:image/") ? "" : currentBackgroundUrl
+    );
+    setShowBackgroundDialog(true);
+    setMemorySettingsOpen(false);
+  };
+
+  const closeBackgroundDialog = () => {
+    setShowBackgroundDialog(false);
+    setBackgroundDraft("");
+    setBackgroundInputValue("");
+  };
+
   const updateUserConfigDraft = (field: keyof UserCustomConfigDTO, value: string) => {
     setEditingPersonaDraft((current) => ({
       ...current,
@@ -720,7 +804,10 @@ export function ChatPage({
     }
 
     const parsed = Number(memoryDraft);
-    const memoryTurns = Math.max(1, Math.min(50, Number.isFinite(parsed) ? Math.floor(parsed) : activeChat.memoryTurns));
+    const memoryTurns = Math.max(
+      1,
+      Math.min(50, Number.isFinite(parsed) ? Math.floor(parsed) : activeChat.memoryTurns)
+    );
 
     setLoading(true);
     setError(null);
@@ -743,6 +830,60 @@ export function ChatPage({
       setStatus(t("chat.chatSettingsSaved"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdateMemory"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateBackgroundFile = async (file: File | undefined) => {
+    if (!file) {
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      setError(backgroundCopy.invalid);
+      return;
+    }
+
+    if (file.size > MAX_CHAT_BACKGROUND_FILE_SIZE) {
+      setError(backgroundCopy.tooLarge);
+      return;
+    }
+
+    try {
+      const nextBackground = await readFileAsDataUrl(file);
+      setBackgroundDraft(nextBackground);
+      setBackgroundInputValue("");
+      setStatus(backgroundCopy.uploaded);
+      setError(null);
+    } catch {
+      setError(backgroundCopy.uploadFailed);
+    }
+  };
+
+  const saveBackground = async () => {
+    if (!activeChat) {
+      return;
+    }
+
+    const nextBackgroundUrl = backgroundDraft.trim();
+    if (!isSupportedChatBackgroundUrl(nextBackgroundUrl)) {
+      setError(backgroundCopy.invalid);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const updated = await api.chats.update(activeChat.id, {
+        backgroundUrl: nextBackgroundUrl
+      });
+      applyChatUpdate(updated);
+      closeBackgroundDialog();
+      setStatus(backgroundCopy.saved);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdate"));
     } finally {
       setLoading(false);
     }
@@ -1030,584 +1171,765 @@ export function ChatPage({
 
   return (
     <>
-    <div className="flex flex-col h-full min-h-0 min-w-0">
-
-      <Panel
-        className="flex flex-col h-full min-h-0 min-w-0"
-        title={
-          titleEditing && activeChat ? (
-            <input
-              ref={titleInputRef}
-              className="chat-input w-full rounded bg-transparent px-1 py-0.5 text-sm font-semibold tracking-wide text-slate-100 outline-none border-none focus:outline-none focus:ring-0"
-              style={{ WebkitUserSelect: "none", userSelect: "none" }}
-              value={titleDraft}
-              onChange={(event) => setTitleDraft(event.target.value)}
-              onBlur={() => void commitTitleRename()}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void commitTitleRename();
-                }
-                if (event.key === "Escape") {
-                  setTitleEditing(false);
-                }
-              }}
-            />
-          ) : (
-            <span
-              className="cursor-pointer rounded px-1 py-0.5 hover:bg-white/5 outline-none focus:outline-none focus:ring-0"
-              style={{ WebkitUserSelect: "none", userSelect: "none" }}
-              title={t("chat.renameHint")}
-              onClick={() => {
-                if (!activeChat) {
-                  return;
-                }
-                setTitleDraft(activeChat.title);
-                setTitleEditing(true);
-                setTimeout(() => titleInputRef.current?.focus(), 0);
-              }}
-            >
-              {activeChat?.title ?? t("chat.messageStream")}
-            </span>
-          )
-        }
-        action={
-          activeChat ? (
-            <div className="relative" ref={memorySettingsRef}>
-              <Button
-                aria-expanded={memorySettingsOpen}
-                aria-label={t("chat.memorySettings")}
-                className="!h-8 !min-h-8 !w-8 !p-0"
-                variant="ghost"
-                onClick={openMemorySettings}
-              >
-                <Settings size={15} />
-              </Button>
-              {memorySettingsOpen ? (
-                <div
-                  className="custom-scrollbar absolute right-0 top-10 z-20 max-h-80 w-56 overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-3 shadow-xl shadow-black/30 backdrop-blur-md sm:max-h-[calc(100dvh-22rem)]"
-                  onPointerDownCapture={handleMemorySettingsPointerDownCapture}
-                >
-                  {settingsModels.length > 0 ? (
-                    <div className="mb-2 border-b border-white/10 pb-2">
-                      <button
-                        className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
-                        type="button"
-                        onClick={openModelDialog}
-                      >
-                        <span>{t("chat.modelSwitchTitle")}</span>
-                        <Sparkles size={14} className="text-slate-400" />
-                      </button>
-                    </div>
-                  ) : null}
-
-                  <div className="border-b border-white/10 pb-2">
-                    <button
-                      className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
-                      type="button"
-                      onClick={openMemoryDialog}
-                    >
-                      <span>{t("chat.memorySettings")}</span>
-                      <BrainCircuit size={14} className="text-slate-400" />
-                    </button>
-                  </div>
-
-                  <div className="border-b border-white/10 pb-2 pt-2">
-                    <button
-                      className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
-                      type="button"
-                      onClick={startEditingUserConfig}
-                    >
-                      <span>{t("chat.userConfigTitle")}</span>
-                      <FileText size={14} className="text-slate-400" />
-                    </button>
-                  </div>
-
-                  <div className="pt-2">
-                    <button
-                      className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
-                      type="button"
-                      onClick={startEditingProfile}
-                    >
-                      <span>{t("chat.userProfileTitle")}</span>
-                      <User size={14} className="text-slate-400" />
-                    </button>
-                    <div className="mt-1.5 flex items-center justify-between gap-2">
-                      <p className="text-xs font-semibold text-slate-100">
-                        {t("chat.autoSummarizeUser")}
-                      </p>
-                      <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-slate-400">
-                        <input
-                          checked={autoSummarizeUser}
-                          type="checkbox"
-                          className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
-                          onChange={(event) => void updateAutoSummarizeUser(event.target.checked)}
-                        />
-                        {t("chat.autoSummarizeUser")}
-                      </label>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ) : null
-        }
-      >
-        {!activeChat ? (
-          <EmptyState>{t("chat.selectOrCreate")}</EmptyState>
-        ) : (
-          <div className="flex min-h-0 flex-1 flex-col">
-            <ErrorNotice message={error} />
-            <SuccessNotice message={status} />
-
-            <div
-              ref={messageViewportRef}
-              data-testid="chat-message-viewport"
-              className={`custom-scrollbar min-h-0 flex-1 overscroll-auto scroll-smooth ${activeOpeningHtml ? "overflow-hidden" : "overflow-y-auto"}`}
-            >
-              {activeChat.messages.length === 0 && activeOpeningHtml ? (
-                <iframe
-                  title={t("characters.openingHtml")}
-                  srcDoc={activeOpeningHtml}
-                  sandbox="allow-scripts"
-                  className="w-full h-full border-0"
-                />
-              ) : (
-              <div className="mx-auto max-w-2xl space-y-4 rounded-2xl p-2 sm:space-y-7 sm:p-5">
-              {activeChat.messages.length > MESSAGES_PER_PAGE ? (
-                <div
-                  data-testid="chat-message-pagination"
-                  className="sticky top-0 z-10 -mx-2 -mt-2 mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-white/5 bg-ink-900/90 px-2 pb-3 pt-2 backdrop-blur-md sm:-mx-5 sm:-mt-5 sm:px-5 sm:pt-5"
-                >
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold text-slate-200">{paginationCopy.page}</p>
-                    <p className="mt-1 text-xs text-slate-500">{paginationCopy.range}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      className="!min-h-[48px] !px-3 text-xs"
-                      data-testid="chat-page-prev"
-                      disabled={safeMessagePage <= 1}
-                      variant="secondary"
-                      onClick={() => setMessagePage((current) => Math.max(1, current - 1))}
-                    >
-                      <ChevronLeft size={14} />
-                      {paginationCopy.previous}
-                    </Button>
-                    <Button
-                      className="!min-h-[48px] !px-3 text-xs"
-                      data-testid="chat-page-next"
-                      disabled={safeMessagePage >= totalMessagePages}
-                      variant="secondary"
-                      onClick={() => setMessagePage((current) => Math.min(totalMessagePages, current + 1))}
-                    >
-                      {safeMessagePage >= totalMessagePages ? paginationCopy.newest : paginationCopy.next}
-                      <ChevronRight size={14} />
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
-              {activeChat.messages.length === 0 ? (
-                  <div className="h-full flex items-center justify-center">
-                    <EmptyState>{t("chat.noMessages")}</EmptyState>
-                  </div>
-              ) : (
-                pagedMessages.map((message) => {
-                  const isUser = message.role === "user";
-                  const isSystem = message.role === "system";
-                  const isErrorSystem = isSystem && message.content.startsWith(GENERATION_ERROR_PREFIX);
-                  const character = message.characterId ? characterMap.get(message.characterId) : undefined;
-                  if (isErrorSystem) {
-                    const errorText = message.content.slice(GENERATION_ERROR_PREFIX.length);
-                    const lastAssistant = [...activeChat.messages].reverse().find((m) => m.role === "assistant");
-                    return (
-                      <ErrorBubble
-                        key={message.id}
-                        characterAvatar={lastAssistant?.characterId ? characterMap.get(lastAssistant.characterId)?.avatar : null}
-                        showAvatar={showMessageAvatars}
-                        error={errorText}
-                        onRetry={retryGeneration}
-                        onDismiss={() => void api.messages.remove(message.id).then(() => {
-                          setActiveChat((current) =>
-                            current ? { ...current, messages: current.messages.filter((m) => m.id !== message.id) } : current
-                          );
-                        })}
-                      />
-                    );
-                  }
-                  if (isSystem) {
-                    return <SystemNotification key={message.id} content={message.content} />;
-                  }
-
-                  if (isUser) {
-                    return (
-                      <UserMessageBubble
-                        key={message.id}
-                        message={message}
-                        showAvatar={showMessageAvatars}
-                        onCopy={() => void copyMessage(message)}
-                        onEdit={() => startEditingMessage(message)}
-                        onDelete={() => setPendingDeleteMessage(message)}
-                        onResend={() => void resendMessage(message)}
-                      />
-                    );
-                  }
-
-                  return (
-                    <AssistantMessageBubble
-                      key={message.id}
-                      message={message}
-                      avatar={character?.avatar}
-                      showAvatar={showMessageAvatars}
-                      htmlCss={character?.htmlCss}
-                      tokenUsageFormatter={formatTokenUsage}
-                      onCopy={() => void copyMessage(message)}
-                      onRegenerate={() => void regenerateMessage(message)}
-                      onEdit={() => startEditingMessage(message)}
-                      onDelete={() => setPendingDeleteMessage(message)}
-                      onVariantPrev={() => void switchVariant(message, -1)}
-                      onVariantNext={() => void switchVariant(message, 1)}
-                      onDebug={setDebugMessage}
-                      disableRegenerate={Boolean(activeRequestId)}
-                    />
-                  );
-                })
-              )}
-              {activeRequestId && streamingCharacterId && safeMessagePage >= totalMessagePages ? (
-                <StreamingBubble
-                  key="streaming"
-                  characterAvatar={
-                    streamingCharacterId ? characterMap.get(streamingCharacterId)?.avatar : null
-                  }
-                  showAvatar={showMessageAvatars}
-                  htmlCss={
-                    streamingCharacterId ? characterMap.get(streamingCharacterId)?.htmlCss : undefined
-                  }
-                  content={streamingContent}
-                />
-              ) : null}
-              </div>
-              )}
-              {!isNearBottom ? (
-                <button
-                  type="button"
-                  className="sticky bottom-3 z-20 mx-auto flex items-center gap-1.5 rounded-full border border-white/10 bg-ink-900/90 px-3 py-1.5 text-xs font-medium text-slate-300 shadow-lg shadow-black/30 backdrop-blur-sm transition-colors hover:bg-ink-800 hover:text-slate-100"
-                  style={{ display: "flex", width: "fit-content", marginLeft: "auto", marginRight: "auto" }}
-                  onClick={scrollToBottom}
-                >
-                  <ArrowDown size={14} />
-                  {t("chat.scrollToBottom")}
-                </button>
-              ) : null}
-            </div>
-
-            <div className="shrink-0">
-              {activeQuickReplies.length > 0 ? (
-                <div className="max-w-2xl mx-auto mb-1 px-1">
-                  <button
-                    type="button"
-                    className="inline-flex h-6 items-center gap-1 text-xs font-medium text-slate-500 transition-colors hover:text-slate-300 active:text-slate-200"
-                    onClick={toggleQuickReplies}
-                  >
-                    <ChevronDown
-                      size={12}
-                      className={`transition-transform duration-200 ${quickRepliesOpen ? "" : "-rotate-90"}`}
-                    />
-                    {t("chat.quickReplies")}
-                  </button>
-                  <div
-                    className="overflow-hidden"
-                    style={{
-                      maxHeight: quickRepliesOpen ? "200px" : "0px",
-                      opacity: quickRepliesOpen ? 1 : 0,
-                      transition: "max-height 300ms ease-out, opacity 300ms ease-out"
-                    }}
-                  >
-                    <div className="mt-0.5 flex flex-wrap gap-1">
-                      {activeQuickReplies.map((qr) => (
-                        <button
-                          key={qr.id}
-                          type="button"
-                          className="inline-flex h-7 items-center gap-1 rounded-md border border-white/10 bg-ink-950/80 px-2 text-xs font-medium text-slate-300 transition-colors hover:border-ember-500/40 hover:bg-ink-900 hover:text-slate-100 active:bg-ink-800"
-                          onClick={() => setDraft((current) => current ? `${current}\n${qr.content}` : qr.content)}
-                        >
-                          {qr.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-              <div className="max-w-2xl mx-auto rounded-xl border border-white/5 bg-ink-950/95 p-1.5 sm:p-2 shadow-xl shadow-black/30 backdrop-blur-sm xl:bg-ink-950/40 xl:shadow-none">
-              <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-1.5 sm:gap-2">
-              <TextArea
-                ref={draftTextAreaRef}
-                className="chat-input !resize-none border-0 bg-transparent !px-2 !py-[11px] !text-sm leading-[1.4] focus:bg-transparent focus:ring-0 sm:!py-3"
-                style={{ height: "auto" }}
-                placeholder={t("chat.writeMessage")}
-                rows={1}
-                value={draft}
-                onInput={autoResizeDraftTextArea}
-                onChange={(event) => setDraft(event.target.value)}
+      <div className="flex flex-col h-full min-h-0 min-w-0">
+        <Panel
+          className="flex flex-col h-full min-h-0 min-w-0"
+          title={
+            titleEditing && activeChat ? (
+              <input
+                ref={titleInputRef}
+                className="chat-input w-full rounded bg-transparent px-1 py-0.5 text-sm font-semibold tracking-wide text-slate-100 outline-none border-none focus:outline-none focus:ring-0"
+                style={{ WebkitUserSelect: "none", userSelect: "none" }}
+                value={titleDraft}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                onBlur={() => void commitTitleRename()}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    const hasTouch = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
-                    if (hasTouch && window.innerWidth < 768) return;
+                  if (event.key === "Enter") {
                     event.preventDefault();
-                    void sendMessage();
+                    void commitTitleRename();
+                  }
+                  if (event.key === "Escape") {
+                    setTitleEditing(false);
                   }
                 }}
               />
-              {activeRequestId ? (
-                <Button className="!min-h-[40px] sm:!min-h-[44px]" variant="danger" onClick={stopGeneration}><StopCircle size={16} />{t("chat.stop")}</Button>
+            ) : (
+              <span
+                className="cursor-pointer rounded px-1 py-0.5 hover:bg-white/5 outline-none focus:outline-none focus:ring-0"
+                style={{ WebkitUserSelect: "none", userSelect: "none" }}
+                title={t("chat.renameHint")}
+                onClick={() => {
+                  if (!activeChat) {
+                    return;
+                  }
+                  setTitleDraft(activeChat.title);
+                  setTitleEditing(true);
+                  setTimeout(() => titleInputRef.current?.focus(), 0);
+                }}
+              >
+                {activeChat?.title ?? t("chat.messageStream")}
+              </span>
+            )
+          }
+          action={
+            activeChat ? (
+              <div className="relative" ref={memorySettingsRef}>
+                <Button
+                  aria-expanded={memorySettingsOpen}
+                  aria-label={t("chat.memorySettings")}
+                  className="!h-8 !min-h-8 !w-8 !p-0"
+                  variant="ghost"
+                  onClick={openMemorySettings}
+                >
+                  <Settings size={15} />
+                </Button>
+                {memorySettingsOpen ? (
+                  <div
+                    className="custom-scrollbar absolute right-0 top-10 z-20 max-h-80 w-56 overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-3 shadow-xl shadow-black/30 backdrop-blur-md sm:max-h-[calc(100dvh-22rem)]"
+                    onPointerDownCapture={handleMemorySettingsPointerDownCapture}
+                  >
+                    {settingsModels.length > 0 ? (
+                      <div className="mb-2 border-b border-white/10 pb-2">
+                        <button
+                          className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
+                          type="button"
+                          onClick={openModelDialog}
+                        >
+                          <span>{t("chat.modelSwitchTitle")}</span>
+                          <Sparkles size={14} className="text-slate-400" />
+                        </button>
+                      </div>
+                    ) : null}
+
+                    <div className="border-b border-white/10 pb-2">
+                      <button
+                        className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
+                        type="button"
+                        onClick={openMemoryDialog}
+                      >
+                        <span>{t("chat.memorySettings")}</span>
+                        <BrainCircuit size={14} className="text-slate-400" />
+                      </button>
+                    </div>
+
+                    <div className="border-b border-white/10 pb-2 pt-2">
+                      <button
+                        className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
+                        type="button"
+                        onClick={openBackgroundDialog}
+                      >
+                        <span>{backgroundCopy.title}</span>
+                        <Image size={14} className="text-slate-400" />
+                      </button>
+                    </div>
+
+                    <div className="border-b border-white/10 pb-2 pt-2">
+                      <button
+                        className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
+                        type="button"
+                        onClick={startEditingUserConfig}
+                      >
+                        <span>{t("chat.userConfigTitle")}</span>
+                        <FileText size={14} className="text-slate-400" />
+                      </button>
+                    </div>
+
+                    <div className="pt-2">
+                      <button
+                        className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
+                        type="button"
+                        onClick={startEditingProfile}
+                      >
+                        <span>{t("chat.userProfileTitle")}</span>
+                        <User size={14} className="text-slate-400" />
+                      </button>
+                      <div className="mt-1.5 flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold text-slate-100">
+                          {t("chat.autoSummarizeUser")}
+                        </p>
+                        <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-slate-400">
+                          <input
+                            checked={autoSummarizeUser}
+                            type="checkbox"
+                            className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                            onChange={(event) => void updateAutoSummarizeUser(event.target.checked)}
+                          />
+                          {t("chat.autoSummarizeUser")}
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null
+          }
+        >
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
+            {activeBackgroundUrl ? (
+              <div className="pointer-events-none absolute inset-0">
+                <img
+                  alt=""
+                  aria-hidden="true"
+                  className="h-full w-full object-cover"
+                  src={activeBackgroundUrl}
+                />
+                <div className="absolute inset-0 bg-black/35" />
+                <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(12,13,18,0.2),rgba(12,13,18,0.7))]" />
+              </div>
+            ) : (
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(251,146,60,0.08),transparent_38%)]" />
+            )}
+
+            <div className="relative z-10 flex min-h-0 flex-1 flex-col">
+              {!activeChat ? (
+                <EmptyState>{t("chat.selectOrCreate")}</EmptyState>
               ) : (
-                <Button className="!min-h-[40px] sm:!min-h-[44px]" disabled={loading || !draft.trim()} onClick={() => void sendMessage()}><Send size={16} />{t("chat.send")}</Button>
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <ErrorNotice message={error} />
+                  <SuccessNotice message={status} />
+
+                  <div
+                    ref={messageViewportRef}
+                    data-testid="chat-message-viewport"
+                    className={`custom-scrollbar min-h-0 flex-1 overscroll-auto scroll-smooth ${activeOpeningHtml ? "overflow-hidden" : "overflow-y-auto"}`}
+                  >
+                    {activeChat.messages.length === 0 && activeOpeningHtml ? (
+                      <iframe
+                        title={t("characters.openingHtml")}
+                        srcDoc={activeOpeningHtml}
+                        sandbox="allow-scripts"
+                        className="w-full h-full border-0"
+                      />
+                    ) : (
+                      <div className="mx-auto max-w-2xl space-y-4 rounded-2xl p-2 sm:space-y-7 sm:p-5">
+                        {activeChat.messages.length > MESSAGES_PER_PAGE ? (
+                          <div
+                            data-testid="chat-message-pagination"
+                            className="sticky top-0 z-10 -mx-2 -mt-2 mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-white/5 bg-ink-900/90 px-2 pb-3 pt-2 backdrop-blur-md sm:-mx-5 sm:-mt-5 sm:px-5 sm:pt-5"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-slate-200">
+                                {paginationCopy.page}
+                              </p>
+                              <p className="mt-1 text-xs text-slate-500">{paginationCopy.range}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                className="!min-h-[48px] !px-3 text-xs"
+                                data-testid="chat-page-prev"
+                                disabled={safeMessagePage <= 1}
+                                variant="secondary"
+                                onClick={() =>
+                                  setMessagePage((current) => Math.max(1, current - 1))
+                                }
+                              >
+                                <ChevronLeft size={14} />
+                                {paginationCopy.previous}
+                              </Button>
+                              <Button
+                                className="!min-h-[48px] !px-3 text-xs"
+                                data-testid="chat-page-next"
+                                disabled={safeMessagePage >= totalMessagePages}
+                                variant="secondary"
+                                onClick={() =>
+                                  setMessagePage((current) =>
+                                    Math.min(totalMessagePages, current + 1)
+                                  )
+                                }
+                              >
+                                {safeMessagePage >= totalMessagePages
+                                  ? paginationCopy.newest
+                                  : paginationCopy.next}
+                                <ChevronRight size={14} />
+                              </Button>
+                            </div>
+                          </div>
+                        ) : null}
+                        {activeChat.messages.length === 0 ? (
+                          <div className="flex h-full items-center justify-center">
+                            <EmptyState>{t("chat.noMessages")}</EmptyState>
+                          </div>
+                        ) : (
+                          pagedMessages.map((message) => {
+                            const isUser = message.role === "user";
+                            const isSystem = message.role === "system";
+                            const isErrorSystem =
+                              isSystem && message.content.startsWith(GENERATION_ERROR_PREFIX);
+                            const character = message.characterId
+                              ? characterMap.get(message.characterId)
+                              : undefined;
+                            if (isErrorSystem) {
+                              const errorText = message.content.slice(
+                                GENERATION_ERROR_PREFIX.length
+                              );
+                              const lastAssistant = [...activeChat.messages]
+                                .reverse()
+                                .find((m) => m.role === "assistant");
+                              return (
+                                <ErrorBubble
+                                  key={message.id}
+                                  characterAvatar={
+                                    lastAssistant?.characterId
+                                      ? characterMap.get(lastAssistant.characterId)?.avatar
+                                      : null
+                                  }
+                                  showAvatar={showMessageAvatars}
+                                  error={errorText}
+                                  onRetry={retryGeneration}
+                                  onDismiss={() =>
+                                    void api.messages.remove(message.id).then(() => {
+                                      setActiveChat((current) =>
+                                        current
+                                          ? {
+                                              ...current,
+                                              messages: current.messages.filter(
+                                                (m) => m.id !== message.id
+                                              )
+                                            }
+                                          : current
+                                      );
+                                    })
+                                  }
+                                />
+                              );
+                            }
+                            if (isSystem) {
+                              return (
+                                <SystemNotification key={message.id} content={message.content} />
+                              );
+                            }
+
+                            if (isUser) {
+                              return (
+                                <UserMessageBubble
+                                  key={message.id}
+                                  message={message}
+                                  showAvatar={showMessageAvatars}
+                                  onCopy={() => void copyMessage(message)}
+                                  onEdit={() => startEditingMessage(message)}
+                                  onDelete={() => setPendingDeleteMessage(message)}
+                                  onResend={() => void resendMessage(message)}
+                                />
+                              );
+                            }
+
+                            return (
+                              <AssistantMessageBubble
+                                key={message.id}
+                                message={message}
+                                avatar={character?.avatar}
+                                showAvatar={showMessageAvatars}
+                                htmlCss={character?.htmlCss}
+                                tokenUsageFormatter={formatTokenUsage}
+                                onCopy={() => void copyMessage(message)}
+                                onRegenerate={() => void regenerateMessage(message)}
+                                onEdit={() => startEditingMessage(message)}
+                                onDelete={() => setPendingDeleteMessage(message)}
+                                onVariantPrev={() => void switchVariant(message, -1)}
+                                onVariantNext={() => void switchVariant(message, 1)}
+                                onDebug={setDebugMessage}
+                                disableRegenerate={Boolean(activeRequestId)}
+                              />
+                            );
+                          })
+                        )}
+                        {activeRequestId &&
+                        streamingCharacterId &&
+                        safeMessagePage >= totalMessagePages ? (
+                          <StreamingBubble
+                            key="streaming"
+                            characterAvatar={
+                              streamingCharacterId
+                                ? characterMap.get(streamingCharacterId)?.avatar
+                                : null
+                            }
+                            showAvatar={showMessageAvatars}
+                            htmlCss={
+                              streamingCharacterId
+                                ? characterMap.get(streamingCharacterId)?.htmlCss
+                                : undefined
+                            }
+                            content={streamingContent}
+                          />
+                        ) : null}
+                      </div>
+                    )}
+                    {!isNearBottom ? (
+                      <button
+                        type="button"
+                        className="sticky bottom-3 z-20 mx-auto flex items-center gap-1.5 rounded-full border border-white/10 bg-ink-900/90 px-3 py-1.5 text-xs font-medium text-slate-300 shadow-lg shadow-black/30 backdrop-blur-sm transition-colors hover:bg-ink-800 hover:text-slate-100"
+                        style={{
+                          display: "flex",
+                          width: "fit-content",
+                          marginLeft: "auto",
+                          marginRight: "auto"
+                        }}
+                        onClick={scrollToBottom}
+                      >
+                        <ArrowDown size={14} />
+                        {t("chat.scrollToBottom")}
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <div className="shrink-0">
+                    {activeQuickReplies.length > 0 ? (
+                      <div className="mx-auto mb-1 max-w-2xl px-1">
+                        <button
+                          type="button"
+                          className="inline-flex h-6 items-center gap-1 text-xs font-medium text-slate-500 transition-colors hover:text-slate-300 active:text-slate-200"
+                          onClick={toggleQuickReplies}
+                        >
+                          <ChevronDown
+                            size={12}
+                            className={`transition-transform duration-200 ${quickRepliesOpen ? "" : "-rotate-90"}`}
+                          />
+                          {t("chat.quickReplies")}
+                        </button>
+                        <div
+                          className="overflow-hidden"
+                          style={{
+                            maxHeight: quickRepliesOpen ? "200px" : "0px",
+                            opacity: quickRepliesOpen ? 1 : 0,
+                            transition: "max-height 300ms ease-out, opacity 300ms ease-out"
+                          }}
+                        >
+                          <div className="mt-0.5 flex flex-wrap gap-1">
+                            {activeQuickReplies.map((qr) => (
+                              <button
+                                key={qr.id}
+                                type="button"
+                                className="inline-flex h-7 items-center gap-1 rounded-md border border-white/10 bg-ink-950/80 px-2 text-xs font-medium text-slate-300 transition-colors hover:border-ember-500/40 hover:bg-ink-900 hover:text-slate-100 active:bg-ink-800"
+                                onClick={() =>
+                                  setDraft((current) =>
+                                    current ? `${current}\n${qr.content}` : qr.content
+                                  )
+                                }
+                              >
+                                {qr.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="mx-auto max-w-2xl rounded-xl border border-white/5 bg-ink-950/95 p-1.5 shadow-xl shadow-black/30 backdrop-blur-sm sm:p-2 xl:bg-ink-950/40 xl:shadow-none">
+                      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-1.5 sm:gap-2">
+                        <TextArea
+                          ref={draftTextAreaRef}
+                          className="chat-input !resize-none border-0 bg-transparent !px-2 !py-[11px] !text-sm leading-[1.4] focus:bg-transparent focus:ring-0 sm:!py-3"
+                          style={{ height: "auto" }}
+                          placeholder={t("chat.writeMessage")}
+                          rows={1}
+                          value={draft}
+                          onInput={autoResizeDraftTextArea}
+                          onChange={(event) => setDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" && !event.shiftKey) {
+                              const hasTouch =
+                                navigator.maxTouchPoints > 0 || "ontouchstart" in window;
+                              if (hasTouch && window.innerWidth < 768) return;
+                              event.preventDefault();
+                              void sendMessage();
+                            }
+                          }}
+                        />
+                        {activeRequestId ? (
+                          <Button
+                            className="!min-h-[40px] sm:!min-h-[44px]"
+                            variant="danger"
+                            onClick={stopGeneration}
+                          >
+                            <StopCircle size={16} />
+                            {t("chat.stop")}
+                          </Button>
+                        ) : (
+                          <Button
+                            className="!min-h-[40px] sm:!min-h-[44px]"
+                            disabled={loading || !draft.trim()}
+                            onClick={() => void sendMessage()}
+                          >
+                            <Send size={16} />
+                            {t("chat.send")}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               )}
+            </div>
+          </div>
+        </Panel>
+      </div>
+      {editingMessage ? (
+        <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm p-4">
+          <section
+            aria-labelledby="edit-message-title"
+            className="animate-scale-in w-full max-w-2xl rounded-2xl border border-white/10 bg-ink-900 p-6 shadow-2xl shadow-black/50 max-h-[85vh] overflow-y-auto"
+            role="dialog"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3
+                  className="text-lg font-semibold tracking-tight text-slate-100"
+                  id="edit-message-title"
+                >
+                  {t("chat.editMessageTitle")}
+                </h3>
+                <p className="mt-1 text-sm text-slate-400">{t("chat.editMessageHelp")}</p>
+              </div>
+              <button
+                aria-label={t("common.cancel")}
+                className="grid h-[48px] w-[48px] shrink-0 place-items-center rounded-full bg-white/5 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200"
+                type="button"
+                onClick={cancelEditingMessage}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="mt-6">
+              <TextArea
+                autoFocus
+                className="min-h-[200px] text-base leading-relaxed"
+                placeholder={t("chat.editMessagePlaceholder")}
+                value={editDraft}
+                onChange={(event) => setEditDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    cancelEditingMessage();
+                  }
+
+                  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                    event.preventDefault();
+                    void saveEditedMessage();
+                  }
+                }}
+              />
+            </div>
+
+            <div className="mt-6 flex flex-wrap justify-end gap-3 pt-4 border-t border-white/5">
+              <Button disabled={loading} variant="ghost" onClick={cancelEditingMessage}>
+                <X size={16} />
+                {t("common.cancel")}
+              </Button>
+              <Button
+                disabled={loading || !editDraft.trim()}
+                onClick={() => void saveEditedMessage()}
+              >
+                <Check size={16} />
+                {t("chat.saveEdit")}
+              </Button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+      {pendingDeleteMessage ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={t("common.delete")}
+          loading={loading}
+          message={t("chat.deleteMessageConfirm")}
+          title={t("chat.deleteMessageTitle")}
+          onCancel={() => setPendingDeleteMessage(null)}
+          onConfirm={() => void deleteMessage()}
+        />
+      ) : null}
+      {showUserConfigDialog ? (
+        <Modal title={t("chat.userConfigTitle")} onClose={cancelEditingUserConfig}>
+          <div className="space-y-4">
+            <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
+              {t("chat.userConfigHelp")}
+            </p>
+            <div className="space-y-5">
+              <div className="space-y-2">
+                <p className="text-sm font-semibold text-slate-300">{t("chat.userConfigPrefix")}</p>
+                <MarkdownEditor
+                  height={200}
+                  placeholder={t("chat.userConfigPrefixHelp")}
+                  value={editingPersonaDraft.prefix}
+                  onChange={(nextValue) => updateUserConfigDraft("prefix", nextValue)}
+                />
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-semibold text-slate-300">{t("chat.userConfigPrompt")}</p>
+                <MarkdownEditor
+                  height={200}
+                  placeholder={t("chat.userConfigPromptHelp")}
+                  value={editingPersonaDraft.prompt}
+                  onChange={(nextValue) => updateUserConfigDraft("prompt", nextValue)}
+                />
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-semibold text-slate-300">{t("chat.userConfigSuffix")}</p>
+                <MarkdownEditor
+                  height={200}
+                  placeholder={t("chat.userConfigSuffixHelp")}
+                  value={editingPersonaDraft.suffix}
+                  onChange={(nextValue) => updateUserConfigDraft("suffix", nextValue)}
+                />
               </div>
             </div>
+            <div className="flex justify-end gap-3 pt-2">
+              <Button
+                className="!min-h-[36px]"
+                disabled={loading}
+                variant="ghost"
+                onClick={cancelEditingUserConfig}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                className="!min-h-[36px]"
+                disabled={loading}
+                onClick={() => void saveUserConfig()}
+              >
+                {t("common.save")}
+              </Button>
             </div>
           </div>
-        )}
-      </Panel>
-    </div>
-    {editingMessage ? (
-      <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm p-4">
-        <section
-          aria-labelledby="edit-message-title"
-          className="animate-scale-in w-full max-w-2xl rounded-2xl border border-white/10 bg-ink-900 p-6 shadow-2xl shadow-black/50 max-h-[85vh] overflow-y-auto"
-          role="dialog"
-        >
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h3 className="text-lg font-semibold tracking-tight text-slate-100" id="edit-message-title">
-                {t("chat.editMessageTitle")}
-              </h3>
-              <p className="mt-1 text-sm text-slate-400">{t("chat.editMessageHelp")}</p>
+        </Modal>
+      ) : null}
+      {showUserProfileDialog ? (
+        <Modal title={t("chat.userProfileTitle")} onClose={cancelEditingProfile}>
+          <div className="space-y-4">
+            <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
+              {t("chat.userProfileHelp")}
+            </p>
+            <MarkdownEditor
+              height={300}
+              value={editingProfileDraft}
+              onChange={(nextValue) => setEditingProfileDraft(nextValue)}
+            />
+            <div className="flex justify-end gap-3">
+              <Button
+                className="!min-h-[36px]"
+                disabled={loading}
+                variant="ghost"
+                onClick={cancelEditingProfile}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                className="!min-h-[36px]"
+                disabled={loading}
+                onClick={() => void saveUserProfileSummary()}
+              >
+                {t("common.save")}
+              </Button>
             </div>
-            <button
-              aria-label={t("common.cancel")}
-              className="grid h-[48px] w-[48px] shrink-0 place-items-center rounded-full bg-white/5 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200"
-              type="button"
-              onClick={cancelEditingMessage}
-            >
-              <X size={18} />
-            </button>
           </div>
-
-          <div className="mt-6">
-            <TextArea
-              autoFocus
-              className="min-h-[200px] text-base leading-relaxed"
-              placeholder={t("chat.editMessagePlaceholder")}
-              value={editDraft}
-            onChange={(event) => setEditDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                cancelEditingMessage();
-              }
-
-              if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                event.preventDefault();
-                void saveEditedMessage();
-              }
-            }}
-          />
+        </Modal>
+      ) : null}
+      {showModelDialog ? (
+        <Modal title={t("chat.modelSwitchTitle")} onClose={closeModelDialog}>
+          <div className="space-y-1.5">
+            {settingsModels.map((model) => (
+              <button
+                className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
+                  activeModelId === model.id
+                    ? "bg-ember-500/15 text-ember-200 ring-1 ring-ember-500/30"
+                    : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                }`}
+                disabled={loading}
+                key={model.id}
+                type="button"
+                onClick={() => {
+                  void switchModel(model);
+                  closeModelDialog();
+                }}
+              >
+                <Sparkles
+                  size={14}
+                  className={activeModelId === model.id ? "text-ember-300" : "text-slate-500"}
+                />
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {model.label || model.model}
+                </span>
+                <span className="ml-auto shrink-0 text-xs font-medium text-slate-500">
+                  {model.provider}
+                </span>
+              </button>
+            ))}
           </div>
-
-          <div className="mt-6 flex flex-wrap justify-end gap-3 pt-4 border-t border-white/5">
-            <Button disabled={loading} variant="ghost" onClick={cancelEditingMessage}>
-              <X size={16} />
-              {t("common.cancel")}
-            </Button>
-            <Button disabled={loading || !editDraft.trim()} onClick={() => void saveEditedMessage()}>
-              <Check size={16} />
-              {t("chat.saveEdit")}
-            </Button>
-          </div>
-        </section>
-      </div>
-    ) : null}
-    {pendingDeleteMessage ? (
-      <ConfirmDialog
-        cancelLabel={t("common.cancel")}
-        confirmLabel={t("common.delete")}
-        loading={loading}
-        message={t("chat.deleteMessageConfirm")}
-        title={t("chat.deleteMessageTitle")}
-        onCancel={() => setPendingDeleteMessage(null)}
-        onConfirm={() => void deleteMessage()}
-      />
-    ) : null}
-    {showUserConfigDialog ? (
-      <Modal title={t("chat.userConfigTitle")} onClose={cancelEditingUserConfig}>
-        <div className="space-y-4">
-          <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
-            {t("chat.userConfigHelp")}
-          </p>
-          <div className="space-y-5">
-            <div className="space-y-2">
-              <p className="text-sm font-semibold text-slate-300">
-                {t("chat.userConfigPrefix")}
-              </p>
-              <MarkdownEditor
-                height={200}
-                placeholder={t("chat.userConfigPrefixHelp")}
-                value={editingPersonaDraft.prefix}
-                onChange={(nextValue) => updateUserConfigDraft("prefix", nextValue)}
+        </Modal>
+      ) : null}
+      {showBackgroundDialog ? (
+        <Modal title={backgroundCopy.title} onClose={closeBackgroundDialog}>
+          <div className="space-y-4">
+            <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
+              {backgroundCopy.help}
+            </p>
+            <div className="space-y-3">
+              <TextInput
+                placeholder={backgroundCopy.inputPlaceholder}
+                value={backgroundInputValue}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  setBackgroundInputValue(nextValue);
+                  setBackgroundDraft(nextValue);
+                }}
               />
+              <div className="flex flex-wrap gap-3">
+                <Button
+                  className="!min-h-[36px]"
+                  disabled={loading}
+                  variant="secondary"
+                  onClick={() => backgroundFileInputRef.current?.click()}
+                >
+                  {backgroundCopy.upload}
+                </Button>
+                <Button
+                  className="!min-h-[36px]"
+                  disabled={loading || !backgroundDraft.trim()}
+                  variant="ghost"
+                  onClick={() => {
+                    setBackgroundDraft("");
+                    setBackgroundInputValue("");
+                  }}
+                >
+                  {backgroundCopy.clear}
+                </Button>
+                <input
+                  ref={backgroundFileInputRef}
+                  className="sr-only"
+                  type="file"
+                  accept="image/*"
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0];
+                    event.currentTarget.value = "";
+                    void updateBackgroundFile(file);
+                  }}
+                />
+              </div>
+              <div className="rounded-xl border border-white/10 bg-ink-950/40 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-slate-200">{backgroundCopy.preview}</p>
+                  {usingUploadedBackground ? (
+                    <span className="text-xs font-medium text-ember-200">
+                      {backgroundCopy.uploaded}
+                    </span>
+                  ) : null}
+                </div>
+                {backgroundDraft.trim() ? (
+                  <div className="overflow-hidden rounded-lg border border-white/10 bg-black/20">
+                    <img
+                      alt={backgroundCopy.preview}
+                      className="h-44 w-full object-cover"
+                      src={backgroundDraft}
+                    />
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-400">{backgroundCopy.empty}</p>
+                )}
+              </div>
             </div>
-            <div className="space-y-2">
-              <p className="text-sm font-semibold text-slate-300">
-                {t("chat.userConfigPrompt")}
-              </p>
-              <MarkdownEditor
-                height={200}
-                placeholder={t("chat.userConfigPromptHelp")}
-                value={editingPersonaDraft.prompt}
-                onChange={(nextValue) => updateUserConfigDraft("prompt", nextValue)}
-              />
-            </div>
-            <div className="space-y-2">
-              <p className="text-sm font-semibold text-slate-300">
-                {t("chat.userConfigSuffix")}
-              </p>
-              <MarkdownEditor
-                height={200}
-                placeholder={t("chat.userConfigSuffixHelp")}
-                value={editingPersonaDraft.suffix}
-                onChange={(nextValue) => updateUserConfigDraft("suffix", nextValue)}
-              />
+            <div className="flex justify-end gap-3">
+              <Button
+                className="!min-h-[36px]"
+                disabled={loading}
+                variant="ghost"
+                onClick={closeBackgroundDialog}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                className="!min-h-[36px]"
+                disabled={loading}
+                onClick={() => void saveBackground()}
+              >
+                {t("common.save")}
+              </Button>
             </div>
           </div>
-          <div className="flex justify-end gap-3 pt-2">
-            <Button
-              className="!min-h-[36px]"
-              disabled={loading}
-              variant="ghost"
-              onClick={cancelEditingUserConfig}
-            >
-              {t("common.cancel")}
-            </Button>
-            <Button
-              className="!min-h-[36px]"
-              disabled={loading}
-              onClick={() => void saveUserConfig()}
-            >
-              {t("common.save")}
-            </Button>
-          </div>
-        </div>
-      </Modal>
-    ) : null}
-    {showUserProfileDialog ? (
-      <Modal title={t("chat.userProfileTitle")} onClose={cancelEditingProfile}>
-        <div className="space-y-4">
-          <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
-            {t("chat.userProfileHelp")}
-          </p>
-          <MarkdownEditor
-            height={300}
-            value={editingProfileDraft}
-            onChange={(nextValue) => setEditingProfileDraft(nextValue)}
-          />
-          <div className="flex justify-end gap-3">
-            <Button
-              className="!min-h-[36px]"
-              disabled={loading}
-              variant="ghost"
-              onClick={cancelEditingProfile}
-            >
-              {t("common.cancel")}
-            </Button>
-            <Button
-              className="!min-h-[36px]"
-              disabled={loading}
-              onClick={() => void saveUserProfileSummary()}
-            >
-              {t("common.save")}
-            </Button>
-          </div>
-        </div>
-      </Modal>
-    ) : null}
-    {showModelDialog ? (
-      <Modal title={t("chat.modelSwitchTitle")} onClose={closeModelDialog}>
-        <div className="space-y-1.5">
-          {settingsModels.map((model) => (
-            <button
-              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
-                activeModelId === model.id
-                  ? "bg-ember-500/15 text-ember-200 ring-1 ring-ember-500/30"
-                  : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
-              }`}
-              disabled={loading}
-              key={model.id}
-              type="button"
-              onClick={() => {
-                void switchModel(model);
-                closeModelDialog();
+        </Modal>
+      ) : null}
+      {showMemoryDialog ? (
+        <Modal title={t("chat.memorySettings")} onClose={closeMemoryDialog}>
+          <div className="space-y-4">
+            <TextInput
+              min={1}
+              max={50}
+              type="number"
+              value={memoryDraft}
+              onChange={(event) => setMemoryDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  void updateMemory();
+                }
               }}
-            >
-              <Sparkles
-                size={14}
-                className={activeModelId === model.id ? "text-ember-300" : "text-slate-500"}
-              />
-              <span className="min-w-0 flex-1 truncate font-medium">
-                {model.label || model.model}
-              </span>
-              <span className="ml-auto shrink-0 text-xs font-medium text-slate-500">
-                {model.provider}
-              </span>
-            </button>
-          ))}
-        </div>
-      </Modal>
-    ) : null}
-    {showMemoryDialog ? (
-      <Modal title={t("chat.memorySettings")} onClose={closeMemoryDialog}>
-        <div className="space-y-4">
-          <TextInput
-            min={1}
-            max={50}
-            type="number"
-            value={memoryDraft}
-            onChange={(event) => setMemoryDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                void updateMemory();
-              }
-            }}
-          />
-          <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
-            {t("chat.memoryHelp")}
-          </p>
-          <div className="flex justify-end gap-3">
-            <Button
-              className="!min-h-[36px]"
-              disabled={loading}
-              variant="ghost"
-              onClick={closeMemoryDialog}
-            >
-              {t("common.cancel")}
-            </Button>
-            <Button
-              className="!min-h-[36px]"
-              disabled={loading}
-              onClick={() => void updateMemory()}
-            >
-              {t("common.save")}
-            </Button>
+            />
+            <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
+              {t("chat.memoryHelp")}
+            </p>
+            <div className="flex justify-end gap-3">
+              <Button
+                className="!min-h-[36px]"
+                disabled={loading}
+                variant="ghost"
+                onClick={closeMemoryDialog}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                className="!min-h-[36px]"
+                disabled={loading}
+                onClick={() => void updateMemory()}
+              >
+                {t("common.save")}
+              </Button>
+            </div>
           </div>
-        </div>
-      </Modal>
-    ) : null}
-    <DebugPromptDrawer
-      open={debugMessage !== null}
-      onClose={() => setDebugMessage(null)}
-      activeChat={activeChat}
-      character={activeChat?.characterId ? characterMap.get(activeChat.characterId) : undefined}
-      debugMessage={debugMessage}
-    />
+        </Modal>
+      ) : null}
+      <DebugPromptDrawer
+        open={debugMessage !== null}
+        onClose={() => setDebugMessage(null)}
+        activeChat={activeChat}
+        character={activeChat?.characterId ? characterMap.get(activeChat.characterId) : undefined}
+        debugMessage={debugMessage}
+      />
     </>
   );
 }

@@ -55,6 +55,7 @@ export type CharacterCardImportInput = CharacterCardDTO;
 export type ChatInput = {
   title: string;
   characterId: string;
+  backgroundUrl?: string;
   memoryTurns?: number;
   userPersona?: string;
   userProfileSummary?: string;

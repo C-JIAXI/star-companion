@@ -192,9 +192,7 @@ export const parseUserCustomConfig = (value?: string | null): UserCustomConfigDT
 
 export const hasUserCustomConfigContent = (value?: Partial<UserCustomConfigDTO> | null) => {
   const normalized = normalizeUserCustomConfig(value);
-  return Boolean(
-    normalized.prefix.trim() || normalized.prompt.trim() || normalized.suffix.trim()
-  );
+  return Boolean(normalized.prefix.trim() || normalized.prompt.trim() || normalized.suffix.trim());
 };
 
 export const serializeUserCustomConfig = (value?: Partial<UserCustomConfigDTO> | null) => {
@@ -220,6 +218,7 @@ export interface ChatDTO {
   id: string;
   title: string;
   characterId: string | null;
+  backgroundUrl: string;
   messageCount: number;
   memoryTurns: number;
   userPersona: string;

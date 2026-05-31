@@ -19,8 +19,21 @@ describe("chatUpdateSchema", () => {
       userPersona: "Roleplay as an engineer."
     });
     assert.equal("characterId" in parsed, false);
+    assert.equal("backgroundUrl" in parsed, false);
     assert.equal("memoryTurns" in parsed, false);
     assert.equal("userProfileSummary" in parsed, false);
+  });
+
+  it("accepts chat background URLs for per-chat backgrounds", () => {
+    const remote = parseBody(chatUpdateSchema, {
+      backgroundUrl: "https://example.com/background.webp"
+    });
+    const uploaded = parseBody(chatUpdateSchema, {
+      backgroundUrl: "data:image/png;base64,QUJDRA=="
+    });
+
+    assert.equal(remote.backgroundUrl, "https://example.com/background.webp");
+    assert.equal(uploaded.backgroundUrl, "data:image/png;base64,QUJDRA==");
   });
 });
 
@@ -73,11 +86,14 @@ describe("characterPageQuerySchema", () => {
       pageSize: 40
     });
 
-    assert.deepEqual(parseBody(characterPageQuerySchema, { q: "  pilot  ", page: "2", pageSize: "500" }), {
-      q: "pilot",
-      page: 2,
-      pageSize: 100
-    });
+    assert.deepEqual(
+      parseBody(characterPageQuerySchema, { q: "  pilot  ", page: "2", pageSize: "500" }),
+      {
+        q: "pilot",
+        page: 2,
+        pageSize: 100
+      }
+    );
   });
 });
 

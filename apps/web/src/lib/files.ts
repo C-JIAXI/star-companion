@@ -12,6 +12,18 @@ export const readFileText = (file: File) =>
   new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.addEventListener("load", () => resolve(String(reader.result ?? "")));
-    reader.addEventListener("error", () => reject(reader.error ?? new Error("Failed to read file")));
+    reader.addEventListener("error", () =>
+      reject(reader.error ?? new Error("Failed to read file"))
+    );
     reader.readAsText(file);
+  });
+
+export const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(String(reader.result ?? "")));
+    reader.addEventListener("error", () =>
+      reject(reader.error ?? new Error("Failed to read file"))
+    );
+    reader.readAsDataURL(file);
   });

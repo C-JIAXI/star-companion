@@ -8,78 +8,79 @@ datasource db {
 }
 
 model UserSettings {
-  id             String   @id @default(cuid())
-  activeProvider String   @default("openai-compatible")
-  apiBaseUrl     String   @default("https://api.openai.com/v1")
+  id                   String    @id @default(cuid())
+  activeProvider       String    @default("openai-compatible")
+  apiBaseUrl           String    @default("https://api.openai.com/v1")
   /// MVP stores this locally in plain text. A later phase should encrypt it at rest.
-  apiKey         String?
-  model          String   @default("gpt-4o-mini")
-  temperature    Float    @default(0.8)
-  maxTokens      Int      @default(800)
-  topP           Float    @default(1)
+  apiKey               String?
+  model                String    @default("gpt-4o-mini")
+  temperature          Float     @default(0.8)
+  maxTokens            Int       @default(800)
+  topP                 Float     @default(1)
   /// UI language. Valid values are "zh-CN" and "en".
-  language       String   @default("zh-CN")
+  language             String    @default("zh-CN")
   /// JSON array of model presets: [{ id, label, provider, apiBaseUrl, key, model }]
-  models         Json?    @default("[]")
+  models               Json?     @default("[]")
   /// Local user profile memory summarised from user messages.
-  userProfileSummary String @default("")
-  autoSummarizeUser Boolean @default(true)
-  showMessageAvatars Boolean @default(true)
+  userProfileSummary   String    @default("")
+  autoSummarizeUser    Boolean   @default(true)
+  showMessageAvatars   Boolean   @default(true)
   userProfileUpdatedAt DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 }
 
 model Character {
-  id          String   @id @default(cuid())
-  name        String
-  avatar      String?
-  description String   @default("")
-  prefix      String   @default("")
-  prompt      String   @default("")
-  suffix      String   @default("")
+  id           String   @id @default(cuid())
+  name         String
+  avatar       String?
+  description  String   @default("")
+  prefix       String   @default("")
+  prompt       String   @default("")
+  suffix       String   @default("")
   htmlCss      String   @default("")
   openingHtml  String   @default("")
   loreEntries  Json     @default("[]")
   quickReplies Json     @default("[]")
   createdAt    DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  updatedAt    DateTime @updatedAt
 
   chats    Chat[]
   messages Message[]
 }
 
 model Chat {
-  id                  String   @id @default(cuid())
-  title               String
-  characterId         String?
-  memoryTurns         Int      @default(12)
+  id                   String    @id @default(cuid())
+  title                String
+  characterId          String?
+  backgroundUrl        String    @default("")
+  memoryTurns          Int       @default(12)
   /// Explicit user-authored persona / preference notes for this chat.
-  userPersona         String   @default("")
-  userProfileSummary  String   @default("")
+  userPersona          String    @default("")
+  userProfileSummary   String    @default("")
   userProfileUpdatedAt DateTime?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   character Character? @relation(fields: [characterId], references: [id], onDelete: SetNull)
-  messages Message[]
+  messages  Message[]
 
   @@index([characterId])
 }
 
 model Message {
-  id                 String    @id @default(cuid())
+  id                 String   @id @default(cuid())
   chatId             String
   /// Valid values: "user", "assistant", or "system".
   role               String
   characterId        String?
   content            String
-  variants           Json      @default("[]")
-  activeVariantIndex Int       @default(0)
+  variants           Json     @default("[]")
+  activeVariantIndex Int      @default(0)
   tokenUsage         Json?
   loreMatches        Json?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   chat      Chat       @relation(fields: [chatId], references: [id], onDelete: Cascade)
   character Character? @relation(fields: [characterId], references: [id], onDelete: SetNull)

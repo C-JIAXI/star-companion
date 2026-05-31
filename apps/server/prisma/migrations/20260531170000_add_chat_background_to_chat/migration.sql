@@ -1,0 +1,1 @@
+ALTER TABLE "Chat" ADD COLUMN "backgroundUrl" TEXT NOT NULL DEFAULT '';

@@ -107,6 +107,7 @@ backupsRouter.post(
         const data = {
           title: chat.title,
           characterId: characterExists?.id ?? null,
+          backgroundUrl: chat.backgroundUrl,
           memoryTurns: chat.memoryTurns,
           userPersona: chat.userPersona,
           userProfileSummary: chat.userProfileSummary,

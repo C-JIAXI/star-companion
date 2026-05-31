@@ -1,10 +1,4 @@
-import type {
-  Character,
-  Chat,
-  Message,
-  Prisma,
-  UserSettings
-} from "@prisma/client";
+import type { Character, Chat, Message, Prisma, UserSettings } from "@prisma/client";
 import { resolveCharacterRecord } from "./services/characterCards.js";
 
 interface ModelPreset {
@@ -202,6 +196,7 @@ export const serializeChat = (chat: Chat, messageCount?: number) => ({
   id: chat.id,
   title: chat.title,
   characterId: chat.characterId,
+  backgroundUrl: chat.backgroundUrl,
   messageCount: messageCount ?? 0,
   memoryTurns: chat.memoryTurns,
   userPersona: chat.userPersona,
