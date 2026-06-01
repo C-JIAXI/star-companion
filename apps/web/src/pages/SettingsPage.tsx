@@ -1,4 +1,5 @@
 import {
+  CheckSquare,
   ChevronDown,
   ChevronRight,
   Download,
@@ -8,6 +9,7 @@ import {
   RefreshCw,
   Save,
   ServerCog,
+  Square,
   Trash2,
   Wrench
 } from "lucide-react";
@@ -386,6 +388,8 @@ export function SettingsPage() {
   const [expandedPresetId, setExpandedPresetId] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSection>("runtime");
   const [modelImportText, setModelImportText] = useState("");
+  const [presetBatchMode, setPresetBatchMode] = useState(false);
+  const [presetSelectedIds, setPresetSelectedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     void api.settings
@@ -611,6 +615,40 @@ export function SettingsPage() {
     }));
     setExpandedPresetId(nextPreset.id);
     setActiveSection("presets");
+  };
+
+  const togglePresetBatchMode = () => {
+    setPresetBatchMode((current) => !current);
+    setPresetSelectedIds(new Set());
+  };
+
+  const toggleAllPresets = () => {
+    if (presetSelectedIds.size === form.models.length) {
+      setPresetSelectedIds(new Set());
+    } else {
+      setPresetSelectedIds(new Set(form.models.map((p) => p.id)));
+    }
+  };
+
+  const togglePresetSelected = (id: string, selected: boolean) => {
+    setPresetSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (selected) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  };
+
+  const deleteSelectedPresets = () => {
+    setForm((current) => ({
+      ...current,
+      models: current.models.filter((preset) => !presetSelectedIds.has(preset.id))
+    }));
+    setPresetSelectedIds(new Set());
+    setPresetBatchMode(false);
   };
 
   const addModelPresets = (modelIds: string[]) => {
@@ -1037,6 +1075,18 @@ export function SettingsPage() {
                 <Plus size={14} />
                 {copy.addPreset}
               </Button>
+              {form.models.length > 0 ? (
+                <Button
+                  className="!min-h-[34px] !px-3 text-xs"
+                  variant={presetBatchMode ? "secondary" : "ghost"}
+                  onClick={togglePresetBatchMode}
+                >
+                  {presetBatchMode ? <CheckSquare size={14} /> : <Square size={14} />}
+                  {presetBatchMode
+                    ? (language === "zh-CN" ? "退出批量" : "Exit Batch")
+                    : (language === "zh-CN" ? "批量管理" : "Batch Manage")}
+                </Button>
+              ) : null}
             </div>
           }
         >
@@ -1073,6 +1123,34 @@ export function SettingsPage() {
                 {copy.presetEmpty}
               </div>
             ) : (
+              <>
+                {presetBatchMode ? (
+                  <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-xs text-slate-300">
+                    <label className="flex cursor-pointer items-center gap-2">
+                      <input
+                        checked={presetSelectedIds.size === form.models.length && form.models.length > 0}
+                        type="checkbox"
+                        className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                        onChange={toggleAllPresets}
+                      />
+                      {language === "zh-CN"
+                        ? `全选 (${presetSelectedIds.size}/${form.models.length})`
+                        : `Select all (${presetSelectedIds.size}/${form.models.length})`}
+                    </label>
+                    {presetSelectedIds.size > 0 ? (
+                      <Button
+                        className="!min-h-[28px] !px-2 text-xs"
+                        variant="danger"
+                        onClick={deleteSelectedPresets}
+                      >
+                        <Trash2 size={12} />
+                        {language === "zh-CN"
+                          ? `删除选中 (${presetSelectedIds.size})`
+                          : `Delete selected (${presetSelectedIds.size})`}
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
               <div className="space-y-3">
                 {form.models.map((preset, index) => {
                   const isActive =
@@ -1094,22 +1172,46 @@ export function SettingsPage() {
                   return (
                     <div
                       key={preset.id}
-                      className={`rounded-xl border px-4 py-4 transition-all duration-200 ${cardClassName}`}
+                      className={`rounded-xl border px-4 py-4 transition-all duration-200 ${
+                        presetBatchMode ? "cursor-pointer hover:bg-white/10" : ""
+                      } ${
+                        presetSelectedIds.has(preset.id)
+                          ? "border-ember-500/40 shadow-lg shadow-ember-500/10"
+                          : cardClassName
+                      }`}
+                      onClick={presetBatchMode ? () => togglePresetSelected(preset.id, !presetSelectedIds.has(preset.id)) : undefined}
                     >
                       <div className={`flex flex-col gap-3 border-b pb-4 md:flex-row md:items-start md:justify-between ${settingsDividerClassName}`}>
                         <div className="min-w-0 flex-1 space-y-3">
                           <button
                             className="flex w-full items-start gap-3 rounded-lg text-left outline-none transition-colors hover:text-slate-100 focus:text-slate-100"
                             type="button"
-                            onClick={() =>
-                              setExpandedPresetId((current) => (current === preset.id ? null : preset.id))
-                            }
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              if (presetBatchMode) {
+                                togglePresetSelected(preset.id, !presetSelectedIds.has(preset.id));
+                              } else {
+                                setExpandedPresetId((current) => (current === preset.id ? null : preset.id));
+                              }
+                            }}
                           >
-                            <span
-                              className={`mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors ${toggleIconClassName}`}
-                            >
-                              {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                            </span>
+                            {presetBatchMode ? (
+                              <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-ember-500/30 bg-ember-500/10 transition-colors">
+                                {presetSelectedIds.has(preset.id) ? (
+                                  <svg className="h-4 w-4 text-ember-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                  </svg>
+                                ) : (
+                                  <Square size={14} className="text-slate-500" />
+                                )}
+                              </span>
+                            ) : (
+                              <span
+                                className={`mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors ${toggleIconClassName}`}
+                              >
+                                {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                              </span>
+                            )}
                             <div className="min-w-0 space-y-2">
                               <div className="truncate text-sm font-semibold text-slate-100">
                                 {getPresetDisplayName(preset, language)}
@@ -1215,6 +1317,7 @@ export function SettingsPage() {
                   );
                 })}
               </div>
+              </>
             )}
           </div>
         </Panel>
