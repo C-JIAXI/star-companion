@@ -117,11 +117,11 @@ const providerTemplates = [
     model: "glm-4-flash"
   },
   {
-    id: "openrouter",
-    label: "OpenRouter",
-    provider: "openrouter",
-    apiBaseUrl: "https://openrouter.ai/api/v1",
-    model: "openai/gpt-4o-mini"
+    id: "xiaomi-mimo",
+    label: "Xiaomi MIMO",
+    provider: "xiaomi-mimo",
+    apiBaseUrl: "https://api.xiaomimimo.com/v1",
+    model: "mimo-v2.5-pro"
   },
   {
     id: "groq",
