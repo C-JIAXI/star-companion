@@ -26,6 +26,20 @@ const loreMatchSchema = z.object({
   updatedAt: z.string().datetime().optional()
 });
 
+const matchedMemorySchema = z.object({
+  id: idSchema,
+  chatId: idSchema,
+  title: z.string(),
+  content: z.string(),
+  keywords: stringArraySchema,
+  importance: z.number().int().min(1).max(5),
+  enabled: z.boolean(),
+  score: z.number().optional(),
+  lastMatchedAt: z.string().datetime().nullable().optional(),
+  createdAt: z.string().datetime().optional(),
+  updatedAt: z.string().datetime().optional()
+});
+
 const loreEntrySchema = z.object({
   id: z.string().min(1).optional(),
   keys: stringArraySchema,
@@ -221,6 +235,7 @@ export const chatCreateSchema = z.object({
   characterId: idSchema,
   backgroundUrl: backgroundUrlSchema.default(""),
   memoryTurns: z.number().int().min(1).max(50).default(12),
+  autoMemoryEnabled: z.boolean().default(true),
   userPersona: z.string().max(12000).default(""),
   userProfileSummary: z.string().default("")
 });
@@ -231,8 +246,29 @@ export const chatUpdateSchema = z
     characterId: idSchema.nullable().optional(),
     backgroundUrl: backgroundUrlSchema.optional(),
     memoryTurns: z.number().int().min(1).max(50).optional(),
+    autoMemoryEnabled: z.boolean().optional(),
     userPersona: z.string().max(12000).optional(),
     userProfileSummary: z.string().optional()
+  })
+  .refine((value) => Object.keys(value).length > 0, "At least one field is required");
+
+export const chatMemoryCreateSchema = z.object({
+  title: z.string().trim().min(1).max(80),
+  content: z.string().trim().min(1).max(1200),
+  keywords: z.array(z.string().trim().min(1).max(40)).max(12).default([]),
+  importance: z.number().int().min(1).max(5).default(3),
+  enabled: z.boolean().default(true),
+  sourceMessageIds: z.array(idSchema).max(20).default([])
+});
+
+export const chatMemoryUpdateSchema = z
+  .object({
+    title: z.string().trim().min(1).max(80).optional(),
+    content: z.string().trim().min(1).max(1200).optional(),
+    keywords: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
+    importance: z.number().int().min(1).max(5).optional(),
+    enabled: z.boolean().optional(),
+    sourceMessageIds: z.array(idSchema).max(20).optional()
   })
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");
 
@@ -244,7 +280,8 @@ export const messageCreateSchema = z.object({
   variants: z.array(z.string()).default([]),
   activeVariantIndex: z.number().int().min(0).default(0),
   tokenUsage: tokenUsageSchema.nullable().optional(),
-  loreMatches: z.array(loreMatchSchema).nullable().optional()
+  loreMatches: z.array(loreMatchSchema).nullable().optional(),
+  memoryMatches: z.array(matchedMemorySchema).nullable().optional()
 });
 
 export const messageUpdateSchema = z
@@ -253,9 +290,10 @@ export const messageUpdateSchema = z
     characterId: idSchema.nullable().optional(),
     content: z.string().optional(),
     variants: z.array(z.string()).optional(),
-    activeVariantIndex: z.number().int().min(0).optional(),
-    tokenUsage: tokenUsageSchema.nullable().optional(),
-    loreMatches: z.array(loreMatchSchema).nullable().optional()
+  activeVariantIndex: z.number().int().min(0).optional(),
+  tokenUsage: tokenUsageSchema.nullable().optional(),
+  loreMatches: z.array(loreMatchSchema).nullable().optional(),
+  memoryMatches: z.array(matchedMemorySchema).nullable().optional()
   })
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");
 
@@ -368,6 +406,14 @@ const backupMessageSchema = messageCreateSchema.extend({
   updatedAt: backupDateSchema
 });
 
+const backupMemorySchema = chatMemoryCreateSchema.extend({
+  id: idSchema.optional(),
+  chatId: idSchema,
+  lastMatchedAt: z.string().datetime().nullable().optional(),
+  createdAt: backupDateSchema,
+  updatedAt: backupDateSchema
+});
+
 export const backupImportSchema = z.object({
   schemaVersion: z.literal(1).default(1),
   exportedAt: z.string().datetime().optional(),
@@ -375,5 +421,6 @@ export const backupImportSchema = z.object({
   characters: z.array(backupCharacterSchema).default([]),
   chats: z.array(backupChatSchema).default([]),
   messages: z.array(backupMessageSchema).default([]),
+  memories: z.array(backupMemorySchema).default([]),
   mode: z.enum(["merge", "replace"]).default("merge")
 });

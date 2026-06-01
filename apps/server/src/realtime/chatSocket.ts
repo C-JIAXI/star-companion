@@ -9,6 +9,7 @@ import {
 import { serializeMessage } from "../serializers.js";
 import { getOrCreateSettings } from "../routes/settings.js";
 import { estimateTokenUsage, streamChatCompletion, type TokenUsage } from "../services/completions.js";
+import { updateChatMemoriesFromTurn, type MatchedMemoryEntry } from "../services/chatMemories.js";
 import { appendVariant, buildPromptContext, type MatchedLoreEntry } from "../services/promptBuilder.js";
 import { updateUserProfileFromChat } from "../services/userProfileMemory.js";
 
@@ -88,12 +89,18 @@ const streamAssistantReply = async ({
     chatId,
     characterId,
     before,
-    excludeMessageIds
+    excludeMessageIds,
+    settings
   });
   sendJson(socket, {
     type: "lore_matches",
     requestId,
     entries: context.matchedLoreEntries
+  });
+  sendJson(socket, {
+    type: "memory_matches",
+    requestId,
+    entries: context.matchedMemoryEntries
   });
 
   let assistantContent = "";
@@ -127,13 +134,20 @@ const streamAssistantReply = async ({
       assistantContent = stripThinkingTags(assistantContent);
       tokenUsage ??= estimateTokenUsage(context.messages, assistantContent);
       const message = targetMessageId
-        ? await updateAssistantVariant(targetMessageId, assistantContent, tokenUsage, context.matchedLoreEntries)
+        ? await updateAssistantVariant(
+            targetMessageId,
+            assistantContent,
+            tokenUsage,
+            context.matchedLoreEntries,
+            context.matchedMemoryEntries
+          )
         : await createAssistantMessage(
             chatId,
             characterId,
             assistantContent,
             tokenUsage,
-            context.matchedLoreEntries
+            context.matchedLoreEntries,
+            context.matchedMemoryEntries
           );
 
       await prisma.chat.update({
@@ -162,13 +176,20 @@ const streamAssistantReply = async ({
 
   tokenUsage ??= estimateTokenUsage(context.messages, assistantContent);
   const message = targetMessageId
-    ? await updateAssistantVariant(targetMessageId, assistantContent, tokenUsage, context.matchedLoreEntries)
+    ? await updateAssistantVariant(
+        targetMessageId,
+        assistantContent,
+        tokenUsage,
+        context.matchedLoreEntries,
+        context.matchedMemoryEntries
+      )
     : await createAssistantMessage(
         chatId,
         characterId,
         assistantContent,
         tokenUsage,
-        context.matchedLoreEntries
+        context.matchedLoreEntries,
+        context.matchedMemoryEntries
       );
 
   await prisma.chat.update({
@@ -190,7 +211,8 @@ const createAssistantMessage = (
   characterId: string | null,
   content: string,
   tokenUsage: TokenUsage,
-  loreMatches: MatchedLoreEntry[]
+  loreMatches: MatchedLoreEntry[],
+  memoryMatches: MatchedMemoryEntry[]
 ) =>
   prisma.message.create({
     data: {
@@ -201,7 +223,8 @@ const createAssistantMessage = (
       variants: [content],
       activeVariantIndex: 0,
       tokenUsage,
-      loreMatches
+      loreMatches,
+      memoryMatches
     }
   });
 
@@ -209,7 +232,8 @@ const updateAssistantVariant = async (
   messageId: string,
   content: string,
   tokenUsage: TokenUsage,
-  loreMatches: MatchedLoreEntry[]
+  loreMatches: MatchedLoreEntry[],
+  memoryMatches: MatchedMemoryEntry[]
 ) => {
   const targetMessage = await prisma.message.findUnique({ where: { id: messageId } });
   if (!targetMessage) {
@@ -224,7 +248,8 @@ const updateAssistantVariant = async (
       variants,
       activeVariantIndex: variants.length - 1,
       tokenUsage,
-      loreMatches
+      loreMatches,
+      memoryMatches
     }
   });
 };
@@ -285,6 +310,10 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
       try {
         const settings = await getOrCreateSettings();
         const updatedChat = await updateUserProfileFromChat({
+          chatId: request.chatId,
+          settings
+        });
+        await updateChatMemoriesFromTurn({
           chatId: request.chatId,
           settings
         });
@@ -428,6 +457,10 @@ const handleResend = async (socket: WebSocket, rawMessage: unknown) => {
       try {
         const settings = await getOrCreateSettings();
         const updatedChat = await updateUserProfileFromChat({
+          chatId: targetMessage.chatId,
+          settings
+        });
+        await updateChatMemoriesFromTurn({
           chatId: targetMessage.chatId,
           settings
         });

@@ -1,4 +1,4 @@
-import type { Character, Chat, Message, Prisma, UserSettings } from "@prisma/client";
+import type { Character, Chat, ChatMemory, Message, Prisma, UserSettings } from "@prisma/client";
 import { resolveCharacterRecord } from "./services/characterCards.js";
 
 interface ModelPreset {
@@ -135,6 +135,55 @@ const toLoreMatches = (value: Prisma.JsonValue | null) => {
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
 };
 
+export const toMemoryMatches = (value: Prisma.JsonValue | null) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+
+      const entry = item as Record<string, unknown>;
+      const id = entry.id;
+      const chatId = entry.chatId;
+      const title = entry.title;
+      const content = entry.content;
+      const keywords = entry.keywords;
+      const importance = entry.importance;
+      const enabled = entry.enabled;
+
+      if (
+        typeof id !== "string" ||
+        typeof chatId !== "string" ||
+        typeof title !== "string" ||
+        typeof content !== "string" ||
+        !Array.isArray(keywords) ||
+        typeof importance !== "number" ||
+        typeof enabled !== "boolean"
+      ) {
+        return null;
+      }
+
+      return {
+        id,
+        chatId,
+        title,
+        content,
+        keywords: keywords.filter((keyword): keyword is string => typeof keyword === "string"),
+        importance,
+        enabled,
+        score: typeof entry.score === "number" ? entry.score : undefined,
+        lastMatchedAt: typeof entry.lastMatchedAt === "string" ? entry.lastMatchedAt : null,
+        createdAt: typeof entry.createdAt === "string" ? entry.createdAt : undefined,
+        updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : undefined
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+};
+
 export const serializeSettings = (settings: UserSettings) => ({
   id: settings.id,
   activeProvider: settings.activeProvider,
@@ -199,11 +248,27 @@ export const serializeChat = (chat: Chat, messageCount?: number) => ({
   backgroundUrl: chat.backgroundUrl,
   messageCount: messageCount ?? 0,
   memoryTurns: chat.memoryTurns,
+  autoMemoryEnabled: chat.autoMemoryEnabled,
+  memoryUpdatedAt: chat.memoryUpdatedAt?.toISOString() ?? null,
   userPersona: chat.userPersona,
   userProfileSummary: chat.userProfileSummary,
   userProfileUpdatedAt: chat.userProfileUpdatedAt?.toISOString() ?? null,
   createdAt: toIso(chat.createdAt),
   updatedAt: toIso(chat.updatedAt)
+});
+
+export const serializeChatMemory = (memory: ChatMemory) => ({
+  id: memory.id,
+  chatId: memory.chatId,
+  title: memory.title,
+  content: memory.content,
+  keywords: toStringArray(memory.keywords),
+  importance: memory.importance,
+  enabled: memory.enabled,
+  sourceMessageIds: toStringArray(memory.sourceMessageIds),
+  lastMatchedAt: memory.lastMatchedAt?.toISOString() ?? null,
+  createdAt: toIso(memory.createdAt),
+  updatedAt: toIso(memory.updatedAt)
 });
 
 export const serializeMessage = (message: Message) => ({
@@ -216,6 +281,7 @@ export const serializeMessage = (message: Message) => ({
   activeVariantIndex: message.activeVariantIndex,
   tokenUsage: toTokenUsage(message.tokenUsage),
   loreMatches: toLoreMatches(message.loreMatches),
+  memoryMatches: toMemoryMatches(message.memoryMatches),
   createdAt: toIso(message.createdAt),
   updatedAt: toIso(message.updatedAt)
 });

@@ -489,6 +489,7 @@ const main = async () => {
       body: chatPayload
     });
     assert.equal(createdChat.characterId, createdCharacter.id);
+    assert.equal(createdChat.autoMemoryEnabled, true);
 
     const listedChats = await requestData(baseUrl, "/api/chats");
     const listedChat = listedChats.find((item) => item.id === createdChat.id);
@@ -500,11 +501,44 @@ const main = async () => {
       body: {
         backgroundUrl: "https://example.com/background-updated.png",
         memoryTurns: 16,
+        autoMemoryEnabled: false,
         userPersona: "Focus on concise diagnostics."
       }
     });
     assert.equal(updatedChat.backgroundUrl, "https://example.com/background-updated.png");
     assert.equal(updatedChat.memoryTurns, 16);
+    assert.equal(updatedChat.autoMemoryEnabled, false);
+
+    const createdMemory = await requestData(baseUrl, `/api/chats/${createdChat.id}/memories`, {
+      method: "POST",
+      expectedStatus: 201,
+      body: {
+        title: "Smoke memory",
+        content: "The smoke path should stay nominal across checks.",
+        keywords: ["smoke", "nominal"],
+        importance: 4,
+        enabled: true
+      }
+    });
+    assert.equal(createdMemory.title, "Smoke memory");
+    assert.equal(createdMemory.keywords.length, 2);
+
+    const listedMemories = await requestData(baseUrl, `/api/chats/${createdChat.id}/memories`);
+    assert.equal(listedMemories.length, 1);
+
+    const updatedMemory = await requestData(
+      baseUrl,
+      `/api/chats/${createdChat.id}/memories/${createdMemory.id}`,
+      {
+        method: "PUT",
+        body: {
+          enabled: false,
+          importance: 5
+        }
+      }
+    );
+    assert.equal(updatedMemory.enabled, false);
+    assert.equal(updatedMemory.importance, 5);
 
     const userMessage = await requestData(baseUrl, "/api/messages", {
       method: "POST",
@@ -546,12 +580,24 @@ const main = async () => {
             alwaysActive: false,
             enabled: true
           }
+        ],
+        memoryMatches: [
+          {
+            id: createdMemory.id,
+            chatId: createdChat.id,
+            title: "Smoke memory",
+            content: "The smoke path should stay nominal across checks.",
+            keywords: ["smoke", "nominal"],
+            importance: 5,
+            enabled: false
+          }
         ]
       }
     });
     assert.equal(assistantMessage.role, "assistant");
     assert.equal(assistantMessage.activeVariantIndex, 1);
     assert.equal(assistantMessage.tokenUsage.totalTokens, 19);
+    assert.equal(assistantMessage.memoryMatches[0].id, createdMemory.id);
 
     const listedMessages = await requestData(
       baseUrl,
@@ -583,6 +629,7 @@ const main = async () => {
     assert.equal(exportedBackup.characters.length, 4);
     assert.equal(exportedBackup.chats.length, 1);
     assert.equal(exportedBackup.messages.length, 2);
+    assert.equal(exportedBackup.memories.length, 1);
     const exportedPrivateBackupCharacter = exportedBackup.characters.find(
       (character) => character.id === importedPrivateBackupCharacter.id
     );
@@ -605,6 +652,7 @@ const main = async () => {
     assert.equal(importedBackupSummary.characters, 4);
     assert.equal(importedBackupSummary.chats, 1);
     assert.equal(importedBackupSummary.messages, 2);
+    assert.equal(importedBackupSummary.memories, 1);
     assert.equal(importedBackupSummary.settingsImported, true);
 
     const restoredImportedPrivateCharacter = await requestData(
@@ -673,6 +721,7 @@ const main = async () => {
     assert.equal(finalBackup.characters.length, 0);
     assert.equal(finalBackup.chats.length, 0);
     assert.equal(finalBackup.messages.length, 0);
+    assert.equal(finalBackup.memories.length, 0);
     assert.ok(finalBackup.settings);
 
     log("Smoke API checks passed");

@@ -4,6 +4,8 @@ import type {
   CharacterExportMode,
   CharacterLoreEntryDTO,
   CharacterVisibility,
+  ChatMemoryDTO,
+  ChatMemoryInput,
   ChatDTO,
   ChatWithMessagesDTO,
   GenerationClientMessage,
@@ -15,6 +17,7 @@ import type {
   LoreEntryScope,
   LoreTriggerMode,
   MatchedLoreEntryDTO,
+  MatchedMemoryDTO,
   MessageDTO,
   MessageRole,
   ModelPreset,
@@ -57,6 +60,7 @@ export type ChatInput = {
   characterId: string;
   backgroundUrl?: string;
   memoryTurns?: number;
+  autoMemoryEnabled?: boolean;
   userPersona?: string;
   userProfileSummary?: string;
 };
@@ -68,6 +72,7 @@ export type MessageInput = {
   content: string;
   variants?: string[];
   activeVariantIndex?: number;
+  memoryMatches?: MatchedMemoryDTO[];
 };
 
 export type SettingsInput = {
@@ -91,6 +96,8 @@ export type {
   CharacterExportMode,
   CharacterLoreEntryDTO,
   CharacterVisibility,
+  ChatMemoryDTO,
+  ChatMemoryInput,
   ChatDTO,
   ChatWithMessagesDTO,
   GenerationClientMessage,
@@ -102,6 +109,7 @@ export type {
   LoreEntryScope,
   LoreTriggerMode,
   MatchedLoreEntryDTO,
+  MatchedMemoryDTO,
   MessageDTO,
   MessageRole,
   ModelPreset,

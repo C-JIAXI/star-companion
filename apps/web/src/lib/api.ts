@@ -8,6 +8,8 @@ import type {
   CharacterDTO,
   CharacterExportMode,
   CharacterInput,
+  ChatMemoryDTO,
+  ChatMemoryInput,
   ChatDTO,
   ChatInput,
   ChatWithMessagesDTO,
@@ -132,7 +134,24 @@ export const api = {
     get: (id: string) => request<ChatWithMessagesDTO>(`/api/chats/${id}`),
     update: (id: string, input: Partial<ChatInput>) =>
       request<ChatDTO>(`/api/chats/${id}`, { method: "PUT", body: input }),
-    remove: (id: string) => request<void>(`/api/chats/${id}`, { method: "DELETE" })
+    remove: (id: string) => request<void>(`/api/chats/${id}`, { method: "DELETE" }),
+    memories: {
+      list: (chatId: string) => request<ChatMemoryDTO[]>(`/api/chats/${chatId}/memories`),
+      create: (chatId: string, input: ChatMemoryInput) =>
+        request<ChatMemoryDTO>(`/api/chats/${chatId}/memories`, {
+          method: "POST",
+          body: input
+        }),
+      update: (chatId: string, memoryId: string, input: Partial<ChatMemoryInput>) =>
+        request<ChatMemoryDTO>(`/api/chats/${chatId}/memories/${memoryId}`, {
+          method: "PUT",
+          body: input
+        }),
+      remove: (chatId: string, memoryId: string) =>
+        request<void>(`/api/chats/${chatId}/memories/${memoryId}`, { method: "DELETE" }),
+      refresh: (chatId: string) =>
+        request<ChatMemoryDTO[]>(`/api/chats/${chatId}/memories/refresh`, { method: "POST" })
+    }
   },
   messages: {
     list: (chatId?: string) =>

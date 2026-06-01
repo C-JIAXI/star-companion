@@ -5,12 +5,16 @@ import {
   ChevronLeft,
   ChevronRight,
   Check,
+  Download,
   FileText,
   Image,
+  Plus,
+  RefreshCw,
   Send,
   Settings,
   Sparkles,
   StopCircle,
+  Trash2,
   User,
   X
 } from "lucide-react";
@@ -24,12 +28,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { sanitizeCharacterHtmlCss } from "../lib/characterHtmlCss";
-import { readFileAsDataUrl } from "../lib/files";
+import { downloadText, readFileAsDataUrl } from "../lib/files";
 import { generateId } from "../lib/uuid";
 import { useWebSocket } from "../lib/useWebSocket";
 import { useAppStore } from "../store/useAppStore";
 import type {
   CharacterDTO,
+  ChatMemoryDTO,
   ChatDTO,
   ChatWithMessagesDTO,
   GenerationClientMessage,
@@ -65,6 +70,13 @@ const MESSAGES_PER_PAGE = 30;
 const GENERATION_ERROR_PREFIX = "[GENERATION_FAILED] ";
 const MAX_CHAT_BACKGROUND_FILE_SIZE = 2 * 1024 * 1024;
 const CHAT_PAGE_STYLE_TAG = "chat-page-character-html-css";
+const emptyMemoryForm = {
+  title: "",
+  content: "",
+  keywords: "",
+  importance: "3",
+  enabled: true
+};
 
 const isSupportedChatBackgroundUrl = (value: string) => {
   const trimmed = value.trim();
@@ -103,6 +115,11 @@ export function ChatPage({
   const [editDraft, setEditDraft] = useState("");
   const [memorySettingsOpen, setMemorySettingsOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState("12");
+  const [chatMemories, setChatMemories] = useState<ChatMemoryDTO[]>([]);
+  const [autoMemoryEnabled, setAutoMemoryEnabled] = useState(true);
+  const [editingMemory, setEditingMemory] = useState<ChatMemoryDTO | "new" | null>(null);
+  const [memoryForm, setMemoryForm] = useState(emptyMemoryForm);
+  const [pendingDeleteMemory, setPendingDeleteMemory] = useState<ChatMemoryDTO | null>(null);
   const memorySettingsRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -222,6 +239,7 @@ export function ChatPage({
           }
         : current
     );
+    setAutoMemoryEnabled(updated.autoMemoryEnabled);
     onChatsChanged();
   };
 
@@ -276,6 +294,10 @@ export function ChatPage({
       }
 
       if (msg.type === "lore_matches") {
+        return;
+      }
+
+      if (msg.type === "memory_matches") {
         return;
       }
 
@@ -533,10 +555,13 @@ export function ChatPage({
     if (!id) {
       setActiveChat(null);
       hasMessagesRef.current = false;
+      setChatMemories([]);
       return;
     }
     const chat = await api.chats.get(id);
     setActiveChat(chat);
+    setChatMemories(chat.memories ?? []);
+    setAutoMemoryEnabled(chat.autoMemoryEnabled);
     hasMessagesRef.current = chat.messages.length > 0;
     setMemoryDraft(String(chat.memoryTurns));
 
@@ -758,6 +783,22 @@ export function ChatPage({
     setMemorySettingsOpen(false);
   };
 
+  const exportCurrentChat = async () => {
+    if (!activeChat) return;
+    try {
+      const data = await api.chats.get(activeChat.id);
+      const lines = data.messages
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => `${m.role === "user" ? "用户" : "AI"}：${m.content}`);
+      const safeName = activeChat.title.replace(/[^\w一-鿿-]/g, "_").slice(0, 50);
+      const date = new Date().toISOString().slice(0, 10);
+      downloadText(`chat-${safeName}-${date}.txt`, lines.join("\n"));
+    } catch {
+      // silent
+    }
+    setMemorySettingsOpen(false);
+  };
+
   const cancelEditingUserConfig = () => {
     setShowUserConfigDialog(false);
     setEditingPersonaDraft(emptyUserCustomConfig());
@@ -783,14 +824,33 @@ export function ChatPage({
     setShowModelDialog(false);
   };
 
+  const loadChatMemories = async () => {
+    if (!activeChat) {
+      return;
+    }
+
+    try {
+      const memories = await api.chats.memories.list(activeChat.id);
+      setChatMemories(memories);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedLoadMemories"));
+    }
+  };
+
   const openMemoryDialog = () => {
     setMemoryDraft(String(activeChat?.memoryTurns ?? 12));
+    setAutoMemoryEnabled(activeChat?.autoMemoryEnabled ?? true);
+    setEditingMemory(null);
+    setMemoryForm(emptyMemoryForm);
     setShowMemoryDialog(true);
     setMemorySettingsOpen(false);
+    void loadChatMemories();
   };
 
   const closeMemoryDialog = () => {
     setShowMemoryDialog(false);
+    setEditingMemory(null);
+    setMemoryForm(emptyMemoryForm);
   };
 
   const openBackgroundDialog = () => {
@@ -826,6 +886,142 @@ export function ChatPage({
     } catch (caught) {
       setAutoSummarizeUser((current) => !current);
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdateUserProfile"));
+    }
+  };
+
+  const updateAutoMemoryEnabled = async (enabled: boolean) => {
+    if (!activeChat) {
+      return;
+    }
+
+    setAutoMemoryEnabled(enabled);
+    try {
+      const updated = await api.chats.update(activeChat.id, { autoMemoryEnabled: enabled });
+      applyChatUpdate(updated);
+      setStatus(t("chat.chatSettingsSaved"));
+    } catch (caught) {
+      setAutoMemoryEnabled((current) => !current);
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdateMemory"));
+    }
+  };
+
+  const parseMemoryKeywords = (value: string) =>
+    [...new Set(value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean))].slice(0, 12);
+
+  const startCreatingMemory = () => {
+    setEditingMemory("new");
+    setMemoryForm(emptyMemoryForm);
+  };
+
+  const startEditingMemory = (memory: ChatMemoryDTO) => {
+    setEditingMemory(memory);
+    setMemoryForm({
+      title: memory.title,
+      content: memory.content,
+      keywords: memory.keywords.join(", "),
+      importance: String(memory.importance),
+      enabled: memory.enabled
+    });
+  };
+
+  const saveLongTermMemory = async () => {
+    if (!activeChat || !editingMemory) {
+      return;
+    }
+
+    const title = memoryForm.title.trim();
+    const content = memoryForm.content.trim();
+    if (!title || !content) {
+      return;
+    }
+
+    const importance = Math.max(1, Math.min(5, Number(memoryForm.importance) || 3));
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const payload = {
+        title,
+        content,
+        keywords: parseMemoryKeywords(memoryForm.keywords),
+        importance,
+        enabled: memoryForm.enabled
+      };
+      const saved =
+        editingMemory === "new"
+          ? await api.chats.memories.create(activeChat.id, payload)
+          : await api.chats.memories.update(activeChat.id, editingMemory.id, payload);
+      setChatMemories((current) => {
+        if (editingMemory === "new") {
+          return [saved, ...current];
+        }
+        return current.map((memory) => (memory.id === saved.id ? saved : memory));
+      });
+      setEditingMemory(null);
+      setMemoryForm(emptyMemoryForm);
+      setStatus(t(editingMemory === "new" ? "chat.memoryCreated" : "chat.memoryUpdated"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedSaveMemory"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleLongTermMemory = async (memory: ChatMemoryDTO) => {
+    if (!activeChat) {
+      return;
+    }
+
+    try {
+      const updated = await api.chats.memories.update(activeChat.id, memory.id, {
+        enabled: !memory.enabled
+      });
+      setChatMemories((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item))
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedSaveMemory"));
+    }
+  };
+
+  const deleteLongTermMemory = async () => {
+    if (!activeChat || !pendingDeleteMemory) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      await api.chats.memories.remove(activeChat.id, pendingDeleteMemory.id);
+      setChatMemories((current) =>
+        current.filter((memory) => memory.id !== pendingDeleteMemory.id)
+      );
+      setPendingDeleteMemory(null);
+      setStatus(t("chat.memoryDeleted"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedDeleteMemory"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const refreshLongTermMemory = async () => {
+    if (!activeChat) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const memories = await api.chats.memories.refresh(activeChat.id);
+      setChatMemories(memories);
+      setStatus(t("chat.memoryRefreshed"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedRefreshMemory"));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1302,6 +1498,17 @@ export function ChatPage({
                         <button
                           className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
                           type="button"
+                          onClick={() => void exportCurrentChat()}
+                        >
+                          <span>{t("chat.exportChat")}</span>
+                          <Download size={14} className="text-slate-400" />
+                        </button>
+                      </div>
+
+                      <div className="border-b border-white/10 pb-2 pt-2">
+                        <button
+                          className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
+                          type="button"
                           onClick={startEditingUserConfig}
                         >
                           <span>{t("chat.userConfigTitle")}</span>
@@ -1353,9 +1560,9 @@ export function ChatPage({
                   <div className="absolute inset-0 bg-black/35" />
                   <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(12,13,18,0.2),rgba(12,13,18,0.7))]" />
                 </div>
-              ) : (
+              ) : !activeChat ? (
                 <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(251,146,60,0.08),transparent_38%)]" />
-              )}
+              ) : null}
 
               <div className="relative z-10 flex min-h-0 flex-1 flex-col">
                 {!activeChat ? (
@@ -1738,6 +1945,18 @@ export function ChatPage({
           onConfirm={() => void deleteMessage()}
         />
       ) : null}
+      {pendingDeleteMemory ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={t("common.delete")}
+          loading={loading}
+          message={t("chat.deleteMemoryConfirm")}
+          title={t("chat.longTermMemory")}
+          variant="danger"
+          onCancel={() => setPendingDeleteMemory(null)}
+          onConfirm={() => void deleteLongTermMemory()}
+        />
+      ) : null}
       {showUserConfigDialog ? (
         <Modal title={t("chat.userConfigTitle")} onClose={cancelEditingUserConfig}>
           <div className="space-y-4">
@@ -1949,38 +2168,241 @@ export function ChatPage({
       ) : null}
       {showMemoryDialog ? (
         <Modal title={t("chat.memorySettings")} onClose={closeMemoryDialog}>
-          <div className="space-y-4">
-            <TextInput
-              min={1}
-              max={50}
-              type="number"
-              value={memoryDraft}
-              onChange={(event) => setMemoryDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  void updateMemory();
-                }
-              }}
-            />
-            <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
-              {t("chat.memoryHelp")}
-            </p>
-            <div className="flex justify-end gap-3">
-              <Button
-                className="!min-h-[36px]"
-                disabled={loading}
-                variant="ghost"
-                onClick={closeMemoryDialog}
-              >
-                {t("common.cancel")}
-              </Button>
-              <Button
-                className="!min-h-[36px]"
-                disabled={loading}
-                onClick={() => void updateMemory()}
-              >
-                {t("common.save")}
-              </Button>
+          <div className="space-y-6">
+            <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold text-slate-200">{t("chat.memorySettings")}</p>
+                  <TextInput
+                    min={1}
+                    max={50}
+                    type="number"
+                    value={memoryDraft}
+                    onChange={(event) => setMemoryDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        void updateMemory();
+                      }
+                    }}
+                  />
+                </div>
+                <Button
+                  className="!min-h-[36px]"
+                  disabled={loading}
+                  onClick={() => void updateMemory()}
+                >
+                  {t("common.save")}
+                </Button>
+              </div>
+              <p className="mt-3 whitespace-pre-line break-words text-xs leading-5 text-slate-400">
+                {t("chat.memoryHelp")}
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 space-y-1">
+                  <h4 className="text-sm font-semibold text-slate-100">{t("chat.longTermMemory")}</h4>
+                  <p className="max-w-xl text-xs leading-5 text-slate-400">
+                    {t("chat.longTermMemoryHelp")}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    className="!min-h-[34px] !px-3 text-xs"
+                    disabled={loading}
+                    variant="secondary"
+                    onClick={() => void refreshLongTermMemory()}
+                  >
+                    <RefreshCw size={14} />
+                    {t("chat.refreshMemory")}
+                  </Button>
+                  <Button
+                    className="!min-h-[34px] !px-3 text-xs"
+                    variant="secondary"
+                    onClick={startCreatingMemory}
+                  >
+                    <Plus size={14} />
+                    {t("chat.addMemory")}
+                  </Button>
+                </div>
+              </div>
+
+              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-slate-300">
+                <span>{t("chat.autoMemory")}</span>
+                <input
+                  checked={autoMemoryEnabled}
+                  type="checkbox"
+                  className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                  onChange={(event) => void updateAutoMemoryEnabled(event.target.checked)}
+                />
+              </label>
+
+              {editingMemory ? (
+                <div className="space-y-3 rounded-xl border border-ember-500/20 bg-ember-500/[0.04] p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-slate-100">
+                      {t(editingMemory === "new" ? "chat.addMemory" : "chat.editMemory")}
+                    </p>
+                    <button
+                      className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200"
+                      type="button"
+                      onClick={() => {
+                        setEditingMemory(null);
+                        setMemoryForm(emptyMemoryForm);
+                      }}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <TextInput
+                    maxLength={80}
+                    placeholder={t("chat.memoryTitle")}
+                    value={memoryForm.title}
+                    onChange={(event) =>
+                      setMemoryForm((current) => ({ ...current, title: event.target.value }))
+                    }
+                  />
+                  <TextArea
+                    className="min-h-28"
+                    maxLength={1200}
+                    placeholder={t("chat.memoryContent")}
+                    value={memoryForm.content}
+                    onChange={(event) =>
+                      setMemoryForm((current) => ({ ...current, content: event.target.value }))
+                    }
+                  />
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]">
+                    <div className="space-y-1">
+                      <TextInput
+                        placeholder={t("chat.memoryKeywords")}
+                        value={memoryForm.keywords}
+                        onChange={(event) =>
+                          setMemoryForm((current) => ({ ...current, keywords: event.target.value }))
+                        }
+                      />
+                      <p className="text-xs text-slate-500">{t("chat.memoryKeywordsHelp")}</p>
+                    </div>
+                    <TextInput
+                      min={1}
+                      max={5}
+                      type="number"
+                      value={memoryForm.importance}
+                      onChange={(event) =>
+                        setMemoryForm((current) => ({ ...current, importance: event.target.value }))
+                      }
+                    />
+                  </div>
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
+                    <input
+                      checked={memoryForm.enabled}
+                      type="checkbox"
+                      className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                      onChange={(event) =>
+                        setMemoryForm((current) => ({ ...current, enabled: event.target.checked }))
+                      }
+                    />
+                    {memoryForm.enabled ? t("common.enabled") : t("common.disabled")}
+                  </label>
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      className="!min-h-[34px]"
+                      disabled={loading}
+                      variant="ghost"
+                      onClick={() => {
+                        setEditingMemory(null);
+                        setMemoryForm(emptyMemoryForm);
+                      }}
+                    >
+                      {t("common.cancel")}
+                    </Button>
+                    <Button
+                      className="!min-h-[34px]"
+                      disabled={loading || !memoryForm.title.trim() || !memoryForm.content.trim()}
+                      onClick={() => void saveLongTermMemory()}
+                    >
+                      {t("common.save")}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+
+              {chatMemories.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-6 text-center text-sm text-slate-500">
+                  {t("chat.memoryEmpty")}
+                </div>
+              ) : (
+                <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+                  {chatMemories.map((memory) => (
+                    <div
+                      key={memory.id}
+                      className={`rounded-xl border p-3 ${
+                        memory.enabled
+                          ? "border-white/10 bg-white/[0.03]"
+                          : "border-white/5 bg-white/[0.015] opacity-70"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="break-words text-sm font-semibold text-slate-100">
+                              {memory.title}
+                            </p>
+                            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-300">
+                              {t("chat.memoryImportance")} {memory.importance}
+                            </span>
+                            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                              memory.enabled
+                                ? "bg-ember-500/15 text-ember-300"
+                                : "bg-white/10 text-slate-400"
+                            }`}>
+                              {memory.enabled ? t("common.enabled") : t("common.disabled")}
+                            </span>
+                          </div>
+                          <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">
+                            {memory.content}
+                          </p>
+                          {memory.keywords.length ? (
+                            <div className="flex flex-wrap gap-1">
+                              {memory.keywords.map((keyword) => (
+                                <span
+                                  key={keyword}
+                                  className="rounded-full bg-white/5 px-2 py-0.5 text-xs text-slate-400"
+                                >
+                                  {keyword}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <button
+                            className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200"
+                            type="button"
+                            onClick={() => void toggleLongTermMemory(memory)}
+                          >
+                            <Check size={14} />
+                          </button>
+                          <button
+                            className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200"
+                            type="button"
+                            onClick={() => startEditingMemory(memory)}
+                          >
+                            <FileText size={14} />
+                          </button>
+                          <button
+                            className="grid h-8 w-8 place-items-center rounded-lg text-rose-400 transition-colors hover:bg-rose-500/15"
+                            type="button"
+                            onClick={() => setPendingDeleteMemory(memory)}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </Modal>

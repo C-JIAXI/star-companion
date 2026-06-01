@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import type { UserSettings } from "@prisma/client";
 import { prisma } from "../db.js";
 import { buildPromptContext } from "./promptBuilder.js";
 import { createCharacterExportCard, importCharacterCard } from "./characterCards.js";
@@ -14,6 +15,25 @@ const ids = {
   privateCharacterId: "",
   privateChatId: ""
 };
+
+const testSettings = {
+  id: "prompt-builder-settings-test",
+  activeProvider: "openai-compatible",
+  apiBaseUrl: "https://api.openai.com/v1",
+  apiKey: null,
+  model: "gpt-4o-mini",
+  temperature: 0.8,
+  maxTokens: 800,
+  topP: 1,
+  language: "zh-CN",
+  models: [],
+  userProfileSummary: "",
+  autoSummarizeUser: true,
+  showMessageAvatars: true,
+  userProfileUpdatedAt: null,
+  createdAt: new Date(),
+  updatedAt: new Date()
+} as UserSettings;
 
 describe("buildPromptContext", () => {
   before(async () => {
@@ -180,6 +200,18 @@ describe("buildPromptContext", () => {
       ]
     });
 
+    await prisma.chatMemory.create({
+      data: {
+        chatId: chat.id,
+        title: "Investigation preference",
+        content: "The user and character have agreed to keep clues explicit.",
+        keywords: ["clues", "investigation"],
+        importance: 4,
+        enabled: true,
+        sourceMessageIds: []
+      }
+    });
+
     await prisma.message.create({
       data: {
         chatId: loreChat.id,
@@ -218,11 +250,14 @@ describe("buildPromptContext", () => {
   });
 
   it("injects user profile memory and only matching lore entries from the chat character", async () => {
-    const context = await buildPromptContext({ chatId: ids.chatId });
+    const context = await buildPromptContext({ chatId: ids.chatId, settings: testSettings });
     const matchedContents = context.matchedLoreEntries.map((entry) => entry.content);
+    const matchedMemoryContents = context.matchedMemoryEntries.map((entry) => entry.content);
     const promptText = context.messages.map((message) => message.content).join("\n\n");
 
     assert.match(promptText, /User prefers concise technical summaries/);
+    assert.match(promptText, /Relevant long-term chat memories/);
+    assert.match(promptText, /The user and character have agreed to keep clues explicit/);
     assert.match(promptText, /The user is roleplaying as a cautious investigator\./);
     assert.match(promptText, /They value truth over comfort\./);
     assert.match(promptText, /Keep the relationship tense but cooperative\./);
@@ -247,12 +282,16 @@ describe("buildPromptContext", () => {
         "Persistent lore content."
       ])
     );
+    assert.deepEqual(
+      new Set(matchedMemoryContents),
+      new Set(["The user and character have agreed to keep clues explicit."])
+    );
     assert.doesNotMatch(promptText, /Disabled lore content/);
     assert.match(promptText, /Prompt Test Character: The assistant says assistant-key\./);
   });
 
   it("does not inject lore when a chat character has no lore entries", async () => {
-    const context = await buildPromptContext({ chatId: ids.loreChatId });
+    const context = await buildPromptContext({ chatId: ids.loreChatId, settings: testSettings });
 
     assert.equal(context.matchedLoreEntries.length, 0);
     assert.doesNotMatch(
@@ -273,7 +312,7 @@ describe("buildPromptContext", () => {
     });
 
     try {
-      const context = await buildPromptContext({ chatId: malformedChat.id });
+      const context = await buildPromptContext({ chatId: malformedChat.id, settings: testSettings });
       const promptText = context.messages.map((message) => message.content).join("\n\n");
 
       assert.doesNotMatch(promptText, /not-json/);
@@ -285,7 +324,8 @@ describe("buildPromptContext", () => {
   it("uses the private chat character when a stale target character is provided", async () => {
     const context = await buildPromptContext({
       chatId: ids.chatId,
-      characterId: ids.foreignCharacterId
+      characterId: ids.foreignCharacterId,
+      settings: testSettings
     });
     const promptText = context.messages.map((message) => message.content).join("\n\n");
 
@@ -295,7 +335,7 @@ describe("buildPromptContext", () => {
   });
 
   it("hides prompt fields for imported private characters until password unlock", async () => {
-    const context = await buildPromptContext({ chatId: ids.privateChatId });
+    const context = await buildPromptContext({ chatId: ids.privateChatId, settings: testSettings });
     const promptText = context.messages.map((message) => message.content).join("\n\n");
 
     assert.doesNotMatch(promptText, /Hidden prefix instruction\./);

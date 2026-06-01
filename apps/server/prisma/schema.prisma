@@ -55,6 +55,8 @@ model Chat {
   characterId          String?
   backgroundUrl        String    @default("")
   memoryTurns          Int       @default(12)
+  autoMemoryEnabled    Boolean   @default(true)
+  memoryUpdatedAt      DateTime?
   /// Explicit user-authored persona / preference notes for this chat.
   userPersona          String    @default("")
   userProfileSummary   String    @default("")
@@ -64,8 +66,29 @@ model Chat {
 
   character Character? @relation(fields: [characterId], references: [id], onDelete: SetNull)
   messages  Message[]
+  memories  ChatMemory[]
 
   @@index([characterId])
+}
+
+model ChatMemory {
+  id               String    @id @default(cuid())
+  chatId           String
+  title            String
+  content          String
+  keywords         Json      @default("[]")
+  importance       Int       @default(3)
+  enabled          Boolean   @default(true)
+  sourceMessageIds Json      @default("[]")
+  lastMatchedAt    DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+  @@index([chatId, enabled])
+  @@index([chatId, updatedAt])
 }
 
 model Message {
@@ -79,6 +102,7 @@ model Message {
   activeVariantIndex Int      @default(0)
   tokenUsage         Json?
   loreMatches        Json?
+  memoryMatches      Json?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 

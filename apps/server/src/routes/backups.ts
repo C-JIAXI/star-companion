@@ -5,6 +5,7 @@ import { backupImportSchema } from "../schemas.js";
 import {
   serializeCharacterForBackup,
   serializeChat,
+  serializeChatMemory,
   serializeMessage,
   serializeSettings
 } from "../serializers.js";
@@ -20,11 +21,12 @@ const importedDates = (value: { createdAt?: string; updatedAt?: string }) => ({
 backupsRouter.get(
   "/export",
   asyncHandler(async (_request, response) => {
-    const [settings, characters, chats, messages] = await Promise.all([
+    const [settings, characters, chats, messages, memories] = await Promise.all([
       getOrCreateSettings(),
       prisma.character.findMany({ orderBy: { updatedAt: "desc" } }),
       prisma.chat.findMany({ orderBy: { updatedAt: "desc" } }),
-      prisma.message.findMany({ orderBy: { createdAt: "asc" } })
+      prisma.message.findMany({ orderBy: { createdAt: "asc" } }),
+      prisma.chatMemory.findMany({ orderBy: { updatedAt: "desc" } })
     ]);
 
     response.json({
@@ -35,7 +37,8 @@ backupsRouter.get(
         settings: serializeSettings(settings),
         characters: characters.map((character) => serializeCharacterForBackup(character)),
         chats: chats.map(serializeChat),
-        messages: messages.map(serializeMessage)
+        messages: messages.map(serializeMessage),
+        memories: memories.map(serializeChatMemory)
       }
     });
   })
@@ -48,6 +51,7 @@ backupsRouter.post(
 
     const summary = await prisma.$transaction(async (tx) => {
       if (backup.mode === "replace") {
+        await tx.chatMemory.deleteMany();
         await tx.message.deleteMany();
         await tx.chat.deleteMany();
         await tx.character.deleteMany();
@@ -109,6 +113,7 @@ backupsRouter.post(
           characterId: characterExists?.id ?? null,
           backgroundUrl: chat.backgroundUrl,
           memoryTurns: chat.memoryTurns,
+          autoMemoryEnabled: chat.autoMemoryEnabled,
           userPersona: chat.userPersona,
           userProfileSummary: chat.userProfileSummary,
           ...importedDates(chat)
@@ -123,6 +128,41 @@ backupsRouter.post(
         } else {
           await tx.chat.create({ data });
         }
+      }
+
+      let importedMemories = 0;
+      for (const memory of backup.memories) {
+        const chatExists = await tx.chat.findUnique({
+          where: { id: memory.chatId },
+          select: { id: true }
+        });
+
+        if (!chatExists) {
+          continue;
+        }
+
+        const data = {
+          chatId: memory.chatId,
+          title: memory.title,
+          content: memory.content,
+          keywords: memory.keywords,
+          importance: memory.importance,
+          enabled: memory.enabled,
+          sourceMessageIds: memory.sourceMessageIds,
+          lastMatchedAt: memory.lastMatchedAt ? new Date(memory.lastMatchedAt) : null,
+          ...importedDates(memory)
+        };
+
+        if (memory.id) {
+          await tx.chatMemory.upsert({
+            where: { id: memory.id },
+            update: data,
+            create: { id: memory.id, ...data }
+          });
+        } else {
+          await tx.chatMemory.create({ data });
+        }
+        importedMemories += 1;
       }
 
       let importedMessages = 0;
@@ -152,6 +192,7 @@ backupsRouter.post(
           activeVariantIndex: message.activeVariantIndex,
           tokenUsage: message.tokenUsage ?? undefined,
           loreMatches: message.loreMatches ?? undefined,
+          memoryMatches: message.memoryMatches ?? undefined,
           ...importedDates(message)
         };
 
@@ -172,6 +213,7 @@ backupsRouter.post(
         characters: backup.characters.length,
         chats: backup.chats.length,
         messages: importedMessages,
+        memories: importedMemories,
         settingsImported
       };
     });

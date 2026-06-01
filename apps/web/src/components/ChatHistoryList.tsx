@@ -1,4 +1,5 @@
 import {
+  Download,
   FileText,
   History,
   MessageSquarePlus,
@@ -11,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
+import { downloadText } from "../lib/files";
 import type { CharacterDTO, ChatDTO } from "../types";
 import { ChatGroupHeader } from "./ChatGroupHeader";
 import { ConfirmDialog, EmptyState, ErrorNotice, Modal, TextInput } from "./ui";
@@ -268,6 +270,20 @@ export function ChatHistoryList({
     }
   };
 
+  const exportChat = async (chat: ChatDTO) => {
+    try {
+      const data = await api.chats.get(chat.id);
+      const lines = data.messages
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => `${m.role === "user" ? "用户" : "AI"}：${m.content}`);
+      const safeName = chat.title.replace(/[^\w一-鿿-]/g, "_").slice(0, 50);
+      const date = new Date().toISOString().slice(0, 10);
+      downloadText(`chat-${safeName}-${date}.txt`, lines.join("\n"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Export failed");
+    }
+  };
+
   const modalTitle = manageMode
     ? language === "zh-CN"
       ? "管理历史"
@@ -476,6 +492,18 @@ export function ChatHistoryList({
                                         }}
                                       >
                                         <Pencil size={11} />
+                                      </button>
+                                    ) : null}
+                                    {!manageMode && renamingId !== chat.id ? (
+                                      <button
+                                        className="grid h-6 w-6 shrink-0 place-items-center rounded text-slate-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-white/10 hover:text-slate-300 active:bg-white/20 transition-all"
+                                        type="button"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          void exportChat(chat);
+                                        }}
+                                      >
+                                        <Download size={11} />
                                       </button>
                                     ) : null}
                                     {!manageMode && renamingId !== chat.id ? (

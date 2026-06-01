@@ -48,7 +48,8 @@ messagesRouter.post(
     const data: Prisma.MessageUncheckedCreateInput = {
       ...body,
       tokenUsage: normalizeTokenUsage(body.tokenUsage),
-      loreMatches: normalizeJsonArray(body.loreMatches)
+      loreMatches: normalizeJsonArray(body.loreMatches),
+      memoryMatches: normalizeJsonArray(body.memoryMatches)
     };
     const message = await prisma.message.create({ data });
 
@@ -83,7 +84,8 @@ messagesRouter.put(
     const data: Prisma.MessageUncheckedUpdateInput = {
       ...body,
       tokenUsage: normalizeTokenUsage(body.tokenUsage),
-      loreMatches: normalizeJsonArray(body.loreMatches)
+      loreMatches: normalizeJsonArray(body.loreMatches),
+      memoryMatches: normalizeJsonArray(body.memoryMatches)
     };
 
     const message = await prisma.message.update({

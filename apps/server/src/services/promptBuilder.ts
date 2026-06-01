@@ -1,7 +1,12 @@
-import type { Character, Message, Prisma } from "@prisma/client";
+import type { Character, Message, Prisma, UserSettings } from "@prisma/client";
 import { prisma } from "../db.js";
 import type { ChatCompletionMessage } from "./completions.js";
 import { resolveCharacterPromptFields } from "./characterCards.js";
+import {
+  formatMemorySystemPrompt,
+  recallChatMemories,
+  type MatchedMemoryEntry
+} from "./chatMemories.js";
 import { getUserCustomConfigSegments } from "./userCustomConfig.js";
 
 type PromptInput = {
@@ -9,6 +14,7 @@ type PromptInput = {
   characterId?: string | null;
   before?: Date;
   excludeMessageIds?: string[];
+  settings?: UserSettings;
 };
 
 type LoreTriggerMode = "user" | "assistant" | "both";
@@ -189,10 +195,12 @@ export const buildPromptContext = async ({
   chatId,
   characterId,
   before,
-  excludeMessageIds
+  excludeMessageIds,
+  settings
 }: PromptInput): Promise<{
   messages: ChatCompletionMessage[];
   matchedLoreEntries: MatchedLoreEntry[];
+  matchedMemoryEntries: MatchedMemoryEntry[];
 }> => {
   const chat = await prisma.chat.findUnique({ where: { id: chatId } });
   const resolvedCharacterId = resolvePromptCharacterId(chat, characterId);
@@ -230,12 +238,23 @@ export const buildPromptContext = async ({
     recentMessages,
     character?.name ?? ""
   );
+  const resolvedSettings =
+    settings ??
+    (await prisma.userSettings.findFirst({ orderBy: { createdAt: "asc" } })) ??
+    (await prisma.userSettings.create({ data: {} }));
+  const matchedMemoryEntries = await recallChatMemories({
+    chatId,
+    query: recentMessages.at(-1)?.content ?? "",
+    recentMessages,
+    settings: resolvedSettings
+  });
   const userCustomConfigSegments = getUserCustomConfigSegments(chat?.userPersona);
 
   const systemMessages: ChatCompletionMessage[] = [
     buildCharacterSystemPrompt(character, matchedLoreEntries),
     ...userCustomConfigSegments,
-    chat?.userProfileSummary.trim() ?? ""
+    chat?.userProfileSummary.trim() ?? "",
+    formatMemorySystemPrompt(matchedMemoryEntries)
   ]
     .filter(Boolean)
     .map((content) => ({
@@ -250,7 +269,8 @@ export const buildPromptContext = async ({
 
   return {
     messages: [...systemMessages, ...historyMessages],
-    matchedLoreEntries
+    matchedLoreEntries,
+    matchedMemoryEntries
   };
 };
 

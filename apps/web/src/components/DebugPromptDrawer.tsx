@@ -137,6 +137,7 @@ export function DebugPromptDrawer({
 
   const messageLoreMatches = debugMessage?.loreMatches ?? [];
   const triggeredLoreIds = new Set(messageLoreMatches.map((e) => e.id));
+  const messageMemoryMatches = debugMessage?.memoryMatches ?? [];
 
   const precedingUserMessage = debugMessage && activeChat
     ? (() => {
@@ -301,6 +302,41 @@ export function DebugPromptDrawer({
               activeChat!.userProfileSummary
             ) : (
               <EmptyHint text={t("debug.userProfileEmpty")} />
+            )}
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            id="chatMemories"
+            title={t("debug.chatMemories")}
+            defaultOpen={false}
+            collapsed={isCollapsed("chatMemories")}
+            onToggle={toggleSection}
+          >
+            {messageMemoryMatches.length ? (
+              <div className="space-y-2">
+                {messageMemoryMatches.map((memory) => (
+                  <div key={memory.id} className="rounded border border-white/5 bg-white/[0.02] p-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-semibold text-slate-200">{memory.title}</span>
+                      <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 font-medium text-emerald-300">
+                        {memory.importance}
+                      </span>
+                    </div>
+                    {memory.keywords.length ? (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {memory.keywords.map((keyword) => (
+                          <span key={keyword} className="rounded-full bg-ember-500/15 px-1.5 py-0.5 font-medium text-ember-300">
+                            {keyword}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <p className="mt-1 whitespace-pre-wrap text-slate-400">{memory.content}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyHint text={t("debug.chatMemoriesEmpty")} />
             )}
           </CollapsibleSection>
         </div>

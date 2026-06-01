@@ -22,6 +22,7 @@ describe("chatUpdateSchema", () => {
     assert.equal("characterId" in parsed, false);
     assert.equal("backgroundUrl" in parsed, false);
     assert.equal("memoryTurns" in parsed, false);
+    assert.equal("autoMemoryEnabled" in parsed, false);
     assert.equal("userProfileSummary" in parsed, false);
   });
 

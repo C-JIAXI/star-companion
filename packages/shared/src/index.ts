@@ -253,6 +253,8 @@ export interface ChatDTO {
   backgroundUrl: string;
   messageCount: number;
   memoryTurns: number;
+  autoMemoryEnabled: boolean;
+  memoryUpdatedAt: string | null;
   userPersona: string;
   userProfileSummary: string;
   userProfileUpdatedAt: string | null;
@@ -262,6 +264,7 @@ export interface ChatDTO {
 
 export interface ChatWithMessagesDTO extends ChatDTO {
   messages: MessageDTO[];
+  memories?: ChatMemoryDTO[];
 }
 
 export interface MessageDTO {
@@ -274,6 +277,7 @@ export interface MessageDTO {
   activeVariantIndex: number;
   tokenUsage: TokenUsageDTO | null;
   loreMatches: MatchedLoreEntryDTO[];
+  memoryMatches: MatchedMemoryDTO[];
   createdAt: string;
   updatedAt: string;
 }
@@ -303,6 +307,43 @@ export interface MatchedLoreEntryDTO {
   updatedAt?: string;
 }
 
+export interface ChatMemoryDTO {
+  id: string;
+  chatId: string;
+  title: string;
+  content: string;
+  keywords: string[];
+  importance: number;
+  enabled: boolean;
+  sourceMessageIds: string[];
+  lastMatchedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatMemoryInput {
+  title: string;
+  content: string;
+  keywords?: string[];
+  importance?: number;
+  enabled?: boolean;
+  sourceMessageIds?: string[];
+}
+
+export interface MatchedMemoryDTO {
+  id: string;
+  chatId: string;
+  title: string;
+  content: string;
+  keywords: string[];
+  importance: number;
+  enabled: boolean;
+  score?: number;
+  lastMatchedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface BackupDTO {
   schemaVersion: 1;
   exportedAt: string;
@@ -310,6 +351,7 @@ export interface BackupDTO {
   characters: BackupCharacterDTO[];
   chats: ChatDTO[];
   messages: MessageDTO[];
+  memories: ChatMemoryDTO[];
 }
 
 export interface BackupImportSummaryDTO {
@@ -317,6 +359,7 @@ export interface BackupImportSummaryDTO {
   characters: number;
   chats: number;
   messages: number;
+  memories: number;
   settingsImported: boolean;
 }
 
@@ -360,6 +403,11 @@ export type GenerationServerMessage =
       type: "lore_matches";
       requestId: string;
       entries: MatchedLoreEntryDTO[];
+    }
+  | {
+      type: "memory_matches";
+      requestId: string;
+      entries: MatchedMemoryDTO[];
     }
   | {
       type: "generation_character_started";
