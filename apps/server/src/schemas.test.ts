@@ -6,6 +6,7 @@ import {
   characterExportSchema,
   characterImportSchema,
   characterPageQuerySchema,
+  characterUpdateRequestSchema,
   characterUnlockSchema,
   chatUpdateSchema,
   settingsUpdateSchema
@@ -34,6 +35,25 @@ describe("chatUpdateSchema", () => {
 
     assert.equal(remote.backgroundUrl, "https://example.com/background.webp");
     assert.equal(uploaded.backgroundUrl, "data:image/png;base64,QUJDRA==");
+  });
+});
+
+describe("characterUpdateRequestSchema", () => {
+  it("does not inject create-time defaults into partial character updates", () => {
+    const parsed = parseBody(characterUpdateRequestSchema, {
+      description: "Updated smoke character description."
+    });
+
+    assert.deepEqual(parsed, {
+      description: "Updated smoke character description."
+    });
+    assert.equal("prefix" in parsed, false);
+    assert.equal("prompt" in parsed, false);
+    assert.equal("suffix" in parsed, false);
+    assert.equal("htmlCss" in parsed, false);
+    assert.equal("openingHtml" in parsed, false);
+    assert.equal("loreEntries" in parsed, false);
+    assert.equal("quickReplies" in parsed, false);
   });
 });
 
@@ -199,6 +219,62 @@ describe("characterImportSchema", () => {
 });
 
 describe("backupImportSchema", () => {
+  it("accepts imported private character backups that preserve encrypted prompt storage", () => {
+    const parsed = parseBody(backupImportSchema, {
+      schemaVersion: 1,
+      mode: "replace",
+      characters: [
+        {
+          id: "private-character-1",
+          name: "Private Backup Character",
+          avatar: null,
+          description: "Backup keeps imported private characters locked.",
+          prefix: "",
+          prompt: "",
+          suffix: "",
+          htmlCss: "",
+          openingHtml: "<section>Locked prompt</section>",
+          loreEntries: {
+            __privateCharacter: {
+              version: 1,
+              algorithm: "aes-256-gcm",
+              iv: "backup-iv",
+              tag: "backup-tag",
+              ciphertext: "backup-ciphertext",
+              accessControl: {
+                version: 1,
+                salt: "backup-salt",
+                verifier: "backup-verifier"
+              },
+              exportSalt: "export-salt"
+            }
+          },
+          quickReplies: [],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }
+      ],
+      chats: [],
+      messages: []
+    });
+
+    assert.deepEqual(parsed.characters[0]?.loreEntries, {
+      __privateCharacter: {
+        version: 1,
+        algorithm: "aes-256-gcm",
+        iv: "backup-iv",
+        tag: "backup-tag",
+        ciphertext: "backup-ciphertext",
+        accessControl: {
+          version: 1,
+          salt: "backup-salt",
+          verifier: "backup-verifier"
+        },
+        exportSalt: "export-salt"
+      }
+    });
+  });
+
   it("rejects legacy backup character fields that do not use prefix/prompt/suffix", () => {
     assert.throws(() =>
       parseBody(backupImportSchema, {

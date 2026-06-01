@@ -89,6 +89,38 @@ export interface CharacterDTO {
   updatedAt: string;
 }
 
+export interface StoredPrivateCharacterBackupDTO {
+  __privateCharacter: {
+    version: 1;
+    algorithm: "aes-256-gcm";
+    iv: string;
+    tag: string;
+    ciphertext: string;
+    accessControl: {
+      version: 1;
+      salt: string;
+      verifier: string;
+    };
+    exportSalt?: string;
+  };
+}
+
+export interface BackupCharacterDTO {
+  id?: string;
+  name: string;
+  avatar: string | null;
+  description: string;
+  prefix: string;
+  prompt: string;
+  suffix: string;
+  htmlCss: string;
+  openingHtml: string;
+  loreEntries: CharacterLoreEntryDTO[] | StoredPrivateCharacterBackupDTO;
+  quickReplies: QuickReplyDTO[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export type CharacterExportMode = CharacterVisibility;
 
 export interface PublicCharacterCardDTO {
@@ -275,7 +307,7 @@ export interface BackupDTO {
   schemaVersion: 1;
   exportedAt: string;
   settings: UserSettingsDTO | null;
-  characters: CharacterDTO[];
+  characters: BackupCharacterDTO[];
   chats: ChatDTO[];
   messages: MessageDTO[];
 }

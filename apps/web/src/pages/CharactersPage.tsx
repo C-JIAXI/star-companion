@@ -76,10 +76,10 @@ const HTML_PREVIEW_TEMPLATES = {
     <h2 class="character-card__title">Character Name</h2>
   </header>
   <p class="character-card__body">A short character description or introduction that sets the tone and context for interactions.</p>
-  <ul class="character-card__tags">
-    <li>tag one</li>
-    <li>tag two</li>
-    <li>tag three</li>
+  <ul class="character-card__meta">
+    <li>Calm voice</li>
+    <li>Night archive</li>
+    <li>Field notes</li>
   </ul>
 </article>`,
   dialogue: `<section class="dialogue-shell">
@@ -738,7 +738,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
           <Plus size={14} />
           {t("common.new")}
         </Button>
-        <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg bg-white/5 px-3 text-xs font-medium text-slate-200 transition-colors hover:bg-white/10 focus-within:ring-2 focus-within:ring-white/20">
+        <label className="inline-flex h-9 min-h-[36px] cursor-pointer items-center gap-2 rounded-lg bg-white/5 px-3 text-xs font-medium text-slate-200 transition-colors hover:bg-white/10 focus-within:ring-2 focus-within:ring-white/20">
           <FileUp size={14} />
           {t("common.import")}
           <input

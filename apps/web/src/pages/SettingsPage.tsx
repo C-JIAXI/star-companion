@@ -307,7 +307,7 @@ const getPageCopy = (language: AppLanguage) =>
         presetApplied: (name: string) => `Loaded preset "${name}"`,
         backupTitle: "Backup & Migration",
         backupHelp:
-          "Full backups export characters, chats, messages, and lorebooks. Settings export model parameters but never the API key.",
+          "Full backups export characters, chats, and messages. Settings export model parameters but never the API key.",
         saveReady: "Save locally",
         noPendingChanges: "No pending changes",
         validationPreset:

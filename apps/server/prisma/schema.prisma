@@ -11,7 +11,7 @@ model UserSettings {
   id                   String    @id @default(cuid())
   activeProvider       String    @default("openai-compatible")
   apiBaseUrl           String    @default("https://api.openai.com/v1")
-  /// MVP stores this locally in plain text. A later phase should encrypt it at rest.
+  /// Stored locally with application-level AES-256-GCM encryption at rest.
   apiKey               String?
   model                String    @default("gpt-4o-mini")
   temperature          Float     @default(0.8)

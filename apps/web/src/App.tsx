@@ -261,7 +261,12 @@ export function App() {
                 <Sparkles size={14} />
               </div>
               <div className="min-w-0 flex-1">
-                <h1 className="truncate text-sm font-bold tracking-tight text-white">{APP_NAME}</h1>
+                <p className="truncate text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
+                  {APP_NAME}
+                </p>
+                <h2 className="truncate text-sm font-semibold tracking-tight text-white">
+                  {t(active.titleKey)}
+                </h2>
               </div>
             </div>
             {activeSection !== "chat" ? null : <div className="w-10 sm:w-11" />}

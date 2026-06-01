@@ -2,7 +2,7 @@ import { createCipheriv, randomBytes, scryptSync } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 type E2ECharacter = {
   id: string;
@@ -40,6 +40,27 @@ type SettingsPutPayload = {
 
 type ApiDataResponse<T> = {
   data?: T;
+};
+
+const openChatHistoryAndSelect = async (page: Page, title: string) => {
+  const viewport = page.viewportSize();
+  if (viewport && viewport.width < 1024) {
+    await page.getByRole("button", { name: /Toggle navigation/ }).click();
+  }
+
+  await page.getByRole("button", { name: /历史|History/ }).click();
+  await page.getByPlaceholder(/搜索历史对话|Search chat history/).fill(title);
+  await page.getByRole("button", { name: title }).click();
+};
+
+const selectChatFromHistory = async (page: Page, title: string) => {
+  const viewport = page.viewportSize();
+  if (viewport && viewport.width < 1024) {
+    await page.getByRole("button", { name: /Toggle navigation/ }).click();
+  }
+
+  await page.getByRole("button", { name: /鍘嗗彶|History/ }).click();
+  await page.getByRole("button", { name: title }).click();
 };
 
 const createPrivateCharacterCardFile = async (name: string, password: string) => {
@@ -162,10 +183,7 @@ test("character built-in css previews in the editor and styles only matching cha
   page,
   request
 }, testInfo) => {
-  test.skip(
-    testInfo.project.name === "mobile-chrome",
-    "This flow exercises the desktop sidebar and editor layout."
-  );
+  await page.setViewportSize({ width: 1440, height: 900 });
   testInfo.setTimeout(90_000);
   const suffix = `${testInfo.project.name}-${Date.now()}`;
   const characterAName = `CSS Character A ${suffix}`;
@@ -320,7 +338,7 @@ test("character built-in css previews in the editor and styles only matching cha
   }
 });
 
-test("character management can create a character and shows save feedback", async ({
+test("character management can create a character with markdown prompt fields", async ({
   page,
   request
 }, testInfo) => {
@@ -340,21 +358,17 @@ test("character management can create a character and shows save feedback", asyn
 
   await page.getByRole("button", { name: /新建|New/ }).click();
   await expect(page.getByRole("heading", { name: /创建角色|Create Character/ })).toBeVisible();
-  const name = `E2E角色-${testInfo.project.name}-${Date.now()}`;
+  const name = `E2E Character ${testInfo.project.name} ${Date.now()}`;
 
   try {
     await page.getByLabel(/名称|Name/).fill(name);
-    await page
-      .getByRole("textbox", { name: /^(前置词|Prefix)/ })
-      .fill("你会保持清晰、稳定的角色边界。");
-    await page
-      .getByRole("textbox", { name: /^(提示词|Prompt)/ })
-      .fill("这是一张用于端到端测试的原创角色卡。");
-    await page.getByRole("textbox", { name: /^(后置词|Suffix)/ }).fill("回复时保持简洁。");
-    await page
-      .getByRole("button", { name: /保存|Save/ })
-      .last()
-      .click();
+    const promptEditors = page.locator(".roleplay-md-editor textarea");
+    await promptEditors.nth(0).fill("Stay within the role boundary and keep the response stable.");
+    await promptEditors
+      .nth(1)
+      .fill("This is an original character card used for end-to-end coverage.");
+    await promptEditors.nth(2).fill("Reply concisely.");
+    await page.getByRole("button", { name: /保存|Save/ }).last().click();
 
     await expect(page.getByRole("status")).toContainText(/角色已保存|Character saved/);
     await expect
@@ -370,28 +384,22 @@ test("character management can create a character and shows save feedback", asyn
   }
 });
 
-test("mobile chat layout exposes panel switching", async ({ page }) => {
+test("mobile chat drawer switches between sections", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
 
-  await expect(page.getByRole("button", { name: /聊天列表|Chats/ })).toBeVisible();
-  await page
-    .getByRole("button", { name: /创建聊天|Create Chat/ })
-    .first()
-    .click();
-  await expect(page.getByRole("heading", { name: /创建聊天|Create Chat/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Toggle navigation/ })).toBeVisible();
+  await page.getByRole("button", { name: /Toggle navigation/ }).click();
+  await expect(page.getByRole("button", { name: /历史|History/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /文档|Docs/ })).toBeVisible();
 
-  await page.getByRole("button", { name: /消息流|Message Stream/ }).click();
-  await expect(
-    page
-      .getByPlaceholder(/输入用户消息|Write a user message/)
-      .or(
-        page.getByText(
-          /选择或创建聊天|Select or create a chat|这段聊天还没有消息|This chat has no messages/
-        )
-      )
-      .first()
-  ).toBeVisible();
+  await page.getByRole("button", { name: /角色|Characters/ }).click();
+  await expect(page.getByRole("heading", { name: /角色工坊|Character Studio/ })).toBeVisible();
+
+  await page.getByRole("button", { name: /Toggle navigation/ }).click();
+  await page.getByRole("button", { name: /聊天|Chat/ }).click();
+  await expect(page.getByRole("heading", { name: /消息流|Message Stream|Chat Workbench/ })).toBeVisible();
+  await expect(page.getByText(/前往角色中开始聊天吧|Go to Characters to start chatting/)).toBeVisible();
 });
 
 test("chat settings can hide avatars and message bubbles do not show sender names", async ({
@@ -470,7 +478,7 @@ test("chat settings can hide avatars and message bubbles do not show sender name
     await persistSettings(false);
 
     await page.goto("/");
-    await page.getByRole("button", { name: chatTitle }).click();
+    await openChatHistoryAndSelect(page, chatTitle);
 
     const assistantBubble = page.locator("article").filter({ hasText: assistantText }).first();
     await expect(assistantBubble).toBeVisible();
@@ -599,10 +607,20 @@ test("chat model switch preserves stored key and runtime settings when preset ha
     throw new Error("Chat creation did not return data");
   }
 
+  const seedMessageResponse = await request.post("/api/messages", {
+    data: {
+      chatId: chat.id,
+      role: "user",
+      content: "Seed message for chat history visibility."
+    }
+  });
+  expect(seedMessageResponse.ok()).toBeTruthy();
+
   try {
     await page.goto("/");
-    await page.getByRole("button", { name: chatTitle }).click();
+    await openChatHistoryAndSelect(page, chatTitle);
     await page.getByRole("button", { name: /记忆|Memory/ }).click();
+    await page.getByRole("button", { name: /模型切换|Switch Model/ }).click();
     await page.getByRole("button", { name: /Target Model/ }).click();
 
     await expect.poll(() => latestSettingsPut.value).not.toBeNull();
@@ -656,24 +674,29 @@ test("chat custom config saves prefix prompt and suffix from memory settings", a
     throw new Error("Chat creation did not return data");
   }
 
+  const seedMessageResponse = await request.post("/api/messages", {
+    data: {
+      chatId: chat.id,
+      role: "user",
+      content: "Seed message for chat history visibility."
+    }
+  });
+  expect(seedMessageResponse.ok()).toBeTruthy();
+
   try {
     await page.goto("/");
-    await page.getByRole("button", { name: chatTitle }).click();
+    await openChatHistoryAndSelect(page, chatTitle);
     await page.locator("button[aria-expanded]").click();
+    await page.getByRole("button", { name: /自定义配置|Custom Config/ }).click();
 
-    const settingsPopover = page.locator("div.custom-scrollbar.absolute.right-0.top-10");
-    const customConfigSection = settingsPopover.locator("div.border-t").nth(0);
-    await customConfigSection.getByRole("button").first().click();
-
-    await customConfigSection.locator("textarea").nth(0).fill(customConfig.prefix);
-    await customConfigSection.locator("textarea").nth(1).fill(customConfig.prompt);
-    await customConfigSection.locator("textarea").nth(2).fill(customConfig.suffix);
-    await customConfigSection.getByRole("button").first().click();
+    const customConfigDialog = page.getByRole("dialog");
+    const configInputs = customConfigDialog.locator("textarea");
+    await configInputs.nth(0).fill(customConfig.prefix);
+    await configInputs.nth(1).fill(customConfig.prompt);
+    await configInputs.nth(2).fill(customConfig.suffix);
+    await customConfigDialog.getByRole("button", { name: /保存|Save/ }).click();
 
     await expect(page.getByRole("status")).toBeVisible();
-    await expect(customConfigSection.getByText(customConfig.prefix)).toBeVisible();
-    await expect(customConfigSection.getByText(customConfig.prompt)).toBeVisible();
-    await expect(customConfigSection.getByText(customConfig.suffix)).toBeVisible();
 
     const storedChatResponse = await request.get(`/api/chats/${chat.id}`);
     expect(storedChatResponse.ok()).toBeTruthy();
@@ -684,11 +707,12 @@ test("chat custom config saves prefix prompt and suffix from memory settings", a
     expect(storedChat?.userPersona).toContain(customConfig.suffix);
 
     await page.reload();
-    await page.getByRole("button", { name: chatTitle }).click();
+    await openChatHistoryAndSelect(page, chatTitle);
     await page.locator("button[aria-expanded]").click();
-    await expect(customConfigSection.getByText(customConfig.prefix)).toBeVisible();
-    await expect(customConfigSection.getByText(customConfig.prompt)).toBeVisible();
-    await expect(customConfigSection.getByText(customConfig.suffix)).toBeVisible();
+    await page.getByRole("button", { name: /自定义配置|Custom Config/ }).click();
+    await expect(customConfigDialog.locator("textarea").nth(0)).toHaveValue(customConfig.prefix);
+    await expect(customConfigDialog.locator("textarea").nth(1)).toHaveValue(customConfig.prompt);
+    await expect(customConfigDialog.locator("textarea").nth(2)).toHaveValue(customConfig.suffix);
   } finally {
     await request.delete(`/api/chats/${chat.id}`);
     await request.delete(`/api/characters/${character.id}`);
@@ -737,7 +761,7 @@ test("long chats paginate and keep messages inside the scrollable viewport", asy
     }
 
     await page.goto("/");
-    await page.getByRole("button", { name: chatTitle }).click();
+    await openChatHistoryAndSelect(page, chatTitle);
 
     const viewport = page.getByTestId("chat-message-viewport");
     await expect(viewport).toBeVisible();
@@ -760,7 +784,7 @@ test("long chats paginate and keep messages inside the scrollable viewport", asy
   }
 });
 
-test("character page paginates and searches server-side character results", async ({
+test("character page search can narrow to a paged server result before editing", async ({
   page,
   request
 }, testInfo) => {
@@ -783,21 +807,27 @@ test("character page paginates and searches server-side character results", asyn
             id: createdIds[index],
             name: `${prefix} ${String(index).padStart(2, "0")}`,
             avatar: null,
+            description: "",
             prefix: "Paging fixture.",
             prompt: `Bulk prompt ${index}`,
             suffix: "Reply directly.",
             htmlCss: "",
-            loreEntries: []
+            openingHtml: "",
+            loreEntries: [],
+            quickReplies: []
           })),
           {
             id: createdIds[40],
             name: targetName,
             avatar: null,
+            description: "",
             prefix: "Paging fixture.",
             prompt: `Unique server-side-search token ${suffix}`,
             suffix: "Reply directly.",
             htmlCss: "",
-            loreEntries: []
+            openingHtml: "",
+            loreEntries: [],
+            quickReplies: []
           }
         ],
         chats: [],
@@ -808,17 +838,22 @@ test("character page paginates and searches server-side character results", asyn
 
     await page.goto("/characters");
     await page
-      .getByPlaceholder(/搜索角色名称|鎼滅储瑙掕壊鍚嶇О|Search character name or prompt/)
+      .getByPlaceholder(/搜索角色名称|Search character name or prompt/)
       .fill(prefix);
     await expect(page.getByTestId("characters-page-next")).toBeEnabled();
     await page.getByTestId("characters-page-next").click();
     await expect(page.getByTestId("characters-page-prev")).toBeEnabled();
 
     await page
-      .getByPlaceholder(/搜索角色名称|鎼滅储瑙掕壊鍚嶇О|Search character name or prompt/)
+      .getByPlaceholder(/搜索角色名称|Search character name or prompt/)
       .fill(`server-side-search token ${suffix}`);
-    await page.getByRole("button", { name: new RegExp(targetName) }).click();
-    await expect(page.getByLabel(/名称|鍚嶇О|Name/)).toHaveValue(targetName);
+    const targetCard = page
+      .locator("div.group")
+      .filter({ has: page.getByText(targetName) })
+      .first();
+    await expect(targetCard).toBeVisible();
+    await targetCard.getByRole("button", { name: /编辑|Edit/ }).click();
+    await expect(page.getByLabel(/名称|Name/)).toHaveValue(targetName);
   } finally {
     await Promise.all(
       createdIds.filter(Boolean).map((id) => request.delete(`/api/characters/${id}`))
@@ -826,7 +861,7 @@ test("character page paginates and searches server-side character results", asyn
   }
 });
 
-test("chat creation paginates and searches characters before creating a chat", async ({
+test("character paging search can create a chat from the matching card", async ({
   page,
   request
 }, testInfo) => {
@@ -834,7 +869,6 @@ test("chat creation paginates and searches characters before creating a chat", a
   const suffix = `${testInfo.project.name}-${Date.now()}`;
   const prefix = `Create Chat Character ${suffix}`;
   const targetName = `${prefix} target`;
-  const chatTitle = `Paged Character Chat ${suffix}`;
   const createdIds = Array.from(
     { length: 40 },
     (_, index) => `e2e-create-chat-${suffix}-${index}`
@@ -851,21 +885,27 @@ test("chat creation paginates and searches characters before creating a chat", a
             id: createdIds[index],
             name: `${prefix} ${String(index).padStart(2, "0")}`,
             avatar: null,
+            description: "",
             prefix: "Create chat paging fixture.",
             prompt: `Create chat prompt ${index}`,
             suffix: "Reply directly.",
             htmlCss: "",
-            loreEntries: []
+            openingHtml: "",
+            loreEntries: [],
+            quickReplies: []
           })),
           {
             id: createdIds[40],
             name: targetName,
             avatar: null,
+            description: "",
             prefix: "Create chat paging fixture.",
             prompt: `Create chat unique-search token ${suffix}`,
             suffix: "Reply directly.",
             htmlCss: "",
-            loreEntries: []
+            openingHtml: "",
+            loreEntries: [],
+            quickReplies: []
           }
         ],
         chats: [],
@@ -874,28 +914,30 @@ test("chat creation paginates and searches characters before creating a chat", a
     });
     expect(importResponse.ok()).toBeTruthy();
 
-    await page.goto("/");
+    await page.goto("/characters");
     await page
-      .getByPlaceholder(/搜索角色名称|Search character name or prompt|鎼滅储瑙掕壊鍚嶇О/)
+      .getByPlaceholder(/搜索角色名称|Search character name or prompt/)
       .fill(prefix);
-    await expect(page.getByTestId("create-chat-character-page-next")).toBeEnabled();
-    await page.getByTestId("create-chat-character-page-next").click();
-    await expect(page.getByTestId("create-chat-character-page-prev")).toBeEnabled();
+    await expect(page.getByTestId("characters-page-next")).toBeEnabled();
+    await page.getByTestId("characters-page-next").click();
+    await expect(page.getByTestId("characters-page-prev")).toBeEnabled();
 
     await page
-      .getByPlaceholder(/搜索角色名称|Search character name or prompt|鎼滅储瑙掕壊鍚嶇О/)
+      .getByPlaceholder(/搜索角色名称|Search character name or prompt/)
       .fill(`unique-search token ${suffix}`);
-    await page.getByText(targetName).click();
-    await page.getByLabel(/标题|鏍囬|Title/).fill(chatTitle);
-    await page
-      .getByRole("button", { name: /创建聊天|鍒涘缓鑱婂ぉ|Create Chat/ })
-      .last()
-      .click();
-    await expect(page.getByRole("button", { name: chatTitle })).toBeVisible();
+    const targetCard = page
+      .locator("div.group")
+      .filter({ has: page.getByText(targetName) })
+      .first();
+    await expect(targetCard).toBeVisible();
+    await targetCard.getByRole("button", { name: /游玩|Play/ }).click();
+
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.locator("#chat-title")).toContainText(/New Chat/);
 
     const chatsResponse = await request.get("/api/chats");
     const chats = ((await chatsResponse.json()) as ApiDataResponse<E2EChat[]>).data ?? [];
-    chatId = chats.find((chat) => chat.title === chatTitle)?.id ?? null;
+    chatId = chats.find((chat) => chat.title === "New Chat")?.id ?? null;
   } finally {
     if (chatId) {
       await request.delete(`/api/chats/${chatId}`);
@@ -906,7 +948,7 @@ test("chat creation paginates and searches characters before creating a chat", a
   }
 });
 
-test("imported private character cards reveal prompt fields only after password unlock", async ({
+test("private character imports keep export enabled before unlock and reveal prompt fields after unlock", async ({
   page,
   request
 }, testInfo) => {
@@ -920,22 +962,30 @@ test("imported private character cards reveal prompt fields only after password 
     await page.goto("/characters");
     await page.locator('input[type="file"]').setInputFiles(file.filePath);
 
-    await expect(page.getByText(name)).toBeVisible();
+    await expect(page.getByRole("heading", { name })).toBeVisible();
 
     const charactersResponse = await request.get("/api/characters");
     const characters =
       ((await charactersResponse.json()) as ApiDataResponse<E2ECharacter[]>).data ?? [];
     createdId = characters.find((character) => character.name === name)?.id ?? null;
 
-    await expect(page.getByText(name)).toBeVisible();
-    await expect(page.getByRole("button", { name: "导出", exact: true })).toBeEnabled();
-    await expect(page.getByRole("button", { name: "复制角色", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: /^导出$|^Export$/ })).toBeEnabled();
+    await expect(
+      page.getByRole("button", { name: /输入密码查看|Unlock with Password/ })
+    ).toBeVisible();
+    await expect(page.locator(".roleplay-md-editor textarea")).toHaveCount(0);
+    await expect(page.getByText("Hidden private prompt.")).toHaveCount(0);
 
     await page.getByRole("button", { name: /输入密码查看|Unlock with Password/ }).click();
     await page.getByLabel(/密码|Password/).fill(password);
     await page.getByRole("button", { name: /查看内容|Reveal Content/ }).click();
 
-    await expect(page.getByRole("button", { name: "复制角色", exact: true })).toBeEnabled();
+    const promptEditors = page.locator(".roleplay-md-editor textarea");
+    await expect(page.getByRole("button", { name: /^导出$|^Export$/ })).toBeEnabled();
+    await expect(promptEditors).toHaveCount(3);
+    await expect(promptEditors.nth(0)).toHaveValue("Hidden private prefix.");
+    await expect(promptEditors.nth(1)).toHaveValue("Hidden private prompt.");
+    await expect(promptEditors.nth(2)).toHaveValue("Hidden private suffix.");
     await expect(page.getByText("Hidden private prompt.").first()).toBeVisible();
   } finally {
     if (createdId) {

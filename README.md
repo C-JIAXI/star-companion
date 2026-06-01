@@ -49,6 +49,7 @@ apps/
 packages/
   shared/    前后端共享类型
 scripts/
+  smoke-api.mjs
   seed-pagination-test.mjs
 ```
 
@@ -111,6 +112,7 @@ npm run dev
 npm run build
 npm run lint
 npm run test:server
+npm run test:api
 npm run test:e2e
 npm run db:generate
 npm run db:migrate
@@ -123,9 +125,8 @@ npm run db:migrate:deploy
 - `npm run build` 会依次构建 shared、server、web
 - `npm run lint` 会检查 shared、server、web
 - `npm run test:server` 会运行服务端测试
-- `npm run test:e2e` 会运行 Playwright 前端端到端测试
-- 当前仓库没有根级 `npm run test:api`
-- 当前仓库也没有 `scripts/smoke-api.mjs`
+- `npm run test:api` 会基于 `prisma/migrations/*/migration.sql` 初始化 fresh SQLite，再启动独立端口 server，覆盖 `health/settings/characters/chats/messages/backups` 冒烟流程
+- `npm run test:e2e` 会运行 Playwright 前端端到端测试；当前仓库状态为 `24 passed`
 
 首次运行 Playwright 可安装浏览器：
 
@@ -217,6 +218,7 @@ HTTP API：
 - 当前角色提示词结构是 `prefix` / `prompt` / `suffix`
 - `Character.htmlCss` 仍用于角色消息内的 HTML fragment；当该角色在聊天页激活时，同一份 CSS 也会作用于应用内文档约定的官方 Chat UI 选择器
 - 当前没有一等持久化字段：`firstMessage`、`exampleDialog`、`tags`、`systemPrompt`
+- 上述字段只应作为历史兼容语境理解，不应默认视为当前待补的一等持久化路线
 - 角色导入与备份导入按当前字段结构处理，不再兼容旧的 `scenario` / `systemPrompt` 字段映射
 
 ## Prompt 组装
@@ -265,6 +267,7 @@ HTTP API：
 npm run build
 npm run lint
 npm run test:server
+npm run test:api
 npm run test:e2e
 ```
 

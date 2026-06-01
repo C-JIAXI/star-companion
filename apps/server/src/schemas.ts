@@ -37,7 +37,8 @@ const loreEntrySchema = z.object({
   enabled: z.boolean().default(true)
 });
 
-const loreEntriesSchema = z.array(loreEntrySchema).default([]);
+const loreEntriesInputSchema = z.array(loreEntrySchema);
+const loreEntriesSchema = loreEntriesInputSchema.default([]);
 
 const quickReplySchema = z.object({
   id: z.string().min(1).optional(),
@@ -45,7 +46,8 @@ const quickReplySchema = z.object({
   content: z.string().min(1)
 });
 
-const quickRepliesSchema = z.array(quickReplySchema).default([]);
+const quickRepliesInputSchema = z.array(quickReplySchema);
+const quickRepliesSchema = quickRepliesInputSchema.default([]);
 
 const isSupportedBackgroundUrl = (value: string) => {
   const trimmed = value.trim();
@@ -87,7 +89,18 @@ export const characterCreateSchema = z.object({
   quickReplies: quickRepliesSchema
 });
 
-const characterUpdateFieldsSchema = characterCreateSchema.partial();
+const characterUpdateFieldsSchema = z.object({
+  name: z.string().trim().min(1).optional(),
+  avatar: z.string().trim().nullable().optional(),
+  description: z.string().optional(),
+  prefix: z.string().optional(),
+  prompt: z.string().optional(),
+  suffix: z.string().optional(),
+  htmlCss: z.string().optional(),
+  openingHtml: z.string().optional(),
+  loreEntries: loreEntriesInputSchema.optional(),
+  quickReplies: quickRepliesInputSchema.optional()
+});
 
 export const characterUpdateSchema = characterUpdateFieldsSchema.refine(
   (value) => Object.keys(value).length > 0,
@@ -126,6 +139,18 @@ const passwordAccessControlSchema = z.object({
   version: z.literal(1),
   salt: z.string().min(1),
   verifier: z.string().min(1)
+});
+
+const storedPrivateCharacterSchema = z.object({
+  __privateCharacter: z.object({
+    version: z.literal(1),
+    algorithm: z.literal("aes-256-gcm"),
+    iv: z.string().min(1),
+    tag: z.string().min(1),
+    ciphertext: z.string().min(1),
+    accessControl: passwordAccessControlSchema,
+    exportSalt: z.string().min(1).optional()
+  })
 });
 
 const privateCharacterCardSchema = z.object({
@@ -288,6 +313,7 @@ export const stopGenerationRequestSchema = z.object({
 const backupDateSchema = z.string().datetime().optional();
 
 const backupSettingsSchema = settingsUpdateSchema.omit({ apiKey: true }).partial();
+const backupLoreEntriesSchema = z.union([loreEntriesSchema, storedPrivateCharacterSchema]);
 
 const backupCharacterSchema = z
   .object({
@@ -300,7 +326,7 @@ const backupCharacterSchema = z
     suffix: z.string(),
     htmlCss: z.string(),
     openingHtml: z.string(),
-    loreEntries: loreEntriesSchema,
+    loreEntries: backupLoreEntriesSchema,
     quickReplies: quickRepliesSchema,
     createdAt: backupDateSchema,
     updatedAt: backupDateSchema
