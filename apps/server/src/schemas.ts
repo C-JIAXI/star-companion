@@ -194,6 +194,10 @@ const toPositiveInt = (fallback: number) =>
     }, z.number().int().positive().catch(fallback))
     .default(fallback);
 
+export const characterBatchDeleteSchema = z.object({
+  ids: z.array(idSchema).min(1).max(100)
+});
+
 export const characterPageQuerySchema = z
   .object({
     q: z

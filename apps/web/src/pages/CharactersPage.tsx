@@ -9,7 +9,9 @@ import {
   Save,
   Search,
   Trash2,
-  X
+  X,
+  CheckSquare,
+  Square
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { CharacterCard } from "../components/CharacterCard";
@@ -288,6 +290,10 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
   const [passwordDialogMode, setPasswordDialogMode] = useState<PasswordDialogMode | null>(null);
   const [passwordValue, setPasswordValue] = useState("");
   const [activeEditorSection, setActiveEditorSection] = useState<EditorSectionId>("prompt");
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false);
+  const [pageInputValue, setPageInputValue] = useState("");
   const [previewTemplateId, setPreviewTemplateId] = useState<HtmlPreviewTemplateId>(
     DEFAULT_HTML_PREVIEW_TEMPLATE
   );
@@ -583,6 +589,66 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
       setError(caught instanceof Error ? caught.message : t("characters.failedDelete"));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const batchDeleteCharacters = async () => {
+    if (selectedIds.size === 0) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const ids = Array.from(selectedIds);
+      await api.characters.batchRemove(ids);
+      setBatchDeleteConfirmOpen(false);
+      setSelectedIds(new Set());
+      setBatchMode(false);
+      await loadCharacters();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("characters.failedDelete"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === characters.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(characters.map((c) => c.id)));
+    }
+  };
+
+  const toggleSelectCharacter = (id: string, selected: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (selected) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  };
+
+  const handlePageInputChange = (value: string) => {
+    setPageInputValue(value);
+  };
+
+  const handlePageInputSubmit = () => {
+    const page = parseInt(pageInputValue, 10);
+    if (!isNaN(page) && page >= 1 && page <= pagination.totalPages && page !== characterPage) {
+      setCharacterPage(page);
+    }
+    setPageInputValue("");
+  };
+
+  const handlePageInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      handlePageInputSubmit();
     }
   };
 
@@ -1442,21 +1508,64 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
         </div>
       ) : (
         <div className="space-y-4">
-          <div className="relative">
-            <Search
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
-              size={16}
-            />
-            <TextInput
-              className="pl-9"
-              placeholder={t("characters.searchPlaceholder")}
-              value={searchQuery}
-              onChange={(event) => {
-                setSearchQuery(event.target.value);
-                setCharacterPage(1);
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+                size={16}
+              />
+              <TextInput
+                className="pl-9"
+                placeholder={t("characters.searchPlaceholder")}
+                value={searchQuery}
+                onChange={(event) => {
+                  setSearchQuery(event.target.value);
+                  setCharacterPage(1);
+                }}
+              />
+            </div>
+            <Button
+              className="!min-h-[40px] !px-3 text-xs"
+              variant={batchMode ? "secondary" : "ghost"}
+              onClick={() => {
+                setBatchMode((current) => !current);
+                setSelectedIds(new Set());
               }}
-            />
+            >
+              {batchMode ? <CheckSquare size={14} /> : <Square size={14} />}
+              {batchMode
+                ? (language === "zh-CN" ? "退出批量" : "Exit Batch")
+                : (language === "zh-CN" ? "批量管理" : "Batch Manage")}
+            </Button>
           </div>
+
+          {batchMode && characters.length > 0 ? (
+            <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-xs text-slate-300">
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  checked={selectedIds.size === characters.length && characters.length > 0}
+                  type="checkbox"
+                  className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                  onChange={toggleSelectAll}
+                />
+                {language === "zh-CN"
+                  ? `全选本页 (${selectedIds.size}/${characters.length})`
+                  : `Select all on page (${selectedIds.size}/${characters.length})`}
+              </label>
+              {selectedIds.size > 0 ? (
+                <Button
+                  className="!min-h-[28px] !px-2 text-xs"
+                  variant="danger"
+                  onClick={() => setBatchDeleteConfirmOpen(true)}
+                >
+                  <Trash2 size={12} />
+                  {language === "zh-CN"
+                    ? `删除选中 (${selectedIds.size})`
+                    : `Delete selected (${selectedIds.size})`}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
 
           <ErrorNotice message={error} />
           <SuccessNotice message={status} />
@@ -1480,8 +1589,11 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                     privateSummaryLabel={privateCharacterCopy.privateSummary}
                     playLabel={t("characters.play")}
                     editLabel={t("common.edit")}
-                    onPlay={onPlay}
-                    onEdit={selectCharacter}
+                    onPlay={batchMode ? () => {} : onPlay}
+                    onEdit={batchMode ? () => {} : selectCharacter}
+                    selectable={batchMode}
+                    selected={selectedIds.has(character.id)}
+                    onSelect={toggleSelectCharacter}
                   />
                 ))}
               </div>
@@ -1499,6 +1611,20 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                     <ChevronLeft size={14} />
                     {language === "zh-CN" ? "上一页" : "Previous"}
                   </Button>
+                  <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                    <input
+                      type="number"
+                      min={1}
+                      max={pagination.totalPages}
+                      className="h-8 w-14 rounded-md border border-white/10 bg-ink-950/50 px-1.5 text-center text-xs text-slate-200 outline-none transition-all hover:border-white/20 focus:border-ember-500 focus:ring-1 focus:ring-ember-500/50 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                      value={pageInputValue || characterPage}
+                      placeholder={String(characterPage)}
+                      onChange={(event) => handlePageInputChange(event.target.value)}
+                      onKeyDown={handlePageInputKeyDown}
+                      onBlur={handlePageInputSubmit}
+                    />
+                    <span>/ {pagination.totalPages}</span>
+                  </div>
                   <Button
                     className="!min-h-[32px] !px-3 text-xs"
                     data-testid="characters-page-next"
@@ -1559,6 +1685,21 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
           }}
           onChange={setPasswordValue}
           onConfirm={() => void submitPasswordDialog()}
+        />
+      ) : null}
+      {batchDeleteConfirmOpen ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={t("common.delete")}
+          loading={loading}
+          message={
+            language === "zh-CN"
+              ? `确定删除选中的 ${selectedIds.size} 个角色？此操作不可撤销。`
+              : `Delete ${selectedIds.size} selected characters? This cannot be undone.`
+          }
+          title={language === "zh-CN" ? "批量删除角色" : "Batch Delete Characters"}
+          onCancel={() => setBatchDeleteConfirmOpen(false)}
+          onConfirm={() => void batchDeleteCharacters()}
         />
       ) : null}
     </>

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../db.js";
 import { asyncHandler, HttpError, parseBody, parseQuery, requireParam } from "../lib/http.js";
 import {
+  characterBatchDeleteSchema,
   characterCreateSchema,
   characterExportSchema,
   characterImportSchema,
@@ -164,5 +165,17 @@ charactersRouter.delete(
     await prisma.character.delete({ where: { id } });
 
     response.status(204).send();
+  })
+);
+
+charactersRouter.post(
+  "/batch-delete",
+  asyncHandler(async (request, response) => {
+    const body = parseBody(characterBatchDeleteSchema, request.body);
+    const result = await prisma.character.deleteMany({
+      where: { id: { in: body.ids } }
+    });
+
+    response.json({ ok: true, data: { deleted: result.count } });
   })
 );

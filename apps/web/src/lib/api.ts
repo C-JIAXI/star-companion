@@ -114,7 +114,12 @@ export const api = {
         method: "PUT",
         body: accessPassword ? { ...input, accessPassword } : input
       }),
-    remove: (id: string) => request<void>(`/api/characters/${id}`, { method: "DELETE" })
+    remove: (id: string) => request<void>(`/api/characters/${id}`, { method: "DELETE" }),
+    batchRemove: (ids: string[]) =>
+      request<{ deleted: number }>("/api/characters/batch-delete", {
+        method: "POST",
+        body: { ids }
+      })
   },
   chats: {
     list: () => request<ChatDTO[]>("/api/chats"),

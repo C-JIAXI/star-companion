@@ -11,6 +11,9 @@ interface CharacterCardProps {
   editLabel: string;
   onPlay: (id: string) => void;
   onEdit: (character: CharacterDTO) => void;
+  selectable?: boolean;
+  selected?: boolean;
+  onSelect?: (id: string, selected: boolean) => void;
 }
 
 export function CharacterCard({
@@ -20,13 +23,25 @@ export function CharacterCard({
   playLabel,
   editLabel,
   onPlay,
-  onEdit
+  onEdit,
+  selectable,
+  selected,
+  onSelect
 }: CharacterCardProps) {
   const src = usePlaceholderSrc(character.avatar, character.id);
 
   return (
     <div
-      className="group flex flex-col overflow-hidden rounded-xl border border-white/5 bg-white/5 p-0 text-sm transition-all duration-200 hover:border-white/10 hover:bg-white/10 active:bg-white/[0.08]"
+      className={`group flex flex-col overflow-hidden rounded-xl border bg-white/5 p-0 text-sm transition-all duration-200 active:bg-white/[0.08] ${
+        selectable
+          ? "cursor-pointer hover:bg-white/10"
+          : "hover:bg-white/10"
+      } ${
+        selected
+          ? "border-ember-500/40 shadow-lg shadow-ember-500/10"
+          : "border-white/5 hover:border-white/10"
+      }`}
+      onClick={selectable ? () => onSelect?.(character.id, !selected) : undefined}
     >
       <div className="relative aspect-video w-full overflow-hidden bg-ink-800 ring-1 ring-white/5 transition-all duration-200 group-hover:ring-ember-500/30">
         <img
@@ -42,6 +57,24 @@ export function CharacterCard({
             <Lock size={11} className="ml-1.5 inline-block shrink-0 text-amber-400" />
           ) : null}
         </p>
+        {selectable ? (
+          <label
+            className="absolute right-2 top-2 z-10 flex h-6 w-6 cursor-pointer items-center justify-center rounded-md border border-white/20 bg-black/40 backdrop-blur-sm transition-colors hover:bg-black/60"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <input
+              checked={selected ?? false}
+              type="checkbox"
+              className="sr-only"
+              onChange={(event) => onSelect?.(character.id, event.target.checked)}
+            />
+            {selected ? (
+              <svg className="h-4 w-4 text-ember-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            ) : null}
+          </label>
+        ) : null}
       </div>
       <div className="min-w-0 w-full flex-1 px-4 pb-1 pt-3">
         <p className="line-clamp-2 text-xs leading-5 text-slate-400">
