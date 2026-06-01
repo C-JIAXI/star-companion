@@ -198,6 +198,10 @@ export const characterBatchDeleteSchema = z.object({
   ids: z.array(idSchema).min(1).max(100)
 });
 
+export const characterBatchFetchSchema = z.object({
+  ids: z.array(idSchema).min(1).max(50)
+});
+
 export const characterPageQuerySchema = z
   .object({
     q: z

@@ -9,6 +9,18 @@ export default defineConfig({
       "@local-roleplay/shared": fileURLToPath(new URL("../../packages/shared/src/index.ts", import.meta.url))
     }
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "react-vendor": ["react", "react-dom"],
+          "ui-vendor": ["lucide-react"],
+          "markdown-vendor": ["marked", "dompurify"],
+          "editor-vendor": ["@uiw/react-md-editor"]
+        }
+      }
+    }
+  },
   server: {
     port: 5173,
     proxy: {

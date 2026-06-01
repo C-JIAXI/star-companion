@@ -63,38 +63,30 @@ export function ChatHistoryList({
 
       const uncachedIds = [...allCharacterIds].filter((id) => !characterCache.has(id));
       if (uncachedIds.length > 0) {
-        const entries = await Promise.all(
-          uncachedIds.map(async (id) => {
-            try {
-              const char = await api.characters.get(id);
-              return [id, char] as const;
-            } catch {
-              return [id, null] as const;
-            }
-          })
-        );
-        const missingIds = entries
-          .filter((entry): entry is readonly [string, null] => entry[1] === null)
-          .map(([id]) => id);
+        try {
+          const fetchedCharacters = await api.characters.batchFetch(uncachedIds);
+          const fetchedIds = new Set(fetchedCharacters.map((c) => c.id));
 
-        setCharacterCache((prev) => {
-          const next = new Map(prev);
-          for (const [id, char] of entries) {
-            if (char) {
-              next.set(id, char);
+          setCharacterCache((prev) => {
+            const next = new Map(prev);
+            for (const char of fetchedCharacters) {
+              next.set(char.id, char);
             }
+            return next;
+          });
+
+          const missingIds = uncachedIds.filter((id) => !fetchedIds.has(id));
+          if (missingIds.length > 0) {
+            setChats((prev) =>
+              prev.map((chat) =>
+                chat.characterId && missingIds.includes(chat.characterId)
+                  ? { ...chat, characterId: null }
+                  : chat
+              )
+            );
           }
-          return next;
-        });
-
-        if (missingIds.length > 0) {
-          setChats((prev) =>
-            prev.map((chat) =>
-              chat.characterId && missingIds.includes(chat.characterId)
-                ? { ...chat, characterId: null }
-                : chat
-            )
-          );
+        } catch {
+          // Batch fetch failed, fall back to no character data
         }
       }
     } catch (caught) {

@@ -380,7 +380,7 @@ function SettingsBadge({ children }: { children: ReactNode }) {
   );
 }
 
-export function SettingsPage() {
+export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void } = {}) {
   const { language, t } = useI18n();
   const copy = useMemo(() => getPageCopy(language), [language]);
   const setLanguage = useAppStore((state) => state.setLanguage);
@@ -455,6 +455,10 @@ export function SettingsPage() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [hasUnsavedChanges]);
+
+  useEffect(() => {
+    onDirtyChange?.(hasUnsavedChanges);
+  }, [hasUnsavedChanges, onDirtyChange]);
 
   const activePreset = useMemo(
     () =>
@@ -773,7 +777,7 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6" {...(hasUnsavedChanges ? { "data-settings-dirty": "" } : {})}>
+    <div className="mx-auto max-w-6xl space-y-6">
       <ErrorNotice message={error} />
       <SuccessNotice message={status} />
 

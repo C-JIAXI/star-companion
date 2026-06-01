@@ -3,6 +3,7 @@ import { prisma } from "../db.js";
 import { asyncHandler, HttpError, parseBody, parseQuery, requireParam } from "../lib/http.js";
 import {
   characterBatchDeleteSchema,
+  characterBatchFetchSchema,
   characterCreateSchema,
   characterExportSchema,
   characterImportSchema,
@@ -177,5 +178,21 @@ charactersRouter.post(
     });
 
     response.json({ ok: true, data: { deleted: result.count } });
+  })
+);
+
+charactersRouter.post(
+  "/batch-fetch",
+  asyncHandler(async (request, response) => {
+    const body = parseBody(characterBatchFetchSchema, request.body);
+    const characters = await prisma.character.findMany({
+      where: { id: { in: body.ids } },
+      orderBy: { updatedAt: "desc" }
+    });
+
+    response.json({
+      ok: true,
+      data: characters.map((character) => serializeCharacter(character))
+    });
   })
 );

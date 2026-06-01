@@ -119,6 +119,11 @@ export const api = {
       request<{ deleted: number }>("/api/characters/batch-delete", {
         method: "POST",
         body: { ids }
+      }),
+    batchFetch: (ids: string[]) =>
+      request<CharacterDTO[]>("/api/characters/batch-fetch", {
+        method: "POST",
+        body: { ids }
       })
   },
   chats: {

@@ -86,5 +86,6 @@ model Message {
   character Character? @relation(fields: [characterId], references: [id], onDelete: SetNull)
 
   @@index([chatId])
+  @@index([chatId, createdAt])
   @@index([characterId])
 }

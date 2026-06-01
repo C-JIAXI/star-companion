@@ -8,7 +8,7 @@ import { CharactersPage } from "./pages/CharactersPage";
 import { DocsPage } from "./pages/DocsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ChatHistoryList } from "./components/ChatHistoryList";
-import { Drawer } from "./components/ui";
+import { ConfirmDialog, Drawer } from "./components/ui";
 import { useAppStore } from "./store/useAppStore";
 import { useMobileViewport } from "./lib/useMobileViewport";
 import type { AppSection } from "./types";
@@ -67,6 +67,8 @@ export function App() {
   const { language, t } = useI18n();
   const active = sectionMeta[activeSection];
   const [showMobileNav, setShowMobileNav] = useState(false);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState<AppSection | null>(null);
 
   useMobileViewport();
 
@@ -101,22 +103,26 @@ export function App() {
   }, [setLanguage, setShowMessageAvatars]);
 
   const navigate = (section: AppSection) => {
-    if (activeSection === "settings" && section !== "settings") {
-      const settingsDirty = document.querySelector("[data-settings-dirty]");
-      if (settingsDirty) {
-        const confirmed = window.confirm(
-          language === "zh-CN"
-            ? "当前设置有未保存的更改，离开将丢失修改。确定离开吗？"
-            : "You have unsaved settings changes. Leaving will discard them. Are you sure?"
-        );
-        if (!confirmed) {
-          return;
-        }
-      }
+    if (activeSection === "settings" && section !== "settings" && settingsDirty) {
+      setPendingNavigation(section);
+      return;
     }
     setActiveSection(section);
     setShowMobileNav(false);
     window.history.pushState({}, "", sectionPaths[section]);
+  };
+
+  const confirmNavigation = () => {
+    if (pendingNavigation) {
+      setActiveSection(pendingNavigation);
+      setShowMobileNav(false);
+      window.history.pushState({}, "", sectionPaths[pendingNavigation]);
+      setPendingNavigation(null);
+    }
+  };
+
+  const cancelNavigation = () => {
+    setPendingNavigation(null);
   };
 
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
@@ -137,10 +143,13 @@ export function App() {
     setChatRefreshKey((current) => current + 1);
   }, []);
 
-  const isNavItemSelected = (section: (typeof navItems)[number]["id"]) =>
-    section === "chat"
-      ? activeSection === "chat" || activeSection === "docs"
-      : activeSection === section;
+  const isNavItemSelected = useCallback(
+    (section: (typeof navItems)[number]["id"]) =>
+      section === "chat"
+        ? activeSection === "chat" || activeSection === "docs"
+        : activeSection === section,
+    [activeSection]
+  );
 
   const handlePlay = useCallback(async (characterId: string) => {
     try {
@@ -300,10 +309,29 @@ export function App() {
             {activeSection === "characters" ? (
               <CharactersPage onPlay={(characterId) => void handlePlay(characterId)} />
             ) : null}
-            {activeSection === "settings" ? <SettingsPage /> : null}
+            {activeSection === "settings" ? (
+              <SettingsPage onDirtyChange={setSettingsDirty} />
+            ) : null}
           </div>
         </main>
       </div>
+      {pendingNavigation ? (
+        <ConfirmDialog
+          title={
+            language === "zh-CN" ? "未保存的更改" : "Unsaved Changes"
+          }
+          message={
+            language === "zh-CN"
+              ? "当前设置有未保存的更改，离开将丢失修改。确定离开吗？"
+              : "You have unsaved settings changes. Leaving will discard them. Are you sure?"
+          }
+          confirmLabel={language === "zh-CN" ? "确定离开" : "Leave"}
+          cancelLabel={language === "zh-CN" ? "取消" : "Cancel"}
+          variant="danger"
+          onCancel={cancelNavigation}
+          onConfirm={confirmNavigation}
+        />
+      ) : null}
     </div>
   );
 }
