@@ -446,6 +446,16 @@ export function SettingsPage() {
     savedSnapshot !== null &&
     (serializeForm(form) !== savedSnapshot || clearStoredApiKey);
 
+  useEffect(() => {
+    const handler = (event: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges) {
+        event.preventDefault();
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [hasUnsavedChanges]);
+
   const activePreset = useMemo(
     () =>
       form.models.find(
@@ -763,7 +773,7 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6" {...(hasUnsavedChanges ? { "data-settings-dirty": "" } : {})}>
       <ErrorNotice message={error} />
       <SuccessNotice message={status} />
 
@@ -1286,6 +1296,7 @@ export function SettingsPage() {
                         <div className="flex flex-wrap items-center gap-2 md:shrink-0">
                           <Button
                             className="!min-h-[34px] !px-3 text-xs whitespace-nowrap hover:!bg-ink-800/75 focus:!ring-ink-700/40"
+                            disabled={presetBatchMode}
                             variant="ghost"
                             onClick={() => applyPreset(preset)}
                           >
@@ -1294,6 +1305,7 @@ export function SettingsPage() {
                           </Button>
                           <Button
                             className="!min-h-[34px] !w-9 !p-0"
+                            disabled={presetBatchMode}
                             variant="danger"
                             onClick={() => setPendingDeletePresetId(preset.id)}
                           >
@@ -1303,12 +1315,12 @@ export function SettingsPage() {
                       </div>
 
                       <div
-                        className={`overflow-hidden transition-all duration-200 ${isExpanded ? "mt-4" : ""}`}
-                        aria-hidden={!isExpanded}
+                        className={`overflow-hidden transition-all duration-200 ${isExpanded && !presetBatchMode ? "mt-4" : ""}`}
+                        aria-hidden={!isExpanded || presetBatchMode}
                         style={{
-                          maxHeight: isExpanded ? "48rem" : "0px",
-                          opacity: isExpanded ? 1 : 0,
-                          pointerEvents: isExpanded ? "auto" : "none"
+                          maxHeight: isExpanded && !presetBatchMode ? "48rem" : "0px",
+                          opacity: isExpanded && !presetBatchMode ? 1 : 0,
+                          pointerEvents: isExpanded && !presetBatchMode ? "auto" : "none"
                         }}
                       >
                         <div className={`grid gap-4 border-t pt-4 md:grid-cols-2 xl:grid-cols-4 ${settingsDividerClassName}`}>

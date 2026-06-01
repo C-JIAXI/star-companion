@@ -64,7 +64,7 @@ const sectionFromLocation = () => {
 
 export function App() {
   const { activeSection, setActiveSection, setLanguage, setShowMessageAvatars } = useAppStore();
-  const { t } = useI18n();
+  const { language, t } = useI18n();
   const active = sectionMeta[activeSection];
   const [showMobileNav, setShowMobileNav] = useState(false);
 
@@ -101,6 +101,19 @@ export function App() {
   }, [setLanguage, setShowMessageAvatars]);
 
   const navigate = (section: AppSection) => {
+    if (activeSection === "settings" && section !== "settings") {
+      const settingsDirty = document.querySelector("[data-settings-dirty]");
+      if (settingsDirty) {
+        const confirmed = window.confirm(
+          language === "zh-CN"
+            ? "当前设置有未保存的更改，离开将丢失修改。确定离开吗？"
+            : "You have unsaved settings changes. Leaving will discard them. Are you sure?"
+        );
+        if (!confirmed) {
+          return;
+        }
+      }
+    }
     setActiveSection(section);
     setShowMobileNav(false);
     window.history.pushState({}, "", sectionPaths[section]);
