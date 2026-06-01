@@ -28,6 +28,7 @@ import {
   HelpLabel,
   Panel,
   SuccessNotice,
+  TextArea,
   TextInput
 } from "../components/ui";
 import type { ReactNode } from "react";
@@ -252,8 +253,13 @@ const getPageCopy = (language: AppLanguage) =>
         presetKey: "专用 API Key（可选）",
         presetEmpty: "还没有预设。把当前运行配置保存成一个常用组合会更顺手。",
         presetDeleteTitle: "删除模型预设",
-        presetDeleteConfirm: (name: string) => `删除预设“${name}”？`,
-        presetApplied: (name: string) => `已载入预设“${name}”`,
+        presetDeleteConfirm: (name: string) => `删除预设"${name}"？`,
+        presetApplied: (name: string) => `已载入预设"${name}"`,
+        presetAppliedSaveHint: (name: string) => `已载入预设"${name}"，请记得保存`,
+        presetBatchDeleteTitle: "批量删除预设",
+        presetBatchDeleteConfirm: (count: number) => `确定删除选中的 ${count} 个预设？`,
+        urlInvalid: "请输入有效的 URL 地址",
+        importRequiresSave: "有未保存更改时无法导入",
         backupTitle: "备份与迁移",
         backupHelp:
           "完整备份会导出角色、聊天、消息和世界书；设置仅导出模型参数，不包含 API Key。",
@@ -307,6 +313,11 @@ const getPageCopy = (language: AppLanguage) =>
         presetDeleteTitle: "Delete Model Preset",
         presetDeleteConfirm: (name: string) => `Delete preset "${name}"?`,
         presetApplied: (name: string) => `Loaded preset "${name}"`,
+        presetAppliedSaveHint: (name: string) => `Loaded preset "${name}" — don't forget to save`,
+        presetBatchDeleteTitle: "Batch Delete Presets",
+        presetBatchDeleteConfirm: (count: number) => `Delete ${count} selected preset${count > 1 ? "s" : ""}?`,
+        urlInvalid: "Please enter a valid URL",
+        importRequiresSave: "Cannot import while there are unsaved changes",
         backupTitle: "Backup & Migration",
         backupHelp:
           "Full backups export characters, chats, and messages. Settings export model parameters but never the API key.",
@@ -390,6 +401,8 @@ export function SettingsPage() {
   const [modelImportText, setModelImportText] = useState("");
   const [presetBatchMode, setPresetBatchMode] = useState(false);
   const [presetSelectedIds, setPresetSelectedIds] = useState<Set<string>>(new Set());
+  const [pendingBatchDelete, setPendingBatchDelete] = useState(false);
+  const [inlineUrlError, setInlineUrlError] = useState<string | null>(null);
 
   useEffect(() => {
     void api.settings
@@ -596,7 +609,7 @@ export function SettingsPage() {
     }));
     setClearStoredApiKey(false);
     setExpandedPresetId(preset.id);
-    setStatus(copy.presetApplied(getPresetDisplayName(preset, language)));
+    setStatus(copy.presetAppliedSaveHint(getPresetDisplayName(preset, language)));
   };
 
   const addPreset = () => {
@@ -643,12 +656,17 @@ export function SettingsPage() {
   };
 
   const deleteSelectedPresets = () => {
+    setPendingBatchDelete(true);
+  };
+
+  const confirmBatchDeletePresets = () => {
     setForm((current) => ({
       ...current,
       models: current.models.filter((preset) => !presetSelectedIds.has(preset.id))
     }));
     setPresetSelectedIds(new Set());
     setPresetBatchMode(false);
+    setPendingBatchDelete(false);
   };
 
   const addModelPresets = (modelIds: string[]) => {
@@ -732,7 +750,16 @@ export function SettingsPage() {
       apiBaseUrl: template.apiBaseUrl,
       model: template.model
     }));
+    setInlineUrlError(null);
     setStatus(copy.providerTemplateApplied(template.label));
+  };
+
+  const validateUrlField = (value: string) => {
+    if (!value.trim()) {
+      setInlineUrlError(null);
+      return;
+    }
+    setInlineUrlError(isValidUrl(value) ? null : copy.urlInvalid);
   };
 
   return (
@@ -859,9 +886,18 @@ export function SettingsPage() {
             <Field label={copy.providerTemplate}>
               <select
                 className={selectClassName}
-                value={getProviderTemplateId(form)}
-                onChange={(event) => applyProviderTemplate(event.target.value)}
+                value={getProviderTemplateId(form) ?? ""}
+                onChange={(event) => {
+                  if (event.target.value) {
+                    applyProviderTemplate(event.target.value);
+                  }
+                }}
               >
+                {getProviderTemplateId(form) === undefined ? (
+                  <option value="" disabled>
+                    {language === "zh-CN" ? "自定义配置" : "Custom configuration"}
+                  </option>
+                ) : null}
                 {providerTemplates.map((template) => (
                   <option key={template.id} value={template.id}>
                     {template.label}
@@ -891,10 +927,16 @@ export function SettingsPage() {
               >
                 <TextInput
                   value={form.apiBaseUrl}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, apiBaseUrl: event.target.value }))
-                  }
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setForm((current) => ({ ...current, apiBaseUrl: value }));
+                    validateUrlField(value);
+                  }}
+                  onBlur={() => validateUrlField(form.apiBaseUrl)}
                 />
+                {inlineUrlError ? (
+                  <p className="mt-1.5 text-xs text-red-400">{inlineUrlError}</p>
+                ) : null}
               </Field>
             </div>
 
@@ -926,7 +968,9 @@ export function SettingsPage() {
                       variant={clearStoredApiKey ? "secondary" : "ghost"}
                       onClick={() => {
                         setClearStoredApiKey((current) => !current);
-                        setForm((current) => ({ ...current, apiKey: "" }));
+                        if (!clearStoredApiKey) {
+                          setForm((current) => ({ ...current, apiKey: "" }));
+                        }
                       }}
                     >
                       {clearStoredApiKey ? copy.clearKeyUndo : copy.clearKey}
@@ -1005,12 +1049,14 @@ export function SettingsPage() {
                 >
                   <TextInput
                     step="0.1"
+                    min="0"
+                    max="2"
                     type="number"
                     value={form.temperature}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
-                        temperature: Number(event.target.value)
+                        temperature: Math.min(2, Math.max(0, Number(event.target.value) || 0))
                       }))
                     }
                   />
@@ -1024,12 +1070,14 @@ export function SettingsPage() {
                   }
                 >
                   <TextInput
+                    min="1"
+                    max="200000"
                     type="number"
                     value={form.maxTokens}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
-                        maxTokens: Number(event.target.value)
+                        maxTokens: Math.min(200000, Math.max(1, Number(event.target.value) || 1))
                       }))
                     }
                   />
@@ -1039,10 +1087,15 @@ export function SettingsPage() {
                 >
                   <TextInput
                     step="0.05"
+                    min="0"
+                    max="1"
                     type="number"
                     value={form.topP}
                     onChange={(event) =>
-                      setForm((current) => ({ ...current, topP: Number(event.target.value) }))
+                      setForm((current) => ({
+                        ...current,
+                        topP: Math.min(1, Math.max(0, Number(event.target.value) || 0))
+                      }))
                     }
                   />
                 </Field>
@@ -1057,16 +1110,18 @@ export function SettingsPage() {
           className={settingsPanelClassName}
           title={copy.presetsTitle}
           action={
-            <div className="flex flex-wrap gap-2">
-              <Button
-                className="!min-h-[34px] !px-3 text-xs"
-                disabled={loading}
-                variant="secondary"
-                onClick={() => void fetchProviderModels()}
-              >
-                <RefreshCw size={14} />
-                {copy.fetchProviderModels}
-              </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative">
+                <Button
+                  className="!min-h-[34px] !px-3 text-xs"
+                  disabled={loading || hasUnsavedChanges}
+                  variant="secondary"
+                  onClick={() => void fetchProviderModels()}
+                >
+                  <RefreshCw size={14} />
+                  {copy.fetchProviderModels}
+                </Button>
+              </div>
               <Button
                 className="!min-h-[34px] !px-3 text-xs"
                 variant="secondary"
@@ -1098,8 +1153,8 @@ export function SettingsPage() {
                 <Field label={copy.importModelsTitle}>
                   <div className="space-y-2">
                     <p className="text-sm leading-6 text-slate-400">{copy.importModelsHelp}</p>
-                    <textarea
-                      className="min-h-32 w-full resize-y rounded-lg border border-white/10 bg-ink-950/50 px-3 py-2 text-sm text-slate-100 outline-none transition-all placeholder:text-slate-600 hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50"
+                    <TextArea
+                      className="min-h-32"
                       placeholder={copy.modelImportPlaceholder}
                       value={modelImportText}
                       onChange={(event) => setModelImportText(event.target.value)}
@@ -1400,6 +1455,19 @@ export function SettingsPage() {
             }));
             setPendingDeletePresetId(null);
           }}
+        />
+      ) : null}
+
+      {pendingBatchDelete ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={t("common.delete")}
+          loading={false}
+          message={copy.presetBatchDeleteConfirm(presetSelectedIds.size)}
+          title={copy.presetBatchDeleteTitle}
+          variant="danger"
+          onCancel={() => setPendingBatchDelete(false)}
+          onConfirm={confirmBatchDeletePresets}
         />
       ) : null}
     </div>
