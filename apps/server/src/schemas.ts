@@ -3,6 +3,11 @@ import { z } from "zod";
 export const idSchema = z.string().min(1);
 
 const stringArraySchema = z.array(z.string().trim().min(1)).default([]);
+const characterTagsSchema = z
+  .array(z.string().trim().min(1).max(40))
+  .max(24)
+  .default([])
+  .transform((tags) => Array.from(new Set(tags)));
 
 const tokenUsageSchema = z.object({
   promptTokens: z.number().int().min(0),
@@ -94,6 +99,7 @@ export const characterCreateSchema = z.object({
   name: z.string().trim().min(1),
   avatar: z.string().trim().nullable().optional(),
   description: z.string().default(""),
+  tags: characterTagsSchema,
   prefix: z.string().default(""),
   prompt: z.string().default(""),
   suffix: z.string().default(""),
@@ -107,6 +113,7 @@ const characterUpdateFieldsSchema = z.object({
   name: z.string().trim().min(1).optional(),
   avatar: z.string().trim().nullable().optional(),
   description: z.string().optional(),
+  tags: characterTagsSchema.optional(),
   prefix: z.string().optional(),
   prompt: z.string().optional(),
   suffix: z.string().optional(),
@@ -176,6 +183,7 @@ const privateCharacterCardSchema = z.object({
     name: z.string().trim().min(1),
     avatar: z.string().trim().nullable().optional(),
     description: z.string().optional(),
+    tags: characterTagsSchema.optional(),
     openingHtml: z.string().optional(),
     quickReplies: quickRepliesSchema.optional()
   }),
@@ -221,11 +229,15 @@ export const characterPageQuerySchema = z
     q: z
       .preprocess((value) => (Array.isArray(value) ? value[0] : value), z.string().trim().catch(""))
       .default(""),
+    tag: z
+      .preprocess((value) => (Array.isArray(value) ? value[0] : value), z.string().trim().catch(""))
+      .default(""),
     page: toPositiveInt(1),
     pageSize: toPositiveInt(40)
   })
   .transform((query) => ({
     q: query.q,
+    tag: query.tag,
     page: query.page,
     pageSize: Math.min(query.pageSize, 100)
   }));
@@ -386,6 +398,7 @@ const backupCharacterSchema = z
     name: z.string().trim().min(1),
     avatar: z.string().trim().nullable().optional(),
     description: z.string(),
+    tags: characterTagsSchema,
     prefix: z.string(),
     prompt: z.string(),
     suffix: z.string(),
@@ -401,6 +414,7 @@ const backupCharacterSchema = z
     name: character.name,
     avatar: character.avatar ?? null,
     description: character.description,
+    tags: character.tags,
     prefix: character.prefix,
     prompt: character.prompt,
     suffix: character.suffix,

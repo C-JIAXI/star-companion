@@ -189,6 +189,7 @@ HTTP API：
 - `suffix`
 - `htmlCss`
 - `openingHtml`
+- `tags`
 - `loreEntries`
 - `quickReplies`
 
@@ -217,7 +218,7 @@ HTTP API：
 
 - 当前角色提示词结构是 `prefix` / `prompt` / `suffix`
 - `Character.htmlCss` 仍用于角色消息内的 HTML fragment；当该角色在聊天页激活时，同一份 CSS 也会作用于应用内文档约定的官方 Chat UI 选择器
-- 当前没有一等持久化字段：`firstMessage`、`exampleDialog`、`tags`、`systemPrompt`
+- 当前没有一等持久化字段：`firstMessage`、`exampleDialog`、`systemPrompt`
 - 上述字段只应作为历史兼容语境理解，不应默认视为当前待补的一等持久化路线
 - 角色导入与备份导入按当前字段结构处理，不再兼容旧的 `scenario` / `systemPrompt` 字段映射
 

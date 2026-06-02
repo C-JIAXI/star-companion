@@ -53,6 +53,7 @@ describe("characterUpdateRequestSchema", () => {
     assert.equal("suffix" in parsed, false);
     assert.equal("htmlCss" in parsed, false);
     assert.equal("openingHtml" in parsed, false);
+    assert.equal("tags" in parsed, false);
     assert.equal("loreEntries" in parsed, false);
     assert.equal("quickReplies" in parsed, false);
   });
@@ -110,14 +111,16 @@ describe("characterPageQuerySchema", () => {
   it("normalizes defaults and clamps page size", () => {
     assert.deepEqual(parseBody(characterPageQuerySchema, {}), {
       q: "",
+      tag: "",
       page: 1,
       pageSize: 40
     });
 
     assert.deepEqual(
-      parseBody(characterPageQuerySchema, { q: "  pilot  ", page: "2", pageSize: "500" }),
+      parseBody(characterPageQuerySchema, { q: "  pilot  ", tag: "  cozy  ", page: "2", pageSize: "500" }),
       {
         q: "pilot",
+        tag: "cozy",
         page: 2,
         pageSize: 100
       }

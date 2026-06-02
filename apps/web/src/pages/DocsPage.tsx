@@ -150,7 +150,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "创建原创角色",
-              body: "进入角色页，新建角色卡，填写名称、简介、核心设定和补充规则。"
+              body: "进入角色页，新建角色卡，填写名称、简介、标签、核心设定和补充规则。"
             },
             {
               title: "开始聊天",
@@ -199,8 +199,16 @@ const getDocsCopy = (language: string): DocsCopy => {
               body: "把角色身份、背景、目标、语气、关系和互动边界写清楚。规则越具体，回复越容易保持一致。"
             },
             {
+              title: "标签与筛选",
+              body: "为角色添加标签后，角色列表会显示标签筛选；搜索框只按角色名称和简介查找，不会匹配提示词内容。"
+            },
+            {
               title: "背景词条",
               body: "需要在特定关键词出现时补充背景信息，可以为角色添加背景词条，让聊天自动带入相关设定。"
+            },
+            {
+              title: "列表信息",
+              body: "角色卡片会显示标签、创建时间和最后更新时间，方便按维护状态和整理维度快速判断。"
             },
             {
               title: "内置 CSS",
@@ -211,7 +219,7 @@ const getDocsCopy = (language: string): DocsCopy => {
               body: "开场页面适合展示角色介绍、序章或欢迎页；角色卡支持导入导出，私密角色内容需密码解锁。"
             }
           ],
-          note: "建议先完善角色设定和背景词条，再按需要添加快捷指令和视觉样式。"
+          note: "建议先完善角色设定、标签和背景词条，再按需要添加快捷指令和视觉样式。"
         },
         {
           id: "settings-security",
@@ -371,7 +379,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Create an original character",
-            body: "Open Characters and create a card with a name, description, core setup, and additional rules."
+            body: "Open Characters and create a card with a name, description, tags, core setup, and additional rules."
           },
           {
             title: "Start chatting",
@@ -422,8 +430,16 @@ const getDocsCopy = (language: string): DocsCopy => {
             body: "Describe the character's identity, background, goals, voice, relationship, and interaction boundaries. Specific rules make replies steadier."
           },
           {
+            title: "Tags and filtering",
+            body: "Add tags to organize characters. The character list can filter by tag, while text search only matches character names and descriptions, not prompt content."
+          },
+          {
             title: "Background entries",
             body: "Add background entries when certain keywords should bring extra character details into the chat automatically."
+          },
+          {
+            title: "List metadata",
+            body: "Character cards show tags, creation time, and last updated time so you can scan organization and maintenance state quickly."
           },
           {
             title: "Built-in CSS",
@@ -434,7 +450,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             body: "Opening pages are useful for introductions, prologues, or welcome screens. Character cards support import/export, and private cards require password unlock."
           }
         ],
-        note: "Start with the character setup and background entries, then add quick commands and visual styling as needed."
+        note: "Start with the character setup, tags, and background entries, then add quick commands and visual styling as needed."
       },
       {
         id: "settings-security",

@@ -1,4 +1,4 @@
-import { Lock, Settings, Sparkles } from "lucide-react";
+import { CalendarDays, Lock, Settings, Sparkles, Tag } from "lucide-react";
 import type { CharacterDTO } from "../types";
 import { usePlaceholderSrc } from "../placeholderImages";
 import { Button } from "./ui";
@@ -7,6 +7,9 @@ interface CharacterCardProps {
   character: CharacterDTO;
   noDescriptionLabel: string;
   privateSummaryLabel: string;
+  createdAtLabel: string;
+  updatedAtLabel: string;
+  locale: string;
   playLabel: string;
   editLabel: string;
   onPlay: (id: string) => void;
@@ -20,6 +23,9 @@ export function CharacterCard({
   character,
   noDescriptionLabel,
   privateSummaryLabel,
+  createdAtLabel,
+  updatedAtLabel,
+  locale,
   playLabel,
   editLabel,
   onPlay,
@@ -29,6 +35,18 @@ export function CharacterCard({
   onSelect
 }: CharacterCardProps) {
   const src = usePlaceholderSrc(character.avatar, character.id);
+  const formatDate = (value: string) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+
+    return new Intl.DateTimeFormat(locale, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(date);
+  };
 
   return (
     <div
@@ -82,6 +100,31 @@ export function CharacterCard({
             ? privateSummaryLabel
             : character.description || noDescriptionLabel}
         </p>
+        {character.tags.length > 0 ? (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {character.tags.slice(0, 4).map((tag) => (
+              <span
+                key={tag}
+                className="inline-flex max-w-full items-center gap-1 rounded-md border border-white/10 bg-white/5 px-1.5 py-0.5 text-[11px] leading-4 text-slate-300"
+              >
+                <Tag size={10} />
+                <span className="max-w-[7rem] truncate">{tag}</span>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <div className="mt-2 grid gap-1 text-[11px] leading-4 text-slate-500">
+          <span className="inline-flex min-w-0 items-center gap-1">
+            <CalendarDays size={11} />
+            <span className="shrink-0">{createdAtLabel}</span>
+            <span className="truncate">{formatDate(character.createdAt)}</span>
+          </span>
+          <span className="inline-flex min-w-0 items-center gap-1">
+            <CalendarDays size={11} />
+            <span className="shrink-0">{updatedAtLabel}</span>
+            <span className="truncate">{formatDate(character.updatedAt)}</span>
+          </span>
+        </div>
       </div>
       <div className="flex w-full items-center justify-center gap-2 px-3 pb-3 pt-1">
         <Button

@@ -46,6 +46,7 @@ model Character {
   suffix       String   @default("")
   htmlCss      String   @default("")
   openingHtml  String   @default("")
+  tags         Json     @default("[]")
   loreEntries  Json     @default("[]")
   quickReplies Json     @default("[]")
   createdAt    DateTime @default(now())

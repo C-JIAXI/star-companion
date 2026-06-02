@@ -289,7 +289,7 @@ test("character built-in css previews in the editor and styles only matching cha
 
     await page.goto("/characters");
     await page
-      .getByPlaceholder(/搜索角色名称|Search character name or prompt|閹兼粎鍌ㄧ憴鎺曞閸氬秶袨/)
+      .getByPlaceholder(/搜索角色名称或简介|Search character name or description|閹兼粎鍌ㄧ憴鎺曞閸氬秶袨/)
       .fill(characterAName);
     const visibleEditButtons = page.locator("button:visible").filter({ hasText: /编辑|Edit/ });
     await expect(visibleEditButtons).toHaveCount(1);
@@ -811,7 +811,7 @@ test("long chats paginate and keep messages inside the scrollable viewport", asy
   }
 });
 
-test("character page search can narrow to a paged server result before editing", async ({
+test("character page tag filter can narrow to a paged server result before editing", async ({
   page,
   request
 }, testInfo) => {
@@ -819,6 +819,7 @@ test("character page search can narrow to a paged server result before editing",
   const suffix = `${testInfo.project.name}-${Date.now()}`;
   const prefix = `Bulk Character ${suffix}`;
   const targetName = `${prefix} target`;
+  const targetTag = `server-tag-${suffix}`;
   const createdIds = Array.from(
     { length: 40 },
     (_, index) => `e2e-character-page-${suffix}-${index}`
@@ -840,6 +841,7 @@ test("character page search can narrow to a paged server result before editing",
             suffix: "Reply directly.",
             htmlCss: "",
             openingHtml: "",
+            tags: [],
             loreEntries: [],
             quickReplies: []
           })),
@@ -848,6 +850,7 @@ test("character page search can narrow to a paged server result before editing",
             name: targetName,
             avatar: null,
             description: "",
+            tags: [targetTag],
             prefix: "Paging fixture.",
             prompt: `Unique server-side-search token ${suffix}`,
             suffix: "Reply directly.",
@@ -865,15 +868,13 @@ test("character page search can narrow to a paged server result before editing",
 
     await page.goto("/characters");
     await page
-      .getByPlaceholder(/搜索角色名称|Search character name or prompt/)
+      .getByPlaceholder(/搜索角色名称或简介|Search character name or description/)
       .fill(prefix);
     await expect(page.getByTestId("characters-page-next")).toBeEnabled();
     await page.getByTestId("characters-page-next").click();
     await expect(page.getByTestId("characters-page-prev")).toBeEnabled();
 
-    await page
-      .getByPlaceholder(/搜索角色名称|Search character name or prompt/)
-      .fill(`server-side-search token ${suffix}`);
+    await page.getByRole("button", { name: targetTag }).click();
     const targetCard = page
       .locator("div.group")
       .filter({ has: page.getByText(targetName) })
@@ -896,6 +897,7 @@ test("character paging search can create a chat from the matching card", async (
   const suffix = `${testInfo.project.name}-${Date.now()}`;
   const prefix = `Create Chat Character ${suffix}`;
   const targetName = `${prefix} target`;
+  const targetTag = `chat-tag-${suffix}`;
   const createdIds = Array.from(
     { length: 40 },
     (_, index) => `e2e-create-chat-${suffix}-${index}`
@@ -918,6 +920,7 @@ test("character paging search can create a chat from the matching card", async (
             suffix: "Reply directly.",
             htmlCss: "",
             openingHtml: "",
+            tags: [],
             loreEntries: [],
             quickReplies: []
           })),
@@ -926,6 +929,7 @@ test("character paging search can create a chat from the matching card", async (
             name: targetName,
             avatar: null,
             description: "",
+            tags: [targetTag],
             prefix: "Create chat paging fixture.",
             prompt: `Create chat unique-search token ${suffix}`,
             suffix: "Reply directly.",
@@ -943,15 +947,13 @@ test("character paging search can create a chat from the matching card", async (
 
     await page.goto("/characters");
     await page
-      .getByPlaceholder(/搜索角色名称|Search character name or prompt/)
+      .getByPlaceholder(/搜索角色名称或简介|Search character name or description/)
       .fill(prefix);
     await expect(page.getByTestId("characters-page-next")).toBeEnabled();
     await page.getByTestId("characters-page-next").click();
     await expect(page.getByTestId("characters-page-prev")).toBeEnabled();
 
-    await page
-      .getByPlaceholder(/搜索角色名称|Search character name or prompt/)
-      .fill(`unique-search token ${suffix}`);
+    await page.getByRole("button", { name: targetTag }).click();
     const targetCard = page
       .locator("div.group")
       .filter({ has: page.getByText(targetName) })

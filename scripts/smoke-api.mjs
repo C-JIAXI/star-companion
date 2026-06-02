@@ -324,6 +324,7 @@ const main = async () => {
       name: `Smoke Character ${runId}`,
       avatar: null,
       description: "Character used by the API smoke test.",
+      tags: ["smoke", "sentinel"],
       prefix: "Stay in character.",
       prompt: "You are a smoke-test sentinel.",
       suffix: "Reply with crisp answers.",
@@ -356,6 +357,7 @@ const main = async () => {
     });
     assert.equal(createdCharacter.visibility, "public");
     assert.equal(createdCharacter.canViewPrompt, true);
+    assert.deepEqual(createdCharacter.tags, characterPayload.tags);
 
     const characterList = await requestData(baseUrl, "/api/characters");
     assert.equal(characterList.some((item) => item.id === createdCharacter.id), true);
@@ -363,13 +365,34 @@ const main = async () => {
     const pagedCharacters = await requestData(
       baseUrl,
       `/api/characters/page?${new URLSearchParams({
-        q: "sentinel",
+        q: "Smoke Character",
         page: "1",
         pageSize: "10"
       }).toString()}`
     );
     assert.equal(pagedCharacters.total >= 1, true);
     assert.equal(pagedCharacters.items.some((item) => item.id === createdCharacter.id), true);
+    assert.equal(pagedCharacters.availableTags.includes("sentinel"), true);
+
+    const tagFilteredCharacters = await requestData(
+      baseUrl,
+      `/api/characters/page?${new URLSearchParams({
+        tag: "sentinel",
+        page: "1",
+        pageSize: "10"
+      }).toString()}`
+    );
+    assert.equal(tagFilteredCharacters.items.some((item) => item.id === createdCharacter.id), true);
+
+    const promptOnlySearchCharacters = await requestData(
+      baseUrl,
+      `/api/characters/page?${new URLSearchParams({
+        q: "smoke-test sentinel",
+        page: "1",
+        pageSize: "10"
+      }).toString()}`
+    );
+    assert.equal(promptOnlySearchCharacters.items.some((item) => item.id === createdCharacter.id), false);
 
     const fetchedCharacter = await requestData(baseUrl, `/api/characters/${createdCharacter.id}`);
     assert.equal(
@@ -419,6 +442,7 @@ const main = async () => {
       characterPayload.prompt,
       "public export should keep the current prompt"
     );
+    assert.deepEqual(publicCard.character.tags, characterPayload.tags);
 
     const importedPublicCharacter = await requestData(baseUrl, "/api/characters/import", {
       method: "POST",
@@ -431,6 +455,7 @@ const main = async () => {
       characterPayload.prompt,
       "public import should keep the exported prompt"
     );
+    assert.deepEqual(importedPublicCharacter.tags, characterPayload.tags);
 
     const privatePassword = "smoke-private-password";
     const privateCard = await requestData(baseUrl, `/api/characters/${createdCharacter.id}/export`, {

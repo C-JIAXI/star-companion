@@ -2,12 +2,14 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CalendarDays,
   Download,
   FileUp,
   Lock,
   Plus,
   Save,
   Search,
+  Tag,
   Trash2,
   X,
   CheckSquare,
@@ -68,7 +70,7 @@ const blankQuickReply = (): QuickReplyDTO & { _localId: string; _collapsed: bool
 });
 
 type QuickReplyForm = ReturnType<typeof blankQuickReply>;
-type EditorSectionId = "prompt" | "html" | "opening" | "lore" | "quickReplies";
+type EditorSectionId = "prompt" | "tags" | "html" | "opening" | "lore" | "quickReplies";
 type PasswordDialogMode = "unlock" | "export-private" | "export-public";
 
 const HTML_PREVIEW_TEMPLATES = {
@@ -139,6 +141,7 @@ const blankForm = {
   name: "",
   avatar: "",
   description: "",
+  tags: [] as string[],
   prefix: "",
   prompt: "",
   suffix: "",
@@ -220,6 +223,7 @@ const toForm = (character: CharacterDTO): CharacterForm => ({
   name: character.name,
   avatar: character.avatar ?? "",
   description: character.description,
+  tags: character.tags ?? [],
   prefix: character.prefix,
   prompt: character.prompt,
   suffix: character.suffix,
@@ -250,6 +254,7 @@ const toInput = (form: CharacterForm): CharacterInput => ({
   name: form.name,
   avatar: form.avatar || null,
   description: form.description,
+  tags: form.tags,
   prefix: form.prefix,
   prompt: form.prompt,
   suffix: form.suffix,
@@ -265,12 +270,37 @@ const toInput = (form: CharacterForm): CharacterInput => ({
   }))
 });
 
+const normalizeTags = (tags: string[]) =>
+  Array.from(new Set(tags.map((tag) => tag.trim()).filter(Boolean))).slice(0, 24);
+
+const splitTagInput = (value: string) =>
+  value
+    .split(/[,，]/)
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+
+const formatCharacterDate = (value: string, language: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat(language === "zh-CN" ? "zh-CN" : "en", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+};
+
 const emptyCharacterPage = {
   items: [] as CharacterDTO[],
   total: 0,
   page: 1,
   pageSize: CHARACTER_PAGE_SIZE,
-  totalPages: 1
+  totalPages: 1,
+  availableTags: [] as string[]
 };
 
 export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => void }) {
@@ -282,6 +312,8 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
   const [selectedCharacter, setSelectedCharacter] = useState<CharacterDTO | null>(null);
   const [form, setForm] = useState<CharacterForm>(blankForm);
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedTag, setSelectedTag] = useState("");
+  const [tagInput, setTagInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -334,6 +366,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
   const editorSections = useMemo(
     () => [
       { id: "prompt" as const, label: t("characters.editorSectionPrompt") },
+      { id: "tags" as const, label: t("characters.tags") },
       { id: "html" as const, label: t("characters.editorSectionHtml") },
       { id: "opening" as const, label: t("characters.editorSectionOpening") },
       { id: "lore" as const, label: t("characters.editorSectionLore") },
@@ -452,12 +485,14 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
   const loadCharacters = async (
     nextPage = characterPage,
     nextSearchQuery = searchQuery,
+    nextSelectedTag = selectedTag,
     nextSelectedId = selectedId
   ) => {
     const requestId = characterRequestRef.current + 1;
     characterRequestRef.current = requestId;
     const data = await api.characters.page({
       q: nextSearchQuery,
+      tag: nextSelectedTag,
       page: nextPage,
       pageSize: CHARACTER_PAGE_SIZE
     });
@@ -497,7 +532,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
     void loadCharacters().catch((caught: unknown) =>
       setError(caught instanceof Error ? caught.message : t("characters.failedLoad"))
     );
-  }, [characterPage, searchQuery, t]);
+  }, [characterPage, searchQuery, selectedTag, t]);
 
   useEffect(() => {
     if (!status) {
@@ -546,16 +581,17 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
         );
         setSelectedCharacter(updated);
         setForm(toForm(updated));
-        await loadCharacters(characterPage, searchQuery, updated.id);
+        await loadCharacters(characterPage, searchQuery, selectedTag, updated.id);
       } else {
         const created = await api.characters.create(toInput(form));
         setIsCreating(false);
         setSearchQuery("");
+        setSelectedTag("");
         setCharacterPage(1);
         setSelectedId(created.id);
         setSelectedCharacter(created);
         setForm(toForm(created));
-        await loadCharacters(1, "", created.id);
+        await loadCharacters(1, "", "", created.id);
       }
       setStatus(t("characters.saved"));
     } catch (caught) {
@@ -703,11 +739,12 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
       setIsCreating(false);
       delete unlockedPasswordRef.current[imported.id];
       setSearchQuery("");
+      setSelectedTag("");
       setCharacterPage(1);
       setSelectedId(imported.id);
       setSelectedCharacter(imported);
       setForm(toForm(imported));
-      await loadCharacters(1, "", imported.id);
+      await loadCharacters(1, "", "", imported.id);
       setStatus(privateCharacterCopy.imported);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("characters.failedImport"));
@@ -719,6 +756,16 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
   const applyPreviewTemplate = (templateId: HtmlPreviewTemplateId) => {
     setPreviewTemplateId(templateId);
     setPreviewMarkup(HTML_PREVIEW_TEMPLATES[templateId]);
+  };
+
+  const addTagsToForm = (rawValue: string) => {
+    const nextTags = normalizeTags([...form.tags, ...splitTagInput(rawValue)]);
+    setForm({ ...form, tags: nextTags });
+    setTagInput("");
+  };
+
+  const removeTagFromForm = (tag: string) => {
+    setForm({ ...form, tags: form.tags.filter((item) => item !== tag) });
   };
 
   const unlockSelectedCharacter = async (password: string) => {
@@ -936,6 +983,32 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                     <p className="line-clamp-2 text-xs leading-5 text-slate-400">
                       {form.description || t("common.noDescription")}
                     </p>
+                    {form.tags.length > 0 ? (
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {form.tags.slice(0, 6).map((tag) => (
+                          <span
+                            key={tag}
+                            className="max-w-full truncate rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-slate-300"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {selectedCharacter ? (
+                      <div className="mt-3 space-y-1 border-t border-white/5 pt-3 text-[11px] leading-4 text-slate-500">
+                        <div className="flex items-center gap-1.5">
+                          <CalendarDays size={12} />
+                          <span>{t("characters.createdAt")}:</span>
+                          <span>{formatCharacterDate(selectedCharacter.createdAt, language)}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <CalendarDays size={12} />
+                          <span>{t("characters.updatedAt")}:</span>
+                          <span>{formatCharacterDate(selectedCharacter.updatedAt, language)}</span>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -1009,6 +1082,60 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                     </Field>
                   </div>
                 )
+              ) : null}
+
+              {activeEditorSection === "tags" ? (
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-white/5 bg-ink-950/30 p-4">
+                    <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-100">
+                      <Tag size={15} />
+                      {t("characters.tags")}
+                    </div>
+                    <div className="flex flex-col gap-3 sm:flex-row">
+                      <TextInput
+                        value={tagInput}
+                        placeholder={t("characters.tagInputPlaceholder")}
+                        onChange={(event) => setTagInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            addTagsToForm(tagInput);
+                          }
+                        }}
+                      />
+                      <Button
+                        className="!min-h-[40px] whitespace-nowrap"
+                        disabled={!tagInput.trim()}
+                        variant="secondary"
+                        onClick={() => addTagsToForm(tagInput)}
+                      >
+                        <Plus size={14} />
+                        {t("characters.tagAdd")}
+                      </Button>
+                    </div>
+                    {form.tags.length === 0 ? (
+                      <p className="mt-4 text-sm text-slate-500">{t("characters.tagsEmpty")}</p>
+                    ) : (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {form.tags.map((tag) => (
+                          <span
+                            key={tag}
+                            className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-ember-500/20 bg-ember-500/10 px-2.5 py-1 text-xs font-medium text-ember-100"
+                          >
+                            <span className="truncate">{tag}</span>
+                            <button
+                              className="rounded p-0.5 text-ember-100/70 transition-colors hover:bg-ember-500/20 hover:text-ember-50"
+                              type="button"
+                              onClick={() => removeTagFromForm(tag)}
+                            >
+                              <X size={12} />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               ) : null}
 
               {activeEditorSection === "html" ? (
@@ -1539,6 +1666,46 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
             </Button>
           </div>
 
+          {pagination.availableTags.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                <Tag size={13} />
+                {t("characters.tagFilter")}
+              </span>
+              <button
+                className={`rounded-lg border px-2.5 py-1 text-xs transition-colors ${
+                  selectedTag
+                    ? "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
+                    : "border-ember-500/25 bg-ember-500/10 text-ember-100"
+                }`}
+                type="button"
+                onClick={() => {
+                  setSelectedTag("");
+                  setCharacterPage(1);
+                }}
+              >
+                {t("characters.tagFilterAll")}
+              </button>
+              {pagination.availableTags.map((tag) => (
+                <button
+                  key={tag}
+                  className={`max-w-full rounded-lg border px-2.5 py-1 text-xs transition-colors ${
+                    selectedTag === tag
+                      ? "border-ember-500/25 bg-ember-500/10 text-ember-100"
+                      : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
+                  }`}
+                  type="button"
+                  onClick={() => {
+                    setSelectedTag(selectedTag === tag ? "" : tag);
+                    setCharacterPage(1);
+                  }}
+                >
+                  <span className="inline-block max-w-[10rem] truncate align-bottom">{tag}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
           {batchMode && characters.length > 0 ? (
             <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-xs text-slate-300">
               <label className="flex cursor-pointer items-center gap-2">
@@ -1570,7 +1737,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
           <ErrorNotice message={error} />
           <SuccessNotice message={status} />
 
-          {characters.length === 0 && pagination.total === 0 && !searchQuery.trim() ? (
+          {characters.length === 0 && pagination.total === 0 && !searchQuery.trim() && !selectedTag ? (
             <div className="flex items-center justify-center py-16">
               <EmptyState>{t("characters.noCharacters")}</EmptyState>
             </div>
@@ -1587,6 +1754,9 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                     character={character}
                     noDescriptionLabel={t("common.noDescription")}
                     privateSummaryLabel={privateCharacterCopy.privateSummary}
+                    createdAtLabel={t("characters.createdAt")}
+                    updatedAtLabel={t("characters.updatedAt")}
+                    locale={language === "zh-CN" ? "zh-CN" : "en"}
                     playLabel={t("characters.play")}
                     editLabel={t("common.edit")}
                     onPlay={batchMode ? () => {} : onPlay}

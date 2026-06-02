@@ -79,6 +79,7 @@ backupsRouter.post(
           name: character.name,
           avatar: character.avatar ?? null,
           description: character.description,
+          tags: character.tags,
           prefix: character.prefix,
           prompt: character.prompt,
           suffix: character.suffix,

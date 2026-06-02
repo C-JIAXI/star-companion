@@ -146,6 +146,7 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 - `suffix`
 - `htmlCss`
 - `openingHtml`
+- `tags`
 - `loreEntries`
 - `quickReplies`
 
@@ -157,7 +158,6 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
   - `firstMessage`
   - `exampleDialog`
   - `systemPrompt`
-  - `tags`
 - 上述字段只应作为历史兼容语境理解，不应默认视为当前待补的一等持久化路线。
 - `htmlCss` 既可样式化角色消息里的 HTML fragment，也会在该角色激活聊天时作用于应用内文档约定的官方 Chat UI 选择器。
 - 导入角色与备份数据按当前字段结构处理，不再兼容旧的 `scenario/systemPrompt` 字段映射。
@@ -211,7 +211,7 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 
 - 角色首条消息自动开场
 - E2E / smoke test 与后续 UI、schema 演进的持续同步维护
-- 历史 `firstMessage / exampleDialog / tags / systemPrompt` 残留的继续清理
+- 历史 `firstMessage / exampleDialog / systemPrompt` 残留的继续清理
 
 ## Prompt 组装规则
 
@@ -256,7 +256,7 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 
 1. 迁移目录中仍保留旧 lorebook / 兼容字段历史，属于历史债务，不代表当前产品方向。
 2. 当前 Windows 环境下 fresh SQLite 的 `prisma db push` / `prisma migrate deploy` 仍会报 schema engine error；`scripts/smoke-api.mjs` 已改为回放 `prisma/migrations/*/migration.sql` 来启动空库 smoke。
-3. 历史 `firstMessage / exampleDialog / tags / systemPrompt` 概念仍可能在旧测试、旧示例或历史讨论语境中出现；继续清理时应保持为兼容说明，而不是新功能路线。
+3. 历史 `firstMessage / exampleDialog / systemPrompt` 概念仍可能在旧测试、旧示例或历史讨论语境中出现；继续清理时应保持为兼容说明，而不是新功能路线。
 
 ## 当前验证状态
 
@@ -279,7 +279,7 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 1. 保持 E2E / smoke tests 与当前 UI、schema 同步
 2. 继续打磨单角色聊天体验
 3. 让 README、代码实现保持同步
-4. 清理 `firstMessage / exampleDialog / tags / systemPrompt` 相关的遗留代码
+4. 清理 `firstMessage / exampleDialog / systemPrompt` 相关的遗留代码
 
 ## 交付标准
 

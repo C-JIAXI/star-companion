@@ -45,6 +45,7 @@ export type CharacterInput = {
   name: string;
   avatar?: string | null;
   description?: string;
+  tags?: string[];
   prefix?: string;
   prompt?: string;
   suffix?: string;

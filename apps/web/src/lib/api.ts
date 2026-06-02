@@ -83,10 +83,13 @@ export const api = {
   characters: {
     list: () => request<CharacterDTO[]>("/api/characters"),
     get: (id: string) => request<CharacterDTO>(`/api/characters/${id}`),
-    page: (query: { q?: string; page?: number; pageSize?: number } = {}) => {
+    page: (query: { q?: string; tag?: string; page?: number; pageSize?: number } = {}) => {
       const params = new URLSearchParams();
       if (query.q?.trim()) {
         params.set("q", query.q.trim());
+      }
+      if (query.tag?.trim()) {
+        params.set("tag", query.tag.trim());
       }
       if (query.page !== undefined) {
         params.set("page", String(query.page));

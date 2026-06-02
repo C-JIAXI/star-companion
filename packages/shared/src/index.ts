@@ -68,6 +68,7 @@ export interface CharacterCardContentDTO {
   name: string;
   avatar: string | null;
   description: string;
+  tags: string[];
   prefix: string;
   prompt: string;
   suffix: string;
@@ -82,6 +83,7 @@ export interface CharacterDTO {
   name: string;
   avatar: string | null;
   description: string;
+  tags: string[];
   prefix: string;
   prompt: string;
   suffix: string;
@@ -116,6 +118,7 @@ export interface BackupCharacterDTO {
   name: string;
   avatar: string | null;
   description: string;
+  tags: string[];
   prefix: string;
   prompt: string;
   suffix: string;
@@ -144,7 +147,7 @@ export interface PrivateCharacterCardDTO {
   exportedAt: string;
   character: Pick<
     CharacterCardContentDTO,
-    "name" | "avatar" | "description" | "openingHtml" | "quickReplies"
+    "name" | "avatar" | "description" | "tags" | "openingHtml" | "quickReplies"
   >;
   protectedPayload: {
     version: 1;
@@ -169,6 +172,7 @@ export interface PaginatedCharactersDTO {
   page: number;
   pageSize: number;
   totalPages: number;
+  availableTags: string[];
 }
 
 export interface UserCustomConfigDTO {

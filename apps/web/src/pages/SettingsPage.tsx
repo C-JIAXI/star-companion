@@ -432,7 +432,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       if (current && form.providers.some((p) => p.id === current)) {
         return current;
       }
-      return form.providers[0]?.id ?? null;
+      return null;
     });
   }, [form.providers]);
 

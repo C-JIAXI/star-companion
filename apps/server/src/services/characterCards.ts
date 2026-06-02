@@ -64,6 +64,7 @@ export type CharacterExportCard =
         name: string;
         avatar?: string | null;
         description: string;
+        tags: string[];
         prefix: string;
         prompt: string;
         suffix: string;
@@ -82,6 +83,7 @@ export type CharacterExportCard =
         name: string;
         avatar?: string | null;
         description?: string;
+        tags?: string[];
         openingHtml?: string;
         quickReplies?: ImportedQuickReplyInput[];
       };
@@ -252,6 +254,21 @@ export const toQuickReplies = (value: unknown): QuickReplyRecord[] => {
       };
     })
     .filter((entry): entry is QuickReplyRecord => entry !== null);
+};
+
+export const toCharacterTags = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  );
 };
 
 const encryptPayload = (payload: EncryptedPromptPayload, key: Buffer) => {
@@ -521,7 +538,7 @@ export const resolveCharacterPromptFields = (
 };
 
 export const createCharacterExportCard = (
-  character: Pick<Character, "name" | "avatar" | "description" | "prefix" | "prompt" | "suffix" | "htmlCss" | "openingHtml" | "loreEntries" | "quickReplies">,
+  character: Pick<Character, "name" | "avatar" | "description" | "tags" | "prefix" | "prompt" | "suffix" | "htmlCss" | "openingHtml" | "loreEntries" | "quickReplies">,
   visibility: "public" | "private",
   password?: string
 ): CharacterExportCard => {
@@ -530,6 +547,7 @@ export const createCharacterExportCard = (
     ? decryptStoredPromptFields(character.loreEntries, password)
     : null;
   const quickReplies = toQuickReplies(character.quickReplies);
+  const tags = toCharacterTags(character.tags);
   const openingHtml = character.openingHtml ?? "";
 
   if (visibility === "public") {
@@ -549,6 +567,7 @@ export const createCharacterExportCard = (
         name: character.name,
         avatar: character.avatar,
         description: character.description,
+        tags,
         ...promptFields,
         openingHtml,
         quickReplies
@@ -580,6 +599,7 @@ export const createCharacterExportCard = (
       name: character.name,
       avatar: character.avatar,
       description: character.description,
+      tags,
       openingHtml,
       quickReplies
     },
@@ -637,12 +657,14 @@ export const importCharacterCard = (
   openingHtml: string;
   loreEntries: Prisma.InputJsonValue;
   quickReplies: Prisma.InputJsonValue;
+  tags: Prisma.InputJsonValue;
 } => {
   if (source.visibility === "public") {
     return {
       name: source.character.name,
       avatar: source.character.avatar ?? null,
       description: source.character.description ?? "",
+      tags: source.character.tags ?? [],
       prefix: source.character.prefix,
       prompt: source.character.prompt,
       suffix: source.character.suffix,
@@ -659,6 +681,7 @@ export const importCharacterCard = (
     name: source.character.name,
     avatar: source.character.avatar ?? null,
     description: source.character.description ?? "",
+    tags: source.character.tags ?? [],
     prefix: "",
     prompt: "",
     suffix: "",
@@ -690,6 +713,7 @@ export const buildCharacterUpdateData = (
     suffix?: string;
     htmlCss?: string;
     openingHtml?: string;
+    tags?: Prisma.InputJsonValue;
     loreEntries?: Prisma.InputJsonValue;
     quickReplies?: Prisma.InputJsonValue;
   },
@@ -732,6 +756,7 @@ export const buildCharacterUpdateData = (
     name: updates.name,
     avatar: "avatar" in updates ? updates.avatar : undefined,
     description: "description" in updates ? updates.description : undefined,
+    tags: updates.tags,
     openingHtml: updates.openingHtml,
     prefix: "",
     prompt: "",
