@@ -145,8 +145,8 @@ const getDocsCopy = (language: string): DocsCopy => {
           kind: "guide",
           items: [
             {
-              title: "配置模型",
-              body: "进入设置页，选择供应商，填写服务地址、模型名称和 API Key。保存后先进行连接测试。"
+              title: "配置供应商与模型",
+              body: "进入设置页供应商管理，从模板添加供应商（如 OpenAI、Anthropic 等），填写 API Key，保存后点击「从供应商导入」获取可用模型列表，选择一个模型即可开始使用。"
             },
             {
               title: "创建原创角色",
@@ -216,7 +216,7 @@ const getDocsCopy = (language: string): DocsCopy => {
         {
           id: "settings-security",
           title: "设置与安全",
-          description: "模型配置、模型预设、界面语言和显示偏好都在设置页维护。",
+          description: "模型配置、供应商管理、界面语言和显示偏好都在设置页维护。",
           kind: "guide",
           items: [
             {
@@ -224,12 +224,12 @@ const getDocsCopy = (language: string): DocsCopy => {
               body: "API Key 只保存在本地配置中，运行时代码会加密保存；界面不会展示已保存密钥的明文。"
             },
             {
-              title: "供应商与模型",
-              body: "可以连接常见的兼容服务，也可以使用 Anthropic Claude 或 Google Gemini。选择供应商模板后再填写对应模型信息。"
+              title: "供应商管理",
+              body: "从模板快速添加供应商，或自定义创建。每个供应商独立配置服务地址、API Key 和模型列表，支持从供应商 API 一键获取可用模型。"
             },
             {
-              title: "模型预设",
-              body: "可以保存多个模型配置并批量导入模型 ID，聊天中可从已保存预设快速切换模型。"
+              title: "模型切换",
+              body: "在供应商管理中选择模型即可切换当前聊天使用的模型，聊天页也支持快速切换。"
             },
             {
               title: "语言与头像",
@@ -246,7 +246,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           items: [
             {
               title: "导出范围",
-              body: "完整备份包含角色、聊天和消息；设置只导出模型参数，不导出 API Key。"
+              body: "完整备份包含角色、聊天和消息；设置导出供应商配置和模型参数，不导出 API Key。"
             },
             {
               title: "合并导入",
@@ -366,8 +366,8 @@ const getDocsCopy = (language: string): DocsCopy => {
         kind: "guide",
         items: [
           {
-            title: "Configure a model",
-            body: "Open Settings, choose a provider, enter the service address, model name, and API key. Save, then run a connection test."
+            title: "Configure a provider and model",
+            body: "Open Settings, go to Provider Management, add a provider from a template (e.g. OpenAI, Anthropic), enter the API key, save, then click 'Import from Provider' to fetch available models. Select a model to start."
           },
           {
             title: "Create an original character",
@@ -440,7 +440,7 @@ const getDocsCopy = (language: string): DocsCopy => {
         id: "settings-security",
         title: "Settings and Security",
         description:
-          "Settings manages model configuration, presets, language, and display preferences.",
+          "Settings manages model configuration, provider management, language, and display preferences.",
         kind: "guide",
         items: [
           {
@@ -448,12 +448,12 @@ const getDocsCopy = (language: string): DocsCopy => {
             body: "API keys are stored only in local configuration. The interface does not reveal the saved key after it is stored."
           },
           {
-            title: "Providers and models",
-            body: "Use a compatible service, or connect Anthropic Claude or Google Gemini with the matching provider template."
+            title: "Provider management",
+            body: "Add providers from templates or create custom ones. Each provider has its own service address, API key, and model list. Fetch available models from the provider API with one click."
           },
           {
-            title: "Model presets",
-            body: "Save multiple model configurations and bulk-import model IDs, then switch between saved presets from the chat page."
+            title: "Model switching",
+            body: "Select a model in provider management to switch the active model used by chat. The chat page also supports quick model switching."
           },
           {
             title: "Language and avatars",
@@ -470,7 +470,7 @@ const getDocsCopy = (language: string): DocsCopy => {
         items: [
           {
             title: "Export contents",
-            body: "Full backups include characters, chats, and messages. Settings export model parameters but not the API key."
+            body: "Full backups include characters, chats, and messages. Settings export provider configurations and model parameters but not the API key."
           },
           {
             title: "Merge import",
@@ -714,8 +714,8 @@ export function DocsPage() {
         </div>
       </section>
 
-      <div className="grid min-w-0 gap-6 lg:grid-cols-[14rem_1fr]">
-        <aside className="min-w-0 lg:sticky lg:top-28 lg:self-start">
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[14rem_minmax(0,1fr)]">
+        <aside className="min-w-0 lg:sticky lg:top-0 lg:self-start">
           <nav
             className="custom-scrollbar flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:rounded-lg lg:border lg:border-white/5 lg:bg-ink-900/50 lg:p-2"
             aria-label={copy.navLabel}

@@ -9,13 +9,101 @@ import { encryptApiKey, hasStoredApiKey } from "../services/apiKeyVault.js";
 
 export const settingsRouter = Router();
 
+const generateId = () => Math.random().toString(36).slice(2, 12);
+
+const migrateModelsToProviders = async (settings: any) => {
+  const providers = settings.providers;
+  const models = settings.models;
+
+  if (
+    Array.isArray(providers) && providers.length > 0
+  ) {
+    return settings;
+  }
+
+  if (!Array.isArray(models) || models.length === 0) {
+    return settings;
+  }
+
+  const groupMap = new Map<string, { provider: string; apiBaseUrl: string; key?: string; models: { id: string; label: string; model: string }[] }>();
+
+  for (const preset of models) {
+    if (
+      typeof preset !== "object" || preset === null || Array.isArray(preset)
+    ) {
+      continue;
+    }
+
+    const p = preset as Record<string, unknown>;
+    const provider = String(p.provider ?? "");
+    const apiBaseUrl = String(p.apiBaseUrl ?? "");
+    const key = typeof p.key === "string" ? p.key : undefined;
+    const modelId = String(p.model ?? "");
+    const label = String(p.label ?? modelId);
+
+    const groupKey = `${provider}\0${apiBaseUrl}`;
+    let group = groupMap.get(groupKey);
+
+    if (!group) {
+      group = { provider, apiBaseUrl, key, models: [] };
+      groupMap.set(groupKey, group);
+    }
+
+    if (key && !group.key) {
+      group.key = key;
+    }
+
+    group.models.push({ id: generateId(), label, model: modelId });
+  }
+
+  const migratedProviders = Array.from(groupMap.values()).map((group) => ({
+    id: generateId(),
+    label: group.provider || "custom",
+    provider: group.provider,
+    apiBaseUrl: group.apiBaseUrl,
+    key: group.key,
+    models: group.models
+  }));
+
+  let activeProviderId = "";
+  let activeModelId = "";
+
+  for (const provider of migratedProviders) {
+    if (
+      provider.provider === settings.activeProvider &&
+      provider.apiBaseUrl === settings.apiBaseUrl
+    ) {
+      activeProviderId = provider.id;
+      const matchedModel = provider.models.find((m) => m.model === settings.model);
+      activeModelId = matchedModel?.id ?? provider.models[0]?.id ?? "";
+      break;
+    }
+  }
+
+  if (!activeProviderId && migratedProviders.length > 0) {
+    activeProviderId = migratedProviders[0].id;
+    activeModelId = migratedProviders[0].models[0]?.id ?? "";
+  }
+
+  await prisma.userSettings.update({
+    where: { id: settings.id },
+    data: {
+      providers: migratedProviders as unknown as Prisma.JsonArray,
+      activeProviderId,
+      activeModelId
+    }
+  });
+
+  return prisma.userSettings.findUniqueOrThrow({ where: { id: settings.id } });
+};
+
 export const getOrCreateSettings = async () => {
   const existing = await prisma.userSettings.findFirst({
     orderBy: { createdAt: "asc" }
   });
 
   if (existing) {
-    return existing;
+    return migrateModelsToProviders(existing);
   }
 
   return prisma.userSettings.create({ data: {} });
@@ -62,15 +150,58 @@ settingsRouter.get(
   })
 );
 
+settingsRouter.get(
+  "/providers/:providerId/models",
+  asyncHandler(async (request, response) => {
+    const settings = await getOrCreateSettings();
+    const providers = Array.isArray(settings.providers) ? settings.providers : [];
+    const targetProvider = providers.find(
+      (p: any): p is Record<string, unknown> =>
+        typeof p === "object" && p !== null && !Array.isArray(p) && String(p.id) === request.params.providerId
+    );
+
+    if (!targetProvider) {
+      response.status(404).json({ ok: false, error: "Provider not found" });
+      return;
+    }
+
+    const providerSettings = {
+      ...settings,
+      activeProvider: String(targetProvider.provider ?? ""),
+      apiBaseUrl: String(targetProvider.apiBaseUrl ?? ""),
+      apiKey: typeof targetProvider.key === "string" && targetProvider.key ? targetProvider.key : settings.apiKey
+    };
+
+    const result = await fetchAvailableModels(providerSettings as any);
+
+    response.json({
+      ok: true,
+      data: result
+    });
+  })
+);
+
 settingsRouter.put(
   "/",
   asyncHandler(async (request, response) => {
     const body = parseBody(settingsUpdateSchema, request.body);
     const existing = await getOrCreateSettings();
+
+    const activeProfile = body.providers.find((p) => p.id === body.activeProviderId);
+    const activeModel = activeProfile?.models.find((m) => m.id === body.activeModelId);
+
+    const resolvedProvider = activeProfile?.provider ?? body.activeProvider;
+    const resolvedBaseUrl = activeProfile?.apiBaseUrl ?? body.apiBaseUrl;
+    const resolvedModel = activeModel?.model ?? body.model;
+    const resolvedApiKey = activeProfile?.key ?? ("apiKey" in body ? body.apiKey : undefined);
+
     const data: Prisma.UserSettingsUpdateInput = {
-      activeProvider: body.activeProvider,
-      apiBaseUrl: body.apiBaseUrl,
-      model: body.model,
+      providers: body.providers as Prisma.JsonArray,
+      activeProviderId: body.activeProviderId,
+      activeModelId: body.activeModelId,
+      activeProvider: resolvedProvider,
+      apiBaseUrl: resolvedBaseUrl,
+      model: resolvedModel,
       temperature: body.temperature,
       maxTokens: body.maxTokens,
       topP: body.topP,
@@ -80,8 +211,7 @@ settingsRouter.put(
       userProfileSummary: body.userProfileSummary,
       userProfileUpdatedAt:
         typeof body.userProfileSummary === "string" ? new Date() : undefined,
-      models: body.models as Prisma.JsonArray,
-      apiKey: "apiKey" in body ? encryptApiKey(body.apiKey) : undefined
+      apiKey: resolvedApiKey !== undefined ? encryptApiKey(resolvedApiKey) : undefined
     };
 
     const settings = await prisma.userSettings.update({

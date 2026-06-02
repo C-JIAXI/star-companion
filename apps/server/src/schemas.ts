@@ -301,6 +301,21 @@ export const messageListQuerySchema = z.object({
   chatId: idSchema.optional()
 });
 
+const providerModelSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  model: z.string().min(1)
+});
+
+const providerProfileSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  provider: z.string().min(1),
+  apiBaseUrl: z.string().url(),
+  key: z.string().optional(),
+  models: z.array(providerModelSchema).default([])
+});
+
 export const settingsUpdateSchema = z.object({
   activeProvider: z.string().trim().min(1).default("openai-compatible"),
   apiBaseUrl: z.string().trim().url(),
@@ -313,6 +328,9 @@ export const settingsUpdateSchema = z.object({
   autoSummarizeUser: z.boolean().optional(),
   showMessageAvatars: z.boolean().optional(),
   userProfileSummary: z.string().max(4000).optional(),
+  providers: z.array(providerProfileSchema).default([]),
+  activeProviderId: z.string().default(""),
+  activeModelId: z.string().default(""),
   models: z
     .array(
       z.object({
@@ -325,6 +343,7 @@ export const settingsUpdateSchema = z.object({
       })
     )
     .default([])
+    .optional()
 });
 
 export const userProfileUpdateSchema = z.object({

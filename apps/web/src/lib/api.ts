@@ -175,7 +175,9 @@ export const api = {
       request<{ reachable: true; model: string; checkedAt: string }>("/api/settings/test", {
         method: "POST"
       }),
-    models: () => request<AvailableModelsDTO>("/api/settings/models")
+    models: () => request<AvailableModelsDTO>("/api/settings/models"),
+    providerModels: (providerId: string) =>
+      request<AvailableModelsDTO>(`/api/settings/providers/${providerId}/models`)
   },
   backups: {
     export: () => request<BackupDTO>("/api/backups/export"),

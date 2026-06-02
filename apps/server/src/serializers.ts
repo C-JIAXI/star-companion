@@ -1,13 +1,19 @@
 import type { Character, Chat, ChatMemory, Message, Prisma, UserSettings } from "@prisma/client";
 import { resolveCharacterRecord } from "./services/characterCards.js";
 
-interface ModelPreset {
+interface ProviderModel {
+  id: string;
+  label: string;
+  model: string;
+}
+
+interface ProviderProfile {
   id: string;
   label: string;
   provider: string;
   apiBaseUrl: string;
   key?: string;
-  model: string;
+  models: ProviderModel[];
 }
 
 const toIso = (date: Date) => date.toISOString();
@@ -35,7 +41,24 @@ const toStringArray = (value: Prisma.JsonValue): string[] => {
   return value.filter((item): item is string => typeof item === "string");
 };
 
-const toModelPresets = (value: Prisma.JsonValue): ModelPreset[] => {
+const toProviderModels = (value: unknown): ProviderModel[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter(
+      (item): item is Record<string, unknown> =>
+        typeof item === "object" && item !== null && !Array.isArray(item)
+    )
+    .map((item) => ({
+      id: String(item.id ?? ""),
+      label: String(item.label ?? ""),
+      model: String(item.model ?? "")
+    }));
+};
+
+const toProviderProfiles = (value: Prisma.JsonValue): ProviderProfile[] => {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -45,16 +68,14 @@ const toModelPresets = (value: Prisma.JsonValue): ModelPreset[] => {
       (item): item is Prisma.JsonObject =>
         typeof item === "object" && item !== null && !Array.isArray(item)
     )
-    .map((item) => {
-      return {
-        id: String(item.id ?? ""),
-        label: String(item.label ?? ""),
-        provider: String(item.provider ?? ""),
-        apiBaseUrl: String(item.apiBaseUrl ?? ""),
-        key: typeof item.key === "string" ? item.key : undefined,
-        model: String(item.model ?? "")
-      };
-    });
+    .map((item) => ({
+      id: String(item.id ?? ""),
+      label: String(item.label ?? ""),
+      provider: String(item.provider ?? ""),
+      apiBaseUrl: String(item.apiBaseUrl ?? ""),
+      key: typeof item.key === "string" ? item.key : undefined,
+      models: toProviderModels(item.models)
+    }));
 };
 
 const toTokenUsage = (value: Prisma.JsonValue | null) => {
@@ -193,7 +214,9 @@ export const serializeSettings = (settings: UserSettings) => ({
   maxTokens: settings.maxTokens,
   topP: settings.topP,
   language: settings.language === "en" ? "en" : "zh-CN",
-  models: toModelPresets(settings.models),
+  providers: toProviderProfiles(settings.providers),
+  activeProviderId: settings.activeProviderId ?? "",
+  activeModelId: settings.activeModelId ?? "",
   userProfileSummary: settings.userProfileSummary,
   autoSummarizeUser: settings.autoSummarizeUser,
   showMessageAvatars: settings.showMessageAvatars,

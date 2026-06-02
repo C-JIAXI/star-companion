@@ -280,15 +280,19 @@ const main = async () => {
       autoSummarizeUser: false,
       showMessageAvatars: false,
       userProfileSummary: "",
-      models: [
+      providers: [
         {
-          id: "smoke-preset",
-          label: "Smoke Preset",
+          id: "smoke-provider",
+          label: "Smoke Provider",
           provider: "openai-compatible",
           apiBaseUrl: "https://api.openai.com/v1",
-          model: "gpt-4o-mini"
+          models: [
+            { id: "smoke-model", label: "Smoke Model", model: "gpt-4o-mini" }
+          ]
         }
-      ]
+      ],
+      activeProviderId: "smoke-provider",
+      activeModelId: "smoke-model"
     };
     const updatedSettings = await requestData(baseUrl, "/api/settings", {
       method: "PUT",

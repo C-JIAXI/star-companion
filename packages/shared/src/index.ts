@@ -4,13 +4,19 @@ export type MessageRole = "user" | "assistant" | "system";
 export type AppLanguage = "zh-CN" | "en";
 export type CharacterVisibility = "public" | "private";
 
-export interface ModelPreset {
+export interface ProviderModel {
+  id: string;
+  label: string;
+  model: string;
+}
+
+export interface ProviderProfile {
   id: string;
   label: string;
   provider: string;
   apiBaseUrl: string;
   key?: string;
-  model: string;
+  models: ProviderModel[];
 }
 
 export interface UserSettingsDTO {
@@ -22,7 +28,9 @@ export interface UserSettingsDTO {
   maxTokens: number;
   topP: number;
   language: AppLanguage;
-  models: ModelPreset[];
+  providers: ProviderProfile[];
+  activeProviderId: string;
+  activeModelId: string;
   userProfileSummary: string;
   autoSummarizeUser: boolean;
   showMessageAvatars: boolean;

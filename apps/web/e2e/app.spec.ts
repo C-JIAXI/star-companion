@@ -18,12 +18,19 @@ type E2EChatDetails = E2EChat & {
   userPersona: string;
 };
 
-type E2EModelPreset = {
+type E2EProviderModel = {
+  id: string;
+  label: string;
+  model: string;
+};
+
+type E2EProviderProfile = {
   id: string;
   label: string;
   provider: string;
   apiBaseUrl: string;
-  model: string;
+  key?: string;
+  models: E2EProviderModel[];
 };
 
 type SettingsPutPayload = {
@@ -34,7 +41,9 @@ type SettingsPutPayload = {
   maxTokens?: number;
   topP?: number;
   language?: string;
-  models?: E2EModelPreset[];
+  providers?: E2EProviderProfile[];
+  activeProviderId?: string;
+  activeModelId?: string;
   apiKey?: string;
 };
 
@@ -142,7 +151,9 @@ test("changing language does not immediately reload stale server settings", asyn
           maxTokens: 800,
           topP: 1,
           language: "zh-CN",
-          models: [],
+          providers: [],
+          activeProviderId: "",
+          activeModelId: "",
           userProfileSummary: "",
           autoSummarizeUser: true,
           showMessageAvatars: true,
@@ -434,7 +445,9 @@ test("chat settings can hide avatars and message bubbles do not show sender name
         maxTokens: originalSettings.maxTokens,
         topP: originalSettings.topP,
         language: originalSettings.language,
-        models: originalSettings.models ?? [],
+        providers: originalSettings.providers ?? [],
+        activeProviderId: originalSettings.activeProviderId ?? "",
+        activeModelId: originalSettings.activeModelId ?? "",
         autoSummarizeUser: originalSettings.autoSummarizeUser,
         userProfileSummary: originalSettings.userProfileSummary ?? "",
         showMessageAvatars
@@ -499,7 +512,7 @@ test("chat settings can hide avatars and message bubbles do not show sender name
   }
 });
 
-test("chat model switch preserves stored key and runtime settings when preset has no dedicated key", async ({
+test("chat model switch preserves stored key and runtime settings when provider has no dedicated key", async ({
   page,
   request
 }) => {
@@ -507,20 +520,16 @@ test("chat model switch preserves stored key and runtime settings when preset ha
   const characterName = `Switch Character ${suffix}`;
   const chatTitle = `Switch Chat ${suffix}`;
   const now = new Date().toISOString();
-  const models: E2EModelPreset[] = [
+  const providers: E2EProviderProfile[] = [
     {
-      id: "preset-active",
-      label: "Active Model",
+      id: "provider-active",
+      label: "OpenAI",
       provider: "openai-compatible",
       apiBaseUrl: "https://api.openai.com/v1",
-      model: "gpt-4o-mini"
-    },
-    {
-      id: "preset-target",
-      label: "Target Model",
-      provider: "openai-compatible",
-      apiBaseUrl: "https://api.openai.com/v1",
-      model: "gpt-4o"
+      models: [
+        { id: "model-active", label: "Active Model", model: "gpt-4o-mini" },
+        { id: "model-target", label: "Target Model", model: "gpt-4o" }
+      ]
     }
   ];
 
@@ -536,14 +545,16 @@ test("chat model switch preserves stored key and runtime settings when preset ha
           ok: true,
           data: {
             id: "settings-switch-e2e",
-            activeProvider: models[0].provider,
-            apiBaseUrl: models[0].apiBaseUrl,
-            model: models[0].model,
+            activeProvider: providers[0].provider,
+            apiBaseUrl: providers[0].apiBaseUrl,
+            model: providers[0].models[0].model,
             temperature: 1.1,
             maxTokens: 1200,
             topP: 0.9,
             language: "en",
-            models,
+            providers,
+            activeProviderId: providers[0].id,
+            activeModelId: providers[0].models[0].id,
             userProfileSummary: "",
             autoSummarizeUser: true,
             showMessageAvatars: true,
@@ -559,20 +570,28 @@ test("chat model switch preserves stored key and runtime settings when preset ha
 
     if (method === "PUT") {
       latestSettingsPut.value = (route.request().postDataJSON() as SettingsPutPayload) ?? null;
+      const putProviders = latestSettingsPut.value?.providers ?? providers;
+      const putActiveProviderId = latestSettingsPut.value?.activeProviderId ?? providers[0].id;
+      const putActiveModelId = latestSettingsPut.value?.activeModelId ?? providers[0].models[0].id;
+      const activeProvider = putProviders.find((p) => p.id === putActiveProviderId) ?? putProviders[0];
+      const activeModel = activeProvider?.models.find((m) => m.id === putActiveModelId) ?? activeProvider?.models[0];
+
       await route.fulfill({
         contentType: "application/json",
         body: JSON.stringify({
           ok: true,
           data: {
             id: "settings-switch-e2e",
-            activeProvider: latestSettingsPut.value?.activeProvider,
-            apiBaseUrl: latestSettingsPut.value?.apiBaseUrl,
-            model: latestSettingsPut.value?.model,
+            activeProvider: activeProvider?.provider ?? latestSettingsPut.value?.activeProvider,
+            apiBaseUrl: activeProvider?.apiBaseUrl ?? latestSettingsPut.value?.apiBaseUrl,
+            model: activeModel?.model ?? latestSettingsPut.value?.model,
             temperature: latestSettingsPut.value?.temperature,
             maxTokens: latestSettingsPut.value?.maxTokens,
             topP: latestSettingsPut.value?.topP,
             language: latestSettingsPut.value?.language,
-            models: latestSettingsPut.value?.models,
+            providers: putProviders,
+            activeProviderId: putActiveProviderId,
+            activeModelId: putActiveModelId,
             userProfileSummary: "",
             autoSummarizeUser: true,
             showMessageAvatars: true,

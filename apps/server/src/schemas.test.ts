@@ -68,14 +68,16 @@ describe("settingsUpdateSchema", () => {
       maxTokens: 800,
       topP: 1,
       language: "zh-CN",
-      models: [],
+      providers: [],
+      activeProviderId: "",
+      activeModelId: "",
       showMessageAvatars: false
     });
 
     assert.equal(parsed.showMessageAvatars, false);
   });
 
-  it("accepts model presets without runtime-only fields", () => {
+  it("accepts provider profiles with nested models", () => {
     const parsed = parseBody(settingsUpdateSchema, {
       activeProvider: "openai-compatible",
       apiBaseUrl: "https://api.openai.com/v1",
@@ -84,18 +86,23 @@ describe("settingsUpdateSchema", () => {
       maxTokens: 800,
       topP: 1,
       language: "zh-CN",
-      models: [
+      providers: [
         {
-          id: "preset-1",
-          label: "GPT",
+          id: "provider-1",
+          label: "OpenAI",
           provider: "openai",
           apiBaseUrl: "https://api.openai.com/v1",
-          model: "gpt-4o-mini"
+          models: [
+            { id: "model-1", label: "GPT", model: "gpt-4o-mini" }
+          ]
         }
-      ]
+      ],
+      activeProviderId: "provider-1",
+      activeModelId: "model-1"
     });
 
-    assert.equal(parsed.models[0]?.model, "gpt-4o-mini");
+    assert.equal(parsed.providers[0]?.models[0]?.model, "gpt-4o-mini");
+    assert.equal(parsed.activeProviderId, "provider-1");
   });
 });
 

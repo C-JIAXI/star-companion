@@ -1,25 +1,22 @@
 import {
-  CheckSquare,
   ChevronDown,
   ChevronRight,
   Download,
   FileUp,
-  ListPlus,
   Plus,
   RefreshCw,
   Save,
   ServerCog,
-  Square,
-  Trash2,
-  Wrench
+  Trash2
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { languageOptions, useI18n } from "../i18n";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { downloadJson, readFileText } from "../lib/files";
 import { generateId } from "../lib/uuid";
 import { useAppStore } from "../store/useAppStore";
-import type { AppLanguage, ModelPreset, SettingsInput } from "../types";
+import type { AppLanguage, ProviderModel, ProviderProfile, SettingsInput } from "../types";
 import {
   Button,
   ConfirmDialog,
@@ -28,7 +25,6 @@ import {
   HelpLabel,
   Panel,
   SuccessNotice,
-  TextArea,
   TextInput
 } from "../components/ui";
 import type { ReactNode } from "react";
@@ -42,7 +38,9 @@ const defaultForm: SettingsInput = {
   maxTokens: 800,
   topP: 1,
   language: "zh-CN",
-  models: [],
+  providers: [],
+  activeProviderId: "",
+  activeModelId: "",
   showMessageAvatars: true,
   userProfileSummary: ""
 };
@@ -75,259 +73,204 @@ const providerTemplates = [
     label: "OpenAI",
     provider: "openai",
     apiBaseUrl: "https://api.openai.com/v1",
-    model: "gpt-4o-mini"
+    defaultModels: [
+      { label: "GPT-4o", model: "gpt-4o" },
+      { label: "GPT-4o Mini", model: "gpt-4o-mini" }
+    ]
   },
   {
     id: "anthropic",
     label: "Anthropic Claude",
     provider: "anthropic",
     apiBaseUrl: "https://api.anthropic.com/v1",
-    model: "claude-sonnet-4-5"
+    defaultModels: [
+      { label: "Claude Sonnet 4.5", model: "claude-sonnet-4-5" },
+      { label: "Claude Haiku 3.5", model: "claude-3-5-haiku-20241022" }
+    ]
   },
   {
     id: "google-gemini",
     label: "Google Gemini",
     provider: "google-gemini",
     apiBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    model: "gemini-2.5-flash"
+    defaultModels: [
+      { label: "Gemini 2.5 Flash", model: "gemini-2.5-flash" },
+      { label: "Gemini 2.5 Pro", model: "gemini-2.5-pro" }
+    ]
   },
   {
     id: "deepseek",
     label: "DeepSeek",
     provider: "deepseek",
     apiBaseUrl: "https://api.deepseek.com/v1",
-    model: "deepseek-chat"
+    defaultModels: [
+      { label: "DeepSeek Chat", model: "deepseek-chat" },
+      { label: "DeepSeek Coder", model: "deepseek-coder" }
+    ]
   },
   {
     id: "qwen",
     label: "通义千问 / Qwen",
     provider: "qwen",
     apiBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model: "qwen-plus"
+    defaultModels: [
+      { label: "Qwen Plus", model: "qwen-plus" },
+      { label: "Qwen Turbo", model: "qwen-turbo" }
+    ]
   },
   {
     id: "moonshot",
     label: "Moonshot Kimi",
     provider: "moonshot",
     apiBaseUrl: "https://api.moonshot.cn/v1",
-    model: "moonshot-v1-8k"
+    defaultModels: [
+      { label: "Moonshot v1 8K", model: "moonshot-v1-8k" },
+      { label: "Moonshot v1 32K", model: "moonshot-v1-32k" }
+    ]
   },
   {
     id: "zhipu",
     label: "智谱 GLM",
     provider: "zhipu",
     apiBaseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    model: "glm-4-flash"
+    defaultModels: [
+      { label: "GLM-4 Flash", model: "glm-4-flash" },
+      { label: "GLM-4 Air", model: "glm-4-air" }
+    ]
   },
   {
     id: "xiaomi-mimo",
     label: "Xiaomi MIMO",
     provider: "xiaomi-mimo",
     apiBaseUrl: "https://api.xiaomimimo.com/v1",
-    model: "mimo-v2.5-pro"
+    defaultModels: [
+      { label: "MIMO v2.5 Pro", model: "mimo-v2.5-pro" }
+    ]
   },
   {
     id: "groq",
     label: "Groq",
     provider: "groq",
     apiBaseUrl: "https://api.groq.com/openai/v1",
-    model: "llama-3.3-70b-versatile"
+    defaultModels: [
+      { label: "Llama 3.3 70B", model: "llama-3.3-70b-versatile" }
+    ]
   },
   {
     id: "ollama",
     label: "Ollama",
     provider: "ollama",
     apiBaseUrl: "http://localhost:11434/v1",
-    model: "llama3.1"
+    defaultModels: [
+      { label: "Llama 3.1", model: "llama3.1" }
+    ]
   },
   {
     id: "lm-studio",
     label: "LM Studio",
     provider: "lm-studio",
     apiBaseUrl: "http://localhost:1234/v1",
-    model: "local-model"
+    defaultModels: [
+      { label: "Local Model", model: "local-model" }
+    ]
   }
 ] as const;
 
-const getProviderTemplateId = (form: SettingsInput) =>
-  providerTemplates.find(
-    (template) =>
-      template.provider === form.activeProvider &&
-      template.apiBaseUrl === form.apiBaseUrl
-  )?.id;
-
-const collectModelIds = (value: unknown): string[] => {
-  if (typeof value === "string") {
-    return value.trim() ? [value.trim().replace(/^models\//, "")] : [];
-  }
-
-  if (Array.isArray(value)) {
-    return value.flatMap(collectModelIds);
-  }
-
-  if (!value || typeof value !== "object") {
-    return [];
-  }
-
-  const record = value as Record<string, unknown>;
-  const direct = [record.id, record.model, record.name].flatMap(collectModelIds);
-  const nested = [record.data, record.models].flatMap(collectModelIds);
-  return [...direct, ...nested];
-};
-
-const parseModelImportText = (raw: string) => {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return [];
-  }
-
-  try {
-    return collectModelIds(JSON.parse(trimmed));
-  } catch {
-    return trimmed
-      .split(/[\n,，;；\t]+/)
-      .map((item) => item.trim().replace(/^models\//, ""))
-      .filter(Boolean);
-  }
-};
-
-const getPresetDisplayName = (preset: ModelPreset, language: AppLanguage) => {
-  const label = preset.label.trim();
+const getProviderDisplayName = (provider: ProviderProfile, language: AppLanguage) => {
+  const label = provider.label.trim();
   if (label) {
     return label;
   }
 
-  const model = preset.model.trim();
-  if (model) {
-    return model;
-  }
-
-  return language === "zh-CN" ? "未命名预设" : "Untitled preset";
+  return language === "zh-CN" ? "未命名供应商" : "Unnamed provider";
 };
-
-const createPresetLabel = (form: SettingsInput, language: AppLanguage) =>
-  form.model.trim() || (language === "zh-CN" ? "新预设" : "New Preset");
 
 const getPageCopy = (language: AppLanguage) =>
   language === "zh-CN"
     ? {
         runtimeTitle: "当前运行配置",
-        runtimeHelp: "这里决定当前聊天实际使用的供应商、模型与采样参数。",
+        runtimeHelp: "这里展示当前聊天实际使用的供应商与模型，采样参数可在此调整。",
         providerStatus: "当前供应商",
         modelStatus: "当前模型",
         apiKeyStatus: "API Key",
         changesStatus: "更改状态",
-        presetsStatus: "预设数量",
+        providerCount: "供应商数量",
         keyStored: "已保存",
         keyPendingRemoval: "待清除",
         keyMissing: "未保存",
         changesDirty: "未保存更改",
         changesClean: "已同步",
-        presetCount: (count: number) => `${count} 个`,
+        providerCountDisplay: (count: number) => `${count} 个`,
         proxyNote: "所有模型请求都通过后端代理发出，前端不会直连模型供应商。",
-        clearKey: "清除已保存 Key",
-        clearKeyUndo: "保留已保存 Key",
-        runtimeBlockTitle: "连接信息",
         samplingBlockTitle: "采样参数",
-        providerTemplate: "供应商模板",
-        providerTemplateApplied: (name: string) => `已套用供应商模板"${name}"`,
-        presetsTitle: "模型预设库",
-        presetsHelp: "保存常用组合，聊天页会直接读取这里的预设进行模型切换。",
-        addPreset: "添加预设",
-        fetchProviderModels: "从供应商导入",
-        importModels: "导入模型 ID",
-        importModelsTitle: "批量导入任意模型",
-        importModelsHelp:
-          "粘贴模型 ID、逗号分隔列表、JSON 数组，或 OpenAI/Gemini 模型列表响应；会按当前供应商和 Base URL 生成预设。",
-        modelImportPlaceholder:
-          "例如：\ngpt-4o-mini\ngemini-2.5-flash\nclaude-sonnet-4-5\n\n也可以粘贴 { \"data\": [{ \"id\": \"model-id\" }] }",
-        modelImportEmpty: "没有识别到可导入的模型 ID。",
-        modelImportAdded: (count: number) => `已导入 ${count} 个模型预设。`,
-        fetchRequiresSave: "从供应商导入模型前，请先保存当前连接配置和 API Key。",
-        applyPreset: "应用到当前配置",
-        activePreset: "当前使用",
-        presetLabel: "预设名称",
-        presetProvider: "供应商",
-        presetUrl: "API Base URL",
-        presetModel: "模型",
-        presetKey: "专用 API Key（可选）",
-        presetEmpty: "还没有预设。把当前运行配置保存成一个常用组合会更顺手。",
-        presetDeleteTitle: "删除模型预设",
-        presetDeleteConfirm: (name: string) => `删除预设"${name}"？`,
-        presetApplied: (name: string) => `已载入预设"${name}"`,
-        presetAppliedSaveHint: (name: string) => `已载入预设"${name}"，请记得保存`,
-        presetBatchDeleteTitle: "批量删除预设",
-        presetBatchDeleteConfirm: (count: number) => `确定删除选中的 ${count} 个预设？`,
+        providersTitle: "供应商管理",
+        providersHelp: "配置供应商连接信息和模型列表。选择一个模型即可切换当前聊天使用的模型。",
+        addProvider: "添加供应商",
+        providerLabel: "供应商名称",
+        providerType: "供应商类型",
+        providerUrl: "API Base URL",
+        providerKey: "专用 API Key（可选）",
+        providerModels: "模型列表",
+        providerEmpty: "还没有供应商。点击上方按钮添加一个。",
+        providerDeleteTitle: "删除供应商",
+        providerDeleteConfirm: (name: string) => `删除供应商"${name}"？`,
+        modelLabel: "模型名称",
+        modelId: "模型 ID",
+        addModel: "添加模型",
+        importFromProvider: "从供应商导入",
+        activeModel: "当前使用",
         urlInvalid: "请输入有效的 URL 地址",
-        importRequiresSave: "有未保存更改时无法导入",
+        validationProvider:
+          "请先补全每个供应商的名称、类型、API Base URL 和至少一个模型，且 API Base URL 必须是有效地址。",
         backupTitle: "备份与迁移",
         backupHelp:
           "完整备份会导出角色、聊天、消息和世界书；设置仅导出模型参数，不包含 API Key。",
         saveReady: "保存到本地",
-        noPendingChanges: "当前没有待保存更改",
-        validationPreset:
-          "请先补全每个预设的名称、供应商、API Base URL 和模型，且 API Base URL 必须是有效地址。"
+        noPendingChanges: "当前没有待保存更改"
       }
     : {
         runtimeTitle: "Active Runtime",
-        runtimeHelp: "These values define the provider, model, and sampling settings used by chat right now.",
+        runtimeHelp: "These values show the active provider and model used by chat. Sampling parameters can be adjusted here.",
         providerStatus: "Provider",
         modelStatus: "Model",
         apiKeyStatus: "API Key",
         changesStatus: "Change State",
-        presetsStatus: "Preset Count",
+        providerCount: "Provider Count",
         keyStored: "Stored",
         keyPendingRemoval: "Pending removal",
         keyMissing: "Not stored",
         changesDirty: "Unsaved changes",
         changesClean: "Synced",
-        presetCount: (count: number) => `${count}`,
+        providerCountDisplay: (count: number) => `${count}`,
         proxyNote: "All model requests go through the backend proxy. The frontend never calls providers directly.",
-        clearKey: "Clear stored key",
-        clearKeyUndo: "Keep stored key",
-        runtimeBlockTitle: "Connection",
         samplingBlockTitle: "Sampling",
-        providerTemplate: "Provider Template",
-        providerTemplateApplied: (name: string) => `Applied provider template "${name}"`,
-        presetsTitle: "Model Presets",
-        presetsHelp: "Save reusable provider/model combinations. The chat page reads this list directly for model switching.",
-        addPreset: "Add Preset",
-        fetchProviderModels: "Import from Provider",
-        importModels: "Import Model IDs",
-        importModelsTitle: "Bulk Import Any Model",
-        importModelsHelp:
-          "Paste model IDs, comma-separated lists, JSON arrays, or OpenAI/Gemini model-list responses. Presets use the current provider and base URL.",
-        modelImportPlaceholder:
-          "Examples:\ngpt-4o-mini\ngemini-2.5-flash\nclaude-sonnet-4-5\n\nYou can also paste { \"data\": [{ \"id\": \"model-id\" }] }",
-        modelImportEmpty: "No model IDs were recognized.",
-        modelImportAdded: (count: number) => `Imported ${count} model presets.`,
-        fetchRequiresSave: "Save the current connection and API key before importing models from the provider.",
-        applyPreset: "Apply to Runtime",
-        activePreset: "Active",
-        presetLabel: "Preset Name",
-        presetProvider: "Provider",
-        presetUrl: "API Base URL",
-        presetModel: "Model",
-        presetKey: "Dedicated API Key (optional)",
-        presetEmpty: "No presets yet. Saving the current runtime as a reusable combination will help here.",
-        presetDeleteTitle: "Delete Model Preset",
-        presetDeleteConfirm: (name: string) => `Delete preset "${name}"?`,
-        presetApplied: (name: string) => `Loaded preset "${name}"`,
-        presetAppliedSaveHint: (name: string) => `Loaded preset "${name}" — don't forget to save`,
-        presetBatchDeleteTitle: "Batch Delete Presets",
-        presetBatchDeleteConfirm: (count: number) => `Delete ${count} selected preset${count > 1 ? "s" : ""}?`,
+        providersTitle: "Provider Management",
+        providersHelp: "Configure provider connection info and model lists. Select a model to switch the active model used by chat.",
+        addProvider: "Add Provider",
+        providerLabel: "Provider Name",
+        providerType: "Provider Type",
+        providerUrl: "API Base URL",
+        providerKey: "Dedicated API Key (optional)",
+        providerModels: "Models",
+        providerEmpty: "No providers yet. Click the button above to add one.",
+        providerDeleteTitle: "Delete Provider",
+        providerDeleteConfirm: (name: string) => `Delete provider "${name}"?`,
+        modelLabel: "Model Name",
+        modelId: "Model ID",
+        addModel: "Add Model",
+        importFromProvider: "Import from Provider",
+        activeModel: "Active",
         urlInvalid: "Please enter a valid URL",
-        importRequiresSave: "Cannot import while there are unsaved changes",
+        validationProvider:
+          "Complete every provider name, type, API base URL, and add at least one model before saving. API base URLs must be valid URLs.",
         backupTitle: "Backup & Migration",
         backupHelp:
           "Full backups export characters, chats, and messages. Settings export model parameters but never the API key.",
         saveReady: "Save locally",
-        noPendingChanges: "No pending changes",
-        validationPreset:
-          "Complete every preset name, provider, API base URL, and model before saving. API base URLs must be valid URLs."
+        noPendingChanges: "No pending changes"
       };
 
-type SettingsSection = "runtime" | "presets" | "backup";
+type SettingsSection = "runtime" | "providers" | "backup";
 
 function SummaryCard({
   label,
@@ -395,14 +338,19 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const [loading, setLoading] = useState(false);
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
-  const [pendingDeletePresetId, setPendingDeletePresetId] = useState<string | null>(null);
-  const [expandedPresetId, setExpandedPresetId] = useState<string | null>(null);
+  const [expandedProviderId, setExpandedProviderId] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSection>("runtime");
-  const [modelImportText, setModelImportText] = useState("");
-  const [presetBatchMode, setPresetBatchMode] = useState(false);
-  const [presetSelectedIds, setPresetSelectedIds] = useState<Set<string>>(new Set());
-  const [pendingBatchDelete, setPendingBatchDelete] = useState(false);
-  const [inlineUrlError, setInlineUrlError] = useState<string | null>(null);
+  const [pendingDeleteProviderId, setPendingDeleteProviderId] = useState<string | null>(null);
+  const [pendingDeleteModel, setPendingDeleteModel] = useState<{
+    providerId: string;
+    modelId: string;
+  } | null>(null);
+  const [addProviderDropdownOpen, setAddProviderDropdownOpen] = useState(false);
+  const [selectedModelIds, setSelectedModelIds] = useState<Set<string>>(new Set());
+  const [pendingBatchDelete, setPendingBatchDelete] = useState<string | null>(null);
+  const [manageMode, setManageMode] = useState(false);
+  const addProviderButtonRef = useRef<HTMLDivElement>(null);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
 
   useEffect(() => {
     void api.settings
@@ -417,7 +365,9 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
           maxTokens: settings.maxTokens,
           topP: settings.topP,
           language: settings.language,
-          models: settings.models ?? [],
+          providers: settings.providers ?? [],
+          activeProviderId: settings.activeProviderId ?? "",
+          activeModelId: settings.activeModelId ?? "",
           showMessageAvatars: settings.showMessageAvatars,
           userProfileSummary: settings.userProfileSummary ?? ""
         };
@@ -460,56 +410,48 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     onDirtyChange?.(hasUnsavedChanges);
   }, [hasUnsavedChanges, onDirtyChange]);
 
-  const activePreset = useMemo(
-    () =>
-      form.models.find(
-        (preset) =>
-          preset.provider === form.activeProvider &&
-          preset.apiBaseUrl === form.apiBaseUrl &&
-          preset.model === form.model
-      ) ?? null,
-    [form.activeProvider, form.apiBaseUrl, form.model, form.models]
-  );
+  const activeProviderName = useMemo(() => {
+    const provider = form.providers.find((p) => p.id === form.activeProviderId);
+    return provider ? getProviderDisplayName(provider, language) : "";
+  }, [form.providers, form.activeProviderId, language]);
 
-  const pendingDeletePreset = useMemo(
-    () =>
-      pendingDeletePresetId
-        ? form.models.find((preset) => preset.id === pendingDeletePresetId) ?? null
-        : null,
-    [form.models, pendingDeletePresetId]
-  );
+  const activeModelName = useMemo(() => {
+    if (!form.activeProviderId || !form.activeModelId) {
+      return "";
+    }
+    const provider = form.providers.find((p) => p.id === form.activeProviderId);
+    if (!provider) {
+      return "";
+    }
+    const model = provider.models.find((m) => m.id === form.activeModelId);
+    return model ? (model.label || model.model) : "";
+  }, [form.providers, form.activeProviderId, form.activeModelId]);
 
   useEffect(() => {
-    setExpandedPresetId((current) => {
-      const currentStillExists = current ? form.models.some((preset) => preset.id === current) : false;
-      if (currentStillExists) {
+    setExpandedProviderId((current) => {
+      if (current && form.providers.some((p) => p.id === current)) {
         return current;
       }
-
-      return (
-        form.models.find(
-          (preset) =>
-            preset.provider === form.activeProvider &&
-            preset.apiBaseUrl === form.apiBaseUrl &&
-            preset.model === form.model
-        )?.id ??
-        form.models[0]?.id ??
-        null
-      );
+      return form.providers[0]?.id ?? null;
     });
-  }, [form.activeProvider, form.apiBaseUrl, form.model, form.models]);
+  }, [form.providers]);
+
+  useEffect(() => {
+    setSelectedModelIds(new Set());
+    setManageMode(false);
+  }, [expandedProviderId]);
 
   const saveSettings = async () => {
-    const hasInvalidPreset = form.models.some(
-      (preset) =>
-        !preset.label.trim() ||
-        !preset.provider.trim() ||
-        !preset.model.trim() ||
-        !isValidUrl(preset.apiBaseUrl)
+    const hasInvalidProvider = form.providers.some(
+      (provider) =>
+        !provider.label.trim() ||
+        !provider.provider.trim() ||
+        !isValidUrl(provider.apiBaseUrl) ||
+        provider.models.length === 0
     );
 
-    if (hasInvalidPreset) {
-      setError(copy.validationPreset);
+    if (hasInvalidProvider) {
+      setError(copy.validationProvider);
       return;
     }
 
@@ -533,7 +475,9 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         maxTokens: settings.maxTokens,
         topP: settings.topP,
         language: settings.language,
-        models: settings.models ?? [],
+        providers: settings.providers ?? [],
+        activeProviderId: settings.activeProviderId ?? "",
+        activeModelId: settings.activeModelId ?? "",
         autoSummarizeUser: settings.autoSummarizeUser,
         showMessageAvatars: settings.showMessageAvatars,
         userProfileSummary: settings.userProfileSummary ?? ""
@@ -613,167 +557,201 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     }
   };
 
-  const applyPreset = (preset: ModelPreset) => {
-    setForm((current) => ({
-      ...current,
-      activeProvider: preset.provider,
-      apiBaseUrl: preset.apiBaseUrl,
-      model: preset.model,
-      apiKey: preset.key ?? ""
-    }));
-    setClearStoredApiKey(false);
-    setExpandedPresetId(preset.id);
-    setStatus(copy.presetAppliedSaveHint(getPresetDisplayName(preset, language)));
-  };
+  const addProviderFromTemplate = (templateId: string) => {
+    const template = providerTemplates.find((t) => t.id === templateId);
+    if (!template) {
+      return;
+    }
 
-  const addPreset = () => {
-    const nextPreset: ModelPreset = {
+    const newProvider: ProviderProfile = {
       id: generateId(),
-      label: createPresetLabel(form, language),
-      provider: form.activeProvider,
-      apiBaseUrl: form.apiBaseUrl,
-      model: form.model,
-      key: form.apiKey?.trim() ? form.apiKey : undefined
+      label: template.label,
+      provider: template.provider,
+      apiBaseUrl: template.apiBaseUrl,
+      models: template.defaultModels.map((m) => ({
+        id: generateId(),
+        label: m.label,
+        model: m.model
+      }))
     };
 
     setForm((current) => ({
       ...current,
-      models: [...current.models, nextPreset]
+      providers: [...current.providers, newProvider]
     }));
-    setExpandedPresetId(nextPreset.id);
-    setActiveSection("presets");
+    setExpandedProviderId(newProvider.id);
+    setAddProviderDropdownOpen(false);
+    setActiveSection("providers");
   };
 
-  const togglePresetBatchMode = () => {
-    setPresetBatchMode((current) => !current);
-    setPresetSelectedIds(new Set());
+  const addCustomProvider = () => {
+    const newProvider: ProviderProfile = {
+      id: generateId(),
+      label: language === "zh-CN" ? "新供应商" : "New Provider",
+      provider: "openai",
+      apiBaseUrl: "https://api.openai.com/v1",
+      models: []
+    };
+
+    setForm((current) => ({
+      ...current,
+      providers: [...current.providers, newProvider]
+    }));
+    setExpandedProviderId(newProvider.id);
+    setAddProviderDropdownOpen(false);
+    setActiveSection("providers");
   };
 
-  const toggleAllPresets = () => {
-    if (presetSelectedIds.size === form.models.length) {
-      setPresetSelectedIds(new Set());
-    } else {
-      setPresetSelectedIds(new Set(form.models.map((p) => p.id)));
-    }
+  const updateProvider = (providerId: string, updates: Partial<ProviderProfile>) => {
+    setForm((current) => ({
+      ...current,
+      providers: current.providers.map((p) =>
+        p.id === providerId ? { ...p, ...updates } : p
+      )
+    }));
   };
 
-  const togglePresetSelected = (id: string, selected: boolean) => {
-    setPresetSelectedIds((prev) => {
+  const addModelToProvider = (providerId: string) => {
+    const newModel: ProviderModel = {
+      id: generateId(),
+      label: "",
+      model: ""
+    };
+
+    setForm((current) => ({
+      ...current,
+      providers: current.providers.map((p) =>
+        p.id === providerId ? { ...p, models: [...p.models, newModel] } : p
+      )
+    }));
+  };
+
+  const updateModel = (providerId: string, modelId: string, updates: Partial<ProviderModel>) => {
+    setForm((current) => ({
+      ...current,
+      providers: current.providers.map((p) =>
+        p.id === providerId
+          ? { ...p, models: p.models.map((m) => m.id === modelId ? { ...m, ...updates } : m) }
+          : p
+      )
+    }));
+  };
+
+  const toggleModelSelection = (modelId: string) => {
+    setSelectedModelIds((prev) => {
       const next = new Set(prev);
-      if (selected) {
-        next.add(id);
+      if (next.has(modelId)) {
+        next.delete(modelId);
       } else {
-        next.delete(id);
+        next.add(modelId);
       }
       return next;
     });
   };
 
-  const deleteSelectedPresets = () => {
-    setPendingBatchDelete(true);
+  const toggleAllModels = (modelIds: string[]) => {
+    setSelectedModelIds((prev) => {
+      const allSelected = modelIds.every((id) => prev.has(id));
+      if (allSelected) {
+        const next = new Set(prev);
+        for (const id of modelIds) {
+          next.delete(id);
+        }
+        return next;
+      }
+      const next = new Set(prev);
+      for (const id of modelIds) {
+        next.add(id);
+      }
+      return next;
+    });
   };
 
-  const confirmBatchDeletePresets = () => {
+  const batchDeleteModels = (providerId: string) => {
+    setForm((current) => {
+      const provider = current.providers.find((p) => p.id === providerId);
+      if (!provider) return current;
+      const toDelete = provider.models.filter((m) => selectedModelIds.has(m.id));
+      if (!toDelete.length) return current;
+      const deleteIds = new Set(toDelete.map((m) => m.id));
+      return {
+        ...current,
+        providers: current.providers.map((p) =>
+          p.id === providerId
+            ? { ...p, models: p.models.filter((m) => !deleteIds.has(m.id)) }
+            : p
+        ),
+        activeModelId: deleteIds.has(current.activeModelId) ? "" : current.activeModelId
+      };
+    });
+    setSelectedModelIds(new Set());
+    setPendingBatchDelete(null);
+  };
+
+  const selectModel = (providerId: string, modelId: string) => {
     setForm((current) => ({
       ...current,
-      models: current.models.filter((preset) => !presetSelectedIds.has(preset.id))
+      activeProviderId: providerId,
+      activeModelId: modelId
     }));
-    setPresetSelectedIds(new Set());
-    setPresetBatchMode(false);
-    setPendingBatchDelete(false);
   };
 
-  const addModelPresets = (modelIds: string[]) => {
+  const addModelsFromImport = (providerId: string, modelIds: string[]) => {
     const uniqueModelIds = [...new Set(modelIds.map((model) => model.trim()).filter(Boolean))];
 
     if (!uniqueModelIds.length) {
-      setError(copy.modelImportEmpty);
       return;
     }
 
-    const existing = new Set(
-      form.models.map(
-        (preset) =>
-          `${preset.provider}\u0000${preset.apiBaseUrl}\u0000${preset.model}`
-      )
-    );
-    const presetsToAdd = uniqueModelIds
-      .filter((model) => {
-        const key = `${form.activeProvider}\u0000${form.apiBaseUrl}\u0000${model}`;
-        if (existing.has(key)) {
-          return false;
-        }
-        existing.add(key);
-        return true;
-      })
-      .map((model) => ({
-        id: generateId(),
-        label: model,
-        provider: form.activeProvider,
-        apiBaseUrl: form.apiBaseUrl,
-        model
-      }));
+    let addedCount = 0;
 
-    if (!presetsToAdd.length) {
-      setError(copy.modelImportEmpty);
-      return;
+    setForm((current) => {
+      const provider = current.providers.find((p) => p.id === providerId);
+      if (!provider) {
+        return current;
+      }
+
+      const existingModels = new Set(provider.models.map((m) => m.model));
+      const modelsToAdd = uniqueModelIds
+        .filter((model) => !existingModels.has(model))
+        .map((model) => ({
+          id: generateId(),
+          label: model,
+          model
+        }));
+
+      if (!modelsToAdd.length) {
+        return current;
+      }
+
+      addedCount = modelsToAdd.length;
+      return {
+        ...current,
+        providers: current.providers.map((p) =>
+          p.id === providerId
+            ? { ...p, models: [...p.models, ...modelsToAdd] }
+            : p
+        )
+      };
+    });
+    if (addedCount > 0) {
+      setStatus(language === "zh-CN" ? `已导入 ${addedCount} 个模型。` : `Imported ${addedCount} model(s).`);
     }
-
-    setForm((current) => ({
-      ...current,
-      models: [...current.models, ...presetsToAdd]
-    }));
-    setModelImportText("");
-    setExpandedPresetId(presetsToAdd[0]?.id ?? null);
-    setStatus(copy.modelImportAdded(presetsToAdd.length));
   };
 
-  const importModelText = () => {
-    addModelPresets(parseModelImportText(modelImportText));
-  };
-
-  const fetchProviderModels = async () => {
-    if (hasUnsavedChanges) {
-      setError(copy.fetchRequiresSave);
-      return;
-    }
-
+  const fetchProviderModels = async (providerId: string) => {
     setLoading(true);
     setError(null);
     setStatus(null);
 
     try {
-      const result = await api.settings.models();
-      addModelPresets(result.models);
+      const result = await api.settings.providerModels(providerId);
+      addModelsFromImport(providerId, result.models);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("settings.connectionFailed"));
     } finally {
       setLoading(false);
     }
-  };
-
-  const applyProviderTemplate = (templateId: string) => {
-    const template = providerTemplates.find((candidate) => candidate.id === templateId);
-    if (!template) {
-      return;
-    }
-
-    setForm((current) => ({
-      ...current,
-      activeProvider: template.provider,
-      apiBaseUrl: template.apiBaseUrl,
-      model: template.model
-    }));
-    setInlineUrlError(null);
-    setStatus(copy.providerTemplateApplied(template.label));
-  };
-
-  const validateUrlField = (value: string) => {
-    if (!value.trim()) {
-      setInlineUrlError(null);
-      return;
-    }
-    setInlineUrlError(isValidUrl(value) ? null : copy.urlInvalid);
   };
 
   return (
@@ -786,12 +764,12 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
           <div className="grid gap-3 sm:grid-cols-2">
             <SummaryCard
               label={copy.providerStatus}
-              value={form.activeProvider || t("common.unknown")}
+              value={activeProviderName || t("common.unknown")}
             />
             <SummaryCard
               label={copy.modelStatus}
-              value={form.model || t("common.unknown")}
-              tone={activePreset ? "emerald" : "default"}
+              value={activeModelName || t("common.unknown")}
+              tone={activeModelName ? "emerald" : "default"}
             />
             <SummaryCard
               label={copy.apiKeyStatus}
@@ -805,8 +783,8 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
               tone={hasApiKey || Boolean(form.apiKey?.trim()) ? "emerald" : "default"}
             />
             <SummaryCard
-              label={copy.presetsStatus}
-              value={copy.presetCount(form.models.length)}
+              label={copy.providerCount}
+              value={copy.providerCountDisplay(form.providers.length)}
             />
           </div>
 
@@ -856,7 +834,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         <div className={`flex rounded-xl border p-1 ${settingsPanelClassName}`}>
           {([
             ["runtime", copy.runtimeTitle],
-            ["presets", copy.presetsTitle],
+            ["providers", copy.providersTitle],
             ["backup", copy.backupTitle]
           ] as const).map(([section, label]) => {
             const active = activeSection === section;
@@ -884,142 +862,45 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
           className={settingsPanelClassName}
           title={copy.runtimeTitle}
           action={
-            activePreset ? (
+            activeModelName ? (
               <div
                 className={`max-w-full truncate rounded-full px-3 py-1 text-xs font-medium text-slate-200 ${settingsSurfaceClassName}`}
-                title={`${copy.activePreset}: ${getPresetDisplayName(activePreset, language)}`}
+                title={`${copy.activeModel}: ${activeModelName}`}
               >
-                {`${copy.activePreset}: ${getPresetDisplayName(activePreset, language)}`}
+                {`${copy.activeModel}: ${activeModelName}`}
               </div>
             ) : undefined
           }
         >
           <div className="space-y-6">
-            <SettingsSectionHeading title={copy.runtimeBlockTitle} description={copy.runtimeHelp} />
+            <p className="text-sm leading-6 text-slate-400">{copy.runtimeHelp}</p>
 
-            <Field label={copy.providerTemplate}>
-              <select
-                className={selectClassName}
-                value={getProviderTemplateId(form) ?? ""}
-                onChange={(event) => {
-                  if (event.target.value) {
-                    applyProviderTemplate(event.target.value);
-                  }
-                }}
-              >
-                {getProviderTemplateId(form) === undefined ? (
-                  <option value="" disabled>
-                    {language === "zh-CN" ? "自定义配置" : "Custom configuration"}
-                  </option>
-                ) : null}
-                {providerTemplates.map((template) => (
-                  <option key={template.id} value={template.id}>
-                    {template.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <div className="grid gap-5 md:grid-cols-2">
-              <Field
-                label={<HelpLabel label={t("settings.provider")} description={t("help.provider")} />}
-              >
-                <TextInput
-                  value={form.activeProvider}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, activeProvider: event.target.value }))
-                  }
-                />
-              </Field>
-              <Field
-                label={
-                  <HelpLabel
-                    label={t("settings.apiBaseUrl")}
-                    description={t("help.apiBaseUrl")}
-                  />
-                }
-              >
-                <TextInput
-                  value={form.apiBaseUrl}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setForm((current) => ({ ...current, apiBaseUrl: value }));
-                    validateUrlField(value);
-                  }}
-                  onBlur={() => validateUrlField(form.apiBaseUrl)}
-                />
-                {inlineUrlError ? (
-                  <p className="mt-1.5 text-xs text-red-400">{inlineUrlError}</p>
-                ) : null}
-              </Field>
-            </div>
-
-            <Field label={<HelpLabel label={t("settings.apiKey")} description={t("help.apiKey")} />}>
+            <div className={`rounded-xl p-4 ${settingsSurfaceClassName}`}>
               <div className="space-y-3">
-                <TextInput
-                  placeholder={
-                    hasApiKey
-                      ? t("settings.apiKeyPlaceholderStored")
-                      : t("settings.apiKeyPlaceholderEmpty")
-                  }
-                  type="password"
-                  value={form.apiKey}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setForm((current) => ({ ...current, apiKey: value }));
-                    if (value.trim()) {
-                      setClearStoredApiKey(false);
-                    }
-                  }}
-                />
-                {hasApiKey ? (
-                  <div className="flex flex-wrap items-center gap-3">
-                    <SettingsBadge>
-                      {clearStoredApiKey ? copy.keyPendingRemoval : copy.keyStored}
-                    </SettingsBadge>
-                    <Button
-                      className="!min-h-[34px] !px-3 text-xs"
-                      variant={clearStoredApiKey ? "secondary" : "ghost"}
-                      onClick={() => {
-                        setClearStoredApiKey((current) => !current);
-                        if (!clearStoredApiKey) {
-                          setForm((current) => ({ ...current, apiKey: "" }));
-                        }
-                      }}
-                    >
-                      {clearStoredApiKey ? copy.clearKeyUndo : copy.clearKey}
-                    </Button>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <div className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                      {copy.providerStatus}
+                    </div>
+                    <div className="mt-1 text-sm font-semibold text-slate-100">
+                      {activeProviderName || t("common.unknown")}
+                    </div>
                   </div>
-                ) : null}
+                  <div>
+                    <div className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                      {copy.modelStatus}
+                    </div>
+                    <div className="mt-1 text-sm font-semibold text-slate-100">
+                      {activeModelName || t("common.unknown")}
+                    </div>
+                  </div>
+                </div>
+                <p className="text-sm leading-6 text-slate-400">
+                  {language === "zh-CN"
+                    ? '要切换供应商或模型，请前往「供应商管理」标签页选择。'
+                    : "To switch provider or model, go to the Provider Management tab."}
+                </p>
               </div>
-            </Field>
-
-            <div className="grid gap-5 md:grid-cols-2">
-              <Field label={<HelpLabel label={t("settings.model")} description={t("help.model")} />}>
-                <TextInput
-                  value={form.model}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, model: event.target.value }))
-                  }
-                />
-              </Field>
-              <Field label={t("settings.language")}>
-                <select
-                  className={selectClassName}
-                  value={form.language}
-                  onChange={(event) => {
-                    const nextLanguage = event.target.value as SettingsInput["language"];
-                    setForm((current) => ({ ...current, language: nextLanguage }));
-                    setLanguage(nextLanguage);
-                  }}
-                >
-                  {languageOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </Field>
             </div>
 
             <div className={`border-t pt-6 ${settingsDividerClassName}`}>
@@ -1119,114 +1000,49 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         </Panel>
       ) : null}
 
-      {activeSection === "presets" ? (
+      {activeSection === "providers" ? (
         <Panel
           className={settingsPanelClassName}
-          title={copy.presetsTitle}
+          title={copy.providersTitle}
           action={
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="relative">
-                <Button
-                  className="!min-h-[34px] !px-3 text-xs"
-                  disabled={loading || hasUnsavedChanges}
-                  variant="secondary"
-                  onClick={() => void fetchProviderModels()}
-                >
-                  <RefreshCw size={14} />
-                  {copy.fetchProviderModels}
-                </Button>
-              </div>
+            <div ref={addProviderButtonRef}>
               <Button
                 className="!min-h-[34px] !px-3 text-xs"
                 variant="secondary"
-                onClick={addPreset}
+                onClick={() => {
+                  if (!addProviderDropdownOpen && addProviderButtonRef.current) {
+                    const rect = addProviderButtonRef.current.getBoundingClientRect();
+                    const dropdownHeight = 320;
+                    const spaceBelow = window.innerHeight - rect.bottom;
+                    const top = spaceBelow < dropdownHeight
+                      ? rect.top - dropdownHeight - 4
+                      : rect.bottom + 4;
+                    const dropdownWidth = 256;
+                    const left = rect.right - dropdownWidth;
+                    const maxLeft = window.innerWidth - dropdownWidth - 8;
+                    setDropdownPos({ top: Math.max(8, top), left: Math.min(Math.max(8, left), maxLeft) });
+                  }
+                  setAddProviderDropdownOpen((prev) => !prev);
+                }}
               >
                 <Plus size={14} />
-                {copy.addPreset}
+                {copy.addProvider}
               </Button>
-              {form.models.length > 0 ? (
-                <Button
-                  className="!min-h-[34px] !px-3 text-xs"
-                  variant={presetBatchMode ? "secondary" : "ghost"}
-                  onClick={togglePresetBatchMode}
-                >
-                  {presetBatchMode ? <CheckSquare size={14} /> : <Square size={14} />}
-                  {presetBatchMode
-                    ? (language === "zh-CN" ? "退出批量" : "Exit Batch")
-                    : (language === "zh-CN" ? "批量管理" : "Batch Manage")}
-                </Button>
-              ) : null}
             </div>
           }
         >
           <div className="space-y-4">
-            <p className="text-sm leading-6 text-slate-400">{copy.presetsHelp}</p>
+            <p className="text-sm leading-6 text-slate-400">{copy.providersHelp}</p>
 
-            <div className={`rounded-xl p-4 ${settingsSurfaceClassName}`}>
-              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-                <Field label={copy.importModelsTitle}>
-                  <div className="space-y-2">
-                    <p className="text-sm leading-6 text-slate-400">{copy.importModelsHelp}</p>
-                    <TextArea
-                      className="min-h-32"
-                      placeholder={copy.modelImportPlaceholder}
-                      value={modelImportText}
-                      onChange={(event) => setModelImportText(event.target.value)}
-                    />
-                  </div>
-                </Field>
-                <Button
-                  className="lg:mb-0"
-                  disabled={!modelImportText.trim()}
-                  variant="secondary"
-                  onClick={importModelText}
-                >
-                  <ListPlus size={16} />
-                  {copy.importModels}
-                </Button>
-              </div>
-            </div>
-
-            {form.models.length === 0 ? (
-              <div className={`rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-8 text-center text-sm text-slate-500`}>
-                {copy.presetEmpty}
+            {form.providers.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-8 text-center text-sm text-slate-500">
+                {copy.providerEmpty}
               </div>
             ) : (
-              <>
-                {presetBatchMode ? (
-                  <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-xs text-slate-300">
-                    <label className="flex cursor-pointer items-center gap-2">
-                      <input
-                        checked={presetSelectedIds.size === form.models.length && form.models.length > 0}
-                        type="checkbox"
-                        className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
-                        onChange={toggleAllPresets}
-                      />
-                      {language === "zh-CN"
-                        ? `全选 (${presetSelectedIds.size}/${form.models.length})`
-                        : `Select all (${presetSelectedIds.size}/${form.models.length})`}
-                    </label>
-                    {presetSelectedIds.size > 0 ? (
-                      <Button
-                        className="!min-h-[28px] !px-2 text-xs"
-                        variant="danger"
-                        onClick={deleteSelectedPresets}
-                      >
-                        <Trash2 size={12} />
-                        {language === "zh-CN"
-                          ? `删除选中 (${presetSelectedIds.size})`
-                          : `Delete selected (${presetSelectedIds.size})`}
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : null}
               <div className="space-y-3">
-                {form.models.map((preset, index) => {
-                  const isActive =
-                    preset.provider === form.activeProvider &&
-                    preset.apiBaseUrl === form.apiBaseUrl &&
-                    preset.model === form.model;
-                  const isExpanded = expandedPresetId === preset.id;
+                {form.providers.map((provider) => {
+                  const isActive = provider.id === form.activeProviderId;
+                  const isExpanded = expandedProviderId === provider.id;
                   const cardClassName = isActive
                     ? "border-ember-500/25 bg-ember-500/[0.05] shadow-lg shadow-ember-950/10"
                     : isExpanded
@@ -1240,58 +1056,40 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
 
                   return (
                     <div
-                      key={preset.id}
-                      className={`rounded-xl border px-4 py-4 transition-all duration-200 ${
-                        presetBatchMode ? "cursor-pointer hover:bg-white/10" : ""
-                      } ${
-                        presetSelectedIds.has(preset.id)
-                          ? "border-ember-500/40 shadow-lg shadow-ember-500/10"
-                          : cardClassName
-                      }`}
-                      onClick={presetBatchMode ? () => togglePresetSelected(preset.id, !presetSelectedIds.has(preset.id)) : undefined}
+                      key={provider.id}
+                      className={`rounded-xl border px-4 py-4 transition-all duration-200 ${cardClassName}`}
                     >
                       <div className={`flex flex-col gap-3 border-b pb-4 md:flex-row md:items-start md:justify-between ${settingsDividerClassName}`}>
                         <div className="min-w-0 flex-1 space-y-3">
                           <button
                             className="flex w-full items-start gap-3 rounded-lg text-left outline-none transition-colors hover:text-slate-100 focus:text-slate-100"
                             type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              if (presetBatchMode) {
-                                togglePresetSelected(preset.id, !presetSelectedIds.has(preset.id));
-                              } else {
-                                setExpandedPresetId((current) => (current === preset.id ? null : preset.id));
-                              }
-                            }}
+                            onClick={() =>
+                              setExpandedProviderId((current) =>
+                                current === provider.id ? null : provider.id
+                              )
+                            }
                           >
-                            {presetBatchMode ? (
-                              <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-ember-500/30 bg-ember-500/10 transition-colors">
-                                {presetSelectedIds.has(preset.id) ? (
-                                  <svg className="h-4 w-4 text-ember-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                                  </svg>
-                                ) : (
-                                  <Square size={14} className="text-slate-500" />
-                                )}
-                              </span>
-                            ) : (
-                              <span
-                                className={`mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors ${toggleIconClassName}`}
-                              >
-                                {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                              </span>
-                            )}
+                            <span
+                              className={`mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors ${toggleIconClassName}`}
+                            >
+                              {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                            </span>
                             <div className="min-w-0 space-y-2">
                               <div className="truncate text-sm font-semibold text-slate-100">
-                                {getPresetDisplayName(preset, language)}
+                                {getProviderDisplayName(provider, language)}
                               </div>
                               <div className="flex flex-wrap items-center gap-2">
-                                {isActive ? <SettingsBadge>{copy.activePreset}</SettingsBadge> : null}
-                                <SettingsBadge>{preset.provider || t("common.unknown")}</SettingsBadge>
-                                <SettingsBadge>{preset.model || t("common.unknown")}</SettingsBadge>
+                                {isActive ? <SettingsBadge>{copy.activeModel}</SettingsBadge> : null}
+                                <SettingsBadge>{provider.provider || t("common.unknown")}</SettingsBadge>
+                                <SettingsBadge>
+                                  {language === "zh-CN"
+                                    ? `${provider.models.length} 个模型`
+                                    : `${provider.models.length} model(s)`}
+                                </SettingsBadge>
                               </div>
                               <div className="truncate text-xs leading-5 text-slate-500">
-                                {preset.apiBaseUrl}
+                                {provider.apiBaseUrl}
                               </div>
                             </div>
                           </button>
@@ -1300,18 +1098,16 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                         <div className="flex flex-wrap items-center gap-2 md:shrink-0">
                           <Button
                             className="!min-h-[34px] !px-3 text-xs whitespace-nowrap hover:!bg-ink-800/75 focus:!ring-ink-700/40"
-                            disabled={presetBatchMode}
-                            variant="ghost"
-                            onClick={() => applyPreset(preset)}
+                            variant="secondary"
+                            onClick={() => void fetchProviderModels(provider.id)}
                           >
-                            <Wrench size={14} />
-                            {copy.applyPreset}
+                            <RefreshCw size={14} />
+                            {copy.importFromProvider}
                           </Button>
                           <Button
                             className="!min-h-[34px] !w-9 !p-0"
-                            disabled={presetBatchMode}
                             variant="danger"
-                            onClick={() => setPendingDeletePresetId(preset.id)}
+                            onClick={() => setPendingDeleteProviderId(provider.id)}
                           >
                             <Trash2 size={14} />
                           </Button>
@@ -1319,76 +1115,199 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                       </div>
 
                       <div
-                        className={`overflow-hidden transition-all duration-200 ${isExpanded && !presetBatchMode ? "mt-4" : ""}`}
-                        aria-hidden={!isExpanded || presetBatchMode}
+                        className={`overflow-hidden transition-all duration-200 ${isExpanded ? "mt-4" : ""}`}
+                        aria-hidden={!isExpanded}
                         style={{
-                          maxHeight: isExpanded && !presetBatchMode ? "48rem" : "0px",
-                          opacity: isExpanded && !presetBatchMode ? 1 : 0,
-                          pointerEvents: isExpanded && !presetBatchMode ? "auto" : "none"
+                          maxHeight: isExpanded ? "64rem" : "0px",
+                          opacity: isExpanded ? 1 : 0,
+                          pointerEvents: isExpanded ? "auto" : "none"
                         }}
                       >
-                        <div className={`grid gap-4 border-t pt-4 md:grid-cols-2 xl:grid-cols-4 ${settingsDividerClassName}`}>
-                          <Field label={copy.presetLabel}>
-                            <TextInput
-                              value={preset.label}
-                              onChange={(event) => {
-                                const nextModels = [...form.models];
-                                nextModels[index] = { ...nextModels[index], label: event.target.value };
-                                setForm((current) => ({ ...current, models: nextModels }));
-                              }}
-                            />
-                          </Field>
-                          <Field label={copy.presetProvider}>
-                            <TextInput
-                              value={preset.provider}
-                              onChange={(event) => {
-                                const nextModels = [...form.models];
-                                nextModels[index] = { ...nextModels[index], provider: event.target.value };
-                                setForm((current) => ({ ...current, models: nextModels }));
-                              }}
-                            />
-                          </Field>
-                          <Field label={copy.presetUrl}>
-                            <TextInput
-                              value={preset.apiBaseUrl}
-                              onChange={(event) => {
-                                const nextModels = [...form.models];
-                                nextModels[index] = { ...nextModels[index], apiBaseUrl: event.target.value };
-                                setForm((current) => ({ ...current, models: nextModels }));
-                              }}
-                            />
-                          </Field>
-                          <Field label={copy.presetModel}>
-                            <TextInput
-                              value={preset.model}
-                              onChange={(event) => {
-                                const nextModels = [...form.models];
-                                nextModels[index] = { ...nextModels[index], model: event.target.value };
-                                setForm((current) => ({ ...current, models: nextModels }));
-                              }}
-                            />
-                          </Field>
-                          <Field label={copy.presetKey}>
-                            <TextInput
-                              type="password"
-                              value={preset.key ?? ""}
-                              onChange={(event) => {
-                                const nextModels = [...form.models];
-                                nextModels[index] = {
-                                  ...nextModels[index],
-                                  key: event.target.value || undefined
-                                };
-                                setForm((current) => ({ ...current, models: nextModels }));
-                              }}
-                            />
-                          </Field>
+                        <div className="space-y-4">
+                          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                            <Field label={copy.providerLabel}>
+                              <TextInput
+                                value={provider.label}
+                                onChange={(event) =>
+                                  updateProvider(provider.id, { label: event.target.value })
+                                }
+                              />
+                            </Field>
+                            <Field label={copy.providerType}>
+                              <TextInput
+                                value={provider.provider}
+                                onChange={(event) =>
+                                  updateProvider(provider.id, { provider: event.target.value })
+                                }
+                              />
+                            </Field>
+                            <Field label={copy.providerUrl}>
+                              <TextInput
+                                value={provider.apiBaseUrl}
+                                onChange={(event) =>
+                                  updateProvider(provider.id, { apiBaseUrl: event.target.value })
+                                }
+                              />
+                            </Field>
+                            <Field label={copy.providerKey}>
+                              <TextInput
+                                type="password"
+                                value={provider.key ?? ""}
+                                onChange={(event) =>
+                                  updateProvider(provider.id, {
+                                    key: event.target.value || undefined
+                                  })
+                                }
+                              />
+                            </Field>
+                          </div>
+
+                          <div className={`border-t pt-4 ${settingsDividerClassName}`}>
+                            <div className="mb-3 flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <span className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                                  {copy.providerModels}
+                                </span>
+                                {manageMode ? (
+                                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-400">
+                                    <input
+                                      checked={provider.models.length > 0 && provider.models.every((m) => selectedModelIds.has(m.id))}
+                                      className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                                      type="checkbox"
+                                      onChange={() => toggleAllModels(provider.models.map((m) => m.id))}
+                                    />
+                                    {language === "zh-CN" ? "全选" : "All"}
+                                  </label>
+                                ) : null}
+                                {manageMode && selectedModelIds.size > 0 ? (
+                                  <Button
+                                    className="!min-h-[28px] !px-2 text-xs"
+                                    variant="danger"
+                                    onClick={() => setPendingBatchDelete(provider.id)}
+                                  >
+                                    <Trash2 size={12} />
+                                    {language === "zh-CN"
+                                      ? `删除 ${selectedModelIds.size} 个`
+                                      : `Delete ${selectedModelIds.size}`}
+                                  </Button>
+                                ) : null}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {provider.models.length > 0 ? (
+                                  <button
+                                    className={`text-xs transition-colors ${manageMode ? "text-ember-400 hover:text-ember-300" : "text-slate-400 hover:text-slate-200"}`}
+                                    type="button"
+                                    onClick={() => {
+                                      setManageMode((prev) => !prev);
+                                      setSelectedModelIds(new Set());
+                                    }}
+                                  >
+                                    {manageMode
+                                      ? (language === "zh-CN" ? "退出管理" : "Exit")
+                                      : (language === "zh-CN" ? "管理" : "Manage")}
+                                  </button>
+                                ) : null}
+                                <Button
+                                  className="!min-h-[28px] !px-2 text-xs"
+                                  variant="ghost"
+                                  onClick={() => addModelToProvider(provider.id)}
+                                >
+                                  <Plus size={12} />
+                                  {copy.addModel}
+                                </Button>
+                              </div>
+                            </div>
+
+                            {provider.models.length === 0 ? (
+                              <p className="py-4 text-center text-xs text-slate-500">
+                                {language === "zh-CN"
+                                  ? "暂无模型，请添加或导入。"
+                                  : "No models yet. Add or import some."}
+                              </p>
+                            ) : (
+                              <div className="space-y-2">
+                                {provider.models.map((model) => {
+                                  const isModelActive =
+                                    provider.id === form.activeProviderId &&
+                                    model.id === form.activeModelId;
+
+                                  return (
+                                    <div
+                                      key={model.id}
+                                      className={`group flex items-center gap-2.5 rounded-lg border px-3 py-2 transition-all ${
+                                        manageMode
+                                          ? "cursor-pointer border-white/5 bg-white/[0.02] hover:border-white/10"
+                                          : isModelActive
+                                            ? "border-ember-500/25 bg-ember-500/[0.06]"
+                                            : "border-white/5 bg-white/[0.02] hover:border-white/10"
+                                      }`}
+                                      onClick={(event) => {
+                                        const target = event.target as HTMLElement;
+                                        if (target.tagName === "INPUT" || target.closest("button") || target.closest("input")) return;
+                                        if (manageMode) {
+                                          toggleModelSelection(model.id);
+                                        } else {
+                                          selectModel(provider.id, model.id);
+                                        }
+                                      }}
+                                    >
+                                      {manageMode ? (
+                                        <input
+                                          checked={selectedModelIds.has(model.id)}
+                                          className="shrink-0 rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                                          type="checkbox"
+                                          onChange={() => toggleModelSelection(model.id)}
+                                        />
+                                      ) : null}
+                                      <button
+                                        className={`shrink-0 rounded-full border-2 transition-all ${
+                                          manageMode
+                                            ? "h-3.5 w-3.5 cursor-not-allowed border-slate-600 bg-slate-700/50 opacity-40"
+                                            : isModelActive
+                                              ? "h-3.5 w-3.5 border-ember-400 bg-ember-400 shadow-[0_0_6px_rgba(251,146,60,0.4)]"
+                                              : "h-3.5 w-3.5 border-slate-500 bg-transparent hover:border-slate-300"
+                                        }`}
+                                        disabled={manageMode}
+                                        title={language === "zh-CN" ? "设为当前模型" : "Set as active model"}
+                                        type="button"
+                                        onClick={() => selectModel(provider.id, model.id)}
+                                      />
+                                      <TextInput
+                                        className={`!min-h-[30px] !flex-1 !border-0 !bg-transparent !px-1 !py-1 font-mono text-xs ${manageMode ? "pointer-events-none opacity-40" : ""}`}
+                                        disabled={manageMode}
+                                        placeholder={copy.modelId}
+                                        value={model.model}
+                                        onChange={(event) =>
+                                          updateModel(provider.id, model.id, { model: event.target.value, label: event.target.value })
+                                        }
+                                      />
+                                      {!manageMode ? (
+                                      <Button
+                                        className="!min-h-[28px] !w-7 !p-0 opacity-0 transition-opacity group-hover:opacity-100"
+                                        variant="danger"
+                                        onClick={() =>
+                                          setPendingDeleteModel({
+                                            providerId: provider.id,
+                                            modelId: model.id
+                                          })
+                                        }
+                                      >
+                                        <Trash2 size={12} />
+                                      </Button>
+                                      ) : null}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                          </div>
                         </div>
                       </div>
                     </div>
                   );
                 })}
               </div>
-              </>
             )}
           </div>
         </Panel>
@@ -1456,20 +1375,72 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         />
       ) : null}
 
-      {pendingDeletePreset ? (
+      {pendingDeleteProviderId ? (
         <ConfirmDialog
           cancelLabel={t("common.cancel")}
           confirmLabel={t("common.delete")}
           loading={loading}
-          message={copy.presetDeleteConfirm(getPresetDisplayName(pendingDeletePreset, language))}
-          title={copy.presetDeleteTitle}
-          onCancel={() => setPendingDeletePresetId(null)}
+          message={copy.providerDeleteConfirm(
+            getProviderDisplayName(
+              form.providers.find((p) => p.id === pendingDeleteProviderId) ?? {
+                id: "",
+                label: "",
+                provider: "",
+                apiBaseUrl: "",
+                models: []
+              },
+              language
+            )
+          )}
+          title={copy.providerDeleteTitle}
+          onCancel={() => setPendingDeleteProviderId(null)}
           onConfirm={() => {
             setForm((current) => ({
               ...current,
-              models: current.models.filter((preset) => preset.id !== pendingDeletePreset.id)
+              providers: current.providers.filter((p) => p.id !== pendingDeleteProviderId),
+              activeProviderId:
+                current.activeProviderId === pendingDeleteProviderId
+                  ? ""
+                  : current.activeProviderId,
+              activeModelId:
+                current.activeProviderId === pendingDeleteProviderId
+                  ? ""
+                  : current.activeModelId
             }));
-            setPendingDeletePresetId(null);
+            setPendingDeleteProviderId(null);
+          }}
+        />
+      ) : null}
+
+      {pendingDeleteModel ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={t("common.delete")}
+          loading={loading}
+          message={
+            language === "zh-CN"
+              ? `删除该模型？`
+              : `Delete this model?`
+          }
+          title={copy.providerDeleteTitle}
+          onCancel={() => setPendingDeleteModel(null)}
+          onConfirm={() => {
+            setForm((current) => ({
+              ...current,
+              providers: current.providers.map((p) =>
+                p.id === pendingDeleteModel.providerId
+                  ? {
+                      ...p,
+                      models: p.models.filter((m) => m.id !== pendingDeleteModel.modelId)
+                    }
+                  : p
+              ),
+              activeModelId:
+                current.activeModelId === pendingDeleteModel.modelId
+                  ? ""
+                  : current.activeModelId
+            }));
+            setPendingDeleteModel(null);
           }}
         />
       ) : null}
@@ -1478,14 +1449,56 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         <ConfirmDialog
           cancelLabel={t("common.cancel")}
           confirmLabel={t("common.delete")}
-          loading={false}
-          message={copy.presetBatchDeleteConfirm(presetSelectedIds.size)}
-          title={copy.presetBatchDeleteTitle}
-          variant="danger"
-          onCancel={() => setPendingBatchDelete(false)}
-          onConfirm={confirmBatchDeletePresets}
+          loading={loading}
+          message={
+            language === "zh-CN"
+              ? `删除选中的 ${selectedModelIds.size} 个模型？`
+              : `Delete ${selectedModelIds.size} selected model(s)?`
+          }
+          title={copy.providerDeleteTitle}
+          onCancel={() => setPendingBatchDelete(null)}
+          onConfirm={() => batchDeleteModels(pendingBatchDelete)}
         />
       ) : null}
+
+      {addProviderDropdownOpen && dropdownPos
+        ? createPortal(
+            <>
+              <div
+                className="fixed inset-0 z-40"
+                onClick={() => {
+                  setAddProviderDropdownOpen(false);
+                  setDropdownPos(null);
+                }}
+              />
+              <div
+                className="fixed z-50 max-h-80 w-64 overflow-y-auto rounded-xl border border-white/10 bg-ink-900 p-1 shadow-xl shadow-black/30"
+                style={{ top: dropdownPos.top, left: dropdownPos.left }}
+              >
+                {providerTemplates.map((template) => (
+                  <button
+                    key={template.id}
+                    className="flex w-full flex-col gap-1 rounded-lg px-3 py-2.5 text-left text-sm text-slate-200 transition-colors hover:bg-white/10"
+                    type="button"
+                    onClick={() => addProviderFromTemplate(template.id)}
+                  >
+                    <span className="font-medium">{template.label}</span>
+                    <span className="text-xs text-slate-500">{template.provider}</span>
+                  </button>
+                ))}
+                <div className="mx-1 my-1 border-t border-white/5" />
+                <button
+                  className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-sm font-medium text-slate-300 transition-colors hover:bg-white/10"
+                  type="button"
+                  onClick={addCustomProvider}
+                >
+                  {language === "zh-CN" ? "自定义供应商" : "Custom Provider"}
+                </button>
+              </div>
+            </>,
+            document.body
+          )
+        : null}
     </div>
   );
 }

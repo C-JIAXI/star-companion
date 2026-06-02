@@ -19,8 +19,14 @@ model UserSettings {
   topP                 Float     @default(1)
   /// UI language. Valid values are "zh-CN" and "en".
   language             String    @default("zh-CN")
-  /// JSON array of model presets: [{ id, label, provider, apiBaseUrl, key, model }]
+  /// JSON array of model presets (LEGACY — kept for migration only)
   models               Json?     @default("[]")
+  /// JSON array of provider profiles: [{ id, label, provider, apiBaseUrl, key, models }]
+  providers            Json?     @default("[]")
+  /// References a ProviderProfile.id within the providers array
+  activeProviderId     String?   @default("")
+  /// References a ProviderModel.id within the active provider's models array
+  activeModelId        String?   @default("")
   /// Local user profile memory summarised from user messages.
   userProfileSummary   String    @default("")
   autoSummarizeUser    Boolean   @default(true)

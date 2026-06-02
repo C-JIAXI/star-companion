@@ -40,7 +40,7 @@ import type {
   GenerationClientMessage,
   GenerationServerMessage,
   MessageDTO,
-  ModelPreset,
+  ProviderProfile,
   PublicUserSettingsDTO,
   SettingsInput,
   TokenUsageDTO
@@ -137,8 +137,10 @@ export function ChatPage({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [memorySettingsOpen]);
 
-  const [settingsModels, setSettingsModels] = useState<ModelPreset[]>([]);
+  const [settingsProviders, setSettingsProviders] = useState<ProviderProfile[]>([]);
+  const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
+  const [expandedDialogProviderId, setExpandedDialogProviderId] = useState<string | null>(null);
   const [runtimeSettings, setRuntimeSettings] = useState<Pick<
     PublicUserSettingsDTO,
     "activeProvider" | "apiBaseUrl" | "model" | "temperature" | "maxTokens" | "topP" | "language"
@@ -534,7 +536,7 @@ export function ChatPage({
 
   const loadSettings = async () => {
     const settings = await api.settings.get();
-    setSettingsModels(settings.models ?? []);
+    setSettingsProviders(settings.providers ?? []);
     setRuntimeSettings({
       activeProvider: settings.activeProvider,
       apiBaseUrl: settings.apiBaseUrl,
@@ -546,9 +548,8 @@ export function ChatPage({
     });
     setAutoSummarizeUser(settings.autoSummarizeUser);
     useAppStore.getState().setShowMessageAvatars(settings.showMessageAvatars);
-    if (settings.models?.length) {
-      setActiveModelId(settings.models[0].id);
-    }
+    setActiveProviderId(settings.activeProviderId || null);
+    setActiveModelId(settings.activeModelId || null);
   };
 
   const loadChat = async (id: string | null) => {
@@ -702,8 +703,7 @@ export function ChatPage({
     setMemorySettingsOpen((current) => {
       if (!current) {
         void api.settings.get().then((settings) => {
-          const models = settings.models ?? [];
-          setSettingsModels(models);
+          setSettingsProviders(settings.providers ?? []);
           setRuntimeSettings({
             activeProvider: settings.activeProvider,
             apiBaseUrl: settings.apiBaseUrl,
@@ -714,14 +714,8 @@ export function ChatPage({
             language: settings.language
           });
           setAutoSummarizeUser(settings.autoSummarizeUser);
-          if (models.length > 0) {
-            const active = models.find(
-              (m) => m.provider === settings.activeProvider && m.model === settings.model
-            );
-            setActiveModelId(active?.id ?? models[0].id);
-          } else {
-            setActiveModelId(null);
-          }
+          setActiveProviderId(settings.activeProviderId || null);
+          setActiveModelId(settings.activeModelId || null);
           useAppStore.getState().setShowMessageAvatars(settings.showMessageAvatars);
         });
       }
@@ -1116,36 +1110,48 @@ export function ChatPage({
     }
   };
 
-  const switchModel = async (model: ModelPreset) => {
+  const switchModel = async (providerId: string, modelId: string) => {
     if (!runtimeSettings) {
       return;
     }
 
+    const provider = settingsProviders.find((p) => p.id === providerId);
+    const model = provider?.models.find((m) => m.id === modelId);
+    if (!provider || !model) {
+      return;
+    }
+
+    const previousProviderId = activeProviderId;
     const previousModelId = activeModelId;
     setLoading(true);
     setError(null);
     setStatus(null);
-    setActiveModelId(model.id);
+    setActiveProviderId(providerId);
+    setActiveModelId(modelId);
     setMemorySettingsOpen(false);
 
     const payload: SettingsInput = {
-      activeProvider: model.provider,
-      apiBaseUrl: model.apiBaseUrl,
+      activeProvider: provider.provider,
+      apiBaseUrl: provider.apiBaseUrl,
       model: model.model,
       temperature: runtimeSettings.temperature,
       maxTokens: runtimeSettings.maxTokens,
       topP: runtimeSettings.topP,
       language: runtimeSettings.language,
-      models: settingsModels
+      providers: settingsProviders,
+      activeProviderId: providerId,
+      activeModelId: modelId
     };
 
-    if (model.key?.trim()) {
-      payload.apiKey = model.key.trim();
+    if (provider.key?.trim()) {
+      payload.apiKey = provider.key.trim();
     }
 
     try {
       const updated = await api.settings.update(payload);
-      setSettingsModels(updated.models ?? []);
+      setSettingsProviders(updated.providers ?? []);
+      setActiveProviderId(updated.activeProviderId || null);
+      setActiveModelId(updated.activeModelId || null);
       setRuntimeSettings({
         activeProvider: updated.activeProvider,
         apiBaseUrl: updated.apiBaseUrl,
@@ -1156,15 +1162,9 @@ export function ChatPage({
         language: updated.language
       });
       useAppStore.getState().setShowMessageAvatars(updated.showMessageAvatars);
-      const matchedModel = (updated.models ?? []).find(
-        (item) =>
-          item.provider === updated.activeProvider &&
-          item.apiBaseUrl === updated.apiBaseUrl &&
-          item.model === updated.model
-      );
-      setActiveModelId(matchedModel?.id ?? model.id);
       setStatus(t("chat.modelSwitched", { label: model.label || model.model }));
     } catch (caught) {
+      setActiveProviderId(previousProviderId);
       setActiveModelId(previousModelId);
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdateMemory"));
     } finally {
@@ -1459,7 +1459,7 @@ export function ChatPage({
                       className="custom-scrollbar absolute right-0 top-10 z-20 max-h-80 w-56 overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-3 shadow-xl shadow-black/30 backdrop-blur-md sm:max-h-[calc(100dvh-22rem)]"
                       onPointerDownCapture={handleMemorySettingsPointerDownCapture}
                     >
-                      {settingsModels.length > 0 ? (
+                      {settingsProviders.length > 0 ? (
                         <div className="mb-2 border-b border-white/10 pb-2">
                           <button
                             className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
@@ -2045,34 +2045,84 @@ export function ChatPage({
       ) : null}
       {showModelDialog ? (
         <Modal title={t("chat.modelSwitchTitle")} onClose={closeModelDialog}>
-          <div className="space-y-1.5">
-            {settingsModels.map((model) => (
-              <button
-                className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
-                  activeModelId === model.id
-                    ? "bg-ember-500/15 text-ember-200 ring-1 ring-ember-500/30"
-                    : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
-                }`}
-                disabled={loading}
-                key={model.id}
-                type="button"
-                onClick={() => {
-                  void switchModel(model);
-                  closeModelDialog();
-                }}
-              >
-                <Sparkles
-                  size={14}
-                  className={activeModelId === model.id ? "text-ember-300" : "text-slate-500"}
-                />
-                <span className="min-w-0 flex-1 truncate font-medium">
-                  {model.label || model.model}
-                </span>
-                <span className="ml-auto shrink-0 text-xs font-medium text-slate-500">
-                  {model.provider}
-                </span>
-              </button>
-            ))}
+          <div className="space-y-1">
+            {settingsProviders.length === 0 ? (
+              <p className="px-3 py-6 text-center text-sm text-slate-500">
+                {t("chat.noProviders")}
+              </p>
+            ) : (
+              settingsProviders.map((provider) => {
+                const isExpanded = expandedDialogProviderId === provider.id;
+                const hasActiveModel = provider.models.some((m) => m.id === activeModelId && provider.id === activeProviderId);
+
+                return (
+                  <div key={provider.id} className="rounded-lg">
+                    <button
+                      className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
+                        hasActiveModel
+                          ? "bg-ember-500/10 text-ember-200"
+                          : "text-slate-300 hover:bg-white/5 hover:text-slate-100"
+                      }`}
+                      type="button"
+                      onClick={() => {
+                        setExpandedDialogProviderId(isExpanded ? null : provider.id);
+                      }}
+                    >
+                      {isExpanded ? (
+                        <ChevronDown size={14} className="shrink-0 text-slate-500" />
+                      ) : (
+                        <ChevronRight size={14} className="shrink-0 text-slate-500" />
+                      )}
+                      <span className="min-w-0 flex-1 truncate font-medium">
+                        {provider.label || provider.provider}
+                      </span>
+                      <span className="ml-auto shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-xs text-slate-500">
+                        {provider.models.length}
+                      </span>
+                    </button>
+
+                    {isExpanded ? (
+                      <div className="ml-4 mt-1 space-y-0.5 border-l border-white/5 pl-3">
+                        {provider.models.length === 0 ? (
+                          <p className="px-2 py-3 text-xs text-slate-600">
+                            {language === "zh-CN" ? "该供应商下还没有模型" : "No models configured"}
+                          </p>
+                        ) : (
+                          provider.models.map((model) => {
+                            const isActive = provider.id === activeProviderId && model.id === activeModelId;
+                            return (
+                              <button
+                                className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+                                  isActive
+                                    ? "bg-ember-500/15 text-ember-200 ring-1 ring-ember-500/30"
+                                    : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                                }`}
+                                disabled={loading}
+                                key={model.id}
+                                type="button"
+                                onClick={() => {
+                                  void switchModel(provider.id, model.id);
+                                  closeModelDialog();
+                                }}
+                              >
+                                {isActive ? (
+                                  <Check size={14} className="shrink-0 text-ember-300" />
+                                ) : (
+                                  <Sparkles size={14} className="shrink-0 text-slate-600" />
+                                )}
+                                <span className="min-w-0 flex-1 truncate font-medium">
+                                  {model.label || model.model}
+                                </span>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })
+            )}
           </div>
         </Modal>
       ) : null}

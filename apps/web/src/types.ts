@@ -20,7 +20,8 @@ import type {
   MatchedMemoryDTO,
   MessageDTO,
   MessageRole,
-  ModelPreset,
+  ProviderModel,
+  ProviderProfile,
   PaginatedCharactersDTO,
   PublicUserSettingsDTO,
   QuickReplyDTO,
@@ -84,7 +85,9 @@ export type SettingsInput = {
   maxTokens: number;
   topP: number;
   language: AppLanguage;
-  models: ModelPreset[];
+  providers: ProviderProfile[];
+  activeProviderId: string;
+  activeModelId: string;
   autoSummarizeUser?: boolean;
   showMessageAvatars?: boolean;
   userProfileSummary?: string;
@@ -112,7 +115,8 @@ export type {
   MatchedMemoryDTO,
   MessageDTO,
   MessageRole,
-  ModelPreset,
+  ProviderModel,
+  ProviderProfile,
   PaginatedCharactersDTO,
   PublicUserSettingsDTO,
   QuickReplyDTO,
