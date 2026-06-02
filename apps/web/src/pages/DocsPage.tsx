@@ -1,38 +1,111 @@
-import { Copy } from "lucide-react";
+import {
+  BookOpen,
+  Bot,
+  Brush,
+  Check,
+  ClipboardList,
+  Code2,
+  Copy,
+  Database,
+  MessageSquareText,
+  ShieldCheck,
+  type LucideIcon
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "../components/ui";
 import { useI18n } from "../i18n";
 
-type DocsSection =
-  | {
-      id: string;
-      title: string;
-      description: string;
-      kind: "overview";
-      items: Array<{ label: string; value: string }>;
-    }
-  | {
-      id: string;
-      title: string;
-      description: string;
-      kind: "selectors";
-      groups: Array<{
-        title: string;
-        items: Array<{ selector: string; detail: string }>;
-      }>;
-    }
-  | {
-      id: string;
-      title: string;
-      description: string;
-      kind: "examples";
-      examples: Array<{
-        id: string;
-        title: string;
-        description: string;
-        code: string;
-      }>;
-    };
+type GuideSection = {
+  id: string;
+  title: string;
+  description: string;
+  kind: "guide";
+  items: Array<{
+    title: string;
+    body: string;
+  }>;
+  note?: string;
+};
+
+type SelectorSection = {
+  id: string;
+  title: string;
+  description: string;
+  kind: "selectors";
+  groups: Array<{
+    title: string;
+    items: Array<{ selector: string; detail: string }>;
+  }>;
+  examples: Array<{
+    id: string;
+    title: string;
+    description: string;
+    code: string;
+  }>;
+};
+
+type DocsSection = GuideSection | SelectorSection;
+
+type DocsCopy = {
+  eyebrow: string;
+  intro: string;
+  navLabel: string;
+  copy: string;
+  copied: string;
+  quickFacts: Array<{
+    label: string;
+    value: string;
+  }>;
+  sections: DocsSection[];
+};
+
+const sectionIcons: Record<string, LucideIcon> = {
+  "quick-start": ClipboardList,
+  "chat-workbench": MessageSquareText,
+  characters: Bot,
+  "settings-security": ShieldCheck,
+  backup: Database,
+  appearance: Brush
+};
+
+const composerCss = `#chat-composer {
+  border-color: rgba(251, 146, 60, 0.5) !important;
+  background: rgba(15, 23, 42, 0.9) !important;
+}
+
+#chat-message-input {
+  color: rgb(248, 250, 252) !important;
+}
+
+#chat-primary-action[data-chat-action="send"] {
+  background: linear-gradient(135deg, rgb(251, 146, 60), rgb(245, 158, 11));
+}`;
+
+const assistantBubbleCss = `[data-chat-message="assistant"] [data-chat-bubble] {
+  background: rgba(30, 41, 59, 0.92) !important;
+  border-color: rgba(56, 189, 248, 0.25) !important;
+}
+
+[data-chat-message="assistant"] [data-chat-actions] {
+  border-top-color: rgba(56, 189, 248, 0.18) !important;
+}
+
+[data-chat-message="assistant"] [data-chat-action="copy"] {
+  color: rgb(125, 211, 252) !important;
+}`;
+
+const quickRepliesCss = `#chat-quick-replies-toggle {
+  color: rgb(226, 232, 240) !important;
+}
+
+[data-chat-quick-reply] {
+  border-color: rgba(148, 163, 184, 0.28) !important;
+  background: rgba(15, 23, 42, 0.82) !important;
+}
+
+[data-chat-quick-reply]:hover {
+  border-color: rgba(251, 146, 60, 0.5) !important;
+}`;
 
 const copyWithFallback = async (value: string) => {
   try {
@@ -50,232 +123,565 @@ const copyWithFallback = async (value: string) => {
   document.body.removeChild(textarea);
 };
 
-export function DocsPage() {
-  const { language } = useI18n();
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-
-  const copy = useMemo(() => {
-    if (language === "zh-CN") {
-      return {
-        intro:
-          "这里先收纳聊天样式相关文档。后续继续添加使用教程、FAQ 或进阶案例时，直接追加新的 section 即可。",
-        sections: [
-          {
-            id: "overview",
-            title: "概览",
-            description: "先确认编辑入口和生效规则，避免把样式写到错误的位置。",
-            kind: "overview",
-            items: [
-              {
-                label: "编辑入口",
-                value: "角色页 -> 内置css"
-              },
-              {
-                label: "生效范围",
-                value: "当前角色的所有聊天共享同一套样式"
-              },
-              {
-                label: "支持内容",
-                value: "角色消息 HTML fragment + 聊天页官方选择器"
-              },
-              {
-                label: "稳定承诺",
-                value: "只保证本页列出的 id 和 data-chat-* 选择器长期稳定"
-              }
-            ]
-          },
-          {
-            id: "selectors",
-            title: "聊天样式选择器",
-            description:
-              "单例节点用 id，重复节点用 data 属性。后续扩展样式时优先使用这里的选择器。",
-            kind: "selectors",
-            groups: [
-              {
-                title: "官方 id",
-                items: [
-                  { selector: "#chat-page-root", detail: "聊天页根容器" },
-                  { selector: "#chat-panel", detail: "主聊天面板容器" },
-                  { selector: "#chat-title", detail: "聊天标题区域" },
-                  { selector: "#chat-settings-trigger", detail: "右上角聊天设置按钮" },
-                  { selector: "#chat-message-viewport", detail: "消息滚动视口" },
-                  { selector: "#chat-message-list", detail: "消息列表容器" },
-                  { selector: "#chat-pagination", detail: "消息分页条" },
-                  { selector: "#chat-scroll-bottom", detail: "回到底部按钮" },
-                  { selector: "#chat-quick-replies", detail: "快捷指令整体区域" },
-                  { selector: "#chat-quick-replies-toggle", detail: "快捷指令折叠按钮" },
-                  { selector: "#chat-composer", detail: "输入区外层容器" },
-                  { selector: "#chat-message-input", detail: "消息输入框" },
-                  { selector: "#chat-primary-action", detail: "发送或停止按钮" },
-                  { selector: "#chat-empty-state", detail: "空状态区域" },
-                  { selector: "#chat-opening-frame", detail: "开场 iframe" }
-                ]
-              },
-              {
-                title: "官方 data 属性",
-                items: [
-                  {
-                    selector: '[data-chat-message="user|assistant|streaming|error|system"]',
-                    detail: "每条消息的类型标记"
-                  },
-                  { selector: "[data-chat-bubble]", detail: "消息气泡主体" },
-                  { selector: "[data-chat-avatar]", detail: "消息头像节点" },
-                  { selector: "[data-chat-actions]", detail: "消息操作区" },
-                  {
-                    selector:
-                      '[data-chat-action="copy|edit|delete|resend|regenerate|debug|variant-prev|variant-next|retry|dismiss|send|stop"]',
-                    detail: "具体操作按钮"
-                  },
-                  { selector: "[data-chat-token-info]", detail: "token 统计信息" },
-                  { selector: "[data-chat-quick-reply]", detail: "单个快捷指令按钮" }
-                ]
-              }
-            ]
-          },
-          {
-            id: "examples",
-            title: "示例代码",
-            description: "从这些片段开始最稳。先小范围改颜色和间距，再逐步加动画或版式。",
-            kind: "examples",
-            examples: [
-              {
-                id: "composer",
-                title: "输入区和发送按钮",
-                description: "统一输入区边框、背景和主按钮状态。",
-                code: `#chat-composer {\n  border-color: rgba(251, 146, 60, 0.5) !important;\n  background: rgba(15, 23, 42, 0.9) !important;\n}\n\n#chat-message-input {\n  color: rgb(248, 250, 252) !important;\n}\n\n#chat-primary-action[data-chat-action="send"] {\n  background: linear-gradient(135deg, rgb(251, 146, 60), rgb(245, 158, 11));\n}`
-              },
-              {
-                id: "assistant-bubble",
-                title: "角色气泡和操作区",
-                description: "只改 assistant 气泡，不影响 user 气泡。",
-                code: `[data-chat-message="assistant"] [data-chat-bubble] {\n  background: rgba(30, 41, 59, 0.92) !important;\n  border-color: rgba(56, 189, 248, 0.25) !important;\n}\n\n[data-chat-message="assistant"] [data-chat-actions] {\n  border-top-color: rgba(56, 189, 248, 0.18) !important;\n}\n\n[data-chat-message="assistant"] [data-chat-action="copy"] {\n  color: rgb(125, 211, 252) !important;\n}`
-              },
-              {
-                id: "quick-replies",
-                title: "快捷指令区域",
-                description: "调整快捷指令标签的层次感和交互反馈。",
-                code: `#chat-quick-replies-toggle {\n  color: rgb(226, 232, 240) !important;\n}\n\n[data-chat-quick-reply] {\n  border-color: rgba(148, 163, 184, 0.28) !important;\n  background: rgba(15, 23, 42, 0.82) !important;\n}\n\n[data-chat-quick-reply]:hover {\n  border-color: rgba(251, 146, 60, 0.5) !important;\n}`
-              }
-            ]
-          }
-        ] satisfies DocsSection[],
-        copied: "已复制",
-        copy: "复制代码"
-      };
-    }
-
+const getDocsCopy = (language: string): DocsCopy => {
+  if (language === "zh-CN") {
     return {
+      eyebrow: "应用内手册",
       intro:
-        "This page starts with chat styling docs. Future tutorials, FAQs, and advanced examples can be added by appending new sections to the same page.",
+        "按日常工作流整理模型设置、角色创建、聊天管理、记忆、备份迁移和界面样式。新用户可以顺序阅读，熟悉后也可以直接跳到样式参考。",
+      navLabel: "文档章节",
+      copy: "复制 CSS",
+      copied: "已复制",
+      quickFacts: [
+        { label: "产品边界", value: "单用户、单角色回复，不做群聊和独立世界书页面。" },
+        { label: "安全原则", value: "API Key 只在设置页本地保存，模型请求始终走后端代理。" },
+        { label: "样式入口", value: "角色内置 CSS 可作用于角色消息片段和官方 Chat UI 选择器。" }
+      ],
       sections: [
         {
-          id: "overview",
-          title: "Overview",
-          description:
-            "Lock down the editing path and scope first so styles end up in the right place.",
-          kind: "overview",
+          id: "quick-start",
+          title: "快速上手",
+          description: "第一次使用时，按这个顺序完成基础配置。",
+          kind: "guide",
           items: [
             {
-              label: "Edit path",
-              value: "Characters -> Built-in CSS"
+              title: "配置模型",
+              body: "进入设置页，选择供应商，填写服务地址、模型名称和 API Key。保存后先进行连接测试。"
             },
             {
-              label: "Scope",
-              value: "All chats for the current character share the same style sheet"
+              title: "创建原创角色",
+              body: "进入角色页，新建角色卡，填写名称、简介、核心设定和补充规则。"
             },
             {
-              label: "Supported targets",
-              value: "Character message HTML fragments + documented chat page selectors"
+              title: "开始聊天",
+              body: "在角色卡上点击游玩，应用会创建一段绑定该角色的新聊天。"
             },
             {
-              label: "Stability promise",
-              value: "Only the selectors listed on this page are treated as stable"
+              title: "逐步调整",
+              body: "如果回复不稳定，优先调整角色提示词；如果是本段聊天的用户身份或偏好，放进聊天设置里的用户设定。"
             }
-          ]
+          ],
+          note: "API Key 只需要在设置页填写一次，聊天时不需要重复输入。"
         },
         {
-          id: "selectors",
-          title: "Chat Style Selectors",
+          id: "chat-workbench",
+          title: "聊天工作台",
+          description: "聊天页负责消息管理、回复生成、聊天设置和单段聊天外观。",
+          kind: "guide",
+          items: [
+            {
+              title: "发送与停止",
+              body: "输入消息后发送。生成中主按钮会切换为停止，停止后保留已经流式返回的内容。"
+            },
+            {
+              title: "消息操作",
+              body: "用户消息可复制、编辑、删除、重发；角色回复可复制、编辑、删除、重新生成，并在有候选版本时切换变体。"
+            },
+            {
+              title: "聊天设置",
+              body: "右上角设置菜单可调整记忆轮数、长期记忆、聊天背景、用户设定、用户画像摘要和当前模型。"
+            },
+            {
+              title: "快捷指令",
+              body: "角色配置快捷回复后，会显示在输入区上方。点击指令会把预设内容填入输入框，适合常用动作或开场问题。"
+            }
+          ],
+          note: "删除消息前请确认影响；如果只是想修正文案，优先使用编辑或重发。"
+        },
+        {
+          id: "characters",
+          title: "角色工坊",
+          description: "角色卡决定角色如何说话、如何回应，以及何时补充背景信息。",
+          kind: "guide",
+          items: [
+            {
+              title: "角色设定",
+              body: "把角色身份、背景、目标、语气、关系和互动边界写清楚。规则越具体，回复越容易保持一致。"
+            },
+            {
+              title: "背景词条",
+              body: "需要在特定关键词出现时补充背景信息，可以为角色添加背景词条，让聊天自动带入相关设定。"
+            },
+            {
+              title: "内置 CSS",
+              body: "内置样式可美化角色回复里的 HTML 片段，也能在该角色聊天中调整气泡、输入区和快捷指令外观。"
+            },
+            {
+              title: "开场 HTML 与导入导出",
+              body: "开场页面适合展示角色介绍、序章或欢迎页；角色卡支持导入导出，私密角色内容需密码解锁。"
+            }
+          ],
+          note: "建议先完善角色设定和背景词条，再按需要添加快捷指令和视觉样式。"
+        },
+        {
+          id: "settings-security",
+          title: "设置与安全",
+          description: "模型配置、模型预设、界面语言和显示偏好都在设置页维护。",
+          kind: "guide",
+          items: [
+            {
+              title: "API Key",
+              body: "API Key 只保存在本地配置中，运行时代码会加密保存；界面不会展示已保存密钥的明文。"
+            },
+            {
+              title: "供应商与模型",
+              body: "可以连接常见的兼容服务，也可以使用 Anthropic Claude 或 Google Gemini。选择供应商模板后再填写对应模型信息。"
+            },
+            {
+              title: "模型预设",
+              body: "可以保存多个模型配置并批量导入模型 ID，聊天中可从已保存预设快速切换模型。"
+            },
+            {
+              title: "语言与头像",
+              body: "支持中文和英文界面，也可以控制聊天消息头像是否显示。"
+            }
+          ],
+          note: "请只在设置页填写 API Key，不要把密钥写进角色设定、聊天内容或样式代码。"
+        },
+        {
+          id: "backup",
+          title: "备份与迁移",
+          description: "备份功能用于保存本地数据或迁移到新的本地环境。",
+          kind: "guide",
+          items: [
+            {
+              title: "导出范围",
+              body: "完整备份包含角色、聊天和消息；设置只导出模型参数，不导出 API Key。"
+            },
+            {
+              title: "合并导入",
+              body: "merge 会保留现有数据，并按备份中的 ID 更新或新增匹配项，适合补充迁移。"
+            },
+            {
+              title: "替换导入",
+              body: "replace 会清空现有角色、聊天和消息后再导入，但不会清除本地 API Key。"
+            },
+            {
+              title: "导入前检查",
+              body: "导入前确认备份来源可信，并理解当前模式会怎样影响本地数据库。"
+            }
+          ],
+          note: "导入前建议先导出现有备份，方便需要时恢复。"
+        },
+        {
+          id: "appearance",
+          title: "样式参考",
           description:
-            "Use ids for singletons and data attributes for repeated nodes. Prefer these selectors for all future styling work.",
+            "这些是角色内置 CSS 可以使用的官方样式钩子。用于美化聊天界面时，优先使用这里列出的选择器。",
           kind: "selectors",
           groups: [
             {
-              title: "Official ids",
+              title: "官方 id",
               items: [
-                { selector: "#chat-page-root", detail: "Chat page root container" },
-                { selector: "#chat-panel", detail: "Primary chat panel shell" },
-                { selector: "#chat-title", detail: "Chat title region" },
-                { selector: "#chat-settings-trigger", detail: "Top-right chat settings button" },
-                { selector: "#chat-message-viewport", detail: "Scrollable message viewport" },
-                { selector: "#chat-message-list", detail: "Message list container" },
-                { selector: "#chat-pagination", detail: "Message pagination bar" },
-                { selector: "#chat-scroll-bottom", detail: "Scroll-to-bottom button" },
-                { selector: "#chat-quick-replies", detail: "Quick command area" },
-                { selector: "#chat-quick-replies-toggle", detail: "Quick command collapse toggle" },
-                { selector: "#chat-composer", detail: "Composer outer container" },
-                { selector: "#chat-message-input", detail: "Message input field" },
-                { selector: "#chat-primary-action", detail: "Send or stop button" },
-                { selector: "#chat-empty-state", detail: "Empty-state container" },
-                { selector: "#chat-opening-frame", detail: "Opening iframe" }
+                { selector: "#chat-page-root", detail: "聊天页根容器" },
+                { selector: "#chat-panel", detail: "主聊天面板容器" },
+                { selector: "#chat-title", detail: "聊天标题区域" },
+                { selector: "#chat-settings-trigger", detail: "右上角聊天设置按钮" },
+                { selector: "#chat-message-viewport", detail: "消息滚动视口" },
+                { selector: "#chat-message-list", detail: "消息列表容器" },
+                { selector: "#chat-pagination", detail: "消息分页条" },
+                { selector: "#chat-scroll-bottom", detail: "回到底部按钮" },
+                { selector: "#chat-quick-replies", detail: "快捷指令整体区域" },
+                { selector: "#chat-quick-replies-toggle", detail: "快捷指令折叠按钮" },
+                { selector: "#chat-composer", detail: "输入区外层容器" },
+                { selector: "#chat-message-input", detail: "消息输入框" },
+                { selector: "#chat-primary-action", detail: "发送或停止按钮" },
+                { selector: "#chat-empty-state", detail: "空状态区域" },
+                { selector: "#chat-opening-frame", detail: "开场 iframe" }
               ]
             },
             {
-              title: "Official data attributes",
+              title: "官方 data 属性",
               items: [
                 {
                   selector: '[data-chat-message="user|assistant|streaming|error|system"]',
-                  detail: "Message type marker"
+                  detail: "每条消息的类型标记"
                 },
-                { selector: "[data-chat-bubble]", detail: "Message bubble body" },
-                { selector: "[data-chat-avatar]", detail: "Avatar node" },
-                { selector: "[data-chat-actions]", detail: "Message action row" },
+                { selector: "[data-chat-bubble]", detail: "消息气泡主体" },
+                { selector: "[data-chat-avatar]", detail: "消息头像节点" },
+                { selector: "[data-chat-actions]", detail: "消息操作区" },
                 {
                   selector:
                     '[data-chat-action="copy|edit|delete|resend|regenerate|debug|variant-prev|variant-next|retry|dismiss|send|stop"]',
-                  detail: "Specific action button"
+                  detail: "具体操作按钮"
                 },
-                { selector: "[data-chat-token-info]", detail: "Token usage display" },
-                { selector: "[data-chat-quick-reply]", detail: "Single quick command button" }
+                { selector: "[data-chat-token-info]", detail: "token 统计信息" },
+                { selector: "[data-chat-quick-reply]", detail: "单个快捷指令按钮" }
               ]
             }
-          ]
-        },
-        {
-          id: "examples",
-          title: "Example CSS",
-          description:
-            "Start with small visual changes first. Then add motion or layout once the selector scope is stable.",
-          kind: "examples",
+          ],
           examples: [
             {
               id: "composer",
-              title: "Composer and primary action",
-              description: "Restyle the input shell, field, and send state together.",
-              code: `#chat-composer {\n  border-color: rgba(251, 146, 60, 0.5) !important;\n  background: rgba(15, 23, 42, 0.9) !important;\n}\n\n#chat-message-input {\n  color: rgb(248, 250, 252) !important;\n}\n\n#chat-primary-action[data-chat-action="send"] {\n  background: linear-gradient(135deg, rgb(251, 146, 60), rgb(245, 158, 11));\n}`
+              title: "输入区和发送按钮",
+              description: "统一输入区边框、背景和主按钮状态。",
+              code: composerCss
             },
             {
               id: "assistant-bubble",
-              title: "Assistant bubble and actions",
-              description: "Target only assistant messages without changing user bubbles.",
-              code: `[data-chat-message="assistant"] [data-chat-bubble] {\n  background: rgba(30, 41, 59, 0.92) !important;\n  border-color: rgba(56, 189, 248, 0.25) !important;\n}\n\n[data-chat-message="assistant"] [data-chat-actions] {\n  border-top-color: rgba(56, 189, 248, 0.18) !important;\n}\n\n[data-chat-message="assistant"] [data-chat-action="copy"] {\n  color: rgb(125, 211, 252) !important;\n}`
+              title: "角色气泡和操作区",
+              description: "只改 assistant 气泡，不影响 user 气泡。",
+              code: assistantBubbleCss
             },
             {
               id: "quick-replies",
-              title: "Quick command strip",
-              description: "Adjust the quick command affordance and chip treatment.",
-              code: `#chat-quick-replies-toggle {\n  color: rgb(226, 232, 240) !important;\n}\n\n[data-chat-quick-reply] {\n  border-color: rgba(148, 163, 184, 0.28) !important;\n  background: rgba(15, 23, 42, 0.82) !important;\n}\n\n[data-chat-quick-reply]:hover {\n  border-color: rgba(251, 146, 60, 0.5) !important;\n}`
+              title: "快捷指令区域",
+              description: "调整快捷指令标签的层次感和交互反馈。",
+              code: quickRepliesCss
             }
           ]
         }
-      ] satisfies DocsSection[],
-      copied: "Copied",
-      copy: "Copy CSS"
+      ]
     };
-  }, [language]);
+  }
+
+  return {
+    eyebrow: "In-App Manual",
+    intro:
+      "A practical guide for model setup, character creation, chat management, memory, backups, and appearance styling. Read it in order when getting started, or jump straight to the styling reference when refining a character.",
+    navLabel: "Documentation sections",
+    copy: "Copy CSS",
+    copied: "Copied",
+    quickFacts: [
+      {
+        label: "Product scope",
+        value:
+          "Single user, single character replies, with no group chat or standalone worldbook page."
+      },
+      {
+        label: "Security rule",
+        value:
+          "API keys stay in local settings and all model requests go through the backend proxy."
+      },
+      {
+        label: "Styling entry",
+        value: "Character CSS can target reply fragments and the official Chat UI selectors."
+      }
+    ],
+    sections: [
+      {
+        id: "quick-start",
+        title: "Quick Start",
+        description: "Complete the foundation in this order the first time you use the app.",
+        kind: "guide",
+        items: [
+          {
+            title: "Configure a model",
+            body: "Open Settings, choose a provider, enter the service address, model name, and API key. Save, then run a connection test."
+          },
+          {
+            title: "Create an original character",
+            body: "Open Characters and create a card with a name, description, core setup, and additional rules."
+          },
+          {
+            title: "Start chatting",
+            body: "Click Play on a character card to create a new chat bound to that character."
+          },
+          {
+            title: "Refine gradually",
+            body: "If replies drift, adjust the character prompt first. Put chat-specific user identity or preferences in chat settings."
+          }
+        ],
+        note: "Enter your API key once in Settings. You do not need to paste it again while chatting."
+      },
+      {
+        id: "chat-workbench",
+        title: "Chat Workbench",
+        description:
+          "The chat page handles message management, reply generation, chat settings, and per-chat appearance.",
+        kind: "guide",
+        items: [
+          {
+            title: "Send and stop",
+            body: "Send from the composer. While generation streams, the primary button becomes Stop and keeps content already received."
+          },
+          {
+            title: "Message actions",
+            body: "User messages can be copied, edited, deleted, or resent. Character replies can be copied, edited, deleted, regenerated, and switched between variants."
+          },
+          {
+            title: "Chat settings",
+            body: "The top-right menu controls memory turns, long-term memory, chat background, user notes, profile summary, and the active model."
+          },
+          {
+            title: "Quick commands",
+            body: "When a character defines quick replies, they appear above the composer and fill the input with reusable actions or prompts."
+          }
+        ],
+        note: "Confirm before deleting messages. If you only need to fix wording, use edit or resend first."
+      },
+      {
+        id: "characters",
+        title: "Character Workshop",
+        description:
+          "Character cards decide how a character speaks, responds, and brings in background details.",
+        kind: "guide",
+        items: [
+          {
+            title: "Character setup",
+            body: "Describe the character's identity, background, goals, voice, relationship, and interaction boundaries. Specific rules make replies steadier."
+          },
+          {
+            title: "Background entries",
+            body: "Add background entries when certain keywords should bring extra character details into the chat automatically."
+          },
+          {
+            title: "Built-in CSS",
+            body: "Built-in styles can shape HTML fragments in character replies and adjust bubbles, the composer, and quick commands for that character's chats."
+          },
+          {
+            title: "Opening HTML and import/export",
+            body: "Opening pages are useful for introductions, prologues, or welcome screens. Character cards support import/export, and private cards require password unlock."
+          }
+        ],
+        note: "Start with the character setup and background entries, then add quick commands and visual styling as needed."
+      },
+      {
+        id: "settings-security",
+        title: "Settings and Security",
+        description:
+          "Settings manages model configuration, presets, language, and display preferences.",
+        kind: "guide",
+        items: [
+          {
+            title: "API keys",
+            body: "API keys are stored only in local configuration. The interface does not reveal the saved key after it is stored."
+          },
+          {
+            title: "Providers and models",
+            body: "Use a compatible service, or connect Anthropic Claude or Google Gemini with the matching provider template."
+          },
+          {
+            title: "Model presets",
+            body: "Save multiple model configurations and bulk-import model IDs, then switch between saved presets from the chat page."
+          },
+          {
+            title: "Language and avatars",
+            body: "Switch between Chinese and English, and choose whether message avatars are shown."
+          }
+        ],
+        note: "Only enter API keys in Settings. Do not place keys in character setup, chat messages, or style code."
+      },
+      {
+        id: "backup",
+        title: "Backups and Migration",
+        description: "Backups save local data or move it to another local environment.",
+        kind: "guide",
+        items: [
+          {
+            title: "Export contents",
+            body: "Full backups include characters, chats, and messages. Settings export model parameters but not the API key."
+          },
+          {
+            title: "Merge import",
+            body: "merge keeps existing data and updates or creates records matching backup IDs. Use it for additive migration."
+          },
+          {
+            title: "Replace import",
+            body: "replace clears existing characters, chats, and messages before importing, but it does not clear the local API key."
+          },
+          {
+            title: "Check before importing",
+            body: "Confirm the backup source is trusted and understand how the selected mode will affect the local database."
+          }
+        ],
+        note: "Export a backup before importing so you can restore the previous state if needed."
+      },
+      {
+        id: "appearance",
+        title: "Appearance Reference",
+        description:
+          "These are the official styling hooks available to character built-in CSS. Prefer these selectors when styling the chat interface.",
+        kind: "selectors",
+        groups: [
+          {
+            title: "Official ids",
+            items: [
+              { selector: "#chat-page-root", detail: "Chat page root container" },
+              { selector: "#chat-panel", detail: "Primary chat panel shell" },
+              { selector: "#chat-title", detail: "Chat title region" },
+              { selector: "#chat-settings-trigger", detail: "Top-right chat settings button" },
+              { selector: "#chat-message-viewport", detail: "Scrollable message viewport" },
+              { selector: "#chat-message-list", detail: "Message list container" },
+              { selector: "#chat-pagination", detail: "Message pagination bar" },
+              { selector: "#chat-scroll-bottom", detail: "Scroll-to-bottom button" },
+              { selector: "#chat-quick-replies", detail: "Quick command area" },
+              { selector: "#chat-quick-replies-toggle", detail: "Quick command collapse toggle" },
+              { selector: "#chat-composer", detail: "Composer outer container" },
+              { selector: "#chat-message-input", detail: "Message input field" },
+              { selector: "#chat-primary-action", detail: "Send or stop button" },
+              { selector: "#chat-empty-state", detail: "Empty-state container" },
+              { selector: "#chat-opening-frame", detail: "Opening iframe" }
+            ]
+          },
+          {
+            title: "Official data attributes",
+            items: [
+              {
+                selector: '[data-chat-message="user|assistant|streaming|error|system"]',
+                detail: "Message type marker"
+              },
+              { selector: "[data-chat-bubble]", detail: "Message bubble body" },
+              { selector: "[data-chat-avatar]", detail: "Avatar node" },
+              { selector: "[data-chat-actions]", detail: "Message action row" },
+              {
+                selector:
+                  '[data-chat-action="copy|edit|delete|resend|regenerate|debug|variant-prev|variant-next|retry|dismiss|send|stop"]',
+                detail: "Specific action button"
+              },
+              { selector: "[data-chat-token-info]", detail: "Token usage display" },
+              { selector: "[data-chat-quick-reply]", detail: "Single quick command button" }
+            ]
+          }
+        ],
+        examples: [
+          {
+            id: "composer",
+            title: "Composer and primary action",
+            description: "Restyle the input shell, field, and send state together.",
+            code: composerCss
+          },
+          {
+            id: "assistant-bubble",
+            title: "Assistant bubble and actions",
+            description: "Target only assistant messages without changing user bubbles.",
+            code: assistantBubbleCss
+          },
+          {
+            id: "quick-replies",
+            title: "Quick command strip",
+            description: "Adjust the quick command affordance and chip treatment.",
+            code: quickRepliesCss
+          }
+        ]
+      }
+    ]
+  };
+};
+
+function SectionHeading({ section }: { section: DocsSection }) {
+  const Icon = sectionIcons[section.id] ?? BookOpen;
+
+  return (
+    <div className="flex min-w-0 items-start gap-3">
+      <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.04] text-ember-200">
+        <Icon size={18} />
+      </span>
+      <div className="min-w-0">
+        <h3 className="text-lg font-semibold tracking-tight text-slate-100">{section.title}</h3>
+        <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-400">{section.description}</p>
+      </div>
+    </div>
+  );
+}
+
+function GuideSectionView({ section }: { section: GuideSection }) {
+  return (
+    <>
+      <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {section.items.map((item, index) => (
+          <article
+            key={item.title}
+            className="min-w-0 rounded-lg border border-white/5 bg-white/[0.035] p-4 transition-colors hover:border-white/10 hover:bg-white/[0.055]"
+          >
+            <p className="text-xs font-semibold tabular-nums text-ember-300">
+              {String(index + 1).padStart(2, "0")}
+            </p>
+            <h4 className="mt-2 text-sm font-semibold text-slate-100">{item.title}</h4>
+            <p className="mt-2 text-sm leading-6 text-slate-300">{item.body}</p>
+          </article>
+        ))}
+      </div>
+      {section.note ? (
+        <p className="mt-4 rounded-lg border border-emerald-400/15 bg-emerald-400/[0.06] px-4 py-3 text-sm leading-6 text-emerald-50/90">
+          {section.note}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+function SelectorSectionView({
+  section,
+  copiedId,
+  copyLabel,
+  copiedLabel,
+  onCopy
+}: {
+  section: SelectorSection;
+  copiedId: string | null;
+  copyLabel: string;
+  copiedLabel: string;
+  onCopy: (id: string, code: string) => void;
+}) {
+  return (
+    <div className="mt-5 space-y-6">
+      <div className="grid min-w-0 gap-4 xl:grid-cols-2">
+        {section.groups.map((group) => (
+          <article
+            key={group.title}
+            className="min-w-0 rounded-lg border border-white/5 bg-white/[0.035] p-4"
+          >
+            <h4 className="text-sm font-semibold text-slate-100">{group.title}</h4>
+            <div className="mt-4 divide-y divide-white/5 overflow-hidden rounded-lg border border-white/5 bg-ink-950/45">
+              {group.items.map((item) => (
+                <div key={item.selector} className="grid gap-1 px-3 py-3">
+                  <code className="custom-scrollbar block overflow-x-auto whitespace-nowrap font-mono text-xs text-ember-200">
+                    {item.selector}
+                  </code>
+                  <p className="text-sm leading-6 text-slate-300">{item.detail}</p>
+                </div>
+              ))}
+            </div>
+          </article>
+        ))}
+      </div>
+
+      <div className="grid min-w-0 gap-4 xl:grid-cols-2">
+        {section.examples.map((example) => {
+          const copied = copiedId === example.id;
+          return (
+            <article
+              key={example.id}
+              className="min-w-0 rounded-lg border border-white/5 bg-white/[0.035] p-4"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <Code2 size={15} className="shrink-0 text-cyan-300" />
+                    <h4 className="text-sm font-semibold text-slate-100">{example.title}</h4>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-slate-400">{example.description}</p>
+                </div>
+                <Button
+                  className="!min-h-[34px] !px-3 text-xs"
+                  variant="secondary"
+                  onClick={() => onCopy(example.id, example.code)}
+                >
+                  {copied ? <Check size={13} /> : <Copy size={13} />}
+                  {copied ? copiedLabel : copyLabel}
+                </Button>
+              </div>
+              <pre className="custom-scrollbar mt-4 max-h-[360px] overflow-auto rounded-lg border border-white/5 bg-ink-950/80 p-4 font-mono text-xs leading-6 text-slate-200">
+                <code>{example.code}</code>
+              </pre>
+            </article>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function DocsPage() {
+  const { language } = useI18n();
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copy = useMemo(() => getDocsCopy(language), [language]);
 
   const copyExample = async (id: string, code: string) => {
-    await copyWithFallback(code);
+    try {
+      await copyWithFallback(code);
+    } catch {}
     setCopiedId(id);
     window.setTimeout(() => {
       setCopiedId((current) => (current === id ? null : current));
@@ -285,107 +691,75 @@ export function DocsPage() {
   return (
     <div
       id="docs-page-root"
-      className="mx-auto flex max-w-5xl min-w-0 flex-col gap-6"
+      className="mx-auto flex max-w-7xl min-w-0 flex-col gap-6"
       data-testid="docs-page-root"
     >
-      <section className="overflow-hidden rounded-2xl border border-white/5 bg-ink-900/80 p-5 shadow-lg shadow-black/20 backdrop-blur-sm sm:p-6">
-        <p className="max-w-3xl text-sm leading-7 text-slate-300">{copy.intro}</p>
-        <nav className="mt-4 flex flex-wrap gap-2">
-          {copy.sections.map((section) => (
-            <a
-              key={section.id}
-              href={`#${section.id}`}
-              className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-ember-500/40 hover:text-ember-200"
+      <section className="overflow-hidden rounded-lg border border-white/5 bg-ink-900/70 px-4 py-5 shadow-lg shadow-black/20 sm:px-5 lg:px-6">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ember-300">
+            {copy.eyebrow}
+          </p>
+          <p className="mt-3 max-w-4xl text-sm leading-7 text-slate-300">{copy.intro}</p>
+        </div>
+        <div className="mt-5 grid gap-2 md:grid-cols-3">
+          {copy.quickFacts.map((fact) => (
+            <div
+              key={fact.label}
+              className="rounded-lg border border-white/5 bg-white/[0.035] px-3 py-2.5"
             >
-              {section.title}
-            </a>
+              <p className="text-xs font-semibold text-slate-500">{fact.label}</p>
+              <p className="mt-1 text-sm leading-6 text-slate-200">{fact.value}</p>
+            </div>
           ))}
-        </nav>
+        </div>
       </section>
 
-      {copy.sections.map((section) => (
-        <section
-          key={section.id}
-          id={section.id}
-          className="overflow-hidden rounded-2xl border border-white/5 bg-ink-900/80 p-5 shadow-lg shadow-black/20 backdrop-blur-sm sm:p-6"
-        >
-          <div className="max-w-3xl">
-            <h3 className="text-lg font-semibold tracking-tight text-slate-100">{section.title}</h3>
-            <p className="mt-2 text-sm leading-7 text-slate-400">{section.description}</p>
-          </div>
-
-          {section.kind === "overview" ? (
-            <div className="mt-5 grid gap-3 md:grid-cols-2">
-              {section.items.map((item) => (
-                <article
-                  key={item.label}
-                  className="rounded-xl border border-white/5 bg-white/[0.03] p-4"
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[14rem_1fr]">
+        <aside className="min-w-0 lg:sticky lg:top-28 lg:self-start">
+          <nav
+            className="custom-scrollbar flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:rounded-lg lg:border lg:border-white/5 lg:bg-ink-900/50 lg:p-2"
+            aria-label={copy.navLabel}
+          >
+            {copy.sections.map((section) => {
+              const Icon = sectionIcons[section.id] ?? BookOpen;
+              return (
+                <a
+                  key={section.id}
+                  href={`#${section.id}`}
+                  className="inline-flex min-h-[38px] shrink-0 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 text-xs font-medium text-slate-300 transition-colors hover:border-ember-500/40 hover:text-ember-200 lg:border-transparent lg:bg-transparent"
                 >
-                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                    {item.label}
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-slate-200">{item.value}</p>
-                </article>
-              ))}
-            </div>
-          ) : null}
+                  <Icon size={14} className="shrink-0" />
+                  <span className="whitespace-nowrap">{section.title}</span>
+                </a>
+              );
+            })}
+          </nav>
+        </aside>
 
-          {section.kind === "selectors" ? (
-            <div className="mt-5 grid min-w-0 gap-4 xl:grid-cols-2">
-              {section.groups.map((group) => (
-                <article
-                  key={group.title}
-                  className="min-w-0 rounded-xl border border-white/5 bg-white/[0.03] p-4"
-                >
-                  <h4 className="text-sm font-semibold text-slate-100">{group.title}</h4>
-                  <div className="mt-3 space-y-3">
-                    {group.items.map((item) => (
-                      <div
-                        key={item.selector}
-                        className="rounded-lg border border-white/5 bg-ink-950/50 px-3 py-2.5"
-                      >
-                        <code className="block overflow-x-auto whitespace-nowrap text-xs text-ember-200">
-                          {item.selector}
-                        </code>
-                        <p className="mt-1 text-sm leading-6 text-slate-300">{item.detail}</p>
-                      </div>
-                    ))}
-                  </div>
-                </article>
-              ))}
-            </div>
-          ) : null}
+        <div className="min-w-0 space-y-7">
+          {copy.sections.map((section) => (
+            <section
+              key={section.id}
+              id={section.id}
+              className="scroll-mt-28 border-b border-white/5 pb-7 last:border-b-0"
+            >
+              <SectionHeading section={section} />
 
-          {section.kind === "examples" ? (
-            <div className="mt-5 grid min-w-0 gap-4 xl:grid-cols-2">
-              {section.examples.map((example) => (
-                <article
-                  key={example.id}
-                  className="min-w-0 rounded-xl border border-white/5 bg-white/[0.03] p-4"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <h4 className="text-sm font-semibold text-slate-100">{example.title}</h4>
-                      <p className="mt-1 text-sm leading-6 text-slate-400">{example.description}</p>
-                    </div>
-                    <Button
-                      className="!min-h-[34px] !px-3 text-xs"
-                      variant="secondary"
-                      onClick={() => void copyExample(example.id, example.code)}
-                    >
-                      <Copy size={13} />
-                      {copiedId === example.id ? copy.copied : copy.copy}
-                    </Button>
-                  </div>
-                  <pre className="custom-scrollbar mt-4 overflow-x-auto rounded-xl border border-white/5 bg-ink-950/80 p-4 text-xs leading-6 text-slate-200">
-                    <code>{example.code}</code>
-                  </pre>
-                </article>
-              ))}
-            </div>
-          ) : null}
-        </section>
-      ))}
+              {section.kind === "guide" ? <GuideSectionView section={section} /> : null}
+
+              {section.kind === "selectors" ? (
+                <SelectorSectionView
+                  section={section}
+                  copiedId={copiedId}
+                  copyLabel={copy.copy}
+                  copiedLabel={copy.copied}
+                  onCopy={(id, code) => void copyExample(id, code)}
+                />
+              ) : null}
+            </section>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
