@@ -1,4 +1,4 @@
-export const APP_NAME = "Local Roleplay Platform";
+export const APP_NAME = "Star Companion";
 
 export type MessageRole = "user" | "assistant" | "system";
 export type AppLanguage = "zh-CN" | "en";

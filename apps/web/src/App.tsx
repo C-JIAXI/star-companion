@@ -1,6 +1,5 @@
-import { Menu, MessageSquareText, Settings, Sparkles, Users } from "lucide-react";
+import { Menu, MessageSquareText, Settings, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { APP_NAME } from "@local-roleplay/shared";
 import { api } from "./lib/api";
 import { useI18n, type TranslationKey } from "./i18n";
 import { ChatPage } from "./pages/ChatPage";
@@ -65,12 +64,17 @@ const sectionFromLocation = () => {
 export function App() {
   const { activeSection, setActiveSection, setLanguage, setShowMessageAvatars } = useAppStore();
   const { language, t } = useI18n();
+  const appName = t("app.name");
   const active = sectionMeta[activeSection];
   const [showMobileNav, setShowMobileNav] = useState(false);
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<AppSection | null>(null);
 
   useMobileViewport();
+
+  useEffect(() => {
+    document.title = `${t(active.titleKey)} | ${appName}`;
+  }, [active.titleKey, appName, t]);
 
   useEffect(() => {
     const syncFromLocation = () => {
@@ -170,10 +174,8 @@ export function App() {
         onClose={() => setShowMobileNav(false)}
         title={
           <span className="flex items-center gap-2">
-            <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-ember-400 to-ember-600 text-ink-950 shadow-md shadow-ember-500/20">
-              <Sparkles size={14} />
-            </div>
-            <span>{APP_NAME}</span>
+            <img className="h-10 w-10 shrink-0 rounded-lg object-cover" src="/app-logo-v2.png" alt="" />
+            <span>{appName}</span>
           </span>
         }
       >
@@ -218,11 +220,13 @@ export function App() {
         <aside className="hidden lg:sticky lg:top-0 lg:flex lg:h-full lg:w-56 lg:flex-col lg:border-r lg:border-white/5 lg:bg-ink-900/50 lg:backdrop-blur-xl">
           <div className="flex shrink-0 items-center justify-between gap-3 p-3 lg:mb-6 lg:pb-0">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-ember-400 to-ember-600 text-ink-950 shadow-md shadow-ember-500/20">
-                <Sparkles size={18} />
-              </div>
+              <img
+                className="h-12 w-12 shrink-0 rounded-lg object-cover shadow-md shadow-violet-500/20"
+                src="/app-logo-v2.png"
+                alt=""
+              />
               <div className="min-w-0">
-                <h1 className="truncate text-sm font-bold tracking-tight text-white">{APP_NAME}</h1>
+                <h1 className="truncate text-sm font-bold tracking-tight text-white">{appName}</h1>
                 <p className="truncate text-xs font-medium text-slate-400">{t("app.tagline")}</p>
               </div>
             </div>
@@ -279,12 +283,14 @@ export function App() {
               <Menu size={20} />
             </button>
             <div className="flex min-w-0 flex-1 items-center gap-2">
-              <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-ember-400 to-ember-600 text-ink-950 shadow-md shadow-ember-500/20 sm:h-8 sm:w-8">
-                <Sparkles size={14} />
-              </div>
+              <img
+                className="h-12 w-12 shrink-0 rounded-lg object-cover shadow-md shadow-violet-500/20"
+                src="/app-logo-v2.png"
+                alt=""
+              />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
-                  {APP_NAME}
+                  {appName}
                 </p>
                 <h2 className="truncate text-sm font-semibold tracking-tight text-white">
                   {t(active.titleKey)}

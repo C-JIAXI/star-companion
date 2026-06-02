@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { useAppStore } from "./store/useAppStore";
 
 const zhCN = {
+  "app.name": "星伴",
   "app.tagline": "本地优先角色扮演工坊",
   "common.addEntry": "添加条目",
   "common.apiKeyStored": "API Key 已保存在本地",
@@ -32,7 +33,7 @@ const zhCN = {
   "section.characters.title": "角色工坊",
   "section.chat.subtitle": "创建聊天、绑定角色，并通过后端代理流式生成回复。",
   "section.chat.title": "聊天工作台",
-  "section.docs.subtitle": "查看应用内文档、聊天样式选择器和后续教程。",
+  "section.docs.subtitle": "查看模型设置、角色创建、聊天管理、数据备份、界面美化和官方 CSS 说明。",
   "section.docs.title": "应用文档",
   "section.settings.subtitle": "在本地保存模型配置。所有模型请求都通过后端代理。",
   "section.settings.title": "模型设置",
@@ -327,6 +328,7 @@ const zhCN = {
 } as const;
 
 const en: Record<keyof typeof zhCN, string> = {
+  "app.name": "Star Companion",
   "app.tagline": "Local-first roleplay studio",
   "common.addEntry": "Add Entry",
   "common.apiKeyStored": "API key stored locally",
@@ -359,7 +361,7 @@ const en: Record<keyof typeof zhCN, string> = {
   "section.chat.subtitle":
     "Create chats, bind characters, and stream responses through the backend proxy.",
   "section.chat.title": "Chat Workbench",
-  "section.docs.subtitle": "Browse in-app docs, chat style selectors, and future tutorials.",
+  "section.docs.subtitle": "Browse model setup, character creation, chat management, backup, appearance, and official CSS guides.",
   "section.docs.title": "App Docs",
   "section.settings.subtitle":
     "Configure your model provider. All model requests are proxied through the backend.",

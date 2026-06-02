@@ -12,7 +12,7 @@ import { messagesRouter } from "./routes/messages.js";
 import { settingsRouter } from "./routes/settings.js";
 import { attachChatSocket } from "./realtime/chatSocket.js";
 
-const APP_NAME = "Local Roleplay Platform";
+const APP_NAME = "Star Companion";
 const app = express();
 
 app.use(

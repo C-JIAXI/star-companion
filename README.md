@@ -1,4 +1,4 @@
-# Local Roleplay Platform
+# 星伴 / Star Companion
 
 本项目是一个本地优先的 AI 角色扮演聊天平台，当前以可本地运行、持续迭代的单角色聊天产品维护。实现保持原创，不复制 TavernAI、SillyTavern 或其他现成产品的源码、UI、素材、默认角色或品牌命名。
 

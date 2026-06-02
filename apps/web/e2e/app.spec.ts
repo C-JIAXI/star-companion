@@ -174,6 +174,14 @@ test("direct routes render their workspace headers", async ({ page }) => {
 
   await page.goto("/docs");
   await expect(page.getByRole("heading", { name: /应用文档|App Docs/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /快速上手|Quick Start/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /聊天工作台|Chat Workbench/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /设置与安全|Settings and Security/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /样式参考|Appearance Reference/ })).toBeVisible();
+  await expect(page.getByText("#chat-composer", { exact: true })).toBeVisible();
+  const copyCssButton = page.getByRole("button", { name: /复制 CSS|Copy CSS/ }).first();
+  await copyCssButton.click();
+  await expect(page.getByRole("button", { name: /已复制|Copied/ })).toBeVisible();
 
   await page.goto("/settings");
   await expect(page.getByRole("heading", { name: /模型设置|Model Settings/ })).toBeVisible();
@@ -328,7 +336,7 @@ test("character built-in css previews in the editor and styles only matching cha
     await expect(page).toHaveURL(/\/docs$/);
     await expect(page.getByTestId("docs-page-root")).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: /聊天样式选择器|Chat Style Selectors/ })
+      page.getByRole("heading", { name: /样式参考|Appearance Reference/ })
     ).toBeVisible();
   } finally {
     await request.delete(`/api/chats/${chatA.id}`).catch(() => {});
