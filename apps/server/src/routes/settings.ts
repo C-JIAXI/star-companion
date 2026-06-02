@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type { Prisma } from "@prisma/client";
+import type { Prisma, UserSettings } from "@prisma/client";
 import { prisma } from "../db.js";
 import { asyncHandler, parseBody } from "../lib/http.js";
 import { fetchAvailableModels, testModelConnection } from "../services/completions.js";
@@ -11,7 +11,10 @@ export const settingsRouter = Router();
 
 const generateId = () => Math.random().toString(36).slice(2, 12);
 
-const migrateModelsToProviders = async (settings: any) => {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const migrateModelsToProviders = async (settings: UserSettings) => {
   const providers = settings.providers;
   const models = settings.models;
 
@@ -28,18 +31,15 @@ const migrateModelsToProviders = async (settings: any) => {
   const groupMap = new Map<string, { provider: string; apiBaseUrl: string; key?: string; models: { id: string; label: string; model: string }[] }>();
 
   for (const preset of models) {
-    if (
-      typeof preset !== "object" || preset === null || Array.isArray(preset)
-    ) {
+    if (!isRecord(preset)) {
       continue;
     }
 
-    const p = preset as Record<string, unknown>;
-    const provider = String(p.provider ?? "");
-    const apiBaseUrl = String(p.apiBaseUrl ?? "");
-    const key = typeof p.key === "string" ? p.key : undefined;
-    const modelId = String(p.model ?? "");
-    const label = String(p.label ?? modelId);
+    const provider = String(preset.provider ?? "");
+    const apiBaseUrl = String(preset.apiBaseUrl ?? "");
+    const key = typeof preset.key === "string" ? preset.key : undefined;
+    const modelId = String(preset.model ?? "");
+    const label = String(preset.label ?? modelId);
 
     const groupKey = `${provider}\0${apiBaseUrl}`;
     let group = groupMap.get(groupKey);
@@ -150,29 +150,49 @@ settingsRouter.get(
   })
 );
 
-settingsRouter.get(
+settingsRouter.post(
   "/providers/:providerId/models",
   asyncHandler(async (request, response) => {
     const settings = await getOrCreateSettings();
-    const providers = Array.isArray(settings.providers) ? settings.providers : [];
-    const targetProvider = providers.find(
-      (p: any): p is Record<string, unknown> =>
-        typeof p === "object" && p !== null && !Array.isArray(p) && String(p.id) === request.params.providerId
-    );
+    const body = request.body as Record<string, unknown> | undefined;
 
-    if (!targetProvider) {
-      response.status(404).json({ ok: false, error: "Provider not found" });
-      return;
+    let activeProvider = "";
+    let apiBaseUrl = "";
+    let apiKey = settings.apiKey;
+
+    if (body && typeof body === "object" && typeof body.apiBaseUrl === "string") {
+      activeProvider = String(body.provider ?? "");
+      apiBaseUrl = body.apiBaseUrl;
+      if (typeof body.key === "string" && body.key) {
+        apiKey = body.key;
+      }
+    } else {
+      const providers: unknown[] = Array.isArray(settings.providers) ? settings.providers : [];
+      const targetProvider = providers.find(
+        (provider): provider is Record<string, unknown> =>
+          isRecord(provider) && String(provider.id) === request.params.providerId
+      );
+
+      if (!targetProvider) {
+        response.status(404).json({ ok: false, error: "Provider not found" });
+        return;
+      }
+
+      activeProvider = String(targetProvider.provider ?? "");
+      apiBaseUrl = String(targetProvider.apiBaseUrl ?? "");
+      if (typeof targetProvider.key === "string" && targetProvider.key) {
+        apiKey = targetProvider.key;
+      }
     }
 
-    const providerSettings = {
+    const providerSettings: UserSettings = {
       ...settings,
-      activeProvider: String(targetProvider.provider ?? ""),
-      apiBaseUrl: String(targetProvider.apiBaseUrl ?? ""),
-      apiKey: typeof targetProvider.key === "string" && targetProvider.key ? targetProvider.key : settings.apiKey
+      activeProvider,
+      apiBaseUrl,
+      apiKey
     };
 
-    const result = await fetchAvailableModels(providerSettings as any);
+    const result = await fetchAvailableModels(providerSettings);
 
     response.json({
       ok: true,

@@ -176,8 +176,11 @@ export const api = {
         method: "POST"
       }),
     models: () => request<AvailableModelsDTO>("/api/settings/models"),
-    providerModels: (providerId: string) =>
-      request<AvailableModelsDTO>(`/api/settings/providers/${providerId}/models`)
+    providerModels: (providerId: string, data?: { provider?: string; apiBaseUrl: string; key?: string }) =>
+      request<AvailableModelsDTO>(`/api/settings/providers/${providerId}/models`, {
+        method: "POST",
+        body: data
+      })
   },
   backups: {
     export: () => request<BackupDTO>("/api/backups/export"),

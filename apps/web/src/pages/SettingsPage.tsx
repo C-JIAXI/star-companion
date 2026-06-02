@@ -745,7 +745,12 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     setStatus(null);
 
     try {
-      const result = await api.settings.providerModels(providerId);
+      const profile = form.providers.find((p) => p.id === providerId);
+      const result = await api.settings.providerModels(providerId, profile ? {
+        provider: profile.provider,
+        apiBaseUrl: profile.apiBaseUrl,
+        key: profile.key
+      } : undefined);
       addModelsFromImport(providerId, result.models);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("settings.connectionFailed"));
