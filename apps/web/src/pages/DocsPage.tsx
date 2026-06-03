@@ -133,9 +133,9 @@ const getDocsCopy = (language: string): DocsCopy => {
       copy: "复制 CSS",
       copied: "已复制",
       quickFacts: [
-        { label: "产品边界", value: "单用户、单角色回复，不做群聊和独立世界书页面。" },
-        { label: "安全原则", value: "API Key 只在设置页本地保存，模型请求始终走后端代理。" },
-        { label: "样式入口", value: "角色内置 CSS 可作用于角色消息片段和官方 Chat UI 选择器。" }
+        { label: "使用范围", value: "本应用专注你和一个角色的一对一聊天，不提供群聊或单独世界书页面。" },
+        { label: "密钥安全", value: "API Key 只在设置页填写和保存，不要写进角色设定或聊天内容。" },
+        { label: "外观定制", value: "想调整聊天外观时，可以在角色里填写内置 CSS；下方样式参考列出可使用的位置。" }
       ],
       sections: [
         {
@@ -145,8 +145,8 @@ const getDocsCopy = (language: string): DocsCopy => {
           kind: "guide",
           items: [
             {
-              title: "配置供应商与模型",
-              body: "进入设置页供应商管理，从模板添加供应商（如 OpenAI、Anthropic 等），填写 API Key，保存后点击「从供应商导入」获取可用模型列表，选择一个模型即可开始使用。"
+              title: "连接模型服务",
+              body: "进入设置页，从模板添加模型服务（如 OpenAI、Anthropic 等），填写 API Key，保存后获取可用模型列表，选择一个模型即可开始使用。"
             },
             {
               title: "创建原创角色",
@@ -212,11 +212,11 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "内置 CSS",
-              body: "内置样式可美化角色回复里的 HTML 片段，也能在该角色聊天中调整气泡、输入区和快捷指令外观。"
+              body: "内置样式可美化角色回复里的卡片和排版，也能在该角色聊天中调整气泡、输入区和快捷指令外观。"
             },
             {
               title: "开场 HTML 与导入导出",
-              body: "开场页面适合展示角色介绍、序章或欢迎页；角色卡支持导入导出。导入同一 cardId 的角色卡会覆盖旧角色，即使角色名称已变更；私密角色内容需密码解锁。"
+              body: "开场页面适合展示角色介绍、序章或欢迎页；角色卡支持导入导出。再次导入同一张角色卡会更新原角色，即使角色名称已变更；私密角色内容需密码解锁。"
             }
           ],
           note: "建议先完善角色设定、标签和背景词条，再按需要添加快捷指令和视觉样式。"
@@ -224,7 +224,7 @@ const getDocsCopy = (language: string): DocsCopy => {
         {
           id: "settings-security",
           title: "设置与安全",
-          description: "模型配置、供应商管理、界面语言和显示偏好都在设置页维护。",
+          description: "模型连接、界面语言和显示偏好都在设置页维护。",
           kind: "guide",
           items: [
             {
@@ -232,12 +232,12 @@ const getDocsCopy = (language: string): DocsCopy => {
               body: "API Key 只保存在本地配置中，运行时代码会加密保存；界面不会展示已保存密钥的明文。"
             },
             {
-              title: "供应商管理",
-              body: "从模板快速添加供应商，或自定义创建。每个供应商独立配置服务地址、API Key 和模型列表，支持从供应商 API 一键获取可用模型。"
+              title: "模型服务",
+              body: "从模板快速添加模型服务，或自定义创建。每个服务可以单独保存地址、API Key 和模型列表。"
             },
             {
               title: "模型切换",
-              body: "在供应商管理中选择模型即可切换当前聊天使用的模型，聊天页也支持快速切换。"
+              body: "在设置页选择模型即可切换聊天使用的模型，聊天页也支持快速切换。"
             },
             {
               title: "语言与头像",
@@ -248,25 +248,25 @@ const getDocsCopy = (language: string): DocsCopy => {
         },
         {
           id: "backup",
-          title: "备份与迁移",
-          description: "备份功能用于保存本地数据或迁移到新的本地环境。",
+          title: "备份与恢复",
+          description: "备份功能用于保存本地数据，也可以把数据带到另一台设备或新的本地环境。",
           kind: "guide",
           items: [
             {
               title: "导出范围",
-              body: "完整备份包含角色、聊天和消息；设置导出供应商配置和模型参数，不导出 API Key。"
+              body: "完整备份包含角色、聊天和消息；设置会导出模型服务和参数，但不会导出 API Key。"
             },
             {
               title: "合并导入",
-              body: "merge 会保留现有数据，并按备份中的 ID 更新或新增匹配项；角色卡身份由 cardId 保持稳定，适合补充迁移。"
+              body: "合并导入会保留现有数据，更新本地已有且备份中也包含的内容，并添加新的内容，适合补充导入。"
             },
             {
               title: "替换导入",
-              body: "replace 会清空现有角色、聊天和消息后再导入，但不会清除本地 API Key。"
+              body: "替换导入会清空现有角色、聊天和消息后再导入，但不会清除本地 API Key。"
             },
             {
               title: "导入前检查",
-              body: "导入前确认备份来源可信，并理解当前模式会怎样影响本地数据库。"
+              body: "导入前确认备份来源可信，并理解当前模式会怎样影响本地内容。"
             }
           ],
           note: "导入前建议先导出现有备份，方便需要时恢复。"
@@ -275,7 +275,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           id: "appearance",
           title: "样式参考",
           description:
-            "这些是角色内置 CSS 可以使用的官方样式钩子。用于美化聊天界面时，优先使用这里列出的选择器。",
+            "如果你会写 CSS，可以用这里列出的位置来调整聊天界面外观。",
           kind: "selectors",
           groups: [
             {
@@ -354,16 +354,16 @@ const getDocsCopy = (language: string): DocsCopy => {
       {
         label: "Product scope",
         value:
-          "Single user, single character replies, with no group chat or standalone worldbook page."
+          "The app focuses on one-on-one chats between you and one character. It does not include group chat or a separate worldbook page."
       },
       {
-        label: "Security rule",
+        label: "Key safety",
         value:
-          "API keys stay in local settings and all model requests go through the backend proxy."
+          "Enter API keys only in Settings. Do not place keys in character setup or chat messages."
       },
       {
-        label: "Styling entry",
-        value: "Character CSS can target reply fragments and the official Chat UI selectors."
+        label: "Appearance",
+        value: "Use a character's built-in CSS to adjust chat appearance. The styling reference lists the available places to target."
       }
     ],
     sections: [
@@ -374,8 +374,8 @@ const getDocsCopy = (language: string): DocsCopy => {
         kind: "guide",
         items: [
           {
-            title: "Configure a provider and model",
-            body: "Open Settings, go to Provider Management, add a provider from a template (e.g. OpenAI, Anthropic), enter the API key, save, then click 'Import from Provider' to fetch available models. Select a model to start."
+            title: "Connect a model service",
+            body: "Open Settings, add a model service from a template (for example OpenAI or Anthropic), enter the API key, save, fetch the available models, then choose one to start."
           },
           {
             title: "Create an original character",
@@ -443,11 +443,11 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Built-in CSS",
-            body: "Built-in styles can shape HTML fragments in character replies and adjust bubbles, the composer, and quick commands for that character's chats."
+            body: "Built-in styles can shape cards and formatting in character replies, and can adjust bubbles, the composer, and quick commands for that character's chats."
           },
           {
             title: "Opening HTML and import/export",
-            body: "Opening pages are useful for introductions, prologues, or welcome screens. Character cards support import/export. Importing a card with the same cardId overwrites the old character even if the character name changed, and private cards require password unlock."
+            body: "Opening pages are useful for introductions, prologues, or welcome screens. Character cards support import/export. Re-importing the same character card updates the existing character even if the name changed, and private cards require password unlock."
           }
         ],
         note: "Start with the character setup, tags, and background entries, then add quick commands and visual styling as needed."
@@ -456,7 +456,7 @@ const getDocsCopy = (language: string): DocsCopy => {
         id: "settings-security",
         title: "Settings and Security",
         description:
-          "Settings manages model configuration, provider management, language, and display preferences.",
+          "Settings manages model connection, language, and display preferences.",
         kind: "guide",
         items: [
           {
@@ -464,12 +464,12 @@ const getDocsCopy = (language: string): DocsCopy => {
             body: "API keys are stored only in local configuration. The interface does not reveal the saved key after it is stored."
           },
           {
-            title: "Provider management",
-            body: "Add providers from templates or create custom ones. Each provider has its own service address, API key, and model list. Fetch available models from the provider API with one click."
+            title: "Model services",
+            body: "Add model services from templates or create custom ones. Each service can keep its own address, API key, and model list."
           },
           {
             title: "Model switching",
-            body: "Select a model in provider management to switch the active model used by chat. The chat page also supports quick model switching."
+            body: "Choose a model in Settings to switch what chat uses. The chat page also supports quick model switching."
           },
           {
             title: "Language and avatars",
@@ -480,25 +480,25 @@ const getDocsCopy = (language: string): DocsCopy => {
       },
       {
         id: "backup",
-        title: "Backups and Migration",
-        description: "Backups save local data or move it to another local environment.",
+        title: "Backups and Restore",
+        description: "Backups save local data and can help move it to another device or local environment.",
         kind: "guide",
         items: [
           {
             title: "Export contents",
-            body: "Full backups include characters, chats, and messages. Settings export provider configurations and model parameters but not the API key."
+            body: "Full backups include characters, chats, and messages. Settings export model services and parameters, but not the API key."
           },
           {
             title: "Merge import",
-            body: "merge keeps existing data and updates or creates records matching backup IDs. Character card identity stays stable through cardId, making it suitable for additive migration."
+            body: "Merge import keeps existing data, updates local content that also appears in the backup, and adds new content. Use it when you want to add to what you already have."
           },
           {
             title: "Replace import",
-            body: "replace clears existing characters, chats, and messages before importing, but it does not clear the local API key."
+            body: "Replace import clears existing characters, chats, and messages before importing, but it does not clear the local API key."
           },
           {
             title: "Check before importing",
-            body: "Confirm the backup source is trusted and understand how the selected mode will affect the local database."
+            body: "Confirm the backup source is trusted and understand how the selected mode will affect your local content."
           }
         ],
         note: "Export a backup before importing so you can restore the previous state if needed."
@@ -507,7 +507,7 @@ const getDocsCopy = (language: string): DocsCopy => {
         id: "appearance",
         title: "Appearance Reference",
         description:
-          "These are the official styling hooks available to character built-in CSS. Prefer these selectors when styling the chat interface.",
+          "If you write CSS, use these available places to adjust the chat interface.",
         kind: "selectors",
         groups: [
           {

@@ -82,6 +82,10 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 
 ## 安装与启动
 
+Windows 用户可以直接双击根目录的 `start-dev.cmd`。它会自动检查依赖、生成 Prisma Client、初始化本地数据库，并在服务启动后打开网页。
+
+如果你想手动启动，可以运行：
+
 ```bash
 npm install
 npm run db:generate
@@ -121,6 +125,7 @@ npm run db:migrate:deploy
 
 说明：
 
+- `start-dev.cmd` 是 Windows 一键启动入口，适合普通本地使用
 - `npm run dev` 会同时启动 `packages/shared`、`apps/server` 和 `apps/web`
 - `npm run build` 会依次构建 shared、server、web
 - `npm run lint` 会检查 shared、server、web
