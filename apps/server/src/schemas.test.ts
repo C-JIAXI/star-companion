@@ -161,6 +161,7 @@ describe("characterImportSchema", () => {
       schemaVersion: 1,
       format: "character-card",
       visibility: "public",
+      cardId: "public-card-id",
       character: {
         name: "Public Card",
         avatar: null,
@@ -175,6 +176,7 @@ describe("characterImportSchema", () => {
       schemaVersion: 1,
       format: "character-card",
       visibility: "private",
+      cardId: "private-card-id",
       character: {
         name: "Private Card With AC",
         avatar: null
@@ -198,7 +200,7 @@ describe("characterImportSchema", () => {
     assert.equal(privateCard.visibility, "private");
   });
 
-  it("rejects legacy character import payloads and private cards without access control", () => {
+  it("rejects legacy character import payloads, cards without cardId, and private cards without access control", () => {
     assert.throws(() =>
       parseBody(characterImportSchema, {
         name: "Legacy Card",
@@ -211,7 +213,25 @@ describe("characterImportSchema", () => {
       parseBody(characterImportSchema, {
         schemaVersion: 1,
         format: "character-card",
+        visibility: "public",
+        character: {
+          name: "Missing Card ID",
+          avatar: null,
+          prefix: "Prefix",
+          prompt: "Prompt",
+          suffix: "Suffix",
+          htmlCss: "",
+          loreEntries: []
+        }
+      })
+    );
+
+    assert.throws(() =>
+      parseBody(characterImportSchema, {
+        schemaVersion: 1,
+        format: "character-card",
         visibility: "private",
+        cardId: "private-card-without-access-control",
         character: {
           name: "Private Card",
           avatar: null
@@ -237,6 +257,7 @@ describe("backupImportSchema", () => {
       characters: [
         {
           id: "private-character-1",
+          cardId: "private-character-card-1",
           name: "Private Backup Character",
           avatar: null,
           description: "Backup keeps imported private characters locked.",
@@ -294,6 +315,7 @@ describe("backupImportSchema", () => {
         characters: [
           {
             name: "Legacy Backup Character",
+            cardId: "legacy-backup-card",
             avatar: null,
             description: "Legacy backup",
             prompt: "Main prompt",

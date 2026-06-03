@@ -247,6 +247,7 @@ export const serializeCharacter = (character: Character, password?: string) => {
 
   return {
     id: character.id,
+    cardId: character.cardId,
     name: resolved.name,
     avatar: resolved.avatar,
     description: resolved.description,
@@ -312,6 +313,7 @@ export const serializeMessage = (message: Message) => ({
 
 export const serializeCharacterForBackup = (character: Character) => ({
   id: character.id,
+  cardId: character.cardId,
   name: character.name,
   avatar: character.avatar,
   description: character.description,

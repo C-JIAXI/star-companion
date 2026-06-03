@@ -59,6 +59,7 @@ export type CharacterExportCard =
       schemaVersion: 1;
       format: "character-card";
       visibility: "public";
+      cardId: string;
       exportedAt?: string;
       character: {
         name: string;
@@ -78,6 +79,7 @@ export type CharacterExportCard =
       schemaVersion: 1;
       format: "character-card";
       visibility: "private";
+      cardId: string;
       exportedAt?: string;
       character: {
         name: string;
@@ -538,7 +540,7 @@ export const resolveCharacterPromptFields = (
 };
 
 export const createCharacterExportCard = (
-  character: Pick<Character, "name" | "avatar" | "description" | "tags" | "prefix" | "prompt" | "suffix" | "htmlCss" | "openingHtml" | "loreEntries" | "quickReplies">,
+  character: Pick<Character, "name" | "avatar" | "description" | "tags" | "prefix" | "prompt" | "suffix" | "htmlCss" | "openingHtml" | "loreEntries" | "quickReplies" | "cardId">,
   visibility: "public" | "private",
   password?: string
 ): CharacterExportCard => {
@@ -562,6 +564,7 @@ export const createCharacterExportCard = (
       schemaVersion: 1,
       format: "character-card",
       visibility: "public",
+      cardId: character.cardId,
       exportedAt: new Date().toISOString(),
       character: {
         name: character.name,
@@ -594,6 +597,7 @@ export const createCharacterExportCard = (
     schemaVersion: 1,
     format: "character-card",
     visibility: "private",
+    cardId: character.cardId,
     exportedAt: new Date().toISOString(),
     character: {
       name: character.name,
@@ -655,6 +659,7 @@ export const importCharacterCard = (
   suffix: string;
   htmlCss: string;
   openingHtml: string;
+  cardId: string;
   loreEntries: Prisma.InputJsonValue;
   quickReplies: Prisma.InputJsonValue;
   tags: Prisma.InputJsonValue;
@@ -662,6 +667,7 @@ export const importCharacterCard = (
   if (source.visibility === "public") {
     return {
       name: source.character.name,
+      cardId: source.cardId,
       avatar: source.character.avatar ?? null,
       description: source.character.description ?? "",
       tags: source.character.tags ?? [],
@@ -679,6 +685,7 @@ export const importCharacterCard = (
 
   return {
     name: source.character.name,
+    cardId: source.cardId,
     avatar: source.character.avatar ?? null,
     description: source.character.description ?? "",
     tags: source.character.tags ?? [],

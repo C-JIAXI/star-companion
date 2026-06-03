@@ -133,6 +133,7 @@ describe("buildPromptContext", () => {
 
     const privateCharacterCard = createCharacterExportCard(
       {
+        cardId: "prompt-builder-private-character-card",
         name: "Imported Private Character",
         avatar: null,
         prefix: "Hidden prefix instruction.",

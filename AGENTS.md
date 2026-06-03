@@ -138,6 +138,7 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 
 ### Character
 
+- `cardId`
 - `name`
 - `avatar`
 - `description`
@@ -159,6 +160,7 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
   - `exampleDialog`
   - `systemPrompt`
 - 上述字段只应作为历史兼容语境理解，不应默认视为当前待补的一等持久化路线。
+- `cardId` 是角色卡导入/导出的稳定身份；同一 `cardId` 的角色卡导入时会覆盖旧角色，即使 `name` 已变更。
 - `htmlCss` 既可样式化角色消息里的 HTML fragment，也会在该角色激活聊天时作用于应用内文档约定的官方 Chat UI 选择器。
 - 导入角色与备份数据按当前字段结构处理，不再兼容旧的 `scenario/systemPrompt` 字段映射。
 

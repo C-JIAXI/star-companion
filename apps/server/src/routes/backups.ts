@@ -76,6 +76,7 @@ backupsRouter.post(
 
       for (const character of backup.characters) {
         const data = {
+          cardId: character.cardId,
           name: character.name,
           avatar: character.avatar ?? null,
           description: character.description,

@@ -59,9 +59,22 @@ charactersRouter.post(
   "/import",
   asyncHandler(async (request, response) => {
     const body = parseBody(characterImportSchema, request.body);
-    const character = await prisma.character.create({
-      data: importCharacterCard(body)
+    const data = importCharacterCard(body);
+    const existing = await prisma.character.findUnique({
+      where: { cardId: data.cardId }
     });
+
+    if (existing) {
+      const character = await prisma.character.update({
+        where: { id: existing.id },
+        data
+      });
+
+      response.json({ ok: true, data: serializeCharacter(character) });
+      return;
+    }
+
+    const character = await prisma.character.create({ data });
 
     response.status(201).json({ ok: true, data: serializeCharacter(character) });
   })

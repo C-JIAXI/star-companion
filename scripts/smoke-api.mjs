@@ -357,6 +357,8 @@ const main = async () => {
     });
     assert.equal(createdCharacter.visibility, "public");
     assert.equal(createdCharacter.canViewPrompt, true);
+    assert.equal(typeof createdCharacter.cardId, "string");
+    assert.equal(createdCharacter.cardId.length > 0, true);
     assert.deepEqual(createdCharacter.tags, characterPayload.tags);
 
     const characterList = await requestData(baseUrl, "/api/characters");
@@ -437,6 +439,7 @@ const main = async () => {
       }
     });
     assert.equal(publicCard.visibility, "public");
+    assert.equal(publicCard.cardId, createdCharacter.cardId);
     assert.equal(
       publicCard.character.prompt,
       characterPayload.prompt,
@@ -444,11 +447,25 @@ const main = async () => {
     );
     assert.deepEqual(publicCard.character.tags, characterPayload.tags);
 
+    const renamedPublicCard = {
+      ...publicCard,
+      character: {
+        ...publicCard.character,
+        name: `${publicCard.character.name} Renamed`
+      }
+    };
+
     const importedPublicCharacter = await requestData(baseUrl, "/api/characters/import", {
       method: "POST",
-      expectedStatus: 201,
-      body: publicCard
+      body: renamedPublicCard
     });
+    assert.equal(
+      importedPublicCharacter.id,
+      createdCharacter.id,
+      "same-card public import should update the existing character even when the name changes"
+    );
+    assert.equal(importedPublicCharacter.cardId, createdCharacter.cardId);
+    assert.equal(importedPublicCharacter.name, renamedPublicCard.character.name);
     assert.equal(importedPublicCharacter.visibility, "public");
     assert.equal(
       importedPublicCharacter.prompt,
@@ -466,22 +483,46 @@ const main = async () => {
       }
     });
     assert.equal(privateCard.visibility, "private");
+    assert.equal(privateCard.cardId, createdCharacter.cardId);
     assert.equal("prompt" in privateCard.character, false);
+
+    const importablePrivateCard = {
+      ...privateCard,
+      cardId: `${privateCard.cardId}-private-import-${runId}`,
+      character: {
+        ...privateCard.character,
+        name: `${privateCard.character.name} Private Import ${runId}`
+      }
+    };
 
     const importedPrivateCharacter = await requestData(baseUrl, "/api/characters/import", {
       method: "POST",
       expectedStatus: 201,
-      body: privateCard
+      body: importablePrivateCard
     });
     assert.equal(importedPrivateCharacter.visibility, "private");
+    assert.equal(importedPrivateCharacter.cardId, importablePrivateCard.cardId);
     assert.equal(importedPrivateCharacter.canViewPrompt, false);
     assert.equal(importedPrivateCharacter.prompt, "");
 
+    const renamedPrivateCard = {
+      ...importablePrivateCard,
+      character: {
+        ...importablePrivateCard.character,
+        name: `${importablePrivateCard.character.name} Renamed`
+      }
+    };
+
     const importedPrivateBackupCharacter = await requestData(baseUrl, "/api/characters/import", {
       method: "POST",
-      expectedStatus: 201,
-      body: privateCard
+      body: renamedPrivateCard
     });
+    assert.equal(
+      importedPrivateBackupCharacter.id,
+      importedPrivateCharacter.id,
+      "same-card private import should update the existing imported character even when the name changes"
+    );
+    assert.equal(importedPrivateBackupCharacter.name, renamedPrivateCard.character.name);
     assert.equal(importedPrivateBackupCharacter.visibility, "private");
     assert.equal(importedPrivateBackupCharacter.canViewPrompt, false);
     assert.equal(importedPrivateBackupCharacter.prompt, "");
@@ -655,7 +696,7 @@ const main = async () => {
     const exportedBackup = await requestData(baseUrl, "/api/backups/export");
     assert.equal(exportedBackup.schemaVersion, 1);
     assert.ok(exportedBackup.settings);
-    assert.equal(exportedBackup.characters.length, 4);
+    assert.equal(exportedBackup.characters.length, 2);
     assert.equal(exportedBackup.chats.length, 1);
     assert.equal(exportedBackup.messages.length, 2);
     assert.equal(exportedBackup.memories.length, 1);
@@ -678,7 +719,7 @@ const main = async () => {
       }
     });
     assert.equal(importedBackupSummary.mode, "replace");
-    assert.equal(importedBackupSummary.characters, 4);
+    assert.equal(importedBackupSummary.characters, 2);
     assert.equal(importedBackupSummary.chats, 1);
     assert.equal(importedBackupSummary.messages, 2);
     assert.equal(importedBackupSummary.memories, 1);
@@ -734,14 +775,6 @@ const main = async () => {
       expectedStatus: 204
     });
     await request(baseUrl, `/api/characters/${importedPrivateCharacter.id}`, {
-      method: "DELETE",
-      expectedStatus: 204
-    });
-    await request(baseUrl, `/api/characters/${importedPrivateBackupCharacter.id}`, {
-      method: "DELETE",
-      expectedStatus: 204
-    });
-    await request(baseUrl, `/api/characters/${createdCharacter.id}`, {
       method: "DELETE",
       expectedStatus: 204
     });

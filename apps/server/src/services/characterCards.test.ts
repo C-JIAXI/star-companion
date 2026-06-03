@@ -11,6 +11,7 @@ import {
 } from "./characterCards.js";
 
 const baseCharacter = {
+  cardId: "private-card-test-character",
   name: "Private Card Test Character",
   avatar: null,
   prefix: "Stay in character.",

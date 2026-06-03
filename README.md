@@ -181,6 +181,7 @@ HTTP API：
 
 `Character`
 
+- `cardId`
 - `name`
 - `avatar`
 - `description`
@@ -217,6 +218,7 @@ HTTP API：
 补充说明：
 
 - 当前角色提示词结构是 `prefix` / `prompt` / `suffix`
+- `cardId` 是角色卡导入/导出的稳定身份；同一 `cardId` 的角色卡导入时会覆盖旧角色，即使 `name` 已变更
 - `Character.htmlCss` 仍用于角色消息内的 HTML fragment；当该角色在聊天页激活时，同一份 CSS 也会作用于应用内文档约定的官方 Chat UI 选择器
 - 当前没有一等持久化字段：`firstMessage`、`exampleDialog`、`systemPrompt`
 - 上述字段只应作为历史兼容语境理解，不应默认视为当前待补的一等持久化路线

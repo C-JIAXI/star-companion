@@ -216,7 +216,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "开场 HTML 与导入导出",
-              body: "开场页面适合展示角色介绍、序章或欢迎页；角色卡支持导入导出，私密角色内容需密码解锁。"
+              body: "开场页面适合展示角色介绍、序章或欢迎页；角色卡支持导入导出。导入同一 cardId 的角色卡会覆盖旧角色，即使角色名称已变更；私密角色内容需密码解锁。"
             }
           ],
           note: "建议先完善角色设定、标签和背景词条，再按需要添加快捷指令和视觉样式。"
@@ -258,7 +258,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "合并导入",
-              body: "merge 会保留现有数据，并按备份中的 ID 更新或新增匹配项，适合补充迁移。"
+              body: "merge 会保留现有数据，并按备份中的 ID 更新或新增匹配项；角色卡身份由 cardId 保持稳定，适合补充迁移。"
             },
             {
               title: "替换导入",
@@ -447,7 +447,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Opening HTML and import/export",
-            body: "Opening pages are useful for introductions, prologues, or welcome screens. Character cards support import/export, and private cards require password unlock."
+            body: "Opening pages are useful for introductions, prologues, or welcome screens. Character cards support import/export. Importing a card with the same cardId overwrites the old character even if the character name changed, and private cards require password unlock."
           }
         ],
         note: "Start with the character setup, tags, and background entries, then add quick commands and visual styling as needed."
@@ -490,7 +490,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Merge import",
-            body: "merge keeps existing data and updates or creates records matching backup IDs. Use it for additive migration."
+            body: "merge keeps existing data and updates or creates records matching backup IDs. Character card identity stays stable through cardId, making it suitable for additive migration."
           },
           {
             title: "Replace import",

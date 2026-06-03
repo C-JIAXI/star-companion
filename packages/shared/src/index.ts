@@ -80,6 +80,7 @@ export interface CharacterCardContentDTO {
 
 export interface CharacterDTO {
   id: string;
+  cardId: string;
   name: string;
   avatar: string | null;
   description: string;
@@ -115,6 +116,7 @@ export interface StoredPrivateCharacterBackupDTO {
 
 export interface BackupCharacterDTO {
   id?: string;
+  cardId: string;
   name: string;
   avatar: string | null;
   description: string;
@@ -136,6 +138,7 @@ export interface PublicCharacterCardDTO {
   schemaVersion: 1;
   format: "character-card";
   visibility: "public";
+  cardId: string;
   exportedAt: string;
   character: CharacterCardContentDTO;
 }
@@ -144,6 +147,7 @@ export interface PrivateCharacterCardDTO {
   schemaVersion: 1;
   format: "character-card";
   visibility: "private";
+  cardId: string;
   exportedAt: string;
   character: Pick<
     CharacterCardContentDTO,

@@ -38,6 +38,7 @@ model UserSettings {
 
 model Character {
   id           String   @id @default(cuid())
+  cardId       String   @unique @default(cuid())
   name         String
   avatar       String?
   description  String   @default("")

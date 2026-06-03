@@ -101,6 +101,7 @@ const createPrivateCharacterCardFile = async (name: string, password: string) =>
     schemaVersion: 1,
     format: "character-card",
     visibility: "private",
+    cardId: `private-character-card-${Date.now()}`,
     exportedAt: new Date().toISOString(),
     character: {
       name,
@@ -833,6 +834,7 @@ test("character page tag filter can narrow to a paged server result before editi
         characters: [
           ...Array.from({ length: 40 }, (_, index) => ({
             id: createdIds[index],
+            cardId: `${createdIds[index]}-card`,
             name: `${prefix} ${String(index).padStart(2, "0")}`,
             avatar: null,
             description: "",
@@ -847,6 +849,7 @@ test("character page tag filter can narrow to a paged server result before editi
           })),
           {
             id: createdIds[40],
+            cardId: `${createdIds[40]}-card`,
             name: targetName,
             avatar: null,
             description: "",
@@ -912,6 +915,7 @@ test("character paging search can create a chat from the matching card", async (
         characters: [
           ...Array.from({ length: 40 }, (_, index) => ({
             id: createdIds[index],
+            cardId: `${createdIds[index]}-card`,
             name: `${prefix} ${String(index).padStart(2, "0")}`,
             avatar: null,
             description: "",
@@ -926,6 +930,7 @@ test("character paging search can create a chat from the matching card", async (
           })),
           {
             id: createdIds[40],
+            cardId: `${createdIds[40]}-card`,
             name: targetName,
             avatar: null,
             description: "",

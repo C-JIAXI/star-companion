@@ -150,6 +150,7 @@ const publicCharacterCardSchema = z.object({
   schemaVersion: z.literal(1).default(1),
   format: z.literal("character-card"),
   visibility: z.literal("public"),
+  cardId: idSchema,
   exportedAt: z.string().datetime().optional(),
   character: characterCreateSchema.extend({
     avatar: z.string().trim().nullable().optional()
@@ -178,6 +179,7 @@ const privateCharacterCardSchema = z.object({
   schemaVersion: z.literal(1).default(1),
   format: z.literal("character-card"),
   visibility: z.literal("private"),
+  cardId: idSchema,
   exportedAt: z.string().datetime().optional(),
   character: z.object({
     name: z.string().trim().min(1),
@@ -395,6 +397,7 @@ const backupLoreEntriesSchema = z.union([loreEntriesSchema, storedPrivateCharact
 const backupCharacterSchema = z
   .object({
     id: idSchema.optional(),
+    cardId: idSchema,
     name: z.string().trim().min(1),
     avatar: z.string().trim().nullable().optional(),
     description: z.string(),
@@ -411,6 +414,7 @@ const backupCharacterSchema = z
   })
   .transform((character) => ({
     id: character.id,
+    cardId: character.cardId,
     name: character.name,
     avatar: character.avatar ?? null,
     description: character.description,
