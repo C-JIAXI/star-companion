@@ -33,6 +33,10 @@ if not errorlevel 1 (
   echo [Star Companion] Server already appears to be running.
   echo [Star Companion] Close the original dev console window to stop that service.
   start "" "http://localhost:5173"
+  echo.
+  echo This launcher did not start a new service because one is already running.
+  echo Press any key to close this window.
+  pause >nul
   exit /b 0
 )
 
