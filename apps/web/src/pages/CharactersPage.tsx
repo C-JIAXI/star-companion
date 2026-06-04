@@ -1018,7 +1018,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                   <button
                     key={section.id}
                     type="button"
-                    className={`min-h-[48px] flex-1 whitespace-nowrap rounded-lg px-2 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
+                    className={`min-h-[48px] flex-1 whitespace-nowrap rounded-lg px-2 text-xs font-medium sm:px-4 sm:text-sm ${
                       activeEditorSection === section.id
                         ? "bg-ember-500 text-ink-950 shadow-sm shadow-ember-500/20"
                         : "text-slate-300 hover:bg-ink-800/75 active:bg-ink-800/90"

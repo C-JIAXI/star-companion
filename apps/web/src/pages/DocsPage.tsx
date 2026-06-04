@@ -62,7 +62,7 @@ type DocsCopy = {
 const sectionIcons: Record<string, LucideIcon> = {
   "quick-start": ClipboardList,
   "chat-workbench": MessageSquareText,
-  characters: Bot,
+  "characters-guide": Bot,
   "settings-security": ShieldCheck,
   backup: Database,
   appearance: Brush
@@ -189,7 +189,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           note: "删除消息前请确认影响；如果只是想修正文案，优先使用编辑或重发。"
         },
         {
-          id: "characters",
+          id: "characters-guide",
           title: "角色工坊",
           description: "角色卡决定角色如何说话、如何回应，以及何时补充背景信息。",
           kind: "guide",
@@ -419,7 +419,7 @@ const getDocsCopy = (language: string): DocsCopy => {
         note: "Confirm before deleting messages. If you only need to fix wording, use edit or resend first."
       },
       {
-        id: "characters",
+        id: "characters-guide",
         title: "Character Workshop",
         description:
           "Character cards decide how a character speaks, responds, and brings in background details.",

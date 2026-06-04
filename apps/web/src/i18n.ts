@@ -268,7 +268,7 @@ const zhCN = {
   "help.apiBaseUrl":
     "模型服务的接口根地址。所有 LLM 请求会由后端代理发送到这里，前端不会直接携带 API Key。",
   "help.apiKey": "调用模型服务所需的密钥。保存时会在后端用本地密钥加密，前端不会直接持有或调用它。",
-  "help.model": "要调用的具体模型名称，例如 gpt-4o-mini 或本地兼容服务提供的模型 ID。",
+  "help.model": "要调用的具体模型名称，例如 gpt-5.4-mini 或本地兼容服务提供的模型 ID。",
   "help.temperature": "控制回复随机性。数值越高越发散，越低越稳定。",
   "help.maxTokens": "限制模型单次回复最多生成的 token 数，用于控制长度和成本。",
   "help.topP": "控制模型只在累计概率范围内选词。通常和 Temperature 二选一重点调整即可。",
@@ -619,7 +619,7 @@ const en: Record<keyof typeof zhCN, string> = {
   "help.apiKey":
     "The key used to call the model service. Encrypted with a local key on the backend when saved. The frontend never holds or calls it directly.",
   "help.model":
-    "The specific model name to call, e.g. gpt-4o-mini or a model ID provided by a local compatible service.",
+    "The specific model name to call, e.g. gpt-5.4-mini or a model ID provided by a local compatible service.",
   "help.temperature":
     "Controls randomness. Higher values produce more varied replies, lower values produce more deterministic replies.",
   "help.maxTokens":

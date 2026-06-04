@@ -33,7 +33,7 @@ const defaultForm: SettingsInput = {
   activeProvider: "openai-compatible",
   apiBaseUrl: "https://api.openai.com/v1",
   apiKey: "",
-  model: "gpt-4o-mini",
+  model: "gpt-5.4-mini",
   temperature: 0.8,
   maxTokens: 800,
   topP: 1,
@@ -74,8 +74,9 @@ const providerTemplates = [
     provider: "openai",
     apiBaseUrl: "https://api.openai.com/v1",
     defaultModels: [
-      { label: "GPT-4o", model: "gpt-4o" },
-      { label: "GPT-4o Mini", model: "gpt-4o-mini" }
+      { label: "GPT-5.5", model: "gpt-5.5" },
+      { label: "GPT-5.4 Mini", model: "gpt-5.4-mini" },
+      { label: "GPT-5.4 Nano", model: "gpt-5.4-nano" }
     ]
   },
   {
@@ -84,8 +85,9 @@ const providerTemplates = [
     provider: "anthropic",
     apiBaseUrl: "https://api.anthropic.com/v1",
     defaultModels: [
-      { label: "Claude Sonnet 4.5", model: "claude-sonnet-4-5" },
-      { label: "Claude Haiku 3.5", model: "claude-3-5-haiku-20241022" }
+      { label: "Claude Opus 4.8", model: "claude-opus-4-8" },
+      { label: "Claude Sonnet 4.6", model: "claude-sonnet-4-6" },
+      { label: "Claude Haiku 4.5", model: "claude-haiku-4-5" }
     ]
   },
   {
@@ -94,18 +96,19 @@ const providerTemplates = [
     provider: "google-gemini",
     apiBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
     defaultModels: [
-      { label: "Gemini 2.5 Flash", model: "gemini-2.5-flash" },
-      { label: "Gemini 2.5 Pro", model: "gemini-2.5-pro" }
+      { label: "Gemini 3 Pro Preview", model: "gemini-3-pro-preview" },
+      { label: "Gemini 3 Flash Preview", model: "gemini-3-flash-preview" },
+      { label: "Gemini 2.5 Flash", model: "gemini-2.5-flash" }
     ]
   },
   {
     id: "deepseek",
     label: "DeepSeek",
     provider: "deepseek",
-    apiBaseUrl: "https://api.deepseek.com/v1",
+    apiBaseUrl: "https://api.deepseek.com",
     defaultModels: [
-      { label: "DeepSeek Chat", model: "deepseek-chat" },
-      { label: "DeepSeek Coder", model: "deepseek-coder" }
+      { label: "DeepSeek V4 Pro", model: "deepseek-v4-pro" },
+      { label: "DeepSeek V4 Flash", model: "deepseek-v4-flash" }
     ]
   },
   {
@@ -114,18 +117,19 @@ const providerTemplates = [
     provider: "qwen",
     apiBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     defaultModels: [
-      { label: "Qwen Plus", model: "qwen-plus" },
-      { label: "Qwen Turbo", model: "qwen-turbo" }
+      { label: "Qwen3.7 Max", model: "qwen3.7-max" },
+      { label: "Qwen3.7 Plus", model: "qwen3.7-plus" },
+      { label: "Qwen3.6 Flash", model: "qwen3.6-flash" }
     ]
   },
   {
     id: "moonshot",
     label: "Moonshot Kimi",
     provider: "moonshot",
-    apiBaseUrl: "https://api.moonshot.cn/v1",
+    apiBaseUrl: "https://api.moonshot.ai/v1",
     defaultModels: [
-      { label: "Moonshot v1 8K", model: "moonshot-v1-8k" },
-      { label: "Moonshot v1 32K", model: "moonshot-v1-32k" }
+      { label: "Kimi K2.6", model: "kimi-k2.6" },
+      { label: "Moonshot v1 128K", model: "moonshot-v1-128k" }
     ]
   },
   {
@@ -134,8 +138,8 @@ const providerTemplates = [
     provider: "zhipu",
     apiBaseUrl: "https://open.bigmodel.cn/api/paas/v4",
     defaultModels: [
-      { label: "GLM-4 Flash", model: "glm-4-flash" },
-      { label: "GLM-4 Air", model: "glm-4-air" }
+      { label: "GLM-5.1", model: "glm-5.1" },
+      { label: "GLM-4.6", model: "glm-4.6" }
     ]
   },
   {
@@ -153,6 +157,7 @@ const providerTemplates = [
     provider: "groq",
     apiBaseUrl: "https://api.groq.com/openai/v1",
     defaultModels: [
+      { label: "GPT OSS 120B", model: "openai/gpt-oss-120b" },
       { label: "Llama 3.3 70B", model: "llama-3.3-70b-versatile" }
     ]
   },
