@@ -48,6 +48,7 @@
   "build": {
     "appId": "local.star-companion.app",
     "productName": "Star Companion",
+    "artifactName": "Star Companion.${ext}",
     "directories": {
       "output": "dist/desktop"
     },

@@ -133,7 +133,7 @@ npm run mobile-backend:smoke
 The debug APK is generated at:
 
 ```text
-android/app/build/outputs/apk/debug/app-debug.apk
+android/app/build/outputs/apk/debug/Star Companion.apk
 ```
 
 Android Studio or a local Android SDK is required to assemble the APK.
