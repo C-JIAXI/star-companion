@@ -104,8 +104,27 @@ const formatMessageContent = (message: Message, characterNames: Map<string, stri
   return name ? `${name}: ${message.content}` : message.content;
 };
 
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const isBoundaryKeyword = (value: string) => /^[a-z0-9][a-z0-9_-]*$/i.test(value);
+
+const matchesKeyword = (key: string, contextText: string) => {
+  const normalizedKey = key.trim().toLowerCase();
+  if (!normalizedKey) {
+    return false;
+  }
+
+  if (!isBoundaryKeyword(normalizedKey)) {
+    return contextText.includes(normalizedKey);
+  }
+
+  return new RegExp(`(^|[^a-z0-9_])${escapeRegExp(normalizedKey)}(?=$|[^a-z0-9_])`, "i").test(
+    contextText
+  );
+};
+
 const matchesContext = (keys: string[], contextText: string) =>
-  keys.some((key) => contextText.includes(key.toLowerCase()));
+  keys.some((key) => matchesKeyword(key, contextText));
 
 const buildLoreContexts = (recentMessages: Message[]) => {
   const messageText = (roles: Array<Message["role"]>) =>
@@ -134,6 +153,7 @@ const findMatchedLoreEntries = (
     enabled: boolean;
   }>,
   recentMessages: Message[],
+  characterId: string,
   characterName: string
 ): MatchedLoreEntry[] => {
   if (characterLoreEntries.length === 0) {
@@ -141,10 +161,6 @@ const findMatchedLoreEntries = (
   }
 
   const contexts = buildLoreContexts(recentMessages);
-
-  if (!Object.values(contexts).some((contextText) => contextText.trim())) {
-    return [];
-  }
 
   const entries = characterLoreEntries.filter((entry) => entry.enabled);
 
@@ -161,7 +177,7 @@ const findMatchedLoreEntries = (
     .slice(0, 8)
     .map((entry) => ({
       id: entry.id,
-      characterId: "",
+      characterId,
       characterName,
       keys: entry.keys,
       content: entry.content,
@@ -236,6 +252,7 @@ export const buildPromptContext = async ({
   const matchedLoreEntries = findMatchedLoreEntries(
     promptFields?.loreEntries ?? [],
     recentMessages,
+    character?.id ?? "",
     character?.name ?? ""
   );
   const resolvedSettings =

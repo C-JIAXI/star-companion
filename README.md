@@ -24,6 +24,7 @@ README 以当前仓库实现为准；如果历史说明与代码不一致，请�
 - 供应商模板、模型预设、模型 ID 批量导入、连接测试。
 - 界面语言切换（`zh-CN` / `en`）。
 - 本地备份导入导出。
+- 同一局域网内桌面端 / 移动端手动拉取或推送同步。
 - 用户画像摘要自动更新。
 - 角色内嵌 `loreEntries` 关键词注入。
 - 聊天气泡头像显示开关。
@@ -114,6 +115,9 @@ npm run dev
 ```bash
 npm run dev
 npm run build
+npm run desktop:dev
+npm run desktop:pack
+npm run desktop:build
 npm run lint
 npm run test:server
 npm run test:api
@@ -128,9 +132,12 @@ npm run db:migrate:deploy
 - `start-dev.cmd` 是 Windows 一键启动入口，适合普通本地使用
 - `npm run dev` 会同时启动 `packages/shared`、`apps/server` 和 `apps/web`
 - `npm run build` 会依次构建 shared、server、web
+- `npm run desktop:dev` 会先构建项目，再用 Electron 启动桌面版
+- `npm run desktop:pack` 会生成免安装桌面目录，输出到 `dist/desktop/win-unpacked`
+- `npm run desktop:build` 会生成 Windows 桌面安装包，输出到 `dist/desktop`
 - `npm run lint` 会检查 shared、server、web
 - `npm run test:server` 会运行服务端测试
-- `npm run test:api` 会基于 `prisma/migrations/*/migration.sql` 初始化 fresh SQLite，再启动独立端口 server，覆盖 `health/settings/characters/chats/messages/backups` 冒烟流程
+- `npm run test:api` 会基于 `prisma/migrations/*/migration.sql` 初始化 fresh SQLite，再启动独立端口 server，覆盖 `health/settings/characters/chats/messages/backups/sync` 冒烟流程
 - `npm run test:e2e` 会运行 Playwright 前端端到端测试；当前仓库状态为 `24 passed`
 
 首次运行 Playwright 可安装浏览器：
@@ -149,6 +156,7 @@ HTTP API：
 - `/api/messages`
 - `/api/settings`
 - `/api/backups`
+- `/api/sync`
 
 补充路由：
 
@@ -253,12 +261,14 @@ HTTP API：
 
 ## 备份与迁移
 
-- 备份导出包含：`settings`、`characters`、`chats`、`messages`
+- 备份导出包含：`settings`、`characters`、`chats`、`messages`、`memories`
 - 备份导出不包含 API Key
 - 备份导入支持 `merge` 与 `replace`
-- `replace` 会清空 `messages`、`chats`、`characters`
+- `replace` 会清空 `memories`、`messages`、`chats`、`characters`
 - `replace` 不会删除本地设置记录，API Key 也不会通过备份覆盖或泄漏
 - 备份导入使用 Zod 校验
+- 局域网同步复用完整备份协议：`pull` 从对端导出后导入本机，`push` 将本机备份导入对端；同步必须由用户在设置页手动确认
+- 设置页同步区会显示 `/api/sync/info` 返回的本机后端地址，其中局域网地址可复制到另一台设备的“对端地址”
 
 ## 开发提示
 

@@ -207,6 +207,7 @@ const zhCN = {
   "characters.loreEntryKeys": "触发关键词",
   "characters.loreEntryKeysPlaceholder": "用逗号分隔，例如：武器, 故乡, 秘密",
   "characters.loreEntryContent": "词条内容",
+  "characters.loreEntryPriorityHelp": "数字越大越优先。一次生成中，如果命中的世界书词条超过 8 条，会优先注入数值最高的词条。",
   "characters.loreEntryTriggerMode": "触发模式",
   "characters.loreEntryTriggerBoth": "双方",
   "characters.loreEntryTriggerUser": "用户",
@@ -555,6 +556,8 @@ const en: Record<keyof typeof zhCN, string> = {
   "characters.loreEntryKeys": "Trigger Keywords",
   "characters.loreEntryKeysPlaceholder": "Comma separated, e.g. weapon, hometown, secret",
   "characters.loreEntryContent": "Content",
+  "characters.loreEntryPriorityHelp":
+    "Higher numbers are used first. If more than 8 lore entries match in one generation, the highest-priority entries are injected.",
   "characters.loreEntryTriggerMode": "Trigger Mode",
   "characters.loreEntryTriggerBoth": "Both",
   "characters.loreEntryTriggerUser": "User",

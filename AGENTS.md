@@ -83,6 +83,9 @@ npm run dev
 
 ```bash
 npm run build
+npm run desktop:dev
+npm run desktop:pack
+npm run desktop:build
 npm run lint
 npm run test:server
 npm run test:api
@@ -206,8 +209,10 @@ API_KEY_ENCRYPTION_SECRET="replace-with-a-long-local-random-secret"
 - 模型预设、供应商模板、模型 ID 批量导入
 - 语言切换
 - 本地备份导入导出
+- 同一局域网内桌面端 / 移动端手动拉取或推送同步
 - 用户画像摘要自动更新
 - 角色内嵌 `loreEntries` 关键词注入
+- Electron 桌面版打包
 
 ### 未完成或仅部分完成
 

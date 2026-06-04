@@ -461,3 +461,8 @@ export const backupImportSchema = z.object({
   memories: z.array(backupMemorySchema).default([]),
   mode: z.enum(["merge", "replace"]).default("merge")
 });
+
+export const lanSyncRequestSchema = z.object({
+  peerBaseUrl: z.string().trim().min(1).max(300),
+  mode: z.enum(["merge", "replace"]).default("merge")
+});

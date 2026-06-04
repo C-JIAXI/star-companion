@@ -1400,7 +1400,14 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                                     </Field>
                                   </div>
                                   <div className="space-y-3">
-                                    <Field label={t("common.priority")}>
+                                    <Field
+                                      label={
+                                        <HelpLabel
+                                          label={t("common.priority")}
+                                          description={t("characters.loreEntryPriorityHelp")}
+                                        />
+                                      }
+                                    >
                                       <TextInput
                                         type="number"
                                         value={String(entry.priority)}

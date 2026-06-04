@@ -4,10 +4,22 @@
   "private": true,
   "packageManager": "npm@11.6.1",
   "type": "module",
+  "main": "apps/desktop/main.cjs",
   "scripts": {
-    "postinstall": "npm install --prefix packages/shared && npm install --prefix apps/server && npm install --prefix apps/web",
+    "postinstall": "npm install --prefix packages/shared && npm install --prefix apps/server && npm install --prefix apps/web && npm install --prefix apps/mobile-backend",
     "dev": "concurrently -n shared,server,web -c cyan,green,magenta \"npm run dev --prefix packages/shared\" \"npm run dev --prefix apps/server\" \"npm run dev --prefix apps/web\"",
     "build": "npm run build --prefix packages/shared && npm run build --prefix apps/server && npm run build --prefix apps/web",
+    "desktop:icon": "node scripts/generate-desktop-icon.mjs",
+    "desktop:prepare": "npm run desktop:icon && node scripts/prepare-desktop-resources.mjs",
+    "desktop:dev": "npm run desktop:icon && npm run build && electron .",
+    "desktop:pack": "npm run build && npm run desktop:prepare && electron-builder --dir",
+    "desktop:build": "npm run build && npm run desktop:prepare && electron-builder",
+    "mobile:build:web": "node scripts/build-mobile-web.mjs",
+    "mobile:sync": "npm run mobile:build:web && cap sync android",
+    "mobile:open:android": "npm run mobile:sync && cap open android",
+    "mobile:build:android": "npm run mobile:sync && cd android && gradlew.bat assembleDebug",
+    "mobile-backend:start": "npm run start --prefix apps/mobile-backend",
+    "mobile-backend:smoke": "node scripts/smoke-mobile-backend.mjs",
     "test:server": "npm run test --prefix apps/server",
     "test:api": "node --disable-warning=ExperimentalWarning scripts/smoke-api.mjs",
     "test:e2e": "npm run test:e2e --prefix apps/web",
@@ -19,10 +31,69 @@
     "db:migrate:deploy": "npm run db:migrate:deploy --prefix apps/server"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.4.0",
+    "@capacitor/cli": "^8.4.0",
+    "@capacitor/core": "^8.4.0",
+    "astral-regex": "^2.0.0",
+    "capacitor-nodejs": "https://github.com/hampoelz/capacitor-nodejs/releases/download/v1.0.0-beta.10/capacitor-nodejs.tgz",
     "concurrently": "^9.2.1",
+    "electron": "^42.3.3",
+    "electron-builder": "^26.8.1",
     "eslint": "^9.39.1",
+    "png-to-ico": "^3.0.1",
     "prettier": "^3.6.2",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.4"
+  },
+  "build": {
+    "appId": "local.star-companion.app",
+    "productName": "Star Companion",
+    "directories": {
+      "output": "dist/desktop"
+    },
+    "files": [
+      "apps/desktop/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/desktop-resources/web",
+        "to": "web"
+      },
+      {
+        "from": "dist/desktop-resources/server/dist",
+        "to": "server/dist"
+      },
+      {
+        "from": "dist/desktop-resources/server/prisma",
+        "to": "server/prisma"
+      },
+      {
+        "from": "dist/desktop-resources/server/package.json",
+        "to": "server/package.json"
+      },
+      {
+        "from": "dist/desktop-resources/server/package-lock.json",
+        "to": "server/package-lock.json"
+      },
+      {
+        "from": "dist/desktop-resources/server/node_modules",
+        "to": "server/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "apps/desktop/assets/app-icon.ico",
+      "signAndEditExecutable": false,
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

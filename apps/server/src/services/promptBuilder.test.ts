@@ -286,6 +286,7 @@ describe("buildPromptContext", () => {
         "Persistent lore content."
       ])
     );
+    assert.ok(context.matchedLoreEntries.every((entry) => entry.characterId === ids.characterId));
     assert.deepEqual(
       new Set(matchedMemoryContents),
       new Set(["The user and character have agreed to keep clues explicit."])
@@ -345,5 +346,161 @@ describe("buildPromptContext", () => {
     assert.doesNotMatch(promptText, /Hidden prefix instruction\./);
     assert.doesNotMatch(promptText, /Hidden prompt instruction for imported private cards\./);
     assert.doesNotMatch(promptText, /Hidden suffix instruction\./);
+  });
+
+  it("injects always-active lore even when a chat has no messages", async () => {
+    const character = await prisma.character.create({
+      data: {
+        name: "Opening Lore Character",
+        avatar: "",
+        prefix: "Opening prefix.",
+        prompt: "",
+        suffix: "",
+        loreEntries: [
+          {
+            id: "opening-always-active",
+            keys: [],
+            content: "Opening lore that should be available before any user message.",
+            priority: 1,
+            scope: "prefix",
+            triggerMode: "both",
+            alwaysActive: true,
+            enabled: true
+          },
+          {
+            id: "opening-keyword-only",
+            keys: ["unseen-keyword"],
+            content: "Keyword-only lore should still wait for context.",
+            priority: 2,
+            scope: "prefix",
+            triggerMode: "both",
+            alwaysActive: false,
+            enabled: true
+          }
+        ]
+      }
+    });
+    const chat = await prisma.chat.create({
+      data: {
+        title: "Opening Lore Chat",
+        characterId: character.id,
+        memoryTurns: 4
+      }
+    });
+
+    try {
+      const context = await buildPromptContext({ chatId: chat.id, settings: testSettings });
+      const promptText = context.messages.map((message) => message.content).join("\n\n");
+
+      assert.deepEqual(
+        context.matchedLoreEntries.map((entry) => entry.id),
+        ["opening-always-active"]
+      );
+      assert.equal(context.matchedLoreEntries[0]?.characterId, character.id);
+      assert.match(promptText, /Opening lore that should be available before any user message\./);
+      assert.doesNotMatch(promptText, /Keyword-only lore should still wait for context\./);
+    } finally {
+      await prisma.chat.delete({ where: { id: chat.id } }).catch(() => {});
+      await prisma.character.delete({ where: { id: character.id } }).catch(() => {});
+    }
+  });
+
+  it("matches whole Latin keywords and keeps matched lore content intact", async () => {
+    const longLoreContent = `Long lore ${"x".repeat(1_500)}`;
+    const scopedLoreEntries = [
+      {
+        id: "long-lore",
+        keys: ["shared-key"],
+        content: longLoreContent,
+        priority: 150,
+        scope: "prompt",
+        triggerMode: "both",
+        alwaysActive: false,
+        enabled: true
+      },
+      ...Array.from({ length: 5 }, (_, index) => ({
+        id: `prefix-${index + 1}`,
+        keys: ["shared-key"],
+        content: `Prefix lore ${index + 1}.`,
+        priority: 100 - index,
+        scope: "prefix",
+        triggerMode: "both",
+        alwaysActive: false,
+        enabled: true
+      })),
+      ...Array.from({ length: 5 }, (_, index) => ({
+        id: `prompt-${index + 1}`,
+        keys: ["shared-key"],
+        content: `Prompt lore ${index + 1}.`,
+        priority: 50 - index,
+        scope: "prompt",
+        triggerMode: "both",
+        alwaysActive: false,
+        enabled: true
+      })),
+      ...Array.from({ length: 5 }, (_, index) => ({
+        id: `suffix-${index + 1}`,
+        keys: ["shared-key"],
+        content: `Suffix lore ${index + 1}.`,
+        priority: 10 - index,
+        scope: "suffix",
+        triggerMode: "both",
+        alwaysActive: false,
+        enabled: true
+      })),
+      {
+        id: "partial-latin-keyword",
+        keys: ["cat"],
+        content: "This should not match the word concatenate.",
+        priority: 200,
+        scope: "prompt",
+        triggerMode: "both",
+        alwaysActive: false,
+        enabled: true
+      }
+    ];
+
+    const character = await prisma.character.create({
+      data: {
+        name: "Scoped Lore Character",
+        avatar: "",
+        prefix: "",
+        prompt: "Scoped prompt.",
+        suffix: "",
+        loreEntries: scopedLoreEntries
+      }
+    });
+    const chat = await prisma.chat.create({
+      data: {
+        title: "Scoped Lore Chat",
+        characterId: character.id,
+        memoryTurns: 4
+      }
+    });
+    await prisma.message.create({
+      data: {
+        chatId: chat.id,
+        role: "user",
+        characterId: null,
+        content: "shared-key appears here, but concatenate should not trigger the short keyword.",
+        variants: [],
+        activeVariantIndex: 0
+      }
+    });
+
+    try {
+      const context = await buildPromptContext({ chatId: chat.id, settings: testSettings });
+      const promptText = context.messages.map((message) => message.content).join("\n\n");
+      const longMatch = context.matchedLoreEntries.find((entry) => entry.id === "long-lore");
+
+      assert.equal(context.matchedLoreEntries.length, 8);
+      assert.ok(context.matchedLoreEntries.every((entry) => entry.characterId === character.id));
+      assert.equal(longMatch?.content, longLoreContent);
+      assert.doesNotMatch(promptText, /This should not match the word concatenate\./);
+      assert.doesNotMatch(promptText, /\.\.\.\[truncated\]/);
+    } finally {
+      await prisma.chat.delete({ where: { id: chat.id } }).catch(() => {});
+      await prisma.character.delete({ where: { id: character.id } }).catch(() => {});
+    }
   });
 });

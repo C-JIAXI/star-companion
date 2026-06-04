@@ -1,0 +1,4 @@
+data/
+server-dist/
+*.sqlite
+*.sqlite-*

@@ -725,6 +725,40 @@ const main = async () => {
     assert.equal(importedBackupSummary.memories, 1);
     assert.equal(importedBackupSummary.settingsImported, true);
 
+    const pulledSyncSummary = await requestData(baseUrl, "/api/sync/pull", {
+      method: "POST",
+      body: {
+        peerBaseUrl: baseUrl,
+        mode: "merge"
+      }
+    });
+    const syncInfo = await requestData(baseUrl, "/api/sync/info");
+    assert.equal(syncInfo.port, port);
+    assert.equal(syncInfo.localUrl, `http://127.0.0.1:${port}`);
+    assert.equal(Array.isArray(syncInfo.lanUrls), true);
+    assert.equal(typeof syncInfo.lanReachable, "boolean");
+
+    assert.equal(pulledSyncSummary.direction, "pull");
+    assert.equal(pulledSyncSummary.mode, "merge");
+    assert.equal(pulledSyncSummary.summary.characters, 2);
+    assert.equal(pulledSyncSummary.summary.chats, 1);
+    assert.equal(pulledSyncSummary.summary.messages, 2);
+    assert.equal(pulledSyncSummary.summary.memories, 1);
+
+    const pushedSyncSummary = await requestData(baseUrl, "/api/sync/push", {
+      method: "POST",
+      body: {
+        peerBaseUrl: baseUrl,
+        mode: "merge"
+      }
+    });
+    assert.equal(pushedSyncSummary.direction, "push");
+    assert.equal(pushedSyncSummary.mode, "merge");
+    assert.equal(pushedSyncSummary.summary.characters, 2);
+    assert.equal(pushedSyncSummary.summary.chats, 1);
+    assert.equal(pushedSyncSummary.summary.messages, 2);
+    assert.equal(pushedSyncSummary.summary.memories, 1);
+
     const restoredImportedPrivateCharacter = await requestData(
       baseUrl,
       `/api/characters/${importedPrivateBackupCharacter.id}`

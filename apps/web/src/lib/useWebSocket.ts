@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { resolveWebSocketUrl } from "./appBackend";
 
 type UseWebSocketOptions = {
   onMessage?: (message: Record<string, unknown>) => void;
@@ -27,13 +28,6 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const resolveSocketUrl = useCallback(() => {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const host = import.meta.env.DEV ? `${window.location.hostname}:4000` : window.location.host;
-
-    return `${protocol}//${host}/ws`;
-  }, []);
-
   const connect = useCallback(() => {
     allowReconnectRef.current = true;
 
@@ -49,7 +43,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
 
     existing?.close();
 
-    const socket = new WebSocket(resolveSocketUrl());
+    const socket = new WebSocket(resolveWebSocketUrl());
     socketRef.current = socket;
 
     socket.onopen = () => {
@@ -106,7 +100,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       }
       onMessageRef.current?.(message);
     };
-  }, [maxReconnectAttempts, reconnectInterval, resolveSocketUrl]);
+  }, [maxReconnectAttempts, reconnectInterval]);
 
   const send = useCallback((data: unknown): boolean => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {

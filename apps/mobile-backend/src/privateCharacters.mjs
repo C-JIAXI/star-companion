@@ -1,0 +1,549 @@
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+  randomUUID,
+  scryptSync,
+  timingSafeEqual
+} from "node:crypto";
+
+const STORE_KEY_MATERIAL = "local-roleplay-platform/private-character-store/v1";
+
+const httpError = (status, message) => {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+};
+
+const toBase64Url = (value) => value.toString("base64url");
+const fromBase64Url = (value) => Buffer.from(value, "base64url");
+
+const storeKey = () =>
+  createHash("sha256")
+    .update(process.env.API_KEY_ENCRYPTION_SECRET ?? "local-roleplay-development-secret")
+    .update(`:${STORE_KEY_MATERIAL}`)
+    .digest();
+
+const exportKey = (password, salt) => scryptSync(password, salt, 32);
+
+const normalizeLoreTriggerMode = (value) => {
+  if (value === "user" || value === "assistant") {
+    return value;
+  }
+  return "both";
+};
+
+const normalizeLoreScope = (value) => {
+  if (value === "prefix" || value === "suffix") {
+    return value;
+  }
+  return "prompt";
+};
+
+const isPasswordAccessControl = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  return value.version === 1 && typeof value.salt === "string" && typeof value.verifier === "string";
+};
+
+const buildPasswordAccessControl = (password) => {
+  const salt = toBase64Url(randomBytes(16));
+  return {
+    version: 1,
+    salt,
+    verifier: toBase64Url(scryptSync(password, salt, 32))
+  };
+};
+
+const verifyPasswordAccessControl = (password, accessControl) => {
+  const actual = scryptSync(password, accessControl.salt, 32);
+  const expected = fromBase64Url(accessControl.verifier);
+
+  if (actual.length !== expected.length) {
+    return false;
+  }
+
+  return timingSafeEqual(actual, expected);
+};
+
+export const toCharacterLoreEntries = (value) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+
+      if (
+        typeof item.content !== "string" ||
+        !Array.isArray(item.keys) ||
+        typeof item.priority !== "number"
+      ) {
+        return null;
+      }
+
+      return {
+        id: typeof item.id === "string" && item.id ? item.id : randomUUID(),
+        keys: item.keys.filter((key) => typeof key === "string"),
+        content: item.content,
+        priority: item.priority,
+        scope: normalizeLoreScope(item.scope),
+        triggerMode: normalizeLoreTriggerMode(item.triggerMode),
+        alwaysActive: item.alwaysActive === true,
+        enabled: item.enabled !== false
+      };
+    })
+    .filter(Boolean);
+};
+
+export const toQuickReplies = (value) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+
+      if (typeof item.label !== "string" || !item.label || typeof item.content !== "string" || !item.content) {
+        return null;
+      }
+
+      return {
+        id: typeof item.id === "string" && item.id ? item.id : randomUUID(),
+        label: item.label,
+        content: item.content
+      };
+    })
+    .filter(Boolean);
+};
+
+export const toCharacterTags = (value) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      value
+        .filter((item) => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  );
+};
+
+const encryptPayload = (payload, key) => {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+
+  return {
+    iv: toBase64Url(iv),
+    tag: toBase64Url(tag),
+    ciphertext: toBase64Url(ciphertext)
+  };
+};
+
+const decryptPayload = (encrypted, key) => {
+  const decipher = createDecipheriv("aes-256-gcm", key, fromBase64Url(encrypted.iv));
+  decipher.setAuthTag(fromBase64Url(encrypted.tag));
+
+  return JSON.parse(
+    Buffer.concat([decipher.update(fromBase64Url(encrypted.ciphertext)), decipher.final()]).toString("utf8")
+  );
+};
+
+const isStoredPrivateCharacterRecord = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const privateCharacter = value.__privateCharacter;
+  if (!privateCharacter || typeof privateCharacter !== "object" || Array.isArray(privateCharacter)) {
+    return false;
+  }
+
+  return (
+    privateCharacter.version === 1 &&
+    privateCharacter.algorithm === "aes-256-gcm" &&
+    typeof privateCharacter.iv === "string" &&
+    typeof privateCharacter.tag === "string" &&
+    typeof privateCharacter.ciphertext === "string" &&
+    isPasswordAccessControl(privateCharacter.accessControl)
+  );
+};
+
+export const isImportedPrivateCharacter = (character) =>
+  isStoredPrivateCharacterRecord(character?.loreEntries) &&
+  Boolean(character.loreEntries.__privateCharacter.exportSalt);
+
+const resolvePrivateCharacterAccess = (payload, envelope) => {
+  if (!isPasswordAccessControl(payload.accessControl) || !isPasswordAccessControl(envelope.accessControl)) {
+    throw new Error("Unsupported private character access control");
+  }
+
+  if (
+    payload.accessControl.salt !== envelope.accessControl.salt ||
+    payload.accessControl.verifier !== envelope.accessControl.verifier
+  ) {
+    throw new Error("Stored private character password verifier mismatch");
+  }
+
+  return payload.accessControl;
+};
+
+const toEncryptedPromptPayload = (fields, access) => ({
+  version: 1,
+  accessControl: access,
+  prefix: fields.prefix,
+  prompt: fields.prompt,
+  suffix: fields.suffix,
+  htmlCss: fields.htmlCss,
+  loreEntries: fields.loreEntries
+});
+
+const normalizePromptFields = (value) => ({
+  prefix: value.prefix ?? "",
+  prompt: value.prompt ?? "",
+  suffix: value.suffix ?? "",
+  htmlCss: value.htmlCss ?? "",
+  loreEntries: toCharacterLoreEntries(value.loreEntries)
+});
+
+const decryptStoredPromptFields = (record, password) => {
+  const privateCharacter = record.__privateCharacter;
+
+  if (privateCharacter.exportSalt) {
+    if (!password) {
+      throw httpError(400, "Password is required to unlock imported private character");
+    }
+
+    if (!verifyPasswordAccessControl(password, privateCharacter.accessControl)) {
+      throw httpError(403, "Private character password is invalid");
+    }
+
+    const payload = decryptPayload(privateCharacter, exportKey(password, privateCharacter.exportSalt));
+    return {
+      access: resolvePrivateCharacterAccess(payload, privateCharacter),
+      fields: normalizePromptFields(payload)
+    };
+  }
+
+  const payload = decryptPayload(privateCharacter, storeKey());
+  return {
+    access: resolvePrivateCharacterAccess(payload, privateCharacter),
+    fields: normalizePromptFields(payload)
+  };
+};
+
+const buildStoredPrivateCharacterJson = (fields, access) => {
+  const encrypted = encryptPayload(toEncryptedPromptPayload(fields, access), storeKey());
+
+  return {
+    __privateCharacter: {
+      version: 1,
+      algorithm: "aes-256-gcm",
+      ...encrypted,
+      accessControl: access
+    }
+  };
+};
+
+export const reEncryptImportedCharacter = (character, password) => {
+  if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
+    throw httpError(400, "Character is not a private character");
+  }
+
+  if (!character.loreEntries.__privateCharacter.exportSalt) {
+    throw httpError(400, "Character is not an imported character");
+  }
+
+  const { access, fields } = decryptStoredPromptFields(character.loreEntries, password);
+  return buildStoredPrivateCharacterJson(fields, access);
+};
+
+const canViewPrivateCharacter = (access, password) => Boolean(password && verifyPasswordAccessControl(password, access));
+
+const assertPrivateCharacterPassword = (access, password, options) => {
+  if (!password) {
+    throw httpError(400, options.missingMessage);
+  }
+
+  if (!verifyPasswordAccessControl(password, access)) {
+    throw httpError(403, options.invalidMessage);
+  }
+};
+
+export const resolveCharacterRecord = (character, password) => {
+  if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
+    return {
+      name: character.name,
+      avatar: character.avatar,
+      description: character.description,
+      openingHtml: character.openingHtml ?? "",
+      ...normalizePromptFields(character),
+      visibility: "public",
+      canViewPrompt: true
+    };
+  }
+
+  const record = character.loreEntries;
+
+  if (record.__privateCharacter.exportSalt && !password) {
+    return {
+      name: character.name,
+      avatar: character.avatar,
+      description: character.description,
+      openingHtml: character.openingHtml ?? "",
+      prefix: "",
+      prompt: "",
+      suffix: "",
+      htmlCss: "",
+      loreEntries: [],
+      visibility: "private",
+      canViewPrompt: false
+    };
+  }
+
+  try {
+    const { access, fields } = decryptStoredPromptFields(character.loreEntries, password);
+    const canViewPrompt = canViewPrivateCharacter(access, password);
+
+    return {
+      name: character.name,
+      avatar: character.avatar,
+      description: character.description,
+      openingHtml: character.openingHtml ?? "",
+      prefix: canViewPrompt ? fields.prefix : "",
+      prompt: canViewPrompt ? fields.prompt : "",
+      suffix: canViewPrompt ? fields.suffix : "",
+      htmlCss: fields.htmlCss,
+      loreEntries: canViewPrompt ? fields.loreEntries : [],
+      visibility: "private",
+      canViewPrompt
+    };
+  } catch {
+    return {
+      name: character.name,
+      avatar: character.avatar,
+      description: character.description,
+      openingHtml: character.openingHtml ?? "",
+      prefix: "",
+      prompt: "",
+      suffix: "",
+      htmlCss: "",
+      loreEntries: [],
+      visibility: "private",
+      canViewPrompt: false
+    };
+  }
+};
+
+export const resolveCharacterPromptFields = (character, password) => {
+  if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
+    return normalizePromptFields(character);
+  }
+
+  if (character.loreEntries.__privateCharacter.exportSalt && !password) {
+    return { prefix: "", prompt: "", suffix: "", htmlCss: "", loreEntries: [] };
+  }
+
+  return decryptStoredPromptFields(character.loreEntries, password).fields;
+};
+
+export const createCharacterExportCard = (character, visibility, password) => {
+  const promptFields = resolveCharacterPromptFields(character, password);
+  const existingPrivateRecord = isStoredPrivateCharacterRecord(character.loreEntries)
+    ? decryptStoredPromptFields(character.loreEntries, password)
+    : null;
+  const quickReplies = toQuickReplies(character.quickReplies);
+  const tags = toCharacterTags(character.tags);
+  const openingHtml = character.openingHtml ?? "";
+
+  if (visibility === "public") {
+    if (existingPrivateRecord && !canViewPrivateCharacter(existingPrivateRecord.access, password)) {
+      throw httpError(403, "Private character password is required to export this character publicly");
+    }
+
+    return {
+      schemaVersion: 1,
+      format: "character-card",
+      visibility: "public",
+      cardId: character.cardId,
+      exportedAt: new Date().toISOString(),
+      character: {
+        name: character.name,
+        avatar: character.avatar,
+        description: character.description,
+        tags,
+        ...promptFields,
+        openingHtml,
+        quickReplies
+      }
+    };
+  }
+
+  if (!password) {
+    throw httpError(400, "Private export password is required");
+  }
+
+  if (existingPrivateRecord) {
+    assertPrivateCharacterPassword(existingPrivateRecord.access, password, {
+      missingMessage: "Private export password is required",
+      invalidMessage: "Private character password is invalid"
+    });
+  }
+
+  const exportAccess = buildPasswordAccessControl(password);
+  const salt = toBase64Url(randomBytes(16));
+  const encrypted = encryptPayload(toEncryptedPromptPayload(promptFields, exportAccess), exportKey(password, salt));
+
+  return {
+    schemaVersion: 1,
+    format: "character-card",
+    visibility: "private",
+    cardId: character.cardId,
+    exportedAt: new Date().toISOString(),
+    character: {
+      name: character.name,
+      avatar: character.avatar,
+      description: character.description,
+      tags,
+      openingHtml,
+      quickReplies
+    },
+    protectedPayload: {
+      version: 1,
+      algorithm: "aes-256-gcm",
+      salt,
+      ...encrypted,
+      accessControl: exportAccess
+    }
+  };
+};
+
+export const canExportCharacterPublicly = (character, password) => {
+  if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
+    return true;
+  }
+
+  if (character.loreEntries.__privateCharacter.exportSalt && !password) {
+    return false;
+  }
+
+  return canViewPrivateCharacter(decryptStoredPromptFields(character.loreEntries, password).access, password);
+};
+
+export const assertCharacterUnlockPassword = (character, password) => {
+  if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
+    throw httpError(400, "Character is not private");
+  }
+
+  const { access } = decryptStoredPromptFields(character.loreEntries, password);
+  assertPrivateCharacterPassword(access, password, {
+    missingMessage: "Private character password is required",
+    invalidMessage: "Private character password is invalid"
+  });
+};
+
+export const importCharacterCard = (source) => {
+  if (source.visibility === "public") {
+    return {
+      name: source.character.name,
+      cardId: source.cardId,
+      avatar: source.character.avatar ?? null,
+      description: source.character.description ?? "",
+      tags: source.character.tags ?? [],
+      prefix: source.character.prefix,
+      prompt: source.character.prompt,
+      suffix: source.character.suffix,
+      htmlCss: source.character.htmlCss,
+      openingHtml: source.character.openingHtml ?? "",
+      loreEntries: source.character.loreEntries,
+      quickReplies: source.character.quickReplies ?? []
+    };
+  }
+
+  return {
+    name: source.character.name,
+    cardId: source.cardId,
+    avatar: source.character.avatar ?? null,
+    description: source.character.description ?? "",
+    tags: source.character.tags ?? [],
+    prefix: "",
+    prompt: "",
+    suffix: "",
+    htmlCss: "",
+    openingHtml: source.character.openingHtml ?? "",
+    loreEntries: {
+      __privateCharacter: {
+        version: 1,
+        algorithm: "aes-256-gcm",
+        iv: source.protectedPayload.iv,
+        tag: source.protectedPayload.tag,
+        ciphertext: source.protectedPayload.ciphertext,
+        accessControl: source.protectedPayload.accessControl,
+        exportSalt: source.protectedPayload.salt
+      }
+    },
+    quickReplies: source.character.quickReplies ?? []
+  };
+};
+
+export const buildCharacterUpdateData = (character, updates, password) => {
+  if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
+    return {
+      ...updates,
+      loreEntries: updates.loreEntries
+    };
+  }
+
+  const { access, fields } = decryptStoredPromptFields(character.loreEntries, password);
+  const hasPrivateUpdates =
+    updates.prefix !== undefined ||
+    updates.prompt !== undefined ||
+    updates.suffix !== undefined ||
+    updates.htmlCss !== undefined ||
+    updates.loreEntries !== undefined;
+
+  if (hasPrivateUpdates) {
+    assertPrivateCharacterPassword(access, password, {
+      missingMessage: "Private character password is required to update prompt content",
+      invalidMessage: "Private character password is invalid"
+    });
+  }
+
+  const nextFields = hasPrivateUpdates
+    ? {
+        prefix: updates.prefix ?? fields.prefix,
+        prompt: updates.prompt ?? fields.prompt,
+        suffix: updates.suffix ?? fields.suffix,
+        htmlCss: updates.htmlCss ?? fields.htmlCss,
+        loreEntries: updates.loreEntries !== undefined ? toCharacterLoreEntries(updates.loreEntries) : fields.loreEntries
+      }
+    : fields;
+
+  return {
+    name: updates.name,
+    avatar: "avatar" in updates ? updates.avatar : undefined,
+    description: "description" in updates ? updates.description : undefined,
+    tags: updates.tags,
+    openingHtml: updates.openingHtml,
+    prefix: "",
+    prompt: "",
+    suffix: "",
+    htmlCss: "",
+    loreEntries: buildStoredPrivateCharacterJson(nextFields, access),
+    quickReplies: updates.quickReplies
+  };
+};

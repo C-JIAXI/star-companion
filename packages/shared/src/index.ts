@@ -377,6 +377,32 @@ export interface BackupImportSummaryDTO {
   settingsImported: boolean;
 }
 
+export type LanSyncDirection = "pull" | "push";
+
+export interface LanSyncRequestDTO {
+  peerBaseUrl: string;
+  mode: "merge" | "replace";
+}
+
+export interface LanSyncSummaryDTO {
+  direction: LanSyncDirection;
+  mode: "merge" | "replace";
+  peerBaseUrl: string;
+  peerExportedAt: string | null;
+  completedAt: string;
+  summary: BackupImportSummaryDTO;
+}
+
+export interface LanSyncInfoDTO {
+  localUrl: string;
+  lanUrls: string[];
+  currentOrigin: string;
+  port: number;
+  listeningHost: string;
+  lanReachable: boolean;
+  checkedAt: string;
+}
+
 export type GenerationClientMessage =
   | {
       type: "generate";

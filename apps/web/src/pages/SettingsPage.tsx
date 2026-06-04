@@ -1,22 +1,37 @@
 import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
   ChevronDown,
   ChevronRight,
+  Copy as CopyIcon,
   Download,
   FileUp,
+  History,
   Plus,
   RefreshCw,
   Save,
   ServerCog,
-  Trash2
+  Trash2,
+  Wifi
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { downloadJson, readFileText } from "../lib/files";
 import { generateId } from "../lib/uuid";
 import { useAppStore } from "../store/useAppStore";
-import type { AppLanguage, ProviderModel, ProviderProfile, SettingsInput } from "../types";
+import type {
+  AppLanguage,
+  BackupImportSummaryDTO,
+  LanSyncDirection,
+  LanSyncInfoDTO,
+  LanSyncSummaryDTO,
+  ProviderModel,
+  ProviderProfile,
+  PublicUserSettingsDTO,
+  SettingsInput
+} from "../types";
 import {
   Button,
   ConfirmDialog,
@@ -55,6 +70,7 @@ const settingsSurfaceClassName =
   "border border-white/5 bg-ink-950/30";
 
 const settingsDividerClassName = "border-white/5";
+const syncRecordStorageKey = "star-companion:lan-sync-records";
 
 const serializeForm = (form: SettingsInput) => JSON.stringify(form);
 
@@ -65,6 +81,74 @@ const isValidUrl = (value: string) => {
   } catch {
     return false;
   }
+};
+
+type SyncRecord = {
+  id: string;
+  direction: LanSyncDirection;
+  mode: "merge" | "replace";
+  peerBaseUrl: string;
+  peerExportedAt: string | null;
+  completedAt: string;
+  summary: BackupImportSummaryDTO;
+};
+
+const isSyncRecord = (value: unknown): value is SyncRecord => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const record = value as Partial<SyncRecord>;
+  return (
+    typeof record.id === "string" &&
+    (record.direction === "pull" || record.direction === "push") &&
+    (record.mode === "merge" || record.mode === "replace") &&
+    typeof record.peerBaseUrl === "string" &&
+    typeof record.completedAt === "string" &&
+    Boolean(record.summary)
+  );
+};
+
+const readSyncRecords = (): SyncRecord[] => {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(syncRecordStorageKey) ?? "[]") as unknown;
+    return Array.isArray(parsed) ? parsed.filter(isSyncRecord).slice(0, 8) : [];
+  } catch {
+    return [];
+  }
+};
+
+const toSyncRecord = (result: LanSyncSummaryDTO): SyncRecord => ({
+  id: generateId(),
+  direction: result.direction,
+  mode: result.mode,
+  peerBaseUrl: result.peerBaseUrl,
+  peerExportedAt: result.peerExportedAt,
+  completedAt: result.completedAt,
+  summary: result.summary
+});
+
+const describeSummaryCounts = (summary: BackupImportSummaryDTO) =>
+  `${summary.characters} / ${summary.chats} / ${summary.messages} / ${summary.memories}`;
+
+const copyTextWithFallback = async (value: string) => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
 };
 
 const providerTemplates = [
@@ -229,7 +313,42 @@ const getPageCopy = (language: AppLanguage) =>
           "请先补全每个供应商的名称、类型、API Base URL 和至少一个模型，且 API Base URL 必须是有效地址。",
         backupTitle: "备份与迁移",
         backupHelp:
-          "完整备份会导出角色、聊天、消息和世界书；设置仅导出模型参数，不包含 API Key。",
+          "完整备份会导出角色、聊天、消息和记忆；设置仅导出模型参数，不包含 API Key。",
+        syncTitle: "局域网同步",
+        syncHelp:
+          "填写同一局域网中另一台设备的后端地址，手动选择拉取或推送数据。同步复用完整备份，不包含 API Key。",
+        localBackendTitle: "本机后端地址",
+        localBackendHelp:
+          "把局域网地址复制到另一台设备的对端地址中。回环地址只适用于当前设备自己。",
+        localBackendLoading: "正在读取本机地址...",
+        localBackendUnavailable: "暂时没有可展示的局域网地址，请确认设备已连接 Wi-Fi 或局域网。",
+        localBackendLocalOnly: "仅本机",
+        localBackendLanReachable: "局域网可用",
+        localBackendRefresh: "刷新地址",
+        copyAddress: "复制地址",
+        addressCopied: "地址已复制。",
+        syncPeerUrl: "对端地址",
+        syncPeerPlaceholder: "例如：http://192.168.1.23:4000",
+        syncMode: "同步模式",
+        syncPull: "从对端拉取",
+        syncPush: "推送到对端",
+        syncRecords: "同步记录",
+        syncRecordLegend: "角色 / 聊天 / 消息 / 记忆",
+        syncNoRecords: "还没有同步记录。",
+        syncPeerUrlRequired: "请输入同一局域网中的对端后端地址。",
+        syncFailed: "同步失败",
+        syncPullConfirm:
+          "将从对端读取完整备份并写入本机数据库。替换模式会清空本机角色、聊天、消息和记忆。确定继续吗？",
+        syncPushConfirm:
+          "将把本机完整备份写入对端数据库。替换模式会清空对端角色、聊天、消息和记忆。确定继续吗？",
+        syncPulled: (summary: BackupImportSummaryDTO) =>
+          `拉取完成：${describeSummaryCounts(summary)}`,
+        syncPushed: (summary: BackupImportSummaryDTO) =>
+          `推送完成：${describeSummaryCounts(summary)}`,
+        syncDirection: (direction: LanSyncDirection) =>
+          direction === "pull" ? "拉取" : "推送",
+        syncModeLabel: (mode: "merge" | "replace") =>
+          mode === "merge" ? "合并" : "替换",
         saveReady: "保存到本地",
         noPendingChanges: "当前没有待保存更改"
       }
@@ -271,6 +390,41 @@ const getPageCopy = (language: AppLanguage) =>
         backupTitle: "Backup & Migration",
         backupHelp:
           "Full backups export characters, chats, and messages. Settings export model parameters but never the API key.",
+        syncTitle: "LAN Sync",
+        syncHelp:
+          "Enter another device backend address on the same LAN, then pull from it or push local data to it. Sync uses full backups and never includes the API key.",
+        localBackendTitle: "This Device Backend",
+        localBackendHelp:
+          "Copy a LAN address into the peer address field on another device. Loopback only works on this device.",
+        localBackendLoading: "Reading local addresses...",
+        localBackendUnavailable: "No LAN address is available yet. Check that this device is on Wi-Fi or LAN.",
+        localBackendLocalOnly: "Local only",
+        localBackendLanReachable: "LAN reachable",
+        localBackendRefresh: "Refresh addresses",
+        copyAddress: "Copy address",
+        addressCopied: "Address copied.",
+        syncPeerUrl: "Peer Address",
+        syncPeerPlaceholder: "Example: http://192.168.1.23:4000",
+        syncMode: "Sync Mode",
+        syncPull: "Pull from Peer",
+        syncPush: "Push to Peer",
+        syncRecords: "Sync Records",
+        syncRecordLegend: "characters / chats / messages / memories",
+        syncNoRecords: "No sync records yet.",
+        syncPeerUrlRequired: "Enter a peer backend address on the same LAN.",
+        syncFailed: "Sync failed",
+        syncPullConfirm:
+          "This will read a full backup from the peer and write it into this device. Replace mode clears local characters, chats, messages, and memories. Continue?",
+        syncPushConfirm:
+          "This will write this device's full backup into the peer. Replace mode clears peer characters, chats, messages, and memories. Continue?",
+        syncPulled: (summary: BackupImportSummaryDTO) =>
+          `Pull complete: ${describeSummaryCounts(summary)}`,
+        syncPushed: (summary: BackupImportSummaryDTO) =>
+          `Push complete: ${describeSummaryCounts(summary)}`,
+        syncDirection: (direction: LanSyncDirection) =>
+          direction === "pull" ? "Pull" : "Push",
+        syncModeLabel: (mode: "merge" | "replace") =>
+          mode === "merge" ? "Merge" : "Replace",
         saveReady: "Save locally",
         noPendingChanges: "No pending changes"
       };
@@ -342,6 +496,12 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
+  const [syncMode, setSyncMode] = useState<"merge" | "replace">("merge");
+  const [syncPeerUrl, setSyncPeerUrl] = useState("");
+  const [syncInfo, setSyncInfo] = useState<LanSyncInfoDTO | null>(null);
+  const [syncInfoLoading, setSyncInfoLoading] = useState(false);
+  const [syncRecords, setSyncRecords] = useState<SyncRecord[]>([]);
+  const [pendingSyncDirection, setPendingSyncDirection] = useState<LanSyncDirection | null>(null);
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
   const [expandedProviderId, setExpandedProviderId] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSection>("runtime");
@@ -357,36 +517,61 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const addProviderButtonRef = useRef<HTMLDivElement>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
 
+  const applyLoadedSettings = useCallback(
+    (settings: PublicUserSettingsDTO) => {
+      const nextForm: SettingsInput = {
+        activeProvider: settings.activeProvider,
+        apiBaseUrl: settings.apiBaseUrl,
+        apiKey: "",
+        model: settings.model,
+        temperature: settings.temperature,
+        maxTokens: settings.maxTokens,
+        topP: settings.topP,
+        language: settings.language,
+        providers: settings.providers ?? [],
+        activeProviderId: settings.activeProviderId ?? "",
+        activeModelId: settings.activeModelId ?? "",
+        showMessageAvatars: settings.showMessageAvatars,
+        userProfileSummary: settings.userProfileSummary ?? ""
+      };
+      setForm(nextForm);
+      setSavedSnapshot(serializeForm(nextForm));
+      setLanguage(settings.language);
+      setShowMessageAvatars(settings.showMessageAvatars);
+      setHasApiKey(settings.hasApiKey);
+      setClearStoredApiKey(false);
+    },
+    [setLanguage, setShowMessageAvatars]
+  );
+
   useEffect(() => {
     void api.settings
       .get()
-      .then((settings) => {
-        const nextForm: SettingsInput = {
-          activeProvider: settings.activeProvider,
-          apiBaseUrl: settings.apiBaseUrl,
-          apiKey: "",
-          model: settings.model,
-          temperature: settings.temperature,
-          maxTokens: settings.maxTokens,
-          topP: settings.topP,
-          language: settings.language,
-          providers: settings.providers ?? [],
-          activeProviderId: settings.activeProviderId ?? "",
-          activeModelId: settings.activeModelId ?? "",
-          showMessageAvatars: settings.showMessageAvatars,
-          userProfileSummary: settings.userProfileSummary ?? ""
-        };
-        setForm(nextForm);
-        setSavedSnapshot(serializeForm(nextForm));
-        setLanguage(settings.language);
-        setShowMessageAvatars(settings.showMessageAvatars);
-        setHasApiKey(settings.hasApiKey);
-        setClearStoredApiKey(false);
-      })
+      .then(applyLoadedSettings)
       .catch((caught: unknown) =>
         setError(caught instanceof Error ? caught.message : "Failed to load settings")
       );
-  }, [setLanguage, setShowMessageAvatars]);
+  }, [applyLoadedSettings]);
+
+  useEffect(() => {
+    setSyncRecords(readSyncRecords());
+  }, []);
+
+  const loadSyncInfo = useCallback(async () => {
+    setSyncInfoLoading(true);
+
+    try {
+      setSyncInfo(await api.sync.info());
+    } catch {
+      setSyncInfo(null);
+    } finally {
+      setSyncInfoLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSyncInfo();
+  }, [loadSyncInfo]);
 
   useEffect(() => {
     if (!status) {
@@ -431,6 +616,25 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     const model = provider.models.find((m) => m.id === form.activeModelId);
     return model ? (model.label || model.model) : "";
   }, [form.providers, form.activeProviderId, form.activeModelId]);
+
+  const syncAddressRows = useMemo(
+    () =>
+      syncInfo
+        ? [
+            {
+              url: syncInfo.localUrl,
+              label: copy.localBackendLocalOnly,
+              tone: "default"
+            },
+            ...syncInfo.lanUrls.map((url) => ({
+              url,
+              label: copy.localBackendLanReachable,
+              tone: "lan"
+            }))
+          ]
+        : [],
+    [copy.localBackendLanReachable, copy.localBackendLocalOnly, syncInfo]
+  );
 
   useEffect(() => {
     setExpandedProviderId((current) => {
@@ -558,6 +762,56 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("settings.failedImportBackup"));
     } finally {
+      setLoading(false);
+    }
+  };
+
+  const addSyncRecord = (result: LanSyncSummaryDTO) => {
+    const record = toSyncRecord(result);
+    setSyncRecords((current) => {
+      const next = [record, ...current].slice(0, 8);
+      window.localStorage.setItem(syncRecordStorageKey, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const copySyncAddress = async (address: string) => {
+    try {
+      await copyTextWithFallback(address);
+      setStatus(copy.addressCopied);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : copy.syncFailed);
+    }
+  };
+
+  const runLanSync = async (direction: LanSyncDirection) => {
+    if (!syncPeerUrl.trim()) {
+      setError(copy.syncPeerUrlRequired);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+
+    try {
+      const result =
+        direction === "pull"
+          ? await api.sync.pull({ peerBaseUrl: syncPeerUrl, mode: syncMode })
+          : await api.sync.push({ peerBaseUrl: syncPeerUrl, mode: syncMode });
+
+      addSyncRecord(result);
+
+      if (direction === "pull") {
+        applyLoadedSettings(await api.settings.get());
+        setStatus(copy.syncPulled(result.summary));
+      } else {
+        setStatus(copy.syncPushed(result.summary));
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : copy.syncFailed);
+    } finally {
+      setPendingSyncDirection(null);
       setLoading(false);
     }
   };
@@ -1368,6 +1622,154 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                 }}
               />
             </div>
+
+            <div className={`border-t pt-6 ${settingsDividerClassName}`}>
+              <div className="mb-4 flex items-start gap-3">
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.03] text-ember-300">
+                  <Wifi size={18} />
+                </div>
+                <SettingsSectionHeading title={copy.syncTitle} description={copy.syncHelp} />
+              </div>
+
+              <div className={`mb-4 rounded-lg p-3 ${settingsSurfaceClassName}`}>
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-slate-100">
+                      {copy.localBackendTitle}
+                    </div>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      {copy.localBackendHelp}
+                    </p>
+                  </div>
+                  <Button
+                    className="!min-h-[34px] !px-3 text-xs"
+                    disabled={syncInfoLoading}
+                    variant="ghost"
+                    onClick={() => void loadSyncInfo()}
+                  >
+                    <RefreshCw size={14} />
+                    {copy.localBackendRefresh}
+                  </Button>
+                </div>
+
+                {syncInfoLoading && syncAddressRows.length === 0 ? (
+                  <div className="rounded-lg border border-white/5 bg-white/[0.02] px-3 py-3 text-sm text-slate-500">
+                    {copy.localBackendLoading}
+                  </div>
+                ) : syncAddressRows.length === 0 ? (
+                  <div className="rounded-lg border border-white/5 bg-white/[0.02] px-3 py-3 text-sm text-slate-500">
+                    {copy.localBackendUnavailable}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {syncAddressRows.map((address) => (
+                      <div
+                        key={`${address.label}-${address.url}`}
+                        className="grid gap-2 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto]"
+                      >
+                        <div className="min-w-0">
+                          <div className="mb-1">
+                            <SettingsBadge>{address.label}</SettingsBadge>
+                          </div>
+                          <div className="break-all font-mono text-xs leading-5 text-slate-300">
+                            {address.url}
+                          </div>
+                        </div>
+                        <Button
+                          className="!min-h-[32px] !px-3 text-xs"
+                          variant="secondary"
+                          onClick={() => void copySyncAddress(address.url)}
+                        >
+                          <CopyIcon size={13} />
+                          {copy.copyAddress}
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+                <Field label={copy.syncPeerUrl}>
+                  <TextInput
+                    inputMode="url"
+                    placeholder={copy.syncPeerPlaceholder}
+                    value={syncPeerUrl}
+                    onChange={(event) => setSyncPeerUrl(event.target.value)}
+                  />
+                </Field>
+                <Field label={copy.syncMode}>
+                  <select
+                    className={selectClassName}
+                    value={syncMode}
+                    onChange={(event) => setSyncMode(event.target.value as "merge" | "replace")}
+                  >
+                    <option value="merge">{t("settings.importModeMerge")}</option>
+                    <option value="replace">{t("settings.importModeReplace")}</option>
+                  </select>
+                </Field>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-3">
+                <Button
+                  disabled={loading}
+                  variant="secondary"
+                  onClick={() => setPendingSyncDirection("pull")}
+                >
+                  <ArrowDownToLine size={16} />
+                  {copy.syncPull}
+                </Button>
+                <Button
+                  disabled={loading}
+                  variant="secondary"
+                  onClick={() => setPendingSyncDirection("push")}
+                >
+                  <ArrowUpFromLine size={16} />
+                  {copy.syncPush}
+                </Button>
+              </div>
+            </div>
+
+            <div className={`border-t pt-6 ${settingsDividerClassName}`}>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                  <History size={16} className="text-slate-400" />
+                  {copy.syncRecords}
+                </div>
+                <span className="text-xs text-slate-500">{copy.syncRecordLegend}</span>
+              </div>
+
+              {syncRecords.length === 0 ? (
+                <div className={`rounded-lg px-4 py-5 text-center text-sm text-slate-500 ${settingsSurfaceClassName}`}>
+                  {copy.syncNoRecords}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {syncRecords.map((record) => (
+                    <div
+                      key={record.id}
+                      className={`grid gap-2 rounded-lg px-3 py-3 text-sm sm:grid-cols-[minmax(0,1fr)_auto] ${settingsSurfaceClassName}`}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <SettingsBadge>{copy.syncDirection(record.direction)}</SettingsBadge>
+                          <SettingsBadge>{copy.syncModeLabel(record.mode)}</SettingsBadge>
+                          <span className="truncate text-slate-300">{record.peerBaseUrl}</span>
+                        </div>
+                        <div className="mt-2 text-xs text-slate-500">
+                          {new Date(record.completedAt).toLocaleString(
+                            language === "zh-CN" ? "zh-CN" : "en-US"
+                          )}
+                        </div>
+                      </div>
+                      <div className="font-mono text-xs text-slate-300">
+                        {describeSummaryCounts(record.summary)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </Panel>
       ) : null}
@@ -1382,6 +1784,21 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
           variant="primary"
           onCancel={() => setPendingImportFile(null)}
           onConfirm={() => void importBackup(pendingImportFile)}
+        />
+      ) : null}
+
+      {pendingSyncDirection ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={t("common.confirm")}
+          loading={loading}
+          message={
+            pendingSyncDirection === "pull" ? copy.syncPullConfirm : copy.syncPushConfirm
+          }
+          title={copy.syncTitle}
+          variant="primary"
+          onCancel={() => setPendingSyncDirection(null)}
+          onConfirm={() => void runLanSync(pendingSyncDirection)}
         />
       ) : null}
 

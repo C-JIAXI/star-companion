@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 import { createServer } from "node:http";
+import path from "node:path";
 import { WebSocketServer } from "ws";
 import { serverConfig } from "./config.js";
 import { connectDatabase, disconnectDatabase, prisma } from "./db.js";
@@ -10,6 +11,7 @@ import { charactersRouter } from "./routes/characters.js";
 import { chatsRouter } from "./routes/chats.js";
 import { messagesRouter } from "./routes/messages.js";
 import { settingsRouter } from "./routes/settings.js";
+import { syncRouter } from "./routes/sync.js";
 import { attachChatSocket } from "./realtime/chatSocket.js";
 
 const APP_NAME = "Star Companion";
@@ -42,6 +44,14 @@ app.use("/api/chats", chatsRouter);
 app.use("/api/messages", messagesRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/backups", backupsRouter);
+app.use("/api/sync", syncRouter);
+
+if (serverConfig.webDistDir) {
+  app.use(express.static(serverConfig.webDistDir));
+  app.get(/^(?!\/api\/).*/, (_request, response) => {
+    response.sendFile(path.join(serverConfig.webDistDir as string, "index.html"));
+  });
+}
 
 app.use(errorMiddleware);
 

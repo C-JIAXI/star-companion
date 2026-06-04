@@ -13,16 +13,40 @@ import type {
   ChatDTO,
   ChatInput,
   ChatWithMessagesDTO,
+  LanSyncInfoDTO,
+  LanSyncRequestDTO,
+  LanSyncSummaryDTO,
   MessageDTO,
   MessageInput,
   PaginatedCharactersDTO,
   PublicUserSettingsDTO,
   SettingsInput
 } from "../types";
+import { resolveApiUrl } from "./appBackend";
 
 type RequestOptions = {
   method?: "GET" | "POST" | "PUT" | "DELETE";
   body?: unknown;
+};
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const fetchWithStartupRetry = async (url: string, init: RequestInit) => {
+  const attempts = import.meta.env.VITE_API_BASE_URL ? 8 : 1;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await fetch(url, init);
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) {
+        await wait(250 + attempt * 250);
+      }
+    }
+  }
+
+  throw lastError;
 };
 
 const isJsonResponse = (response: Response) =>
@@ -34,7 +58,7 @@ const getFallbackErrorMessage = (response: Response) =>
     : `Request failed: ${response.status}`;
 
 const request = async <T>(path: string, options: RequestOptions = {}): Promise<T> => {
-  const response = await fetch(path, {
+  const response = await fetchWithStartupRetry(resolveApiUrl(path), {
     method: options.method ?? "GET",
     headers: options.body ? { "Content-Type": "application/json" } : undefined,
     body: options.body ? JSON.stringify(options.body) : undefined
@@ -192,5 +216,12 @@ export const api = {
         method: "POST",
         body: { ...(backup && typeof backup === "object" ? backup : {}), mode }
       })
+  },
+  sync: {
+    info: () => request<LanSyncInfoDTO>("/api/sync/info"),
+    pull: (input: LanSyncRequestDTO) =>
+      request<LanSyncSummaryDTO>("/api/sync/pull", { method: "POST", body: input }),
+    push: (input: LanSyncRequestDTO) =>
+      request<LanSyncSummaryDTO>("/api/sync/push", { method: "POST", body: input })
   }
 };
