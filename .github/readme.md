@@ -179,5 +179,3 @@ Core models:
 ## License
 
 This project is licensed under [`AGPL-3.0-or-later`](../LICENSE).
-
-AGPL was chosen because Star Companion is a complete local-first web / desktop application that may also be deployed as a server service. The license permits use, study, modification, and redistribution, while requiring source availability when modified versions are provided over a network.
