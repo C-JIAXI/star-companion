@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, "..");
+const repoRoot = path.resolve(__dirname, "..", "..");
 const serverDir = path.join(repoRoot, "apps", "server");
 const webDistDir = path.join(repoRoot, "apps", "web", "dist");
 const desktopResourcesDir = path.join(repoRoot, "dist", "desktop-resources");
@@ -75,7 +75,7 @@ await cp(
 
 const metadata = {
   preparedAt: new Date().toISOString(),
-  source: "scripts/prepare-desktop-resources.mjs"
+  source: "scripts/desktop/prepare-desktop-resources.mjs"
 };
 
 await writeFile(

@@ -76,7 +76,7 @@ if not exist "apps\server\prisma\dev.db" (
     if exist "apps\server\prisma\dev.db-journal" del /q "apps\server\prisma\dev.db-journal"
     if exist "apps\server\prisma\dev.db-wal" del /q "apps\server\prisma\dev.db-wal"
     if exist "apps\server\prisma\dev.db-shm" del /q "apps\server\prisma\dev.db-shm"
-    node --disable-warning=ExperimentalWarning scripts\init-dev-db.mjs
+    node --disable-warning=ExperimentalWarning scripts\dev\init-dev-db.mjs
     if errorlevel 1 (
       echo [ERROR] Local database initialization failed.
       pause

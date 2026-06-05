@@ -2,7 +2,7 @@ import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const mobileBackendDir = path.join(rootDir, "apps", "mobile-backend");
 const webNodeDir = path.join(rootDir, "apps", "web", "dist", "nodejs");
 const serverDistSource = path.join(rootDir, "apps", "server", "dist");

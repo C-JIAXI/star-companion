@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const run = (command, args, options = {}) =>
   new Promise((resolve, reject) => {
@@ -27,4 +27,4 @@ await run(npmCommand, npmArgs(["run", "build", "--prefix", "apps/web"]), {
     VITE_API_BASE_URL: process.env.VITE_API_BASE_URL || "http://127.0.0.1:4110"
   }
 });
-await run("node", ["scripts/prepare-mobile-backend.mjs"]);
+await run("node", ["scripts/mobile/prepare-mobile-backend.mjs"]);

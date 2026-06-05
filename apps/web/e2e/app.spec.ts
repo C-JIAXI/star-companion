@@ -169,6 +169,7 @@ test("changing language does not immediately reload stale server settings", asyn
 
   await page.goto("/settings");
   const languageSelect = page.locator("select", { has: page.locator('option[value="en"]') });
+  await expect(languageSelect).toBeVisible();
   await expect(languageSelect).toHaveValue("zh-CN");
   const settingsGetCountAfterLoad = settingsGetCount;
 

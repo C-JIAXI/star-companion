@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const port = 4111;
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "star-companion-mobile-"));
 
@@ -67,7 +67,7 @@ await new Promise((resolve, reject) => {
 });
 
 await new Promise((resolve, reject) => {
-  const prepare = spawn("node", ["scripts/prepare-mobile-backend.mjs"], {
+  const prepare = spawn("node", ["scripts/mobile/prepare-mobile-backend.mjs"], {
     cwd: rootDir,
     stdio: "inherit"
   });

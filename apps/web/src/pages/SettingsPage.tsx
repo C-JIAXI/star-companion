@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useI18n } from "../i18n";
+import { languageOptions, useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { downloadJson, readFileText } from "../lib/files";
 import { generateId } from "../lib/uuid";
@@ -1169,6 +1169,26 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
 
             <div className={`border-t pt-6 ${settingsDividerClassName}`}>
               <div className="mb-5 grid gap-5 md:grid-cols-2">
+                <Field label={t("settings.language")}>
+                  <select
+                    className={selectClassName}
+                    value={form.language}
+                    onChange={(event) => {
+                      const nextLanguage = event.target.value as AppLanguage;
+                      setForm((current) => ({
+                        ...current,
+                        language: nextLanguage
+                      }));
+                      setLanguage(nextLanguage);
+                    }}
+                  >
+                    {languageOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
                 <Field label={language === "zh-CN" ? "聊天头像显示" : "Show chat avatars"}>
                   <label className="flex min-h-[40px] cursor-pointer items-center gap-3 rounded-lg border border-white/10 bg-ink-950/50 px-3 text-sm text-slate-100 transition-all hover:border-white/20">
                     <input
