@@ -10,10 +10,11 @@ const npmExecPath = process.env.npm_execpath || (existsSync(fallbackNpmCliPath) 
 const runNpmInstall = (prefix) => {
   const fallbackToShell = !npmExecPath && process.platform === "win32";
   const command = npmExecPath ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm";
-  const args = npmExecPath ? [npmExecPath, "install", "--prefix", prefix] : ["install", "--prefix", prefix];
+  const args = npmExecPath ? [npmExecPath, "install", "--ignore-scripts"] : ["install", "--ignore-scripts"];
 
   console.log(`[postinstall] Installing dependencies for ${prefix}`);
   const result = spawnSync(command, args, {
+    cwd: prefix,
     stdio: "inherit",
     shell: fallbackToShell
   });
