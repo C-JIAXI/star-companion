@@ -7,7 +7,7 @@
   "type": "module",
   "main": "apps/desktop/main.cjs",
   "scripts": {
-    "postinstall": "npm install --prefix packages/shared && npm install --prefix apps/server && npm install --prefix apps/web && npm install --prefix apps/mobile-backend",
+    "postinstall": "node scripts/dev/install-subprojects.mjs",
     "dev": "concurrently -n shared,server,web -c cyan,green,magenta \"npm run dev --prefix packages/shared\" \"npm run dev --prefix apps/server\" \"npm run dev --prefix apps/web\"",
     "build": "npm run build --prefix packages/shared && npm run build --prefix apps/server && npm run build --prefix apps/web",
     "desktop:icon": "node scripts/desktop/generate-desktop-icon.mjs",
