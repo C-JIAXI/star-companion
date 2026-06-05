@@ -14,7 +14,7 @@
     "desktop:prepare": "npm run desktop:icon && node scripts/desktop/prepare-desktop-resources.mjs",
     "desktop:dev": "npm run desktop:icon && npm run build && electron .",
     "desktop:pack": "npm run build && npm run desktop:prepare && electron-builder --dir",
-    "desktop:build": "npm run build && npm run desktop:prepare && electron-builder",
+    "desktop:build": "npm run build && npm run desktop:prepare && electron-builder --publish=never",
     "mobile:build:web": "node scripts/mobile/build-mobile-web.mjs",
     "mobile:sync": "npm run mobile:build:web && cap sync android",
     "mobile:open:android": "npm run mobile:sync && cap open android",
