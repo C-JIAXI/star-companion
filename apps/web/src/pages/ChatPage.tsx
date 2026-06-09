@@ -27,7 +27,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
-import { sanitizeCharacterHtmlCss } from "../lib/characterHtmlCss";
+import { scopeCharacterChatUiCss } from "../lib/characterHtmlCss";
 import { downloadText, readFileAsDataUrl } from "../lib/files";
 import { generateId } from "../lib/uuid";
 import { useWebSocket } from "../lib/useWebSocket";
@@ -679,7 +679,7 @@ export function ChatPage({
     );
     existing?.remove();
 
-    const css = sanitizeCharacterHtmlCss(activeCharacterHtmlCss).trim();
+    const css = scopeCharacterChatUiCss(activeCharacterHtmlCss).trim();
     if (!css) {
       return;
     }

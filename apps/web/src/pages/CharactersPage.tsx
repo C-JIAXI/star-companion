@@ -6,6 +6,7 @@ import {
   Download,
   FileUp,
   Lock,
+  Maximize2,
   Plus,
   Save,
   Search,
@@ -38,6 +39,7 @@ import {
   ErrorNotice,
   Field,
   HelpLabel,
+  Modal,
   Panel,
   SuccessNotice,
   TextArea,
@@ -72,6 +74,7 @@ const blankQuickReply = (): QuickReplyDTO & { _localId: string; _collapsed: bool
 type QuickReplyForm = ReturnType<typeof blankQuickReply>;
 type EditorSectionId = "prompt" | "tags" | "html" | "opening" | "lore" | "quickReplies";
 type PasswordDialogMode = "unlock" | "export-private" | "export-public";
+type ExpandedTextField = "htmlCss" | "openingHtml";
 
 const HTML_PREVIEW_TEMPLATES = {
   card: `<article class="character-card">
@@ -332,10 +335,25 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
   const [previewMarkup, setPreviewMarkup] = useState<string>(
     HTML_PREVIEW_TEMPLATES[DEFAULT_HTML_PREVIEW_TEMPLATE]
   );
+  const [expandedTextField, setExpandedTextField] = useState<ExpandedTextField | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const characterRequestRef = useRef(0);
   const unlockedPasswordRef = useRef<Record<string, string>>({});
   const editorCoverSrc = usePlaceholderSrc(form.avatar, selectedId ?? undefined);
+  const expandedTextFieldTitle =
+    expandedTextField === "htmlCss"
+      ? t("characters.htmlCss")
+      : expandedTextField === "openingHtml"
+        ? t("characters.openingHtml")
+        : "";
+  const expandedTextFieldValue = expandedTextField ? form[expandedTextField] : "";
+  const updateExpandedTextField = (value: string) => {
+    if (!expandedTextField) {
+      return;
+    }
+
+    setForm((current) => ({ ...current, [expandedTextField]: value }));
+  };
 
   const htmlPreviewTemplates = useMemo(
     () => [
@@ -1144,14 +1162,29 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                 ) : (
                   <div className="space-y-5">
                     <Field
+                      container="div"
                       label={
-                        <HelpLabel
-                          label={t("characters.htmlCss")}
-                          description={t("help.characterHtmlCss")}
-                        />
+                        <div className="flex min-w-0 items-center justify-between gap-3">
+                          <HelpLabel
+                            label={t("characters.htmlCss")}
+                            description={t("help.characterHtmlCss")}
+                          />
+                          <Button
+                            aria-label={`${t("characters.expandEditor")} ${t("characters.htmlCss")}`}
+                            className="!h-8 !min-h-[32px] shrink-0 !px-2.5 text-xs"
+                            data-testid="expand-html-css-editor"
+                            title={`${t("characters.expandEditor")} ${t("characters.htmlCss")}`}
+                            variant="ghost"
+                            onClick={() => setExpandedTextField("htmlCss")}
+                          >
+                            <Maximize2 size={14} />
+                            {t("characters.expandEditor")}
+                          </Button>
+                        </div>
                       }
                     >
                       <TextArea
+                        aria-label={t("characters.htmlCss")}
                         value={form.htmlCss}
                         onChange={(event) => setForm({ ...form, htmlCss: event.target.value })}
                         className="!h-[170px] min-h-[170px] font-mono text-xs leading-6"
@@ -1226,15 +1259,30 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                 ) : (
                   <div className="space-y-5">
                     <Field
+                      container="div"
                       label={
-                        <HelpLabel
-                          label={t("characters.openingHtml")}
-                          description={t("help.characterOpeningHtml")}
-                        />
+                        <div className="flex min-w-0 items-center justify-between gap-3">
+                          <HelpLabel
+                            label={t("characters.openingHtml")}
+                            description={t("help.characterOpeningHtml")}
+                          />
+                          <Button
+                            aria-label={`${t("characters.expandEditor")} ${t("characters.openingHtml")}`}
+                            className="!h-8 !min-h-[32px] shrink-0 !px-2.5 text-xs"
+                            data-testid="expand-opening-html-editor"
+                            title={`${t("characters.expandEditor")} ${t("characters.openingHtml")}`}
+                            variant="ghost"
+                            onClick={() => setExpandedTextField("openingHtml")}
+                          >
+                            <Maximize2 size={14} />
+                            {t("characters.expandEditor")}
+                          </Button>
+                        </div>
                       }
                     >
                       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                         <TextArea
+                          aria-label={t("characters.openingHtml")}
                           value={form.openingHtml}
                           onChange={(event) =>
                             setForm({ ...form, openingHtml: event.target.value })
@@ -1820,6 +1868,29 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
           )}
         </div>
       )}
+      {expandedTextField ? (
+        <Modal
+          bodyClassName="flex min-h-0 flex-col gap-3 overflow-hidden"
+          panelClassName="h-[calc(100dvh-1.5rem)] !max-h-[calc(100dvh-1.5rem)] max-w-[min(96vw,1100px)] sm:h-[calc(100dvh-3rem)] sm:!max-h-[calc(100dvh-3rem)]"
+          title={`${t("characters.expandEditor")} ${expandedTextFieldTitle}`}
+          onClose={() => setExpandedTextField(null)}
+        >
+          <p className="text-xs leading-5 text-slate-500">{t("characters.expandedEditorHelp")}</p>
+          <TextArea
+            aria-label={expandedTextFieldTitle}
+            className="min-h-0 flex-1 resize-none font-mono text-xs leading-6"
+            data-testid="expanded-character-textarea"
+            placeholder={
+              expandedTextField === "openingHtml"
+                ? t("characters.openingHtmlPlaceholder")
+                : undefined
+            }
+            spellCheck={false}
+            value={expandedTextFieldValue}
+            onChange={(event) => updateExpandedTextField(event.target.value)}
+          />
+        </Modal>
+      ) : null}
       {deleteConfirmOpen && selected ? (
         <ConfirmDialog
           cancelLabel={t("common.cancel")}

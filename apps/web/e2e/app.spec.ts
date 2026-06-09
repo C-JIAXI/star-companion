@@ -211,9 +211,16 @@ test("character built-in css previews in the editor and styles only matching cha
   const characterBName = `CSS Character B ${suffix}`;
   const chatATitle = `CSS Chat A ${suffix}`;
   const chatBTitle = `CSS Chat B ${suffix}`;
-  const assistantReplyA = "Assistant reply for character CSS coverage.";
+  const assistantReplyAText = "Assistant reply for character CSS coverage.";
+  const assistantReplyA = `<div class="custom-fold"><details open><summary><span class="title-icon"></span>Memory Scroll</summary><p>${assistantReplyAText}</p></details></div>`;
   const assistantReplyB = "Assistant reply that should keep default chat styling.";
-  const customCss = `#chat-composer {
+  const customCss = `body {
+  background-color: rgb(253, 246, 227);
+  color: rgb(75, 34, 12);
+  font-family: Georgia, serif;
+}
+
+#chat-composer {
   background: rgb(17, 24, 39) !important;
   border: 2px solid rgb(255, 0, 0) !important;
 }
@@ -225,7 +232,42 @@ test("character built-in css previews in the editor and styles only matching cha
 [data-chat-message="assistant"] [data-chat-bubble] {
   background: rgb(12, 34, 56) !important;
   border-color: rgb(56, 189, 248) !important;
+}
+
+.custom-fold summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+}
+
+.custom-fold summary .title-icon {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgb(196, 30, 58);
+}
+
+.custom-fold summary::after {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid rgb(122, 59, 46);
+  margin-left: auto;
+}
+
+/* Responsive card tweak */
+@media (min-width: 1px) {
+  .custom-fold summary {
+    border-bottom: 3px solid rgb(1, 2, 3);
+  }
 }`;
+  const expandedCss = `${customCss}
+/* expanded editor smoke */`;
+  const expandedOpeningHtml = `<section><h1>Expanded opening ${suffix}</h1></section>`;
 
   const createCharacter = async (name: string) => {
     const response = await request.post("/api/characters", {
@@ -298,6 +340,13 @@ test("character built-in css previews in the editor and styles only matching cha
     await visibleEditButtons.first().click();
     await page.getByRole("button", { name: /内置\s*CSS|Built-in CSS/i }).click();
     await page.getByRole("textbox", { name: /内置\s*css|Built-in CSS/i }).fill(customCss);
+    await page.getByTestId("expand-html-css-editor").click();
+    await expect(page.getByTestId("expanded-character-textarea")).toHaveValue(customCss);
+    await page.getByTestId("expanded-character-textarea").fill(expandedCss);
+    await page.getByRole("button", { name: "Close" }).click();
+    await expect(page.getByRole("textbox", { name: /内置\s*css|Built-in CSS/i })).toHaveValue(
+      expandedCss
+    );
     await page.getByRole("button", { name: /聊天界面|Chat UI/ }).click();
 
     const previewComposer = page.locator("#chat-composer");
@@ -310,6 +359,13 @@ test("character built-in css previews in the editor and styles only matching cha
     await expect(previewComposer).toHaveCSS("border-top-color", "rgb(255, 0, 0)");
     await expect(previewInput).toHaveCSS("color", "rgb(34, 197, 94)");
     await expect(previewAssistantBubble).toHaveCSS("background-color", "rgb(12, 34, 56)");
+    await page.getByRole("button", { name: /开场 HTML|Opening HTML/i }).click();
+    await page.getByTestId("expand-opening-html-editor").click();
+    await page.getByTestId("expanded-character-textarea").fill(expandedOpeningHtml);
+    await page.getByRole("button", { name: "Close" }).click();
+    await expect(
+      page.getByPlaceholder(/输入完整的 HTML 内容|Enter full HTML content/i)
+    ).toHaveValue(expandedOpeningHtml);
 
     await page
       .getByRole("button", { name: /保存|Save/ })
@@ -320,19 +376,61 @@ test("character built-in css previews in the editor and styles only matching cha
     const storedCharacterResponse = await request.get(`/api/characters/${characterA.id}`);
     expect(storedCharacterResponse.ok()).toBeTruthy();
     const storedCharacter = (await storedCharacterResponse.json()) as ApiDataResponse<
-      E2ECharacter & { htmlCss?: string }
+      E2ECharacter & { htmlCss?: string; openingHtml?: string }
     >;
     expect(storedCharacter.data?.htmlCss).toContain("#chat-composer");
+    expect(storedCharacter.data?.htmlCss).toContain("expanded editor smoke");
+    expect(storedCharacter.data?.openingHtml).toBe(expandedOpeningHtml);
 
     await page.goto("/");
     await openHistoryAndSelectChat(chatATitle);
-    await expect(page.getByText(assistantReplyA)).toBeVisible();
+    await expect(page.getByText(assistantReplyAText)).toBeVisible();
+    await expect(page.locator("body")).not.toHaveCSS("background-color", "rgb(253, 246, 227)");
+    await expect(page.locator("#chat-page-root")).not.toHaveCSS(
+      "background-color",
+      "rgb(253, 246, 227)"
+    );
     await expect(page.locator("#chat-composer")).toHaveCSS("background-color", "rgb(17, 24, 39)");
     await expect(page.locator("#chat-composer")).toHaveCSS("border-top-color", "rgb(255, 0, 0)");
     await expect(page.locator("#chat-message-input")).toHaveCSS("color", "rgb(34, 197, 94)");
     await expect(
       page.locator('[data-chat-message="assistant"] [data-chat-bubble]').first()
     ).toHaveCSS("background-color", "rgb(12, 34, 56)");
+    const renderedRootStyles = await page.locator(".custom-fold").evaluate((element) => {
+      const root = element.closest(".rp-wrap");
+      if (!root) {
+        throw new Error("Rendered HTML root was not found");
+      }
+
+      const rootStyle = getComputedStyle(root);
+      return {
+        backgroundColor: rootStyle.backgroundColor,
+        color: rootStyle.color,
+        fontFamily: rootStyle.fontFamily
+      };
+    });
+    expect(renderedRootStyles.backgroundColor).toBe("rgb(253, 246, 227)");
+    expect(renderedRootStyles.color).toBe("rgb(75, 34, 12)");
+    expect(renderedRootStyles.fontFamily).toContain("Georgia");
+    await expect(page.locator(".custom-fold summary")).toHaveCount(1);
+    await expect(page.locator(".custom-fold summary .title-icon")).toHaveCSS(
+      "background-color",
+      "rgb(196, 30, 58)"
+    );
+    await expect(page.locator(".custom-fold summary")).toHaveCSS(
+      "border-bottom-color",
+      "rgb(1, 2, 3)"
+    );
+    const disclosureStyles = await page.locator(".custom-fold summary").evaluate((summary) => ({
+      beforeContent: getComputedStyle(summary, "::before").content,
+      afterContent: getComputedStyle(summary, "::after").content,
+      listStyleType: getComputedStyle(summary).listStyleType
+    }));
+    expect(disclosureStyles).toEqual({
+      beforeContent: "none",
+      afterContent: '""',
+      listStyleType: "none"
+    });
 
     await openHistoryAndSelectChat(chatBTitle);
     await expect(page.getByText(assistantReplyB)).toBeVisible();

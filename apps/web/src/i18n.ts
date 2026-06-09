@@ -175,6 +175,8 @@ const zhCN = {
   "characters.prefix": "前置词",
   "characters.prompt": "提示词",
   "characters.htmlCss": "内置css",
+  "characters.expandEditor": "放大查看",
+  "characters.expandedEditorHelp": "在放大文本域中编辑会同步回当前角色表单。",
   "characters.htmlPreview": "HTML 预览",
   "characters.htmlPreviewHelp":
     "下方示例只用于调试当前角色的内置 CSS，包含 HTML fragment 和 Chat UI 选择器预览，不会写入角色卡数据。",
@@ -522,6 +524,8 @@ const en: Record<keyof typeof zhCN, string> = {
   "characters.prefix": "Prefix",
   "characters.prompt": "Prompt",
   "characters.htmlCss": "Built-in CSS",
+  "characters.expandEditor": "Expand",
+  "characters.expandedEditorHelp": "Edits in the expanded text area are synced back to the current character form.",
   "characters.htmlPreview": "HTML Preview",
   "characters.htmlPreviewHelp":
     "These samples are only for tuning the current character's built-in CSS, including HTML fragments and Chat UI selector previews, and are not saved into the character card.",

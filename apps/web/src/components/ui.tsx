@@ -330,11 +330,15 @@ export function Drawer({
 export function Modal({
   title,
   children,
-  onClose
+  onClose,
+  panelClassName = "",
+  bodyClassName = ""
 }: {
   title: ReactNode;
   children: ReactNode;
   onClose: () => void;
+  panelClassName?: string;
+  bodyClassName?: string;
 }) {
   useEffect(() => {
     const originalOverflow = document.body.style.overflow;
@@ -360,7 +364,7 @@ export function Modal({
       onClick={onClose}
     >
       <section
-        className="animate-modal-enter flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)]"
+        className={`animate-modal-enter flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)] ${panelClassName}`}
         role="dialog"
         onClick={(event) => event.stopPropagation()}
       >
@@ -377,7 +381,9 @@ export function Modal({
             <X size={16} />
           </button>
         </div>
-        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-4 sm:px-6 sm:pb-6">
+        <div
+          className={`custom-scrollbar min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-4 sm:px-6 sm:pb-6 ${bodyClassName}`}
+        >
           {children}
         </div>
       </section>

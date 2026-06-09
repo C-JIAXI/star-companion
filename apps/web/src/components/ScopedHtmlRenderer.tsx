@@ -1,6 +1,6 @@
 import DOMPurify from "dompurify";
 import { useEffect, useRef } from "react";
-import { sanitizeCharacterHtmlCss } from "../lib/characterHtmlCss";
+import { scopeCharacterHtmlCss } from "../lib/characterHtmlCss";
 
 const RENDERABLE_HTML_PATTERN = /<\/?[a-z][\w:-]*(?:\s[^<>]*)?>/i;
 
@@ -212,7 +212,7 @@ const BASE_SCOPED_HTML_CSS = `
   display: none;
 }
 
-:where(.rp-wrap) summary::before {
+:where(.rp-wrap) summary:not(:has(*))::before {
   content: "\\25B6";
   font-size: 0.6rem;
   color: #64748b;
@@ -220,7 +220,7 @@ const BASE_SCOPED_HTML_CSS = `
   flex-shrink: 0;
 }
 
-:where(.rp-wrap) details[open] > summary::before {
+:where(.rp-wrap) details[open] > summary:not(:has(*))::before {
   transform: rotate(90deg);
 }
 
@@ -416,7 +416,7 @@ export function ScopedHtmlRenderer({
     wrapper.replaceChildren();
 
     const styleEl = document.createElement("style");
-    styleEl.textContent = `${BASE_SCOPED_HTML_CSS}\n${sanitizeCharacterHtmlCss(htmlCss ?? "")}`;
+    styleEl.textContent = `${BASE_SCOPED_HTML_CSS}\n${scopeCharacterHtmlCss(htmlCss ?? "")}`;
     wrapper.appendChild(styleEl);
 
     const root = document.createElement("div");
