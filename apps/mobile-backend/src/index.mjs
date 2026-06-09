@@ -33,6 +33,7 @@ import {
 } from "../server-dist/schemas.js";
 import { encryptApiKey, hasStoredApiKey } from "../server-dist/services/apiKeyVault.js";
 import {
+  completeChatCompletion,
   estimateTokenUsage,
   fetchAvailableModels,
   streamChatCompletion,
@@ -119,6 +120,420 @@ const toStringArray = (value) => (Array.isArray(value) ? value.filter((item) => 
 
 const dropUndefined = (value) =>
   Object.fromEntries(Object.entries(value).filter(([_key, entry]) => entry !== undefined));
+
+const KEYWORD_CANDIDATE_LIMIT = 12;
+const RERANKED_MEMORY_LIMIT = 5;
+const AUTO_MEMORY_THROTTLE_MS = 30_000;
+const RECENT_MEMORY_MESSAGE_LIMIT = 6;
+const RECENT_PROFILE_MESSAGE_LIMIT = 16;
+const EXISTING_MEMORY_LIMIT = 30;
+const MAX_PROFILE_LENGTH = 1800;
+
+const uniqueStrings = (values, limit) => [
+  ...new Set(values.map((value) => value.trim()).filter(Boolean))
+].slice(0, limit);
+
+const tokenize = (value) =>
+  uniqueStrings(value.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [], 80)
+    .filter((token) => token.length > 1);
+
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const isBoundaryKeyword = (value) => /^[a-z0-9][a-z0-9_-]*$/i.test(value);
+
+const matchesKeyword = (key, contextText) => {
+  const normalizedKey = key.trim().toLowerCase();
+  if (!normalizedKey) return false;
+  if (!isBoundaryKeyword(normalizedKey)) {
+    return contextText.includes(normalizedKey);
+  }
+  return new RegExp(`(^|[^a-z0-9_])${escapeRegExp(normalizedKey)}(?=$|[^a-z0-9_])`, "i").test(contextText);
+};
+
+const normalizeLoreTriggerMode = (value) =>
+  value === "user" || value === "assistant" ? value : "both";
+
+const normalizeLoreScope = (value) =>
+  value === "prefix" || value === "suffix" ? value : "prompt";
+
+const buildLoreContexts = (recentMessages) => {
+  const textFor = (roles) =>
+    recentMessages
+      .filter((message) => roles.includes(message.role))
+      .map((message) => message.content ?? "")
+      .join("\n")
+      .toLowerCase();
+
+  return {
+    user: textFor(["user"]),
+    assistant: textFor(["assistant"]),
+    both: textFor(["user", "assistant"])
+  };
+};
+
+const findMatchedLoreEntries = (character, promptFields, recentMessages) => {
+  const entries = Array.isArray(promptFields?.loreEntries) ? promptFields.loreEntries : [];
+  if (!character || entries.length === 0) return [];
+
+  const contexts = buildLoreContexts(recentMessages);
+  return entries
+    .filter((entry) => entry?.enabled !== false)
+    .filter((entry) => {
+      if (entry.alwaysActive) return true;
+      const triggerMode = normalizeLoreTriggerMode(entry.triggerMode);
+      return toStringArray(entry.keys).some((key) => matchesKeyword(key, contexts[triggerMode]));
+    })
+    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
+    .slice(0, 8)
+    .map((entry) => ({
+      id: entry.id,
+      characterId: character.id,
+      characterName: character.name,
+      keys: toStringArray(entry.keys),
+      content: entry.content ?? "",
+      priority: entry.priority ?? 0,
+      scope: normalizeLoreScope(entry.scope),
+      triggerMode: normalizeLoreTriggerMode(entry.triggerMode),
+      alwaysActive: Boolean(entry.alwaysActive),
+      enabled: entry.enabled !== false
+    }));
+};
+
+const buildCharacterSystemPrompt = (promptFields, loreEntries = []) => {
+  if (!promptFields) return "";
+
+  const loreFor = (scope) =>
+    loreEntries
+      .filter((entry) => entry.scope === scope)
+      .map((entry) => entry.content.trim())
+      .filter(Boolean)
+      .join("\n\n");
+
+  return [
+    [promptFields.prefix?.trim(), loreFor("prefix")].filter(Boolean).join("\n\n"),
+    [promptFields.prompt?.trim(), loreFor("prompt")].filter(Boolean).join("\n\n"),
+    [promptFields.suffix?.trim(), loreFor("suffix")].filter(Boolean).join("\n\n")
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+};
+
+const scoreMemory = (memory, queryText, queryTokens) => {
+  const lowerQuery = queryText.toLowerCase();
+  const keywords = toStringArray(memory.keywords).map((keyword) => keyword.toLowerCase());
+  const searchable = `${memory.title}\n${memory.content}`.toLowerCase();
+  const searchableTokens = new Set(tokenize(searchable));
+  const keywordScore = keywords.reduce(
+    (total, keyword) => total + (keyword && lowerQuery.includes(keyword) ? 8 : 0),
+    0
+  );
+  const tokenScore = [...queryTokens].reduce(
+    (total, token) => total + (searchableTokens.has(token) ? 2 : searchable.includes(token) ? 1 : 0),
+    0
+  );
+  const relevanceScore = keywordScore + tokenScore;
+  if (relevanceScore <= 0) return 0;
+
+  const importanceScore = (memory.importance ?? 3) * 1.5;
+  const lastMatchedAt = memory.lastMatchedAt ? new Date(memory.lastMatchedAt).getTime() : 0;
+  const recentMatchScore = lastMatchedAt
+    ? Math.max(0, 2 - (Date.now() - lastMatchedAt) / (1000 * 60 * 60 * 24 * 14))
+    : 0;
+
+  return relevanceScore + importanceScore + recentMatchScore;
+};
+
+const toMatchedMemoryEntry = (memory, score) => ({
+  ...serializeMemory(memory),
+  score
+});
+
+const buildMemoryRerankMessages = (queryText, candidates) => [
+  {
+    role: "system",
+    content: [
+      "Select long-term chat memories that are useful for answering the next roleplay message.",
+      "Only choose from the provided candidate IDs.",
+      'Return JSON only: {"ids":["memory-id"]}.',
+      `Choose at most ${RERANKED_MEMORY_LIMIT} IDs. Return {"ids":[]} if none are relevant.`
+    ].join("\n")
+  },
+  {
+    role: "user",
+    content: [
+      `Current conversation context:\n${queryText}`,
+      "",
+      "Candidate memories:",
+      candidates
+        .map(
+          (memory, index) =>
+            `${index + 1}. id=${memory.id}\ntitle=${memory.title}\nimportance=${memory.importance}\nkeywords=${memory.keywords.join(", ")}\ncontent=${memory.content}`
+        )
+        .join("\n\n")
+    ].join("\n")
+  }
+];
+
+const parseRerankedIds = (raw, candidateIds) => {
+  const parsed = JSON.parse(raw);
+  const ids = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed.ids : null;
+  if (!Array.isArray(ids)) return [];
+  return uniqueStrings(
+    ids.filter((id) => typeof id === "string" && candidateIds.has(id)),
+    RERANKED_MEMORY_LIMIT
+  );
+};
+
+const rerankMemories = async (queryText, candidates, settings) => {
+  if (candidates.length === 0) return [];
+  if (!settings.apiKey) return candidates.slice(0, RERANKED_MEMORY_LIMIT);
+
+  try {
+    const candidateIds = new Set(candidates.map((candidate) => candidate.id));
+    const raw = await completeChatCompletion({
+      settings,
+      messages: buildMemoryRerankMessages(queryText, candidates),
+      maxTokens: 180,
+      temperature: 0
+    });
+    const ids = parseRerankedIds(raw.trim(), candidateIds);
+    const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+    const selected = ids.map((id) => byId.get(id)).filter(Boolean);
+    return selected.length ? selected : candidates.slice(0, RERANKED_MEMORY_LIMIT);
+  } catch {
+    return candidates.slice(0, RERANKED_MEMORY_LIMIT);
+  }
+};
+
+const recallChatMemories = async ({ chatId, query, recentMessages, settings }) => {
+  const queryText = [query, ...recentMessages.map((message) => `${message.role}: ${message.content}`)]
+    .join("\n")
+    .trim();
+  if (!queryText) return [];
+
+  const queryTokens = new Set(tokenize(queryText));
+  const candidates = store
+    .listMemories(chatId)
+    .filter((memory) => memory.enabled !== false)
+    .map((memory) => toMatchedMemoryEntry(memory, scoreMemory(memory, queryText, queryTokens)))
+    .filter((memory) => memory.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, KEYWORD_CANDIDATE_LIMIT);
+  const selected = await rerankMemories(queryText, candidates, settings);
+
+  if (selected.length) {
+    const matchedAt = new Date().toISOString();
+    await Promise.all(selected.map((memory) => store.updateMemory(chatId, memory.id, { lastMatchedAt: matchedAt })));
+    return selected.map((memory) => ({ ...memory, lastMatchedAt: matchedAt }));
+  }
+
+  return [];
+};
+
+const formatMemorySystemPrompt = (memories) => {
+  if (memories.length === 0) return "";
+
+  return [
+    "Relevant long-term chat memories:",
+    ...memories.map((memory, index) => {
+      const keywords = memory.keywords.length ? ` [${memory.keywords.join(", ")}]` : "";
+      return `${index + 1}. ${memory.title}${keywords}\n${memory.content}`;
+    })
+  ].join("\n\n");
+};
+
+const buildUserProfileSummaryMessages = (currentSummary, userMessages) => [
+  {
+    role: "system",
+    content: [
+      "You maintain a concise local user profile memory for a roleplay chat app.",
+      "Update the profile only with durable facts or habits explicitly supported by user messages.",
+      "Include stable preferences, recurring style, boundaries, goals, names/pronouns if stated, and interaction habits.",
+      "Do not include API keys, secrets, credentials, private addresses, unsupported guesses, or one-off transient requests.",
+      "Keep it short, neutral, and useful for future assistant responses.",
+      "Return only the updated profile summary. If there is no durable new information, return the existing summary."
+    ].join("\n")
+  },
+  {
+    role: "user",
+    content: [
+      `Existing user profile:\n${currentSummary || "(empty)"}`,
+      "",
+      "Recent user messages:",
+      userMessages.map((message, index) => `${index + 1}. ${message}`).join("\n")
+    ].join("\n")
+  }
+];
+
+const updateUserProfileFromChat = async ({ chatId, settings }) => {
+  if (settings.autoSummarizeUser === false) return null;
+
+  const chat = store.getChat(chatId);
+  if (!chat) return null;
+
+  const recentContents = store
+    .listMessages(chatId)
+    .filter((message) => message.role === "user")
+    .slice(-RECENT_PROFILE_MESSAGE_LIMIT)
+    .map((message) => message.content.trim())
+    .filter(Boolean);
+  if (recentContents.length === 0) return null;
+
+  const summary = (
+    await completeChatCompletion({
+      settings,
+      messages: buildUserProfileSummaryMessages(chat.userProfileSummary ?? "", recentContents),
+      maxTokens: 500,
+      temperature: 0.2
+    })
+  )
+    .trim()
+    .slice(0, MAX_PROFILE_LENGTH);
+
+  if (!summary || summary === chat.userProfileSummary) return null;
+
+  return store.updateChat(chatId, {
+    userProfileSummary: summary,
+    userProfileUpdatedAt: new Date().toISOString()
+  });
+};
+
+const buildChatMemoryMaintenanceMessages = (existingMemories, recentMessages) => [
+  {
+    role: "system",
+    content: [
+      "You maintain long-term memories for one local-first single-character roleplay chat.",
+      "Extract durable plot facts, relationship changes, stable preferences, boundaries, plans, and recurring interaction patterns.",
+      "Do not store API keys, credentials, secrets, exact private addresses, unsupported guesses, or one-off transient requests.",
+      "Prefer updating existing memories over creating duplicates.",
+      "Do not delete. You may disable a memory only when the conversation clearly makes it obsolete or false.",
+      "Return JSON only with this shape:",
+      '{"actions":[{"type":"create","title":"...","content":"...","keywords":["..."],"importance":3},{"type":"update","id":"...","title":"...","content":"...","keywords":["..."],"importance":3,"enabled":true}]}'
+    ].join("\n")
+  },
+  {
+    role: "user",
+    content: [
+      "Existing memories:",
+      existingMemories.length
+        ? existingMemories
+            .map(
+              (memory, index) =>
+                `${index + 1}. id=${memory.id}\ntitle=${memory.title}\nenabled=${memory.enabled !== false}\nimportance=${memory.importance ?? 3}\nkeywords=${toStringArray(memory.keywords).join(", ")}\ncontent=${memory.content}`
+            )
+            .join("\n\n")
+        : "(none)",
+      "",
+      "Recent conversation:",
+      recentMessages
+        .map((message, index) => `${index + 1}. ${message.role}: ${message.content}`)
+        .join("\n")
+    ].join("\n")
+  }
+];
+
+const clampImportance = (value) =>
+  Math.min(5, Math.max(1, typeof value === "number" && Number.isFinite(value) ? Math.round(value) : 3));
+
+const normalizeMemoryAction = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  if (value.type === "create") {
+    const title = typeof value.title === "string" ? value.title.trim().slice(0, 80) : "";
+    const content = typeof value.content === "string" ? value.content.trim().slice(0, 1200) : "";
+    if (!title || !content) return null;
+    return {
+      type: "create",
+      title,
+      content,
+      keywords: uniqueStrings(
+        Array.isArray(value.keywords)
+          ? value.keywords.filter((keyword) => typeof keyword === "string")
+          : [],
+        12
+      ),
+      importance: clampImportance(value.importance)
+    };
+  }
+
+  if (value.type === "update") {
+    const id = typeof value.id === "string" ? value.id : "";
+    if (!id) return null;
+    return {
+      type: "update",
+      id,
+      title: typeof value.title === "string" ? value.title.trim().slice(0, 80) : undefined,
+      content: typeof value.content === "string" ? value.content.trim().slice(0, 1200) : undefined,
+      keywords: Array.isArray(value.keywords)
+        ? uniqueStrings(value.keywords.filter((keyword) => typeof keyword === "string"), 12)
+        : undefined,
+      importance: value.importance === undefined ? undefined : clampImportance(value.importance),
+      enabled: typeof value.enabled === "boolean" ? value.enabled : undefined
+    };
+  }
+
+  return null;
+};
+
+const parseMemoryActions = (raw) => {
+  const parsed = JSON.parse(raw);
+  const actions = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed.actions : null;
+  if (!Array.isArray(actions)) return [];
+  return actions.map(normalizeMemoryAction).filter(Boolean);
+};
+
+const updateChatMemoriesFromTurn = async ({ chatId, settings, force = false }) => {
+  const chat = store.getChat(chatId);
+  if (!chat?.autoMemoryEnabled) return null;
+
+  if (!force && chat.memoryUpdatedAt && Date.now() - new Date(chat.memoryUpdatedAt).getTime() < AUTO_MEMORY_THROTTLE_MS) {
+    return null;
+  }
+
+  const recentMessages = store.listMessages(chatId).slice(-RECENT_MEMORY_MESSAGE_LIMIT);
+  if (recentMessages.length === 0) return null;
+
+  const existingMemories = store.listMemories(chatId).slice(0, EXISTING_MEMORY_LIMIT);
+  const raw = await completeChatCompletion({
+    settings,
+    messages: buildChatMemoryMaintenanceMessages(existingMemories, recentMessages),
+    maxTokens: 700,
+    temperature: 0.2
+  });
+  const actions = parseMemoryActions(raw.trim());
+  const existingIds = new Set(existingMemories.map((memory) => memory.id));
+  const sourceMessageIds = recentMessages.map((message) => message.id);
+
+  for (const action of actions.slice(0, 8)) {
+    if (action.type === "create") {
+      await store.createMemory({
+        chatId,
+        title: action.title,
+        content: action.content,
+        keywords: action.keywords,
+        importance: action.importance,
+        enabled: true,
+        sourceMessageIds
+      });
+      continue;
+    }
+
+    if (!existingIds.has(action.id)) continue;
+    await store.updateMemory(
+      chatId,
+      action.id,
+      dropUndefined({
+        title: action.title,
+        content: action.content,
+        keywords: action.keywords,
+        importance: action.importance,
+        enabled: action.enabled,
+        sourceMessageIds
+      })
+    );
+  }
+
+  return store.updateChat(chatId, { memoryUpdatedAt: new Date().toISOString() });
+};
 
 const serializeSettings = (settings) => ({
   id: settings.id,
@@ -262,7 +677,7 @@ const requestPeer = async (peerBaseUrl, pathName, options = {}) => {
   }
 };
 
-const getPromptContext = ({ chatId, before, excludeMessageIds = [] }) => {
+const getPromptContext = async ({ chatId, before, excludeMessageIds = [] }) => {
   const chat = store.getChat(chatId);
   if (!chat) {
     throw notFound("Chat not found");
@@ -277,12 +692,14 @@ const getPromptContext = ({ chatId, before, excludeMessageIds = [] }) => {
 
   const messages = [];
   const characterPromptFields = character ? resolveCharacterPromptFields(character) : null;
-  const characterPrompt = characterPromptFields
-    ? [characterPromptFields.prefix, characterPromptFields.prompt, characterPromptFields.suffix]
-        .map((part) => part?.trim())
-        .filter(Boolean)
-        .join("\n\n")
-    : "";
+  const matchedLoreEntries = findMatchedLoreEntries(character, characterPromptFields, recentMessages);
+  const matchedMemoryEntries = await recallChatMemories({
+    chatId,
+    query: recentMessages.at(-1)?.content ?? "",
+    recentMessages,
+    settings: store.getSettings()
+  });
+  const characterPrompt = buildCharacterSystemPrompt(characterPromptFields, matchedLoreEntries);
 
   if (characterPrompt) {
     messages.push({ role: "system", content: characterPrompt });
@@ -293,6 +710,10 @@ const getPromptContext = ({ chatId, before, excludeMessageIds = [] }) => {
   if (chat.userProfileSummary?.trim()) {
     messages.push({ role: "system", content: `User profile:\n${chat.userProfileSummary.trim()}` });
   }
+  const memoryPrompt = formatMemorySystemPrompt(matchedMemoryEntries);
+  if (memoryPrompt) {
+    messages.push({ role: "system", content: memoryPrompt });
+  }
   for (const message of recentMessages) {
     if (message.role === "system") continue;
     messages.push({
@@ -301,7 +722,7 @@ const getPromptContext = ({ chatId, before, excludeMessageIds = [] }) => {
     });
   }
 
-  return { chat, messages, matchedLoreEntries: [], matchedMemoryEntries: [] };
+  return { chat, messages, matchedLoreEntries, matchedMemoryEntries };
 };
 
 const app = express();
@@ -526,11 +947,19 @@ app.delete(
   })
 );
 
-app.post("/api/chats/:id/memories/refresh", (request, response) => {
-  const chatId = requireParam(request, "id");
-  if (!store.getChat(chatId)) throw notFound("Chat not found");
-  response.json({ ok: true, data: store.listMemories(chatId).map(serializeMemory) });
-});
+app.post(
+  "/api/chats/:id/memories/refresh",
+  asyncHandler(async (request, response) => {
+    const chatId = requireParam(request, "id");
+    if (!store.getChat(chatId)) throw notFound("Chat not found");
+    await updateChatMemoriesFromTurn({
+      chatId,
+      settings: store.getSettings(),
+      force: true
+    });
+    response.json({ ok: true, data: store.listMemories(chatId).map(serializeMemory) });
+  })
+);
 
 app.get("/api/chats/:id", (request, response) => {
   const chat = store.getChat(requireParam(request, "id"));
@@ -789,10 +1218,17 @@ const createAssistantReply = async ({
   abortController
 }) => {
   const targetMessage = targetMessageId ? store.getMessage(targetMessageId) : null;
-  const context = getPromptContext({
+  const context = await getPromptContext({
     chatId,
     before: targetMessage?.createdAt ? new Date(targetMessage.createdAt) : undefined,
     excludeMessageIds
+  });
+  sendJson(socket, {
+    type: "generation_character_started",
+    requestId,
+    characterId: context.chat.characterId,
+    index: 0,
+    total: 1
   });
   sendJson(socket, { type: "lore_matches", requestId, entries: context.matchedLoreEntries });
   sendJson(socket, { type: "memory_matches", requestId, entries: context.matchedMemoryEntries });
@@ -874,6 +1310,27 @@ const handleGenerate = async (socket, raw) => {
       chatId: request.chatId,
       abortController
     });
+    try {
+      const settings = store.getSettings();
+      const updatedChat = await updateUserProfileFromChat({
+        chatId: request.chatId,
+        settings
+      });
+      await updateChatMemoriesFromTurn({
+        chatId: request.chatId,
+        settings
+      });
+      if (updatedChat) {
+        sendJson(socket, {
+          type: "user_profile_updated",
+          requestId: request.requestId,
+          summary: updatedChat.userProfileSummary,
+          updatedAt: updatedChat.userProfileUpdatedAt ?? null
+        });
+      }
+    } catch {
+      // Best-effort memory maintenance must not break chat generation.
+    }
     sendJson(socket, { type: "generation_done", requestId: request.requestId });
   } catch (error) {
     sendJson(socket, {
@@ -949,6 +1406,27 @@ const handleResend = async (socket, raw) => {
       chatId: target.chatId,
       abortController
     });
+    try {
+      const settings = store.getSettings();
+      const updatedChat = await updateUserProfileFromChat({
+        chatId: target.chatId,
+        settings
+      });
+      await updateChatMemoriesFromTurn({
+        chatId: target.chatId,
+        settings
+      });
+      if (updatedChat) {
+        sendJson(socket, {
+          type: "user_profile_updated",
+          requestId: request.requestId,
+          summary: updatedChat.userProfileSummary,
+          updatedAt: updatedChat.userProfileUpdatedAt ?? null
+        });
+      }
+    } catch {
+      // Best-effort memory maintenance must not break chat generation.
+    }
     sendJson(socket, { type: "generation_done", requestId: request.requestId });
   } catch (error) {
     sendJson(socket, { type: "error", requestId: request.requestId, error: error.message });

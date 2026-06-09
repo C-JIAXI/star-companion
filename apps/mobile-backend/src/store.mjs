@@ -5,6 +5,8 @@ import initSqlJs from "sql.js";
 
 const now = () => new Date().toISOString();
 const clone = (value) => JSON.parse(JSON.stringify(value));
+const dropUndefined = (value) =>
+  Object.fromEntries(Object.entries(value).filter(([_key, entry]) => entry !== undefined));
 
 const defaultSettings = () => {
   const timestamp = now();
@@ -181,7 +183,7 @@ export class MobileStore {
   async updateSettings(updates) {
     const settings = {
       ...this.getSettings(),
-      ...updates,
+      ...dropUndefined(updates),
       updatedAt: now()
     };
     await this.writeRecord("settings", settings);

@@ -1140,7 +1140,9 @@ export function ChatPage({
       language: runtimeSettings.language,
       providers: settingsProviders,
       activeProviderId: providerId,
-      activeModelId: modelId
+      activeModelId: modelId,
+      autoSummarizeUser,
+      showMessageAvatars
     };
 
     if (provider.key?.trim()) {
