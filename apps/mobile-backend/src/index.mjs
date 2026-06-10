@@ -57,6 +57,8 @@ import { MobileStore } from "./store.mjs";
 const APP_NAME = "Star Companion Mobile Backend";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
+const port = Number(process.env.MOBILE_BACKEND_PORT ?? process.env.SERVER_PORT ?? 4110);
+const host = process.env.MOBILE_BACKEND_HOST ?? "0.0.0.0";
 const resolveDataDir = () => {
   if (process.env.MOBILE_BACKEND_DATA_DIR) {
     return process.env.MOBILE_BACKEND_DATA_DIR;
@@ -134,8 +136,10 @@ const uniqueStrings = (values, limit) => [
 ].slice(0, limit);
 
 const tokenize = (value) =>
-  uniqueStrings(value.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [], 80)
+  uniqueStrings(value.toLowerCase().split(/[^0-9a-z_\u4e00-\u9fff-]+/g), 80)
     .filter((token) => token.length > 1);
+
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const isBoundaryKeyword = (value) => /^[a-z0-9][a-z0-9_-]*$/i.test(value);
@@ -693,9 +697,10 @@ const getPromptContext = async ({ chatId, before, excludeMessageIds = [] }) => {
   const messages = [];
   const characterPromptFields = character ? resolveCharacterPromptFields(character) : null;
   const matchedLoreEntries = findMatchedLoreEntries(character, characterPromptFields, recentMessages);
+  const latestMessage = recentMessages.length > 0 ? recentMessages[recentMessages.length - 1] : null;
   const matchedMemoryEntries = await recallChatMemories({
     chatId,
-    query: recentMessages.at(-1)?.content ?? "",
+    query: latestMessage?.content ?? "",
     recentMessages,
     settings: store.getSettings()
   });
@@ -1044,7 +1049,7 @@ app.put(
     const activeProfile = body.providers.find((provider) => provider.id === body.activeProviderId);
     const activeModel = activeProfile?.models.find((model) => model.id === body.activeModelId);
     const resolvedApiKey =
-      activeProfile?.key ?? (Object.hasOwn(body, "apiKey") ? body.apiKey : undefined);
+      activeProfile?.key ?? (hasOwn(body, "apiKey") ? body.apiKey : undefined);
     const settings = await store.updateSettings({
       providers: body.providers,
       activeProviderId: body.activeProviderId,
@@ -1444,29 +1449,36 @@ const handleStop = (socket, raw) => {
   controllers.get(parsed.data.requestId)?.abort();
 };
 
-await store.load();
-const httpServer = createServer(app);
-const wsServer = new WebSocketServer({ server: httpServer, path: "/ws" });
+const startServer = async () => {
+  await store.load();
+  const httpServer = createServer(app);
+  const wsServer = new WebSocketServer({ server: httpServer, path: "/ws" });
 
-wsServer.on("connection", (socket) => {
-  sendJson(socket, { type: "ready", app: APP_NAME });
-  socket.on("message", (message) => {
-    try {
-      const parsed = JSON.parse(message.toString());
-      if (parsed.type === "generate") void handleGenerate(socket, parsed);
-      else if (parsed.type === "regenerate") void handleRegenerate(socket, parsed);
-      else if (parsed.type === "resend") void handleResend(socket, parsed);
-      else if (parsed.type === "stop") handleStop(socket, parsed);
-      else sendJson(socket, { type: "error", error: "Unknown WebSocket message type" });
-    } catch {
-      sendJson(socket, { type: "error", error: "Malformed WebSocket message" });
-    }
+  wsServer.on("connection", (socket) => {
+    sendJson(socket, { type: "ready", app: APP_NAME });
+    socket.on("message", (message) => {
+      try {
+        const parsed = JSON.parse(message.toString());
+        if (parsed.type === "generate") void handleGenerate(socket, parsed);
+        else if (parsed.type === "regenerate") void handleRegenerate(socket, parsed);
+        else if (parsed.type === "resend") void handleResend(socket, parsed);
+        else if (parsed.type === "stop") handleStop(socket, parsed);
+        else sendJson(socket, { type: "error", error: "Unknown WebSocket message type" });
+      } catch {
+        sendJson(socket, { type: "error", error: "Malformed WebSocket message" });
+      }
+    });
   });
-});
 
-const port = Number(process.env.MOBILE_BACKEND_PORT ?? process.env.SERVER_PORT ?? 4110);
-const host = process.env.MOBILE_BACKEND_HOST ?? "0.0.0.0";
+  httpServer.on("error", (error) => {
+    console.error(`${APP_NAME} server error`, error);
+  });
 
-httpServer.listen(port, host, () => {
-  console.log(`${APP_NAME} listening on http://${host}:${port}`);
+  httpServer.listen(port, host, () => {
+    console.log(`${APP_NAME} listening on http://${host}:${port}`);
+  });
+};
+
+startServer().catch((error) => {
+  console.error(`${APP_NAME} failed to start`, error);
 });
