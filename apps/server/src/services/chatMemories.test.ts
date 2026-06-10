@@ -5,7 +5,8 @@ import { prisma } from "../db.js";
 import {
   buildChatMemoryMaintenanceMessages,
   buildMemoryRerankMessages,
-  recallChatMemories
+  recallChatMemories,
+  updateChatMemoriesFromTurn
 } from "./chatMemories.js";
 
 const originalFetch = globalThis.fetch;
@@ -161,6 +162,54 @@ describe("chat memory helpers", () => {
     assert.equal(memories[0]?.title, "Blue door clue");
   });
 
+  it("does not throw when memory maintenance receives an empty model content", async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: "",
+                reasoning_content: "The model spent the response budget on reasoning."
+              },
+              finish_reason: "length"
+            }
+          ]
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )) as typeof fetch;
+
+    const chat = await prisma.chat.create({
+      data: {
+        title: "Empty memory maintenance output",
+        characterId: ids.characterId
+      }
+    });
+    await prisma.message.create({
+      data: {
+        chatId: chat.id,
+        role: "user",
+        content: "Please remember that I prefer quiet inns.",
+        variants: [],
+        activeVariantIndex: 0
+      }
+    });
+
+    await assert.doesNotReject(
+      updateChatMemoriesFromTurn({
+        chatId: chat.id,
+        settings: createSettings({ apiKey: "sk-test" })
+      })
+    );
+
+    const memories = await prisma.chatMemory.findMany({ where: { chatId: chat.id } });
+    assert.equal(memories.length, 0);
+    const unchangedChat = await prisma.chat.findUniqueOrThrow({ where: { id: chat.id } });
+    assert.equal(unchangedChat.memoryUpdatedAt, null);
+
+    await prisma.chat.delete({ where: { id: chat.id } });
+  });
+
   it("builds rerank prompts that restrict output to candidate IDs", () => {
     const messages = buildMemoryRerankMessages("blue door", [
       {
@@ -187,6 +236,8 @@ describe("chat memory helpers", () => {
     const recentMessages = await prisma.message.findMany({ where: { chatId: ids.chatId } });
     const messages = buildChatMemoryMaintenanceMessages([], recentMessages);
 
+    assert.match(messages[0].content, /\/no_think/);
+    assert.match(messages[0].content, /Do not write analysis/);
     assert.match(messages[0].content, /Do not store API keys/);
     assert.match(messages[0].content, /credentials/);
     assert.match(messages[0].content, /unsupported guesses/);

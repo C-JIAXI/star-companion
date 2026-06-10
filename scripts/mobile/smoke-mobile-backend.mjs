@@ -368,6 +368,26 @@ try {
   assert.equal(backup.messages.length, 4);
   assert.ok(backup.memories.length >= 1);
 
+  const exportedText = await request("/api/exports/text", {
+    method: "POST",
+    body: {
+      filename: "chat-mobile-smoke.txt",
+      content: "用户：Please remember that I like blue doors.\nAI：Mobile assistant reply."
+    }
+  });
+  assert.equal(exportedText.filename, "chat-mobile-smoke.txt");
+  assert.match(exportedText.url, /^file:\/\//);
+
+  const exportedJson = await request("/api/exports/text", {
+    method: "POST",
+    body: {
+      filename: "local-roleplay-backup-smoke.json",
+      content: JSON.stringify(backup, null, 2)
+    }
+  });
+  assert.equal(exportedJson.filename, "local-roleplay-backup-smoke.json");
+  assert.match(exportedJson.url, /^file:\/\//);
+
   const peerBaseUrl = `http://127.0.0.1:${port}`;
   const syncInfo = await request("/api/sync/info");
   assert.equal(syncInfo.port, port);

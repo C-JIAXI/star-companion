@@ -1,6 +1,6 @@
 apply plugin: 'com.android.application'
 
-def starCompanionVersionName = "1.0.1"
+def starCompanionVersionName = "1.0.2"
 
 android {
     namespace = "local.starcompanion.app"
@@ -9,7 +9,7 @@ android {
         applicationId "local.starcompanion.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 2
+        versionCode 3
         versionName starCompanionVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {

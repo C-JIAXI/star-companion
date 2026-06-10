@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
-import { downloadText } from "../lib/files";
+import { saveTextFile } from "../lib/files";
 import type { CharacterDTO, ChatDTO } from "../types";
 import { ChatGroupHeader } from "./ChatGroupHeader";
 import { ConfirmDialog, EmptyState, ErrorNotice, Modal, TextInput } from "./ui";
@@ -278,7 +278,7 @@ export function ChatHistoryList({
         .map((m) => `${m.role === "user" ? "用户" : "AI"}：${m.content}`);
       const safeName = chat.title.replace(/[^\w一-鿿-]/g, "_").slice(0, 50);
       const date = new Date().toISOString().slice(0, 10);
-      downloadText(`chat-${safeName}-${date}.txt`, lines.join("\n"));
+      await saveTextFile(`chat-${safeName}-${date}.txt`, lines.join("\n"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Export failed");
     }

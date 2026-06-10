@@ -48,6 +48,7 @@ const zhCN = {
   "chat.deleteChatTitle": "删除聊天",
   "chat.exportChat": "导出聊天",
   "chat.exportChatSuccess": "聊天已导出",
+  "chat.failedExportChat": "导出聊天失败",
   "chat.deleteMessageConfirm": "删除这条消息？",
   "chat.deleteMessageTitle": "删除消息",
   "chat.editMessageHelp": "在这里调整消息内容，保存后会立即更新当前聊天记录。",
@@ -390,6 +391,7 @@ const en: Record<keyof typeof zhCN, string> = {
   "chat.deleteChatTitle": "Delete Chat",
   "chat.exportChat": "Export Chat",
   "chat.exportChatSuccess": "Chat exported",
+  "chat.failedExportChat": "Failed to export chat",
   "chat.deleteMessageConfirm": "Delete this message?",
   "chat.deleteMessageTitle": "Delete Message",
   "chat.editMessageHelp":

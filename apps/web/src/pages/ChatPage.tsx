@@ -28,7 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { scopeCharacterChatUiCss } from "../lib/characterHtmlCss";
-import { downloadText, readFileAsDataUrl } from "../lib/files";
+import { readFileAsDataUrl, saveTextFile } from "../lib/files";
 import { generateId } from "../lib/uuid";
 import { useWebSocket } from "../lib/useWebSocket";
 import { useAppStore } from "../store/useAppStore";
@@ -149,6 +149,7 @@ export function ChatPage({
   const [showUserConfigDialog, setShowUserConfigDialog] = useState(false);
   const [showUserProfileDialog, setShowUserProfileDialog] = useState(false);
   const [showModelDialog, setShowModelDialog] = useState(false);
+  const [modelSwitching, setModelSwitching] = useState(false);
   const [showMemoryDialog, setShowMemoryDialog] = useState(false);
   const [showBackgroundDialog, setShowBackgroundDialog] = useState(false);
   const [backgroundDraft, setBackgroundDraft] = useState("");
@@ -780,15 +781,15 @@ export function ChatPage({
   const exportCurrentChat = async () => {
     if (!activeChat) return;
     try {
-      const data = await api.chats.get(activeChat.id);
-      const lines = data.messages
+      const lines = activeChat.messages
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map((m) => `${m.role === "user" ? "用户" : "AI"}：${m.content}`);
       const safeName = activeChat.title.replace(/[^\w一-鿿-]/g, "_").slice(0, 50);
       const date = new Date().toISOString().slice(0, 10);
-      downloadText(`chat-${safeName}-${date}.txt`, lines.join("\n"));
-    } catch {
-      // silent
+      await saveTextFile(`chat-${safeName}-${date}.txt`, lines.join("\n"));
+      setStatus(t("chat.exportChatSuccess"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedExportChat"));
     }
     setMemorySettingsOpen(false);
   };
@@ -810,6 +811,11 @@ export function ChatPage({
   };
 
   const openModelDialog = () => {
+    const initialProviderId =
+      settingsProviders.find((provider) => provider.id === activeProviderId)?.id ??
+      settingsProviders[0]?.id ??
+      null;
+    setExpandedDialogProviderId(initialProviderId);
     setShowModelDialog(true);
     setMemorySettingsOpen(false);
   };
@@ -1123,7 +1129,7 @@ export function ChatPage({
 
     const previousProviderId = activeProviderId;
     const previousModelId = activeModelId;
-    setLoading(true);
+    setModelSwitching(true);
     setError(null);
     setStatus(null);
     setActiveProviderId(providerId);
@@ -1170,7 +1176,7 @@ export function ChatPage({
       setActiveModelId(previousModelId);
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdateMemory"));
     } finally {
-      setLoading(false);
+      setModelSwitching(false);
     }
   };
 
@@ -2099,7 +2105,7 @@ export function ChatPage({
                                     ? "bg-ember-500/15 text-ember-200 ring-1 ring-ember-500/30"
                                     : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
                                 }`}
-                                disabled={loading}
+                                disabled={modelSwitching}
                                 key={model.id}
                                 type="button"
                                 onClick={() => {

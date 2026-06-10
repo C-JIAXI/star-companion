@@ -1,5 +1,6 @@
 import cors from "cors";
 import express from "express";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
@@ -80,6 +81,7 @@ const resolveDataDir = () => {
 };
 const dataDir = resolveDataDir();
 const store = new MobileStore(path.join(dataDir, "mobile-backend.json"));
+const exportDir = path.join(dataDir, "exports");
 
 const parseBody = (schema, body) => {
   const parsed = schema.safeParse(body);
@@ -135,11 +137,78 @@ const uniqueStrings = (values, limit) => [
   ...new Set(values.map((value) => value.trim()).filter(Boolean))
 ].slice(0, limit);
 
+const extractJsonObject = (raw) => {
+  const text = raw.trim();
+  if (!text) return null;
+
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      if (depth === 0) start = index;
+      depth += 1;
+      continue;
+    }
+
+    if (char === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        return text.slice(start, index + 1);
+      }
+    }
+  }
+
+  return null;
+};
+
+const parseJsonObject = (raw) => {
+  const json = extractJsonObject(raw);
+  if (!json) return null;
+
+  try {
+    const parsed = JSON.parse(json);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
 const tokenize = (value) =>
   uniqueStrings(value.toLowerCase().split(/[^0-9a-z_\u4e00-\u9fff-]+/g), 80)
     .filter((token) => token.length > 1);
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+
+const sanitizeExportFilename = (value) => {
+  const fallback = `export-${new Date().toISOString().slice(0, 10)}.txt`;
+  const filename = typeof value === "string" ? value.trim() : "";
+  const safe = filename
+    .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "_")
+    .replace(/\s+/g, " ")
+    .slice(0, 120);
+  return safe || fallback;
+};
 
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const isBoundaryKeyword = (value) => /^[a-z0-9][a-z0-9_-]*$/i.test(value);
@@ -255,9 +324,11 @@ const buildMemoryRerankMessages = (queryText, candidates) => [
   {
     role: "system",
     content: [
+      "/no_think",
       "Select long-term chat memories that are useful for answering the next roleplay message.",
       "Only choose from the provided candidate IDs.",
       'Return JSON only: {"ids":["memory-id"]}.',
+      "Do not write analysis, markdown, or any text outside the JSON object.",
       `Choose at most ${RERANKED_MEMORY_LIMIT} IDs. Return {"ids":[]} if none are relevant.`
     ].join("\n")
   },
@@ -278,8 +349,8 @@ const buildMemoryRerankMessages = (queryText, candidates) => [
 ];
 
 const parseRerankedIds = (raw, candidateIds) => {
-  const parsed = JSON.parse(raw);
-  const ids = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed.ids : null;
+  const parsed = parseJsonObject(raw);
+  const ids = parsed ? parsed.ids : null;
   if (!Array.isArray(ids)) return [];
   return uniqueStrings(
     ids.filter((id) => typeof id === "string" && candidateIds.has(id)),
@@ -405,11 +476,13 @@ const buildChatMemoryMaintenanceMessages = (existingMemories, recentMessages) =>
   {
     role: "system",
     content: [
+      "/no_think",
       "You maintain long-term memories for one local-first single-character roleplay chat.",
       "Extract durable plot facts, relationship changes, stable preferences, boundaries, plans, and recurring interaction patterns.",
       "Do not store API keys, credentials, secrets, exact private addresses, unsupported guesses, or one-off transient requests.",
       "Prefer updating existing memories over creating duplicates.",
       "Do not delete. You may disable a memory only when the conversation clearly makes it obsolete or false.",
+      "Do not write analysis, markdown, bullet lists, or explanations.",
       "Return JSON only with this shape:",
       '{"actions":[{"type":"create","title":"...","content":"...","keywords":["..."],"importance":3},{"type":"update","id":"...","title":"...","content":"...","keywords":["..."],"importance":3,"enabled":true}]}'
     ].join("\n")
@@ -417,6 +490,7 @@ const buildChatMemoryMaintenanceMessages = (existingMemories, recentMessages) =>
   {
     role: "user",
     content: [
+      "/no_think",
       "Existing memories:",
       existingMemories.length
         ? existingMemories
@@ -479,9 +553,9 @@ const normalizeMemoryAction = (value) => {
 };
 
 const parseMemoryActions = (raw) => {
-  const parsed = JSON.parse(raw);
-  const actions = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed.actions : null;
-  if (!Array.isArray(actions)) return [];
+  const parsed = parseJsonObject(raw);
+  const actions = parsed ? parsed.actions : null;
+  if (!Array.isArray(actions)) return null;
   return actions.map(normalizeMemoryAction).filter(Boolean);
 };
 
@@ -500,10 +574,11 @@ const updateChatMemoriesFromTurn = async ({ chatId, settings, force = false }) =
   const raw = await completeChatCompletion({
     settings,
     messages: buildChatMemoryMaintenanceMessages(existingMemories, recentMessages),
-    maxTokens: 700,
+    maxTokens: 1600,
     temperature: 0.2
   });
   const actions = parseMemoryActions(raw.trim());
+  if (!actions) return null;
   const existingIds = new Set(existingMemories.map((memory) => memory.id));
   const sourceMessageIds = recentMessages.map((message) => message.id);
 
@@ -1122,6 +1197,32 @@ app.post(
   asyncHandler(async (request, response) => {
     const backup = parseBody(backupImportSchema, request.body);
     response.json({ ok: true, data: await store.importBackup(backup) });
+  })
+);
+
+app.post(
+  "/api/exports/text",
+  asyncHandler(async (request, response) => {
+    const filename = sanitizeExportFilename(request.body?.filename);
+    const content = typeof request.body?.content === "string" ? request.body.content : "";
+    if (!content.trim()) {
+      const error = new Error("Export content is empty");
+      error.status = 400;
+      throw error;
+    }
+
+    await mkdir(exportDir, { recursive: true });
+    const filePath = path.join(exportDir, filename);
+    await writeFile(filePath, content, "utf8");
+
+    response.json({
+      ok: true,
+      data: {
+        filename,
+        path: filePath,
+        url: `file://${filePath.replace(/\\/g, "/")}`
+      }
+    });
   })
 );
 

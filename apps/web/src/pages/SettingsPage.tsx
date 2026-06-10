@@ -18,7 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { languageOptions, useI18n } from "../i18n";
 import { api } from "../lib/api";
-import { downloadJson, readFileText } from "../lib/files";
+import { readFileText, saveJsonFile } from "../lib/files";
 import { generateId } from "../lib/uuid";
 import { useAppStore } from "../store/useAppStore";
 import type {
@@ -729,7 +729,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     try {
       const backup = await api.backups.export();
       const stamp = new Date().toISOString().slice(0, 19).replaceAll(":", "-");
-      downloadJson(`local-roleplay-backup-${stamp}.json`, backup);
+      await saveJsonFile(`local-roleplay-backup-${stamp}.json`, backup);
       setStatus(t("settings.backupExported"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("settings.failedExportBackup"));

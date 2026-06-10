@@ -22,7 +22,7 @@ import { MarkdownEditor } from "../components/MarkdownEditor";
 import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
-import { downloadJson, readFileText } from "../lib/files";
+import { readFileText, saveJsonFile } from "../lib/files";
 import { usePlaceholderSrc } from "../placeholderImages";
 import type {
   CharacterCardImportInput,
@@ -730,7 +730,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
     setStatus(null);
     try {
       const card = await api.characters.export(selected.id, exportMode, exportPassword);
-      downloadJson(`${selected.name || "character"}-${exportMode}.json`, card);
+      await saveJsonFile(`${selected.name || "character"}-${exportMode}.json`, card);
       setStatus(
         exportMode === "public"
           ? privateCharacterCopy.exportedPublic
@@ -835,7 +835,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
         setSelectedCharacter(unlocked);
         setForm(toForm(unlocked));
       }
-      downloadJson(
+      await saveJsonFile(
         `${selected.name || "character"}-${
           passwordDialogMode === "export-public" ? "public" : "private"
         }.json`,

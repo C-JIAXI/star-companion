@@ -304,9 +304,12 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
       >
         <MessageBody content={message.content} htmlCss={htmlCss} />
         <div className="mt-3 border-t border-white/5 pt-2">
-          <div className="flex flex-wrap items-center justify-between gap-1 sm:gap-1.5 text-xs">
+          <div className="flex min-w-0 flex-col gap-1.5 text-xs sm:flex-row sm:items-center sm:justify-between">
             <TokenInfo usage={message.tokenUsage} formatter={tokenUsageFormatter} />
-            <div className="flex shrink-0 flex-wrap items-center gap-0.5" data-chat-actions="">
+            <div
+              className="flex w-full min-w-0 flex-wrap items-center justify-end gap-0.5 sm:w-auto"
+              data-chat-actions=""
+            >
               {message.variants.length > 1 ? (
                 <VariantSwitcher
                   currentIndex={message.activeVariantIndex}

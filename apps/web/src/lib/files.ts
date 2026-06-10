@@ -1,3 +1,23 @@
+import { Capacitor } from "@capacitor/core";
+import { Share } from "@capacitor/share";
+import { resolveApiUrl } from "./appBackend";
+
+type MobileTextExportResult = {
+  filename: string;
+  path: string;
+  url: string;
+};
+
+type ApiEnvelope<T> = {
+  ok: true;
+  data: T;
+} | {
+  ok: false;
+  error: string;
+};
+
+const isNativeAndroid = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android";
+
 const saveBlob = (filename: string, blob: Blob) => {
   const file = new File([blob], filename, { type: blob.type });
   const canShareFile =
@@ -37,6 +57,39 @@ export const downloadJson = (filename: string, data: unknown) => {
 
 export const downloadText = (filename: string, text: string) => {
   saveBlob(filename, new Blob([text], { type: "text/plain;charset=utf-8" }));
+};
+
+export const saveJsonFile = async (filename: string, data: unknown) => {
+  if (isNativeAndroid()) {
+    await saveTextFile(filename, JSON.stringify(data, null, 2));
+    return;
+  }
+
+  downloadJson(filename, data);
+};
+
+export const saveTextFile = async (filename: string, text: string) => {
+  if (isNativeAndroid()) {
+    const response = await fetch(resolveApiUrl("/api/exports/text"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, content: text })
+    });
+    const payload = (await response.json()) as ApiEnvelope<MobileTextExportResult>;
+    if (!response.ok || !payload.ok) {
+      throw new Error("error" in payload ? payload.error : "Failed to export text file");
+    }
+
+    await Share.share({
+      title: payload.data.filename,
+      text: payload.data.filename,
+      url: payload.data.url,
+      dialogTitle: payload.data.filename
+    });
+    return;
+  }
+
+  downloadText(filename, text);
 };
 
 export const readFileText = (file: File) =>
