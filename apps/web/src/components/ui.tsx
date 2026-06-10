@@ -411,7 +411,7 @@ export function ConfirmDialog({
   onConfirm: () => void;
 }) {
   return (
-    <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/70 p-3 backdrop-blur-md transition-[opacity,backdrop-filter] duration-300 will-change-[opacity] sm:p-5">
+    <div className="animate-fade-in fixed inset-0 z-[70] grid place-items-center bg-black/70 p-3 backdrop-blur-md transition-[opacity,backdrop-filter] duration-300 will-change-[opacity] sm:p-5">
       <section
         aria-labelledby="confirm-dialog-title"
         className="animate-modal-enter flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)]"

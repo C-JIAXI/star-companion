@@ -846,6 +846,100 @@ test("chat custom config saves prefix prompt and suffix from memory settings", a
   }
 });
 
+test("long-term memory delete confirm stays centered above the memory dialog", async ({
+  page,
+  request
+}) => {
+  const suffix = Date.now();
+  const characterName = `Memory Delete Character ${suffix}`;
+  const chatTitle = `Memory Delete Chat ${suffix}`;
+  const memoryTitle = `Memory Delete Item ${suffix}`;
+
+  const characterResponse = await request.post("/api/characters", {
+    data: {
+      name: characterName,
+      prefix: "Stay concise.",
+      prompt: "A temporary character for memory delete coverage.",
+      suffix: "Reply directly."
+    }
+  });
+  expect(characterResponse.ok()).toBeTruthy();
+  const character = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data;
+  if (!character) {
+    throw new Error("Character creation did not return data");
+  }
+
+  const chatResponse = await request.post("/api/chats", {
+    data: {
+      title: chatTitle,
+      characterId: character.id
+    }
+  });
+  expect(chatResponse.ok()).toBeTruthy();
+  const chat = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data;
+  if (!chat) {
+    throw new Error("Chat creation did not return data");
+  }
+
+  const memoryResponse = await request.post(`/api/chats/${chat.id}/memories`, {
+    data: {
+      title: memoryTitle,
+      content: "The user wants memory delete confirmations to stay centered.",
+      keywords: ["confirm"],
+      importance: 3,
+      enabled: true
+    }
+  });
+  expect(memoryResponse.ok()).toBeTruthy();
+
+  const seedMessageResponse = await request.post("/api/messages", {
+    data: {
+      chatId: chat.id,
+      role: "user",
+      content: "Seed message for memory delete dialog visibility."
+    }
+  });
+  expect(seedMessageResponse.ok()).toBeTruthy();
+
+  try {
+    await page.goto("/");
+    await openChatHistoryAndSelect(page, chatTitle);
+    await page.locator("#chat-settings-trigger").click();
+    await page.getByRole("button", { name: /^(记忆|Memory)$/ }).nth(1).click();
+
+    const memoryDialog = page.getByRole("dialog").filter({ hasText: memoryTitle });
+    await expect(memoryDialog).toBeVisible();
+    await expect(memoryDialog.getByText(memoryTitle)).toBeVisible();
+    await memoryDialog
+      .locator(`[data-chat-memory-action="delete"]`)
+      .click();
+
+    const confirmDialog = page.getByRole("dialog").filter({
+      hasText: /删除这条长期记忆|Delete this long-term memory/
+    });
+    await expect(confirmDialog).toBeVisible();
+
+    const geometry = await confirmDialog.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const topElement = document.elementFromPoint(centerX, centerY);
+      return {
+        centerDeltaX: Math.abs(centerX - window.innerWidth / 2),
+        centerDeltaY: Math.abs(centerY - window.innerHeight / 2),
+        isTopDialog: topElement ? element.contains(topElement) : false
+      };
+    });
+
+    expect(geometry.centerDeltaX).toBeLessThan(12);
+    expect(geometry.centerDeltaY).toBeLessThan(12);
+    expect(geometry.isTopDialog).toBeTruthy();
+  } finally {
+    await request.delete(`/api/chats/${chat.id}`);
+    await request.delete(`/api/characters/${character.id}`);
+  }
+});
+
 test("long chats paginate and keep messages inside the scrollable viewport", async ({
   page,
   request

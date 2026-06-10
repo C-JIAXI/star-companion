@@ -2450,6 +2450,7 @@ export function ChatPage({
                           </button>
                           <button
                             className="grid h-8 w-8 place-items-center rounded-lg text-rose-400 transition-colors hover:bg-rose-500/15"
+                            data-chat-memory-action="delete"
                             type="button"
                             onClick={() => setPendingDeleteMemory(memory)}
                           >
