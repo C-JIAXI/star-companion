@@ -7,7 +7,7 @@ Local-first AI character chat workspace with web, desktop, and Android builds.
 Current scope:
 
 - Single-user, single-character chat with backend-proxied model requests.
-- A unified New Chat flow is available from the desktop sidebar, mobile header, and empty chat workspace, with paginated character search ordered by recent use.
+- A unified New Chat flow is available from the desktop sidebar, mobile header, and empty chat workspace, with paginated character search ordered by recent use plus an inline quick-create path that can create a minimal character and enter chat without leaving the dialog.
 - Character cards with local or remote cover images, embedded prompt segments, HTML/CSS presentation, quick replies, embedded lore entries, local favorites, multi-mode library sorting, batch tag organization, and safe duplication that preserves private-card encryption.
 - Chat-scoped long-term memory with automatic maintenance, hybrid semantic-vector and keyword retrieval, visible index status, reusable local persona presets, user profile summaries, local backup import/export, and manual LAN sync.
 - In-chat AI Agent drafts for scene summaries, next-step suggestions, reply drafts, and memory/lore candidates. The Agent is read-only in v1 and does not modify local data automatically.
@@ -27,7 +27,7 @@ Current scope:
 - Restore the last selected chat after a refresh or app restart, while clearing stale local selections if the chat no longer exists.
 - Message-level context control: retain a message in the transcript while excluding it from future model and AI Agent context.
 - Optional per-message timestamps help track long-running chat chronology without changing the default chat layout.
-- Chat readiness checks and a real model-generation connection test that guide first-run users through provider, API key, model, character, and selected-chat setup before chat generation fails.
+- Chat readiness checks deep-link missing provider, API key, and model items into a focused three-step setup guide, with save/test actions kept available after long provider forms; the real generation test catches connection issues before chat generation fails.
 - Character opening generation for empty chats, stored as a normal assistant message that can be edited or regenerated.
 - Continue the latest assistant reply in place when a response is truncated or the scene needs to carry on; continuation keeps the current message and variant instead of creating a fake user turn.
 - Generate a concise AI title draft from included chat messages, then review and save it explicitly; title suggestions never overwrite chat history automatically.

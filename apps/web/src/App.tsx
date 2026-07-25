@@ -1,17 +1,46 @@
-import { Menu, MessageSquarePlus, MessageSquareText, Plus, Settings, Users } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import {
+  LoaderCircle,
+  Menu,
+  MessageSquarePlus,
+  MessageSquareText,
+  Plus,
+  Settings,
+  Users
+} from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { api } from "./lib/api";
 import { useI18n, type TranslationKey } from "./i18n";
-import { ChatPage } from "./pages/ChatPage";
-import { CharactersPage } from "./pages/CharactersPage";
-import { DocsPage } from "./pages/DocsPage";
-import { SettingsPage } from "./pages/SettingsPage";
 import { ChatHistoryList } from "./components/ChatHistoryList";
 import { NewChatDialog } from "./components/NewChatDialog";
 import { ConfirmDialog, Drawer, ErrorNotice } from "./components/ui";
 import { useAppStore } from "./store/useAppStore";
 import { useMobileViewport } from "./lib/useMobileViewport";
 import type { AppSection } from "./types";
+
+const loadChatPage = () =>
+  import("./pages/ChatPage").then((module) => ({ default: module.ChatPage }));
+const loadCharactersPage = () =>
+  import("./pages/CharactersPage").then((module) => ({ default: module.CharactersPage }));
+const loadDocsPage = () =>
+  import("./pages/DocsPage").then((module) => ({ default: module.DocsPage }));
+const loadSettingsPage = () =>
+  import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage }));
+
+const ChatPage = lazy(loadChatPage);
+const CharactersPage = lazy(loadCharactersPage);
+const DocsPage = lazy(loadDocsPage);
+const SettingsPage = lazy(loadSettingsPage);
+
+const sectionLoaders: Record<AppSection, () => Promise<unknown>> = {
+  chat: loadChatPage,
+  characters: loadCharactersPage,
+  docs: loadDocsPage,
+  settings: loadSettingsPage
+};
+
+const preloadSection = (section: AppSection) => {
+  void sectionLoaders[section]();
+};
 
 const navItems = [
   { id: "chat", labelKey: "nav.chat", icon: MessageSquareText },
@@ -242,6 +271,8 @@ export function App() {
                     }`}
                     key={item.id}
                     type="button"
+                    onFocus={() => preloadSection(item.id)}
+                    onMouseEnter={() => preloadSection(item.id)}
                     onClick={() => navigate(item.id)}
                   >
                     <Icon size={18} className={selected ? "text-ember-300" : "text-ink-400"} />
@@ -307,6 +338,8 @@ export function App() {
                   }`}
                   key={item.id}
                   type="button"
+                  onFocus={() => preloadSection(item.id)}
+                  onMouseEnter={() => preloadSection(item.id)}
                   onClick={() => navigate(item.id)}
                 >
                   <Icon
@@ -392,21 +425,36 @@ export function App() {
             </div>
           </header>
           <div className="animate-fade-in min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-5 lg:p-6 xl:p-8">
-            {activeSection === "chat" ? (
-              <ChatPage
-                selectedChatId={selectedChatId}
-                onChatsChanged={triggerChatRefresh}
-                onNewChat={() => setShowNewChatDialog(true)}
-                onSelectChat={handleSelectChat}
-              />
-            ) : null}
-            {activeSection === "docs" ? <DocsPage /> : null}
-            {activeSection === "characters" ? (
-              <CharactersPage onPlay={(characterId) => void handlePlay(characterId)} />
-            ) : null}
-            {activeSection === "settings" ? (
-              <SettingsPage onDirtyChange={setSettingsDirty} />
-            ) : null}
+            <Suspense
+              fallback={
+                <div
+                  className="grid min-h-[50vh] place-items-center text-sm text-ink-400"
+                  data-testid="workspace-loading"
+                  role="status"
+                >
+                  <span className="inline-flex items-center gap-2">
+                    <LoaderCircle aria-hidden="true" className="animate-spin" size={18} />
+                    {t("app.loadingSection")}
+                  </span>
+                </div>
+              }
+            >
+              {activeSection === "chat" ? (
+                <ChatPage
+                  selectedChatId={selectedChatId}
+                  onChatsChanged={triggerChatRefresh}
+                  onNewChat={() => setShowNewChatDialog(true)}
+                  onSelectChat={handleSelectChat}
+                />
+              ) : null}
+              {activeSection === "docs" ? <DocsPage /> : null}
+              {activeSection === "characters" ? (
+                <CharactersPage onPlay={(characterId) => void handlePlay(characterId)} />
+              ) : null}
+              {activeSection === "settings" ? (
+                <SettingsPage onDirtyChange={setSettingsDirty} />
+              ) : null}
+            </Suspense>
           </div>
         </main>
       </div>

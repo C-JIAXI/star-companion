@@ -682,12 +682,23 @@ export function ChatPage({
     return characterMap.get(activeChat.characterId)?.htmlCss ?? "";
   }, [activeChat?.characterId, characterMap]);
 
-  const navigateToSection = useCallback((section: "chat" | "characters" | "settings") => {
-    const path = section === "chat" ? "/" : `/${section}`;
-    setShowReadinessDialog(false);
-    window.history.pushState({}, "", path);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }, []);
+  const navigateToSection = useCallback(
+    (
+      section: "chat" | "characters" | "settings",
+      settingsFocus?: "provider" | "api-key" | "model"
+    ) => {
+      const path =
+        section === "chat"
+          ? "/"
+          : section === "settings" && settingsFocus
+            ? `/settings?section=providers&focus=${settingsFocus}`
+            : `/${section}`;
+      setShowReadinessDialog(false);
+      window.history.pushState({}, "", path);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    },
+    []
+  );
 
   const activeProviderProfile = useMemo(
     () => settingsProviders.find((provider) => provider.id === activeProviderId) ?? null,
@@ -733,7 +744,7 @@ export function ChatPage({
           ? t("chat.readinessProviderReady")
           : t("chat.readinessProviderMissing"),
         actionLabel: t("chat.readinessOpenSettings"),
-        onAction: () => navigateToSection("settings")
+        onAction: () => navigateToSection("settings", "provider")
       },
       {
         id: "apiKey",
@@ -741,7 +752,7 @@ export function ChatPage({
         title: t("chat.readinessApiKeyTitle"),
         detail: hasEffectiveApiKey ? t("chat.readinessApiKeyReady") : t("chat.readinessApiKeyMissing"),
         actionLabel: t("chat.readinessOpenSettings"),
-        onAction: () => navigateToSection("settings")
+        onAction: () => navigateToSection("settings", "api-key")
       },
       {
         id: "model",
@@ -749,7 +760,7 @@ export function ChatPage({
         title: t("chat.readinessModelTitle"),
         detail: hasConfiguredModel ? t("chat.readinessModelReady") : t("chat.readinessModelMissing"),
         actionLabel: t("chat.readinessOpenSettings"),
-        onAction: () => navigateToSection("settings")
+        onAction: () => navigateToSection("settings", "model")
       },
       {
         id: "character",

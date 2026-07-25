@@ -8,6 +8,7 @@ type E2ECharacter = {
   id: string;
   name: string;
   cardId?: string;
+  description?: string;
   prompt?: string;
   tags?: string[];
 };
@@ -370,6 +371,7 @@ test("chat readiness surfaces missing first-run setup and links to settings", as
   await newChatTrigger.click();
   const newChatDialog = page.getByTestId("new-chat-dialog");
   await expect(newChatDialog).toContainText("There are no characters available for chat yet.");
+  await expect(page.getByTestId("new-chat-empty-quick-create")).toBeVisible();
   await expect(page.getByTestId("new-chat-open-characters")).toBeVisible();
   await page.getByRole("button", { name: "Close", exact: true }).click();
 
@@ -379,8 +381,80 @@ test("chat readiness surfaces missing first-run setup and links to settings", as
   await expect(page.locator('[data-readiness-item="character"]')).toContainText("No characters yet");
 
   await page.locator('[data-readiness-action="provider"]').click();
-  await expect(page).toHaveURL(/\/settings$/);
+  await expect(page).toHaveURL(/\/settings\?section=providers&focus=provider$/);
   await expect(page.getByRole("heading", { name: "Model Settings" })).toBeVisible();
+  await expect(page.getByTestId("settings-section-providers")).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
+  const setupGuide = page.getByTestId("settings-setup-guide");
+  await expect(setupGuide).toHaveAttribute(
+    "data-settings-setup-focus",
+    "provider"
+  );
+  await expect(setupGuide).toBeInViewport();
+  await expect(page.locator('[data-setup-step="provider"]')).toHaveAttribute(
+    "data-setup-focused",
+    "true"
+  );
+});
+
+test("new chat can quick-create a character and enter the conversation", async ({
+  page,
+  request
+}, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const characterName = `Quick Create ${suffix}`;
+  const prompt = `A precise night train conductor who speaks calmly. ${suffix}`;
+  let characterId: string | null = null;
+  let chatId: string | null = null;
+
+  try {
+    await page.goto("/");
+    const trigger =
+      (page.viewportSize()?.width ?? 1280) < 1024
+        ? page.getByTestId("new-chat-trigger-mobile")
+        : page.getByTestId("new-chat-trigger-desktop");
+    await trigger.click();
+
+    const dialog = page.getByTestId("new-chat-dialog");
+    await page.getByTestId("new-chat-quick-create-tab").click();
+    await expect(dialog).toContainText(/填写最少信息创建角色|Create a character with the essentials/);
+    await page.getByTestId("new-chat-quick-name").fill(characterName);
+    await page.getByTestId("new-chat-quick-prompt").fill(prompt);
+    await page.getByTestId("new-chat-quick-submit").click();
+
+    await expect(dialog).toBeHidden();
+    await expect(page.locator("#chat-title")).toContainText("New Chat");
+
+    const charactersResponse = await request.get(
+      `/api/characters/page?q=${encodeURIComponent(characterName)}&pageSize=10`
+    );
+    expect(charactersResponse.ok()).toBeTruthy();
+    const charactersPayload = (await charactersResponse.json()) as ApiDataResponse<{
+      items: E2ECharacter[];
+    }>;
+    const createdCharacter = charactersPayload.data?.items.find(
+      (character) => character.name === characterName
+    );
+    expect(createdCharacter).toMatchObject({
+      name: characterName,
+      description: prompt,
+      prompt
+    });
+    characterId = createdCharacter?.id ?? null;
+    expect(characterId).toBeTruthy();
+
+    const chatsResponse = await request.get("/api/chats");
+    expect(chatsResponse.ok()).toBeTruthy();
+    const chats = ((await chatsResponse.json()) as ApiDataResponse<E2EChat[]>).data ?? [];
+    const createdChat = chats.find((chat) => chat.characterId === characterId);
+    expect(createdChat).toBeTruthy();
+    chatId = createdChat?.id ?? null;
+  } finally {
+    if (chatId) await permanentlyDeleteChatViaApi(request, chatId);
+    if (characterId) await request.delete(`/api/characters/${characterId}`);
+  }
 });
 
 test("new chat starts from the workspace without visiting the character page", async ({

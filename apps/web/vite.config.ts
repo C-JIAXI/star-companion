@@ -10,13 +10,13 @@ export default defineConfig({
     }
   },
   build: {
+    manifest: true,
     rollupOptions: {
       output: {
         manualChunks: {
           "react-vendor": ["react", "react-dom"],
           "ui-vendor": ["lucide-react"],
-          "markdown-vendor": ["marked", "dompurify"],
-          "editor-vendor": ["@uiw/react-md-editor"]
+          "markdown-vendor": ["marked", "dompurify"]
         }
       }
     }

@@ -1,8 +1,10 @@
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Circle,
   Copy as CopyIcon,
   Download,
   FileUp,
@@ -478,6 +480,35 @@ const getPageCopy = (language: AppLanguage) =>
       };
 
 type SettingsSection = "runtime" | "providers" | "backup";
+type SettingsSetupFocus = "provider" | "api-key" | "model";
+
+const readSettingsLocation = () => {
+  const params = new URLSearchParams(window.location.search);
+  const section = params.get("section");
+  const focus = params.get("focus");
+
+  return {
+    section: section === "providers" || section === "backup" ? section : "runtime",
+    focus:
+      focus === "provider" || focus === "api-key" || focus === "model"
+        ? focus
+        : null
+  } satisfies { section: SettingsSection; focus: SettingsSetupFocus | null };
+};
+
+const providerCanRunWithoutKey = (provider: ProviderProfile) => {
+  const providerKind = provider.provider.trim().toLowerCase();
+  if (providerKind === "ollama" || providerKind === "lm-studio") {
+    return true;
+  }
+
+  try {
+    const host = new URL(provider.apiBaseUrl).hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  } catch {
+    return false;
+  }
+};
 
 function SummaryCard({
   label,
@@ -553,7 +584,8 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const [pendingSyncDirection, setPendingSyncDirection] = useState<LanSyncDirection | null>(null);
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
   const [expandedProviderId, setExpandedProviderId] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<SettingsSection>("runtime");
+  const [settingsLocation] = useState(readSettingsLocation);
+  const [activeSection, setActiveSection] = useState<SettingsSection>(settingsLocation.section);
   const [pendingDeleteProviderId, setPendingDeleteProviderId] = useState<string | null>(null);
   const [pendingDeleteModel, setPendingDeleteModel] = useState<{
     providerId: string;
@@ -564,6 +596,8 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const [pendingBatchDelete, setPendingBatchDelete] = useState<string | null>(null);
   const [manageMode, setManageMode] = useState(false);
   const addProviderButtonRef = useRef<HTMLDivElement>(null);
+  const setupAutoExpandedRef = useRef(false);
+  const setupGuideRef = useRef<HTMLElement>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
 
   const applyLoadedSettings = useCallback(
@@ -642,6 +676,56 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     savedSnapshot !== null &&
     (serializeForm(form) !== savedSnapshot || clearStoredApiKey);
 
+  const setupProviderReady = form.providers.some(
+    (provider) =>
+      provider.label.trim() &&
+      provider.provider.trim() &&
+      isValidUrl(provider.apiBaseUrl)
+  );
+  const setupCredentialReady =
+    !clearStoredApiKey &&
+    (hasApiKey ||
+      Boolean(form.apiKey?.trim()) ||
+      form.providers.some(
+        (provider) =>
+          Boolean(provider.key?.trim()) ||
+          Boolean(provider.hasKey) ||
+          providerCanRunWithoutKey(provider)
+      ));
+  const setupActiveProvider = form.providers.find(
+    (provider) => provider.id === form.activeProviderId
+  );
+  const setupActiveModel = setupActiveProvider?.models.find(
+    (model) => model.id === form.activeModelId
+  );
+  const setupModelReady = Boolean(
+    setupActiveProvider &&
+      setupActiveModel &&
+      modelSupportsAiModule(setupActiveProvider.provider, setupActiveModel, "chat")
+  );
+  const setupSteps = [
+    {
+      id: "provider" as const,
+      ready: setupProviderReady,
+      title: t("settings.setupProvider"),
+      detail: t("settings.setupProviderHelp")
+    },
+    {
+      id: "api-key" as const,
+      ready: setupCredentialReady,
+      title: t("settings.setupCredential"),
+      detail: t("settings.setupCredentialHelp")
+    },
+    {
+      id: "model" as const,
+      ready: setupModelReady,
+      title: t("settings.setupModel"),
+      detail: t("settings.setupModelHelp")
+    }
+  ];
+  const setupReadyCount = setupSteps.filter((step) => step.ready).length;
+  const showSetupGuide = Boolean(settingsLocation.focus) || !setupProviderReady;
+
   useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => {
       if (hasUnsavedChanges) {
@@ -700,6 +784,35 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       return null;
     });
   }, [form.providers]);
+
+  useEffect(() => {
+    if (
+      !settingsLocation.focus ||
+      setupAutoExpandedRef.current ||
+      form.providers.length === 0
+    ) {
+      return;
+    }
+
+    const providerId =
+      form.providers.find((provider) => provider.id === form.activeProviderId)?.id ??
+      form.providers[0]?.id;
+    if (providerId) {
+      setupAutoExpandedRef.current = true;
+      setExpandedProviderId(providerId);
+    }
+  }, [form.activeProviderId, form.providers, settingsLocation.focus]);
+
+  useEffect(() => {
+    if (!settingsLocation.focus || savedSnapshot === null) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      setupGuideRef.current?.scrollIntoView({ block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [savedSnapshot, settingsLocation.focus]);
 
   useEffect(() => {
     setSelectedModelIds(new Set());
@@ -1227,12 +1340,14 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
 
             return (
               <button
+                aria-pressed={active}
                 key={section}
                 className={`min-h-[44px] flex-1 whitespace-nowrap border-b-2 px-2 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
                   active
                     ? "border-ember-400 text-ember-200"
                     : "border-transparent text-ink-400 hover:bg-white/[0.035] hover:text-ink-100"
                 }`}
+                data-testid={`settings-section-${section}`}
                 type="button"
                 onClick={() => setActiveSection(section)}
               >
@@ -1530,6 +1645,65 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         >
           <div className="space-y-4">
             <p className="text-sm leading-6 text-slate-400">{copy.providersHelp}</p>
+
+            {showSetupGuide ? (
+              <section
+                className="scroll-mt-4 border-y border-white/[0.08] py-4"
+                data-settings-setup-focus={settingsLocation.focus ?? "none"}
+                data-testid="settings-setup-guide"
+                ref={setupGuideRef}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-100">
+                      {t("settings.setupTitle")}
+                    </h3>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      {t("settings.setupHelp")}
+                    </p>
+                  </div>
+                  <SettingsBadge>
+                    {t("settings.setupProgress", {
+                      current: setupReadyCount,
+                      total: setupSteps.length
+                    })}
+                  </SettingsBadge>
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  {setupSteps.map((step) => {
+                    const focused = settingsLocation.focus === step.id;
+                    const StepIcon = step.ready ? CheckCircle2 : Circle;
+
+                    return (
+                      <div
+                        aria-current={focused ? "step" : undefined}
+                        className={`border-l-2 pl-3 ${
+                          step.ready
+                            ? "border-emerald-400/60"
+                            : focused
+                              ? "border-amber-300"
+                              : "border-white/[0.1]"
+                        }`}
+                        data-setup-focused={focused ? "true" : "false"}
+                        data-setup-ready={step.ready ? "true" : "false"}
+                        data-setup-step={step.id}
+                        key={step.id}
+                      >
+                        <div className="flex items-center gap-2">
+                          <StepIcon
+                            aria-hidden="true"
+                            className={step.ready ? "text-emerald-300" : "text-slate-500"}
+                            size={15}
+                          />
+                          <p className="text-sm font-medium text-slate-200">{step.title}</p>
+                        </div>
+                        <p className="mt-1 text-xs leading-5 text-slate-500">{step.detail}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ) : null}
 
             {form.providers.length > 0 ? (
               <div className={`rounded-lg border p-4 ${settingsSurfaceClassName}`}>
@@ -1918,6 +2092,26 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                 })}
               </div>
             )}
+
+            <div className="sticky bottom-0 z-10 flex flex-col gap-2 border-t border-white/[0.1] bg-ink-900/95 py-3 backdrop-blur sm:flex-row sm:justify-end">
+              <Button
+                data-testid="settings-provider-save"
+                disabled={loading || !hasUnsavedChanges}
+                onClick={() => void saveSettings()}
+              >
+                <Save size={16} />
+                {copy.saveReady}
+              </Button>
+              <Button
+                data-testid="settings-provider-test"
+                disabled={loading || hasUnsavedChanges || !setupModelReady}
+                variant="secondary"
+                onClick={() => void testBackend()}
+              >
+                <ServerCog size={16} />
+                {t("settings.testModel")}
+              </Button>
+            </div>
           </div>
         </Panel>
       ) : null}

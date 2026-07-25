@@ -146,15 +146,15 @@ const getDocsCopy = (language: string): DocsCopy => {
           items: [
             {
               title: "连接模型服务",
-              body: "进入设置页，从模板添加模型服务（如 OpenAI、Anthropic 等），填写 API Key，保存后获取可用模型列表，选择一个模型即可开始使用。"
+              body: "从聊天就绪状态点击缺项可直接进入供应商管理的对应步骤。依次添加模型服务、填写 API Key（本机无鉴权服务可省略）、选择聊天模型，保存后运行真实模型连接测试。"
             },
             {
               title: "创建原创角色",
-              body: "进入角色页，新建角色卡，填写名称、简介、标签、核心设定和补充规则。"
+              body: "想立即开始时，可在“新建聊天”中使用快速创建，只填写名称和核心设定；需要标签、提示词分段、lore、快捷回复或样式时，再进入角色工坊使用高级编辑器。"
             },
             {
               title: "开始聊天",
-              body: "可从桌面侧栏、移动端顶部或聊天空状态点击“新建聊天”，搜索并选择角色后立即创建对话；也可以在角色卡上直接点击游玩。"
+              body: "可从桌面侧栏、移动端顶部或聊天空状态点击“新建聊天”，选择已有角色或快速创建角色后立即进入对话；也可以在角色卡上直接点击游玩。"
             },
             {
               title: "逐步调整",
@@ -403,15 +403,15 @@ const getDocsCopy = (language: string): DocsCopy => {
         items: [
           {
             title: "Connect a model service",
-            body: "Open Settings, add a model service from a template (for example OpenAI or Anthropic), enter the API key, save, fetch the available models, then choose one to start."
+            body: "Open a missing item from Chat Readiness to jump directly to the matching Provider Management step. Add a service, enter its API key (optional for unauthenticated local services), choose a chat model, save, then run the real model connection test."
           },
           {
             title: "Create an original character",
-            body: "Open Characters and create a card with a name, description, tags, core setup, and additional rules."
+            body: "For the fastest start, use Quick Create in New Chat and enter only a name and core definition. Open Character Studio when you need tags, prompt sections, lore, quick replies, or styling."
           },
           {
             title: "Start chatting",
-            body: "Use New Chat from the desktop sidebar, mobile header, or empty chat state to search for a character and start immediately. You can also click Play on a character card."
+            body: "Use New Chat from the desktop sidebar, mobile header, or empty chat state to choose an existing character or quick-create one and enter the conversation immediately. You can also click Play on a character card."
           },
           {
             title: "Refine gradually",
