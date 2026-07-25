@@ -158,7 +158,7 @@ export function DebugPromptDrawer({
       onClick={onClose}
     >
       <section
-        className="animate-modal-enter flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)]"
+        className="animate-modal-enter flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-white/[0.08] bg-ink-900 shadow-xl shadow-black/60 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)]"
         role="dialog"
         onClick={(event) => event.stopPropagation()}
       >

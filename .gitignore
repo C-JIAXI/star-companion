@@ -26,6 +26,7 @@ tmp-*.png
 .tmp-electron-cache/
 .tmp-electron-dist/
 .tmp-npm-cache/
+.tmp-ui-audit/
 .DS_Store
 .vite
 coverage

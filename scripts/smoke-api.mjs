@@ -221,6 +221,19 @@ const createFakeModelServer = (port) => {
       return;
     }
 
+    if (request.method === "POST" && request.url === "/embeddings") {
+      const body = await readJsonBody(request);
+      const inputs = Array.isArray(body.input) ? body.input : [];
+      response.setHeader("Content-Type", "application/json");
+      response.end(
+        JSON.stringify({
+          model: body.model,
+          data: inputs.map((_input, index) => ({ index, embedding: [1, 0, 0] }))
+        })
+      );
+      return;
+    }
+
     if (request.method !== "POST" || request.url !== "/chat/completions") {
       response.statusCode = 404;
       response.end("not found");
@@ -449,6 +462,7 @@ const main = async () => {
               model: "fake-agent-model",
               capabilities: [
                 "text_generation",
+                "text_embedding",
                 "audio_transcription",
                 "text_to_speech",
                 "image_generation"
@@ -461,6 +475,7 @@ const main = async () => {
       activeModelId: "smoke-model",
       moduleModelPreferences: {
         agent: { providerId: "smoke-provider", modelId: "smoke-model" },
+        memory_embedding: { providerId: "smoke-provider", modelId: "smoke-model" },
         image_generation: { providerId: "smoke-provider", modelId: "smoke-model" }
       },
       userPersonaPresets: [
@@ -1007,6 +1022,9 @@ const main = async () => {
     });
     assert.equal(createdMemory.title, "Smoke memory");
     assert.equal(createdMemory.keywords.length, 2);
+    assert.equal(createdMemory.embeddingModel, "openai-compatible:fake-agent-model");
+    assert.ok(createdMemory.embeddingUpdatedAt);
+    assert.equal("embedding" in createdMemory, false);
 
     const listedMemories = await requestData(baseUrl, `/api/chats/${createdChat.id}/memories`);
     assert.equal(listedMemories.length, 1);
@@ -1116,6 +1134,16 @@ const main = async () => {
     );
     assert.equal(listedMessages.length, 2);
     assert.equal(listedMessages[1]?.content, "Nominal status confirmed. Continued.");
+
+    const chatsWithPreview = await requestData(baseUrl, "/api/chats");
+    const chatListPreview = chatsWithPreview.find((chat) => chat.id === createdChat.id);
+    assert.equal(chatListPreview?.messageCount, 2);
+    assert.equal(chatListPreview?.lastMessagePreview?.role, "assistant");
+    assert.equal(
+      chatListPreview?.lastMessagePreview?.content,
+      "Nominal status confirmed. Continued."
+    );
+    assert.ok(chatListPreview?.lastMessagePreview?.createdAt);
 
     const chatWithMessages = await requestData(baseUrl, `/api/chats/${createdChat.id}`);
     assert.equal(chatWithMessages.messages.length, 2);

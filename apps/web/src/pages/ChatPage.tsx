@@ -2,7 +2,6 @@ import {
   ArrowDown,
   Bookmark,
   BrainCircuit,
-  CornerUpLeft,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -11,6 +10,7 @@ import {
   Clipboard,
   Download,
   FileText,
+  GitBranch,
   Image,
   ListChecks,
   Mic,
@@ -47,7 +47,7 @@ import {
 } from "../lib/chatTranscript";
 import { scopeCharacterChatUiCss } from "../lib/characterHtmlCss";
 import { readFileAsDataUrl, saveTextFile } from "../lib/files";
-import { takeChatMessageJump } from "../lib/messageNavigation";
+import { queueChatMessageJump, takeChatMessageJump } from "../lib/messageNavigation";
 import { generateId } from "../lib/uuid";
 import { useWebSocket } from "../lib/useWebSocket";
 import { useAppStore } from "../store/useAppStore";
@@ -89,6 +89,7 @@ import {
 } from "../components/messages";
 import { MarkdownEditor } from "../components/MarkdownEditor";
 import { DebugPromptDrawer } from "../components/DebugPromptDrawer";
+import { ChatStoryNavigator } from "../components/ChatStoryNavigator";
 
 const MESSAGES_PER_PAGE = 30;
 const CHAT_DRAFT_STORAGE_PREFIX = "star-companion:chat-draft:";
@@ -225,10 +226,12 @@ const hasCompatibleModuleModel = (
 export function ChatPage({
   selectedChatId,
   onChatsChanged,
+  onNewChat,
   onSelectChat
 }: {
   selectedChatId: string | null;
   onChatsChanged: () => void;
+  onNewChat: () => void;
   onSelectChat: (id: string | null) => void;
 }) {
   const { language, t } = useI18n();
@@ -291,6 +294,10 @@ export function ChatPage({
   const [transcriptIncludeTimestamps, setTranscriptIncludeTimestamps] = useState(true);
   const [transcriptExportedAt, setTranscriptExportedAt] = useState(() => new Date().toISOString());
   const [showReadinessDialog, setShowReadinessDialog] = useState(false);
+  const [showStoryNavigator, setShowStoryNavigator] = useState(false);
+  const [storyChats, setStoryChats] = useState<ChatDTO[]>([]);
+  const [storyNavigatorLoading, setStoryNavigatorLoading] = useState(false);
+  const [storyNavigatorError, setStoryNavigatorError] = useState<string | null>(null);
   const [showImageDialog, setShowImageDialog] = useState(false);
   const [imagePromptDraft, setImagePromptDraft] = useState("");
   const [imageSize, setImageSize] = useState<"1024x1024" | "1024x1536" | "1536x1024" | "auto">(
@@ -758,7 +765,9 @@ export function ChatPage({
         id: "chat",
         ready: Boolean(activeChat),
         title: t("chat.readinessChatTitle"),
-        detail: activeChat ? t("chat.readinessChatReady") : t("chat.readinessChatMissing")
+        detail: activeChat ? t("chat.readinessChatReady") : t("chat.readinessChatMissing"),
+        actionLabel: hasAnyCharacter ? t("chat.newChat") : undefined,
+        onAction: hasAnyCharacter ? onNewChat : undefined
       }
     ],
     [
@@ -770,6 +779,7 @@ export function ChatPage({
       hasConfiguredProvider,
       hasEffectiveApiKey,
       navigateToSection,
+      onNewChat,
       t
     ]
   );
@@ -2215,6 +2225,63 @@ export function ChatPage({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [activeChat, activeRequestId, continueMessage, sendMessage, stopGeneration]);
 
+  const loadStoryNavigator = async () => {
+    setStoryNavigatorLoading(true);
+    setStoryNavigatorError(null);
+    try {
+      setStoryChats(await api.chats.list());
+    } catch (caught) {
+      setStoryNavigatorError(
+        caught instanceof Error ? caught.message : t("chat.storyLoadFailed")
+      );
+    } finally {
+      setStoryNavigatorLoading(false);
+    }
+  };
+
+  const openStoryNavigator = () => {
+    setShowStoryNavigator(true);
+    void loadStoryNavigator();
+  };
+
+  const navigateToStoryChat = (chatId: string) => {
+    setShowStoryNavigator(false);
+    onSelectChat(chatId);
+  };
+
+  const returnToParentChat = async () => {
+    if (!activeChat?.parentChatId) {
+      return;
+    }
+
+    const parentChatId = activeChat.parentChatId;
+    const sourceMessageId = activeChat.branchSourceMessageId;
+    setStoryNavigatorLoading(true);
+    setStoryNavigatorError(null);
+
+    try {
+      const parentChat = await api.chats.get(parentChatId);
+      if (sourceMessageId) {
+        const sourceIndex = parentChat.messages.findIndex((message) => message.id === sourceMessageId);
+        if (sourceIndex >= 0) {
+          queueChatMessageJump({
+            chatId: parentChatId,
+            messageId: sourceMessageId,
+            index: sourceIndex
+          });
+        }
+      }
+      setShowStoryNavigator(false);
+      onSelectChat(parentChatId);
+    } catch (caught) {
+      setStoryNavigatorError(
+        caught instanceof Error ? caught.message : t("chat.storyParentUnavailable")
+      );
+    } finally {
+      setStoryNavigatorLoading(false);
+    }
+  };
+
   const createStoryCopy = async (
     message: MessageDTO,
     kind: "branch" | "checkpoint",
@@ -2690,22 +2757,16 @@ export function ChatPage({
                 </Button>
                 {activeChat ? (
                   <>
-                  {activeChat.parentChatId ? (
                     <Button
-                      aria-label={t("chat.returnToParent")}
+                      aria-label={t("chat.storyPaths")}
                       className="!h-8 !min-h-8 !w-8 !p-0"
-                      data-testid="chat-return-to-parent"
-                      title={t("chat.returnToParent")}
+                      data-testid="chat-story-trigger"
+                      title={t("chat.storyPaths")}
                       variant="ghost"
-                      onClick={() => {
-                        if (activeChat.parentChatId) {
-                          onSelectChat(activeChat.parentChatId);
-                        }
-                      }}
+                      onClick={openStoryNavigator}
                     >
-                      <CornerUpLeft size={15} />
+                      <GitBranch size={15} />
                     </Button>
-                  ) : null}
                   <Button
                     aria-label={t("chat.searchMessages")}
                     className="!h-8 !min-h-8 !w-8 !p-0"
@@ -2765,7 +2826,7 @@ export function ChatPage({
                   </Button>
                   {memorySettingsOpen ? (
                     <div
-                      className="custom-scrollbar absolute right-0 top-10 z-20 max-h-80 w-56 overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-3 shadow-xl shadow-black/30 backdrop-blur-md sm:max-h-[calc(100dvh-22rem)]"
+                      className="custom-scrollbar absolute right-0 top-10 z-20 max-h-80 w-60 overflow-y-auto rounded-lg border border-white/[0.1] bg-ink-800 p-2 shadow-xl shadow-black/45 sm:max-h-[calc(100dvh-22rem)]"
                       onPointerDownCapture={handleMemorySettingsPointerDownCapture}
                     >
                       {settingsProviders.length > 0 ? (
@@ -2859,7 +2920,7 @@ export function ChatPage({
               </div>
             }
           >
-            <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
+            <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-md">
               {activeBackgroundUrl ? (
                 <div className="pointer-events-none absolute inset-0">
                   <img
@@ -2869,10 +2930,10 @@ export function ChatPage({
                     src={activeBackgroundUrl}
                   />
                   <div className="absolute inset-0 bg-black/35" />
-                  <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(12,13,18,0.2),rgba(12,13,18,0.7))]" />
+                  <div className="absolute inset-0 bg-black/45" />
                 </div>
               ) : !activeChat ? (
-                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(251,146,60,0.08),transparent_38%)]" />
+                <div className="pointer-events-none absolute inset-0 bg-ink-950/35" />
               ) : null}
 
               <div className="relative z-10 flex min-h-0 flex-1 flex-col">
@@ -2880,21 +2941,35 @@ export function ChatPage({
                   <div id="chat-empty-state">
                     <EmptyState>
                       <div className="flex max-w-md flex-col items-center gap-3">
-                        <p>{t("chat.selectOrCreate")}</p>
-                        <p className="text-xs leading-5 text-slate-500">
+                        <p className="font-medium text-ink-200">{t("chat.selectOrCreate")}</p>
+                        <p className="text-xs leading-5 text-ink-400">
                           {readinessIssueCount > 0
                             ? t("chat.readinessEmptyNeedsAction", { count: readinessIssueCount })
                             : t("chat.readinessEmptyReady")}
                         </p>
-                        <Button
-                          className="!min-h-[40px]"
-                          data-testid="chat-readiness-empty-action"
-                          variant={readinessIssueCount > 0 ? "primary" : "secondary"}
-                          onClick={() => setShowReadinessDialog(true)}
-                        >
-                          <ListChecks size={15} />
-                          {t("chat.readinessOpen")}
-                        </Button>
+                        <div className="flex flex-wrap items-center justify-center gap-2">
+                          <Button
+                            className="!min-h-[40px]"
+                            data-testid="chat-new-empty-action"
+                            onClick={
+                              hasAnyCharacter ? onNewChat : () => navigateToSection("characters")
+                            }
+                          >
+                            <Plus size={15} />
+                            {hasAnyCharacter
+                              ? t("chat.newChat")
+                              : t("chat.readinessOpenCharacters")}
+                          </Button>
+                          <Button
+                            className="!min-h-[40px]"
+                            data-testid="chat-readiness-empty-action"
+                            variant="secondary"
+                            onClick={() => setShowReadinessDialog(true)}
+                          >
+                            <ListChecks size={15} />
+                            {t("chat.readinessOpen")}
+                          </Button>
+                        </div>
                       </div>
                     </EmptyState>
                   </div>
@@ -2919,14 +2994,14 @@ export function ChatPage({
                         />
                       ) : (
                         <div
-                          className="mx-auto max-w-2xl space-y-4 rounded-2xl p-2 sm:space-y-7 sm:p-5"
+                            className="mx-auto max-w-3xl space-y-4 p-2 sm:space-y-6 sm:p-5"
                           id="chat-message-list"
                         >
                           {activeChat.messages.length > MESSAGES_PER_PAGE ? (
                             <div
                               id="chat-pagination"
                               data-testid="chat-message-pagination"
-                              className="sticky top-0 z-10 -mx-2 -mt-2 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-t-2xl border-b border-white/5 bg-ink-900/90 px-2 pb-2 pt-1.5 backdrop-blur-md sm:-mx-5 sm:-mt-5 sm:mb-5 sm:gap-3 sm:px-5 sm:pb-3 sm:pt-5"
+                              className="sticky top-0 z-10 -mx-2 -mt-2 mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] bg-ink-900/95 px-2 pb-2 pt-1.5 backdrop-blur-sm sm:-mx-5 sm:-mt-5 sm:mb-5 sm:gap-3 sm:px-5 sm:pb-3 sm:pt-5"
                             >
                               <div className="min-w-0">
                                 <p className="text-xs font-semibold text-slate-200">
@@ -2975,8 +3050,8 @@ export function ChatPage({
                             >
                               <EmptyState>
                                 <div className="flex max-w-md flex-col items-center gap-3">
-                                  <p>{t("chat.noMessages")}</p>
-                                  <p className="text-xs leading-5 text-slate-500">
+                                  <p className="font-medium text-ink-200">{t("chat.noMessages")}</p>
+                                  <p className="text-xs leading-5 text-ink-400">
                                     {t("chat.openingHelp")}
                                   </p>
                                   <Button
@@ -3003,7 +3078,7 @@ export function ChatPage({
                                 : undefined;
                               const messageShellClassName =
                                 highlightedMessageId === message.id
-                                  ? "rounded-2xl ring-2 ring-ember-400/70 ring-offset-2 ring-offset-ink-950 transition"
+                                  ? "rounded-lg ring-2 ring-ember-400/70 ring-offset-2 ring-offset-ink-950 transition"
                                   : "transition";
                               if (isErrorSystem) {
                                 const errorText = message.content.slice(
@@ -3159,7 +3234,7 @@ export function ChatPage({
                         <button
                           id="chat-scroll-bottom"
                           type="button"
-                          className="sticky bottom-3 z-20 mx-auto flex items-center gap-1.5 rounded-full border border-white/10 bg-ink-900/90 px-3 py-1.5 text-xs font-medium text-slate-300 shadow-lg shadow-black/30 backdrop-blur-sm transition-colors hover:bg-ink-800 hover:text-slate-100"
+                          className="sticky bottom-3 z-20 mx-auto flex items-center gap-1.5 rounded-md border border-white/[0.1] bg-ink-800 px-3 py-1.5 text-xs font-medium text-ink-300 shadow-lg shadow-black/30 transition-colors hover:bg-ink-700 hover:text-ink-50"
                           style={{
                             display: "flex",
                             width: "fit-content",
@@ -3218,7 +3293,7 @@ export function ChatPage({
                         </div>
                       ) : null}
                       <div
-                        className="mx-auto max-w-2xl rounded-xl border border-white/5 bg-ink-950/95 p-1.5 shadow-xl shadow-black/30 backdrop-blur-sm sm:p-2 xl:bg-ink-950/40 xl:shadow-none"
+                        className="mx-auto max-w-3xl rounded-lg border border-white/[0.1] bg-ink-950/95 p-1.5 shadow-xl shadow-black/30 sm:p-2 xl:bg-ink-950/70"
                         id="chat-composer"
                       >
                         {queuedMessages.length > 0 ? (
@@ -3278,7 +3353,7 @@ export function ChatPage({
                         ) : null}
                         <div className="mb-1 flex items-center gap-1 px-1">
                           <button
-                            className={`grid h-9 w-9 place-items-center rounded-lg transition-colors ${
+                            className={`grid h-9 w-9 place-items-center rounded-md transition-colors ${
                               recording
                                 ? "bg-rose-500/15 text-rose-300"
                                 : "text-slate-500 hover:bg-white/10 hover:text-slate-200"
@@ -3298,7 +3373,7 @@ export function ChatPage({
                             <Mic size={16} />
                           </button>
                           <button
-                            className={`grid h-9 w-9 place-items-center rounded-lg transition-colors disabled:opacity-40 ${
+                            className={`grid h-9 w-9 place-items-center rounded-md transition-colors disabled:opacity-40 ${
                               speechPlaying
                                 ? "bg-ember-500/15 text-ember-300 hover:bg-ember-500/20"
                                 : "text-slate-500 hover:bg-white/10 hover:text-slate-200"
@@ -3324,7 +3399,7 @@ export function ChatPage({
                             {speechPlaying ? <VolumeX size={16} /> : <Volume2 size={16} />}
                           </button>
                           <button
-                            className="grid h-9 w-9 place-items-center rounded-lg text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200 disabled:opacity-40"
+                            className="grid h-9 w-9 place-items-center rounded-md text-ink-500 transition-colors hover:bg-white/[0.06] hover:text-ink-200 disabled:opacity-40"
                             data-chat-action="image-generate"
                             disabled={mediaLoading || recording || !canGenerateImage}
                             title={canGenerateImage ? t("chat.imageGenerate") : t("chat.mediaModelMissing")}
@@ -3412,7 +3487,7 @@ export function ChatPage({
               />
               <aside
                 aria-label={t("chat.agentTitle")}
-                className="fixed inset-x-0 bottom-0 z-50 flex max-h-[82dvh] min-h-[420px] flex-col rounded-t-2xl border border-white/10 bg-ink-900/95 p-3 shadow-2xl shadow-black/50 backdrop-blur-xl sm:inset-x-auto sm:bottom-4 sm:right-4 sm:top-24 sm:w-[420px] sm:max-h-none sm:min-h-0 sm:rounded-2xl sm:p-4"
+                className="fixed inset-x-0 bottom-0 z-50 flex max-h-[82dvh] min-h-[420px] flex-col rounded-t-lg border border-white/[0.1] bg-ink-900 p-3 shadow-2xl shadow-black/60 sm:inset-x-auto sm:bottom-4 sm:right-4 sm:top-24 sm:w-[420px] sm:max-h-none sm:min-h-0 sm:rounded-lg sm:p-4"
                 data-testid="chat-agent-panel"
               >
                 <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-3">
@@ -3481,7 +3556,7 @@ export function ChatPage({
                     {agentLoading ? t("chat.agentRunning") : t("chat.agentRun")}
                   </Button>
 
-                  <div className="min-h-[180px] rounded-xl border border-white/10 bg-ink-950/50 p-3">
+                  <div className="min-h-[180px] rounded-lg border border-white/10 bg-ink-950/50 p-3">
                     {agentDraft ? (
                       <div className="space-y-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3531,11 +3606,28 @@ export function ChatPage({
           ) : null}
         </div>
       </div>
+      {showStoryNavigator && activeChat ? (
+        <Modal
+          panelClassName="max-w-2xl"
+          title={t("chat.storyPaths")}
+          onClose={() => setShowStoryNavigator(false)}
+        >
+          <ChatStoryNavigator
+            activeChat={activeChat}
+            chats={storyChats}
+            error={storyNavigatorError}
+            loading={storyNavigatorLoading}
+            onNavigate={navigateToStoryChat}
+            onRetry={() => void loadStoryNavigator()}
+            onReturnToParent={() => void returnToParentChat()}
+          />
+        </Modal>
+      ) : null}
       {editingMessage ? (
         <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm p-4">
           <section
             aria-labelledby="edit-message-title"
-            className="animate-scale-in w-full max-w-2xl rounded-2xl border border-white/10 bg-ink-900 p-6 shadow-2xl shadow-black/50 max-h-[85vh] overflow-y-auto"
+            className="animate-scale-in max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-white/10 bg-ink-900 p-6 shadow-xl shadow-black/45"
             role="dialog"
           >
             <div className="flex items-start justify-between gap-4">
@@ -3706,7 +3798,7 @@ export function ChatPage({
                       return (
                         <button
                           key={result.message.id}
-                          className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-ember-400/50 hover:bg-ember-500/10"
+                          className="rounded-lg border border-white/10 bg-ink-800/65 p-3 text-left transition hover:border-ember-400/50 hover:bg-ember-500/[0.08]"
                           data-testid="chat-search-result"
                           type="button"
                           onClick={() => jumpToMessageSearchResult(result)}
@@ -3750,7 +3842,7 @@ export function ChatPage({
                   return (
                     <button
                       key={message.id}
-                      className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-ember-400/50 hover:bg-ember-500/10"
+                      className="rounded-lg border border-white/10 bg-ink-800/65 p-3 text-left transition hover:border-ember-400/50 hover:bg-ember-500/[0.08]"
                       data-testid="chat-bookmark-result"
                       type="button"
                       onClick={() => jumpToBookmarkedMessage(message, index)}
@@ -3837,7 +3929,7 @@ export function ChatPage({
               {t("chat.userConfigHelp")}
             </p>
             <div
-              className="space-y-3 rounded-xl border border-white/10 bg-white/[0.03] p-4"
+              className="space-y-3 rounded-lg border border-white/10 bg-ink-950/35 p-4"
               data-testid="persona-presets"
             >
               <div>
@@ -4119,7 +4211,7 @@ export function ChatPage({
                   }}
                 />
               </div>
-              <div className="rounded-xl border border-white/10 bg-ink-950/40 p-4">
+              <div className="rounded-lg border border-white/10 bg-ink-950/40 p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <p className="text-sm font-semibold text-slate-200">{backgroundCopy.preview}</p>
                   {usingUploadedBackground ? (
@@ -4253,7 +4345,7 @@ export function ChatPage({
       {showMemoryDialog ? (
         <Modal title={t("chat.memorySettings")} onClose={closeMemoryDialog}>
           <div className="space-y-6">
-            <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+            <div className="rounded-lg border border-white/10 bg-ink-950/30 p-4">
               <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
                 <div className="space-y-2">
                   <p className="text-sm font-semibold text-slate-200">{t("chat.memorySettings")}</p>
@@ -4323,7 +4415,7 @@ export function ChatPage({
               </label>
 
               {editingMemory ? (
-                <div className="space-y-3 rounded-xl border border-ember-500/20 bg-ember-500/[0.04] p-4">
+                <div className="space-y-3 rounded-lg border border-ember-500/20 bg-ember-500/[0.04] p-4">
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-sm font-semibold text-slate-100">
                       {t(editingMemory === "new" ? "chat.addMemory" : "chat.editMemory")}
@@ -4412,7 +4504,7 @@ export function ChatPage({
               ) : null}
 
               {chatMemories.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-6 text-center text-sm text-slate-500">
+                <div className="rounded-lg border border-dashed border-white/10 bg-ink-950/25 px-4 py-6 text-center text-sm text-slate-500">
                   {t("chat.memoryEmpty")}
                 </div>
               ) : (
@@ -4420,7 +4512,7 @@ export function ChatPage({
                   {chatMemories.map((memory) => (
                     <div
                       key={memory.id}
-                      className={`rounded-xl border p-3 ${
+                      className={`rounded-lg border p-3 ${
                         memory.enabled
                           ? "border-white/10 bg-white/[0.03]"
                           : "border-white/5 bg-white/[0.015] opacity-70"
@@ -4441,6 +4533,20 @@ export function ChatPage({
                                 : "bg-white/10 text-slate-400"
                             }`}>
                               {memory.enabled ? t("common.enabled") : t("common.disabled")}
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                                memory.embeddingUpdatedAt
+                                  ? "bg-cyan-500/15 text-cyan-300"
+                                  : "bg-white/10 text-slate-400"
+                              }`}
+                              title={memory.embeddingModel ?? undefined}
+                            >
+                              {t(
+                                memory.embeddingUpdatedAt
+                                  ? "chat.memoryVectorReady"
+                                  : "chat.memoryKeywordOnly"
+                              )}
                             </span>
                           </div>
                           <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">
@@ -4504,7 +4610,7 @@ export function ChatPage({
               {readinessItems.map((item) => (
                 <div
                   key={item.id}
-                  className={`flex flex-col gap-3 rounded-xl border p-3 sm:flex-row sm:items-center sm:justify-between ${
+                  className={`flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between ${
                     item.ready
                       ? "border-emerald-500/20 bg-emerald-500/[0.04]"
                       : "border-amber-500/25 bg-amber-500/[0.05]"
@@ -4539,7 +4645,7 @@ export function ChatPage({
                 </div>
               ))}
             </div>
-            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs leading-5 text-slate-500">
+            <div className="rounded-lg border border-white/10 bg-ink-950/35 p-3 text-xs leading-5 text-slate-500">
               {readinessIssueCount > 0
                 ? t("chat.readinessFooterNeedsAction", { count: readinessIssueCount })
                 : t("chat.readinessFooterReady")}

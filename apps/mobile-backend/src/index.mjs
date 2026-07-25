@@ -59,6 +59,7 @@ import {
   streamChatCompletion,
   testModelConnection
 } from "../server-dist/services/completions.js";
+import { generateEmbeddings } from "../server-dist/services/embeddings.js";
 import {
   assertCharacterUnlockPassword,
   buildCharacterUpdateData,
@@ -155,6 +156,8 @@ const AUTO_MEMORY_THROTTLE_MS = 30_000;
 const RECENT_MEMORY_MESSAGE_LIMIT = 6;
 const RECENT_PROFILE_MESSAGE_LIMIT = 16;
 const EXISTING_MEMORY_LIMIT = 30;
+const EMBEDDING_BATCH_SIZE = 64;
+const SEMANTIC_SIMILARITY_THRESHOLD = 0.25;
 const MAX_PROFILE_LENGTH = 1800;
 
 const uniqueStrings = (values, limit) => [
@@ -339,6 +342,87 @@ const scoreMemory = (memory, queryText, queryTokens) => {
   return relevanceScore + importanceScore + recentMatchScore;
 };
 
+const toNumberArray = (value) =>
+  Array.isArray(value) &&
+  value.length > 0 &&
+  value.every((entry) => typeof entry === "number" && Number.isFinite(entry))
+    ? value
+    : null;
+
+const toMemoryEmbeddingText = (memory) =>
+  [
+    String(memory.title ?? "").trim(),
+    String(memory.content ?? "").trim(),
+    toStringArray(memory.keywords).length
+      ? `Keywords: ${toStringArray(memory.keywords).join(", ")}`
+      : ""
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 6000);
+
+const cosineSimilarity = (left, right) => {
+  if (!left.length || left.length !== right.length) return 0;
+  let dot = 0;
+  let leftMagnitude = 0;
+  let rightMagnitude = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    dot += left[index] * right[index];
+    leftMagnitude += left[index] * left[index];
+    rightMagnitude += right[index] * right[index];
+  }
+  if (!leftMagnitude || !rightMagnitude) return 0;
+  return dot / (Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude));
+};
+
+const toEmbeddingIdentity = (settings) =>
+  `${String(settings.activeProvider ?? "").trim().toLowerCase()}:${String(settings.model ?? "").trim()}`;
+
+const ensureMemoryEmbeddings = async (memories, settings, force = false) => {
+  let embeddingSettings;
+  try {
+    embeddingSettings = resolveModuleSettings(settings, "memory_embedding");
+  } catch {
+    return null;
+  }
+
+  const embeddingModel = toEmbeddingIdentity(embeddingSettings);
+  const vectors = new Map();
+  const stale = memories.filter((memory) => {
+    const vector = toNumberArray(memory.embedding);
+    if (!force && memory.embeddingModel === embeddingModel && vector) {
+      vectors.set(memory.id, vector);
+      return false;
+    }
+    return true;
+  });
+
+  try {
+    for (let start = 0; start < stale.length; start += EMBEDDING_BATCH_SIZE) {
+      const batch = stale.slice(start, start + EMBEDDING_BATCH_SIZE);
+      const result = await generateEmbeddings({
+        settings: embeddingSettings,
+        inputs: batch.map(toMemoryEmbeddingText),
+        task: "document"
+      });
+      const embeddingUpdatedAt = new Date().toISOString();
+      for (let index = 0; index < batch.length; index += 1) {
+        const memory = batch[index];
+        const vector = result.vectors[index];
+        vectors.set(memory.id, vector);
+        await store.updateMemory(memory.chatId, memory.id, {
+          embedding: vector,
+          embeddingModel,
+          embeddingUpdatedAt
+        });
+      }
+    }
+    return { settings: embeddingSettings, vectors };
+  } catch {
+    return null;
+  }
+};
+
 const toMatchedMemoryEntry = (memory, score) => ({
   ...serializeMemory(memory),
   score
@@ -411,10 +495,41 @@ const recallChatMemories = async ({ chatId, query, recentMessages, settings }) =
   if (!queryText) return [];
 
   const queryTokens = new Set(tokenize(queryText));
-  const candidates = store
-    .listMemories(chatId)
-    .filter((memory) => memory.enabled !== false)
-    .map((memory) => toMatchedMemoryEntry(memory, scoreMemory(memory, queryText, queryTokens)))
+  const memories = store.listMemories(chatId).filter((memory) => memory.enabled !== false);
+  const embeddingIndex = await ensureMemoryEmbeddings(memories, settings);
+  let queryVector = null;
+  if (embeddingIndex) {
+    try {
+      const result = await generateEmbeddings({
+        settings: embeddingIndex.settings,
+        inputs: [(query.trim() || queryText).slice(0, 6000)],
+        task: "query"
+      });
+      queryVector = result.vectors[0] ?? null;
+    } catch {
+      queryVector = null;
+    }
+  }
+
+  const candidates = memories
+    .map((memory) => {
+      const keywordScore = scoreMemory(memory, queryText, queryTokens);
+      if (!queryVector || !embeddingIndex) {
+        return toMatchedMemoryEntry(memory, keywordScore);
+      }
+      const memoryVector = embeddingIndex.vectors.get(memory.id);
+      const semanticScore = memoryVector
+        ? Math.max(0, cosineSimilarity(queryVector, memoryVector))
+        : 0;
+      if (keywordScore <= 0 && semanticScore < SEMANTIC_SIMILARITY_THRESHOLD) {
+        return toMatchedMemoryEntry(memory, 0);
+      }
+      const normalizedKeywordScore = Math.min(1, keywordScore / 25);
+      const importanceScore = Math.min(1, Math.max(0, (memory.importance ?? 3) / 5));
+      const score =
+        (semanticScore * 0.72 + normalizedKeywordScore * 0.23 + importanceScore * 0.05) * 100;
+      return toMatchedMemoryEntry(memory, Number(score.toFixed(2)));
+    })
     .filter((memory) => memory.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, KEYWORD_CANDIDATE_LIMIT);
@@ -609,10 +724,11 @@ const updateChatMemoriesFromTurn = async ({ chatId, settings, force = false }) =
   let created = 0;
   let updated = 0;
   let disabled = 0;
+  const changedMemoryIds = [];
 
   for (const action of actions.slice(0, 8)) {
     if (action.type === "create") {
-      await store.createMemory({
+      const memory = await store.createMemory({
         chatId,
         title: action.title,
         content: action.content,
@@ -621,6 +737,7 @@ const updateChatMemoriesFromTurn = async ({ chatId, settings, force = false }) =
         enabled: true,
         sourceMessageIds
       });
+      changedMemoryIds.push(memory.id);
       created += 1;
       continue;
     }
@@ -635,15 +752,29 @@ const updateChatMemoriesFromTurn = async ({ chatId, settings, force = false }) =
         keywords: action.keywords,
         importance: action.importance,
         enabled: action.enabled,
-        sourceMessageIds
+        sourceMessageIds,
+        ...(action.title || action.content || action.keywords
+          ? {
+              embedding: null,
+              embeddingModel: null,
+              embeddingUpdatedAt: null
+            }
+          : {})
       })
     );
+    changedMemoryIds.push(action.id);
     updated += 1;
     if (action.enabled === false) disabled += 1;
   }
 
   const updatedAt = new Date().toISOString();
   await store.updateChat(chatId, { memoryUpdatedAt: updatedAt });
+  const changedMemories = changedMemoryIds
+    .map((id) => store.getMemory(chatId, id))
+    .filter((memory) => memory?.enabled !== false);
+  if (changedMemories.length) {
+    await ensureMemoryEmbeddings(changedMemories, settings);
+  }
   return {
     chatId,
     created,
@@ -784,6 +915,8 @@ const serializeMemory = (memory) => ({
   importance: memory.importance ?? 3,
   enabled: memory.enabled !== false,
   sourceMessageIds: toStringArray(memory.sourceMessageIds),
+  embeddingModel: memory.embeddingModel ?? null,
+  embeddingUpdatedAt: memory.embeddingUpdatedAt ?? null,
   lastMatchedAt: memory.lastMatchedAt ?? null,
   createdAt: memory.createdAt,
   updatedAt: memory.updatedAt
@@ -880,6 +1013,7 @@ const moduleCapabilities = {
   chat: "text_generation",
   agent: "text_generation",
   memory: "text_generation",
+  memory_embedding: "text_embedding",
   user_profile: "text_generation",
   voice_transcription: "audio_transcription",
   voice_speech: "text_to_speech",
@@ -888,6 +1022,9 @@ const moduleCapabilities = {
 
 const inferModelCapabilities = (model) => {
   const normalized = String(model ?? "").trim().toLowerCase();
+  if (/(?:^|[-_/])(?:embedding|embed|bge|e5|gte|nomic|jina|mxbai)(?:[-_/]|$)/.test(normalized)) {
+    return ["text_embedding"];
+  }
   if (/(^|[-_/])(?:whisper|transcribe|stt)(?:[-_/]|$)/.test(normalized)) {
     return ["audio_transcription"];
   }
@@ -904,8 +1041,12 @@ const getModelCapabilities = (model) =>
   Array.isArray(model?.capabilities) ? model.capabilities : inferModelCapabilities(model?.model);
 
 const supportsModule = (provider, model, moduleId) => {
+  const providerKind = normalizeProviderKind(provider?.provider);
   const isMediaModule = ["voice_transcription", "voice_speech", "image_generation"].includes(moduleId);
-  if (isMediaModule && normalizeProviderKind(provider?.provider) !== "openai-compatible") {
+  if (isMediaModule && providerKind !== "openai-compatible") {
+    return false;
+  }
+  if (moduleId === "memory_embedding" && providerKind === "anthropic") {
     return false;
   }
   return getModelCapabilities(model).includes(moduleCapabilities[moduleId]);
@@ -959,7 +1100,9 @@ const resolveModuleSettings = (settings, moduleId) => {
   }
   const provider = (settings.providers ?? []).find((entry) => entry.id === preference.providerId);
   const model = provider?.models?.find((entry) => entry.id === preference.modelId);
-  if (!provider || !model) return settings;
+  if (!provider || !model) {
+    throw new Error(`The configured ${moduleId} model no longer exists.`);
+  }
   if (!supportsModule(provider, model, moduleId)) {
     throw new Error(`The configured ${moduleId} model does not support this feature.`);
   }
@@ -1690,8 +1833,12 @@ app.post(
     const chatId = requireParam(request, "id");
     if (!getActiveChat(chatId)) throw notFound("Chat not found");
     const body = parseBody(chatMemoryCreateSchema, request.body);
-    const memory = await store.createMemory({ ...body, chatId });
-    response.status(201).json({ ok: true, data: serializeMemory(memory) });
+    const createdMemory = await store.createMemory({ ...body, chatId });
+    await ensureMemoryEmbeddings([createdMemory], store.getSettings());
+    response.status(201).json({
+      ok: true,
+      data: serializeMemory(store.getMemory(chatId, createdMemory.id))
+    });
   })
 );
 
@@ -1701,13 +1848,30 @@ app.put(
     const chatId = requireParam(request, "id");
     if (!getActiveChat(chatId)) throw notFound("Chat not found");
     const body = parseBody(chatMemoryUpdateSchema, request.body);
+    const embeddingSourceChanged =
+      hasOwn(body, "title") || hasOwn(body, "content") || hasOwn(body, "keywords");
     const memory = await store.updateMemory(
       chatId,
       requireParam(request, "memoryId"),
-      body
+      {
+        ...body,
+        ...(embeddingSourceChanged
+          ? {
+              embedding: null,
+              embeddingModel: null,
+              embeddingUpdatedAt: null
+            }
+          : {})
+      }
     );
     if (!memory) throw notFound("Memory not found");
-    response.json({ ok: true, data: serializeMemory(memory) });
+    if (memory.enabled !== false) {
+      await ensureMemoryEmbeddings([memory], store.getSettings());
+    }
+    response.json({
+      ok: true,
+      data: serializeMemory(store.getMemory(chatId, memory.id))
+    });
   })
 );
 
@@ -1732,6 +1896,10 @@ app.post(
       settings: store.getSettings(),
       force: true
     });
+    await ensureMemoryEmbeddings(
+      store.listMemories(chatId).filter((memory) => memory.enabled !== false),
+      store.getSettings()
+    );
     response.json({ ok: true, data: store.listMemories(chatId).map(serializeMemory) });
   })
 );

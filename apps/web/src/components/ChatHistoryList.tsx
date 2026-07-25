@@ -6,6 +6,7 @@ import {
   GitBranch,
   History,
   MessageSquarePlus,
+  MoreHorizontal,
   Pencil,
   Pin,
   RotateCcw,
@@ -22,6 +23,7 @@ import { api } from "../lib/api";
 import { buildChatTranscript, safeChatTranscriptName } from "../lib/chatTranscript";
 import { readFileText, saveJsonFile, saveTextFile } from "../lib/files";
 import { queueChatMessageJump } from "../lib/messageNavigation";
+import { usePlaceholderSrc } from "../placeholderImages";
 import type { CharacterDTO, ChatArchiveDTO, ChatDTO, GlobalChatMessageSearchDTO } from "../types";
 import { ChatGroupHeader } from "./ChatGroupHeader";
 import { ConfirmDialog, EmptyState, ErrorNotice, Modal, TextInput } from "./ui";
@@ -40,6 +42,102 @@ const compareChats = (a: ChatDTO, b: ChatDTO) => {
   const pinOrder = Number(b.isPinned) - Number(a.isPinned);
   return pinOrder || b.updatedAt.localeCompare(a.updatedAt);
 };
+
+const formatChatActivity = (value: string, language: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const now = new Date();
+  const locale = language === "zh-CN" ? "zh-CN" : "en";
+  if (date.toDateString() === now.toDateString()) {
+    return new Intl.DateTimeFormat(locale, {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    }).format(date);
+  }
+
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayDifference = Math.round((startOfDate - startOfToday) / 86_400_000);
+  if (dayDifference >= -6 && dayDifference < 0) {
+    return new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(dayDifference, "day");
+  }
+
+  return new Intl.DateTimeFormat(locale, {
+    ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+    month: "short",
+    day: "numeric"
+  }).format(date);
+};
+
+function RecentChatItem({
+  chat,
+  character,
+  current,
+  language,
+  onSelect
+}: {
+  chat: ChatDTO;
+  character: CharacterDTO | undefined;
+  current: boolean;
+  language: string;
+  onSelect: () => void;
+}) {
+  const { t } = useI18n();
+  const avatar = usePlaceholderSrc(character?.avatar, chat.characterId ?? chat.id);
+  const activity = formatChatActivity(chat.lastMessagePreview?.createdAt ?? chat.updatedAt, language);
+
+  return (
+    <button
+      aria-current={current ? "page" : undefined}
+      className={`group flex min-h-[52px] w-full min-w-0 items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors ${
+        current
+          ? "bg-ember-500/[0.1] text-ember-100 shadow-[inset_2px_0_0_rgba(69,203,178,0.9)]"
+          : "text-ink-300 hover:bg-white/[0.045] hover:text-ink-100"
+      }`}
+      data-chat-id={chat.id}
+      data-testid="chat-recent-item"
+      type="button"
+      onClick={onSelect}
+    >
+      <span className="relative shrink-0">
+        <img
+          alt=""
+          className="h-8 w-8 rounded-md object-cover ring-1 ring-white/10"
+          loading="lazy"
+          src={avatar}
+        />
+        {chat.isPinned ? (
+          <Pin
+            aria-hidden="true"
+            className="absolute -right-1 -top-1 rounded bg-ink-800 p-0.5 text-amber-300"
+            fill="currentColor"
+            size={12}
+          />
+        ) : null}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 flex-1 truncate text-xs font-semibold">{chat.title}</span>
+          <time
+            className="shrink-0 text-[10px] tabular-nums text-ink-600"
+            dateTime={chat.lastMessagePreview?.createdAt ?? chat.updatedAt}
+          >
+            {activity}
+          </time>
+        </span>
+        <span className="mt-0.5 block truncate text-[11px] leading-4 text-ink-500">
+          {chat.lastMessagePreview?.content ??
+            character?.name ??
+            t("chat.historyNoMessages")}
+        </span>
+      </span>
+    </button>
+  );
+}
 
 export function ChatHistoryList({
   selectedChatId,
@@ -70,6 +168,7 @@ export function ChatHistoryList({
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [actionMenuChatId, setActionMenuChatId] = useState<string | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -151,6 +250,17 @@ export function ChatHistoryList({
     }),
     [chats]
   );
+  const activeChats = useMemo(
+    () => chats.filter((chat) => !chat.deletedAt && !chat.isArchived).sort(compareChats),
+    [chats]
+  );
+  const recentChats = useMemo(() => {
+    const pinned = activeChats.filter((chat) => chat.isPinned);
+    const unpinned = activeChats.filter((chat) => !chat.isPinned);
+    const pinnedLimit = unpinned.length > 0 ? 3 : 6;
+    const selectedPinned = pinned.slice(0, pinnedLimit);
+    return [...selectedPinned, ...unpinned.slice(0, 6 - selectedPinned.length)];
+  }, [activeChats]);
 
   const groups = useMemo(() => {
     const map = new Map<string, CharacterGroup>();
@@ -220,6 +330,7 @@ export function ChatHistoryList({
         return;
       }
       onSelectChat(id);
+      setActionMenuChatId(null);
       setOpen(false);
     },
     [chatScope, manageMode, onSelectChat]
@@ -232,6 +343,7 @@ export function ChatHistoryList({
     setMessageSearchResult(null);
     setManageMode(false);
     setSelectedIds(new Set());
+    setActionMenuChatId(null);
     void loadChats();
     setOpen(true);
   };
@@ -259,12 +371,14 @@ export function ChatHistoryList({
       index: result.index
     });
     onSelectChat(result.chat.id);
+    setActionMenuChatId(null);
     setOpen(false);
   };
 
   const toggleManage = () => {
     setManageMode((prev) => !prev);
     setSelectedIds(new Set());
+    setActionMenuChatId(null);
   };
 
   const toggleSelectAll = () => {
@@ -409,7 +523,13 @@ export function ChatHistoryList({
     }
     try {
       const updated = await api.chats.update(renamingId, { title: trimmed });
-      setChats((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+      setChats((prev) =>
+        prev.map((chat) =>
+          chat.id === updated.id
+            ? { ...chat, ...updated, lastMessagePreview: chat.lastMessagePreview }
+            : chat
+        )
+      );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdate"));
     } finally {
@@ -421,7 +541,13 @@ export function ChatHistoryList({
     setError(null);
     try {
       const updated = await api.chats.update(chat.id, { isPinned: !chat.isPinned });
-      setChats((current) => current.map((entry) => (entry.id === updated.id ? updated : entry)));
+      setChats((current) =>
+        current.map((entry) =>
+          entry.id === updated.id
+            ? { ...entry, ...updated, lastMessagePreview: entry.lastMessagePreview }
+            : entry
+        )
+      );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdate"));
     }
@@ -431,7 +557,13 @@ export function ChatHistoryList({
     setError(null);
     try {
       const updated = await api.chats.update(chat.id, { isArchived: !chat.isArchived });
-      setChats((current) => current.map((entry) => (entry.id === updated.id ? updated : entry)));
+      setChats((current) =>
+        current.map((entry) =>
+          entry.id === updated.id
+            ? { ...entry, ...updated, lastMessagePreview: entry.lastMessagePreview }
+            : entry
+        )
+      );
       if (!chat.isArchived && selectedChatId === chat.id) {
         onSelectChat(null);
       }
@@ -500,7 +632,7 @@ export function ChatHistoryList({
     <>
       <div className="space-y-1">
         <button
-          className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium text-slate-400 transition-all duration-200 hover:bg-white/5 hover:text-slate-200 min-h-[32px]"
+          className="flex min-h-9 w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium text-ink-300 transition-colors hover:bg-white/[0.045] hover:text-ink-100"
           data-testid="chat-history-trigger"
           type="button"
           onClick={handleOpen}
@@ -509,7 +641,7 @@ export function ChatHistoryList({
           <span>{t("chat.history")}</span>
         </button>
         <button
-          className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium text-slate-400 transition-all duration-200 hover:bg-white/5 hover:text-slate-200 min-h-[32px]"
+          className="flex min-h-9 w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium text-ink-300 transition-colors hover:bg-white/[0.045] hover:text-ink-100"
           data-testid="chat-docs-entry"
           type="button"
           onClick={() => {
@@ -522,9 +654,54 @@ export function ChatHistoryList({
         </button>
       </div>
 
+      {recentChats.length > 0 ? (
+        <div className="mt-4 border-t border-white/[0.08] pt-3" data-testid="chat-recent-list">
+          <div className="mb-1.5 flex items-center justify-between gap-2 px-2.5">
+            <p className="text-[11px] font-semibold uppercase text-ink-500">
+              {t("chat.recentChats")}
+            </p>
+            <span className="text-[10px] tabular-nums text-ink-600">{activeChats.length}</span>
+          </div>
+          <div className="space-y-0.5">
+            {recentChats.map((chat) => (
+              <RecentChatItem
+                chat={chat}
+                character={
+                  chat.characterId ? characterCache.get(chat.characterId) : undefined
+                }
+                current={selectedChatId === chat.id}
+                key={chat.id}
+                language={language}
+                onSelect={() => {
+                  onSelectChat(chat.id);
+                  setActionMenuChatId(null);
+                  setOpen(false);
+                }}
+              />
+            ))}
+          </div>
+          {activeChats.length > recentChats.length ? (
+            <button
+              className="mt-1 flex min-h-8 w-full items-center justify-center rounded-md px-2 text-[11px] font-medium text-ink-500 transition-colors hover:bg-white/[0.045] hover:text-ink-200"
+              data-testid="chat-recent-view-all"
+              type="button"
+              onClick={handleOpen}
+            >
+              {t("chat.viewAllHistory", { count: activeChats.length - recentChats.length })}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       {open
         ? createPortal(
-            <Modal title={modalTitle} onClose={() => setOpen(false)}>
+            <Modal
+              title={modalTitle}
+              onClose={() => {
+                setActionMenuChatId(null);
+                setOpen(false);
+              }}
+            >
               <div className="space-y-3">
                 <div className="flex justify-end">
                   <button
@@ -550,7 +727,7 @@ export function ChatHistoryList({
                 </div>
                 <div
                   aria-label={t("chat.historySearchMode")}
-                  className="grid grid-cols-2 rounded-lg border border-white/10 bg-ink-950/40 p-1"
+                  className="grid grid-cols-2 rounded-md border border-white/[0.08] bg-ink-950/60 p-1"
                   role="group"
                 >
                   {(["chats", "messages"] as const).map((mode) => (
@@ -578,7 +755,7 @@ export function ChatHistoryList({
                 {searchMode === "chats" ? (
                   <div
                     aria-label={t("chat.historyScope")}
-                    className="grid grid-cols-3 rounded-lg border border-white/10 bg-ink-950/30 p-1"
+                    className="grid grid-cols-3 rounded-md border border-white/[0.08] bg-ink-950/45 p-1"
                     role="group"
                   >
                     {(["active", "archived", "trash"] as const).map((scope) => (
@@ -597,6 +774,7 @@ export function ChatHistoryList({
                           setSearchQuery("");
                           setManageMode(false);
                           setSelectedIds(new Set());
+                          setActionMenuChatId(null);
                         }}
                       >
                         {scope === "active"
@@ -763,7 +941,7 @@ export function ChatHistoryList({
                                   : t("chat.searchUser");
                             return (
                               <button
-                                className="w-full rounded-lg border border-white/10 bg-white/[0.03] p-3 text-left transition-colors hover:border-ember-400/50 hover:bg-ember-500/10"
+                                className="w-full rounded-md border border-white/[0.08] bg-ink-800/70 p-3 text-left transition-colors hover:border-ember-400/45 hover:bg-ember-500/[0.08]"
                                 data-testid="history-message-search-result"
                                 key={result.message.id}
                                 type="button"
@@ -822,7 +1000,7 @@ export function ChatHistoryList({
                       return (
                         <div
                           key={group.characterId}
-                          className="rounded-lg border border-white/5 bg-white/[0.02]"
+                          className="overflow-hidden rounded-md border border-white/[0.08] bg-ink-950/35"
                         >
                           <ChatGroupHeader
                             characterId={group.characterId}
@@ -834,21 +1012,21 @@ export function ChatHistoryList({
                           />
 
                           {isExpanded ? (
-                            <div className="space-y-0.5 border-t border-white/5 px-1 pb-1 pt-1">
+                            <div className="space-y-0.5 border-t border-white/[0.06] px-1 pb-1 pt-1">
                               {group.chats.map((chat) => {
                                 const isSelected = manageMode && selectedIds.has(chat.id);
                                 const isCurrent = chatScope !== "trash" && selectedChatId === chat.id;
 
                                 return (
                                   <div
-                                    className={`group flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition-all duration-200 min-h-[36px] ${
+                                    className={`group flex min-h-[54px] flex-wrap items-center gap-x-2 gap-y-1 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors ${
                                       chatScope === "trash" && !manageMode ? "cursor-default" : "cursor-pointer"
                                     } ${
                                       isSelected
-                                        ? "bg-ember-500/20 text-ember-100"
+                                        ? "bg-ember-500/15 text-ember-100"
                                         : isCurrent
-                                          ? "bg-white/5 text-ember-100"
-                                          : "text-slate-400 hover:bg-white/5 hover:text-slate-200 active:bg-white/[0.08]"
+                                          ? "bg-ember-500/[0.08] text-ember-100 shadow-[inset_2px_0_0_rgba(69,203,178,0.9)]"
+                                          : "text-slate-400 hover:bg-white/[0.045] hover:text-slate-200 active:bg-white/[0.07]"
                                     }`}
                                     key={chat.id}
                                     data-chat-history-row=""
@@ -901,142 +1079,218 @@ export function ChatHistoryList({
                                           className="shrink-0 text-slate-600"
                                         />
                                       )}
-                                    {renamingId === chat.id ? (
-                                      <input
-                                        ref={renameInputRef}
-                                        className="min-w-0 flex-1 bg-transparent px-1 py-0.5 text-sm text-slate-200 outline-none ring-1 ring-ember-500/50 rounded"
-                                        value={renameValue}
-                                        onChange={(event) => setRenameValue(event.target.value)}
-                                        onBlur={() => void commitRename()}
-                                        onKeyDown={(event) => {
-                                          if (event.key === "Enter") {
-                                            event.preventDefault();
-                                            void commitRename();
-                                          }
-                                          if (event.key === "Escape") {
-                                            setRenamingId(null);
-                                          }
-                                        }}
-                                        onClick={(event) => event.stopPropagation()}
-                                      />
-                                    ) : (
-                                      <span className="min-w-0 flex-1 truncate" data-chat-history-title="">
-                                        {chat.title}
-                                      </span>
-                                    )}
-                                    {!manageMode && chatScope !== "trash" && !chat.isArchived && renamingId !== chat.id ? (
-                                      <button
-                                        aria-label={chat.isPinned ? t("chat.unpin") : t("chat.pin")}
-                                        aria-pressed={chat.isPinned}
-                                        className={`grid h-6 w-6 shrink-0 place-items-center rounded transition-all hover:bg-white/10 active:bg-white/20 ${
-                                          chat.isPinned
-                                            ? "text-ember-300"
-                                            : "text-slate-500 sm:opacity-0 sm:group-hover:opacity-100 hover:text-slate-300"
-                                        }`}
-                                        data-chat-action="pin"
-                                        title={chat.isPinned ? t("chat.unpin") : t("chat.pin")}
-                                        type="button"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          void togglePin(chat);
-                                        }}
-                                      >
-                                        <Pin fill={chat.isPinned ? "currentColor" : "none"} size={11} />
-                                      </button>
-                                    ) : null}
-                                    {!manageMode && chatScope !== "trash" && renamingId !== chat.id ? (
-                                      <button
-                                        aria-label={chat.isArchived ? t("chat.unarchive") : t("chat.archive")}
-                                        className="grid h-6 w-6 shrink-0 place-items-center rounded text-slate-500 transition-all sm:opacity-0 sm:group-hover:opacity-100 hover:bg-white/10 hover:text-slate-300 active:bg-white/20"
-                                        data-chat-action="archive"
-                                        title={chat.isArchived ? t("chat.unarchive") : t("chat.archive")}
-                                        type="button"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          void toggleArchive(chat);
-                                        }}
-                                      >
-                                        {chat.isArchived ? <ArchiveRestore size={11} /> : <Archive size={11} />}
-                                      </button>
-                                    ) : null}
-                                    {!manageMode && chatScope !== "trash" && renamingId !== chat.id ? (
-                                      <button
-                                        className="grid h-6 w-6 shrink-0 place-items-center rounded text-slate-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-white/10 hover:text-slate-300 active:bg-white/20 transition-all"
-                                        title={language === "zh-CN" ? "导出聊天归档" : "Export chat archive"}
-                                        type="button"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          void exportChatArchive(chat);
-                                        }}
-                                      >
-                                        <FileText size={11} />
-                                      </button>
-                                    ) : null}
-                                    {!manageMode && chatScope !== "trash" && renamingId !== chat.id ? (
-                                      <button
-                                        className="grid h-6 w-6 shrink-0 place-items-center rounded text-slate-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-white/10 hover:text-slate-300 active:bg-white/20 transition-all"
-                                        type="button"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          startRename(chat);
-                                        }}
-                                      >
-                                        <Pencil size={11} />
-                                      </button>
-                                    ) : null}
-                                    {!manageMode && chatScope !== "trash" && renamingId !== chat.id ? (
-                                      <button
-                                        aria-label={t("chat.exportReadable")}
-                                        className="grid h-6 w-6 shrink-0 place-items-center rounded text-slate-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-white/10 hover:text-slate-300 active:bg-white/20 transition-all"
-                                        data-chat-action="export-transcript"
-                                        title={t("chat.exportReadable")}
-                                        type="button"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          void exportChatTranscript(chat);
-                                        }}
-                                      >
-                                        <Download size={11} />
-                                      </button>
-                                    ) : null}
-                                    {!manageMode && chatScope === "trash" ? (
-                                      <button
-                                        aria-label={t("chat.restoreFromTrash")}
-                                        className="grid h-6 w-6 shrink-0 place-items-center rounded text-slate-500 transition-all sm:opacity-0 sm:group-hover:opacity-100 hover:bg-emerald-500/15 hover:text-emerald-300 active:bg-emerald-500/25"
-                                        data-chat-action="restore"
-                                        disabled={loading}
-                                        title={t("chat.restoreFromTrash")}
-                                        type="button"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          void restoreChat(chat);
-                                        }}
-                                      >
-                                        <RotateCcw size={11} />
-                                      </button>
-                                    ) : null}
+                                    <div className="min-w-0 flex-1 py-0.5">
+                                      {renamingId === chat.id ? (
+                                        <input
+                                          ref={renameInputRef}
+                                          className="w-full min-w-0 rounded bg-transparent px-1 py-0.5 text-sm text-slate-200 outline-none ring-1 ring-ember-500/50"
+                                          value={renameValue}
+                                          onChange={(event) => setRenameValue(event.target.value)}
+                                          onBlur={() => void commitRename()}
+                                          onKeyDown={(event) => {
+                                            if (event.key === "Enter") {
+                                              event.preventDefault();
+                                              void commitRename();
+                                            }
+                                            if (event.key === "Escape") {
+                                              setRenamingId(null);
+                                            }
+                                          }}
+                                          onClick={(event) => event.stopPropagation()}
+                                        />
+                                      ) : (
+                                        <>
+                                          <div className="flex min-w-0 items-center gap-2">
+                                            <span
+                                              className="min-w-0 flex-1 truncate font-medium text-slate-200"
+                                              data-chat-history-title=""
+                                            >
+                                              {chat.title}
+                                            </span>
+                                            <time
+                                              className="shrink-0 text-[11px] tabular-nums text-slate-600"
+                                              data-testid="chat-history-activity"
+                                              dateTime={
+                                                chat.lastMessagePreview?.createdAt ?? chat.updatedAt
+                                              }
+                                            >
+                                              {formatChatActivity(
+                                                chat.lastMessagePreview?.createdAt ?? chat.updatedAt,
+                                                language
+                                              )}
+                                            </time>
+                                          </div>
+                                          <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px] leading-4 text-slate-500">
+                                            <span
+                                              className="min-w-0 flex-1 truncate"
+                                              data-testid="chat-history-preview"
+                                            >
+                                              {chat.lastMessagePreview
+                                                ? `${t(
+                                                    chat.lastMessagePreview.role === "assistant"
+                                                      ? "chat.searchAssistant"
+                                                      : "chat.searchUser"
+                                                  )}: ${chat.lastMessagePreview.content}`
+                                                : t("chat.historyNoMessages")}
+                                            </span>
+                                            <span className="shrink-0 tabular-nums">
+                                              {t("chat.historyMessageCount", {
+                                                count: chat.messageCount
+                                              })}
+                                            </span>
+                                          </div>
+                                        </>
+                                      )}
+                                    </div>
                                     {!manageMode && renamingId !== chat.id ? (
                                       <button
-                                        aria-label={
-                                          chatScope === "trash"
-                                            ? t("chat.permanentlyDelete")
-                                            : t("chat.moveToTrash")
-                                        }
-                                        className="grid h-6 w-6 shrink-0 place-items-center rounded text-slate-500 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-rose-500/15 hover:text-rose-400 active:bg-rose-500/25 transition-all"
-                                        data-chat-action={chatScope === "trash" ? "permanent-delete" : "trash"}
-                                        title={
-                                          chatScope === "trash"
-                                            ? t("chat.permanentlyDelete")
-                                            : t("chat.moveToTrash")
-                                        }
+                                        aria-expanded={actionMenuChatId === chat.id}
+                                        aria-label={t("chat.moreActions")}
+                                        className={`grid h-8 w-8 shrink-0 place-items-center rounded-md transition-colors ${
+                                          actionMenuChatId === chat.id
+                                            ? "bg-white/[0.08] text-ember-200"
+                                            : "text-slate-500 hover:bg-white/[0.06] hover:text-slate-200"
+                                        }`}
+                                        data-testid="chat-history-row-actions"
+                                        title={t("chat.moreActions")}
                                         type="button"
                                         onClick={(event) => {
                                           event.stopPropagation();
-                                          setPendingDeleteChat(chat);
+                                          setActionMenuChatId((current) =>
+                                            current === chat.id ? null : chat.id
+                                          );
                                         }}
                                       >
-                                        <Trash2 size={11} />
+                                        <MoreHorizontal size={15} />
                                       </button>
+                                    ) : null}
+                                    {actionMenuChatId === chat.id &&
+                                    !manageMode &&
+                                    renamingId !== chat.id ? (
+                                      <div
+                                        className="ml-5 grid basis-full grid-cols-2 gap-1 border-t border-white/[0.06] pt-1.5 sm:grid-cols-3"
+                                        data-testid="chat-history-action-menu"
+                                        onClick={(event) => event.stopPropagation()}
+                                      >
+                                        {chatScope !== "trash" && !chat.isArchived ? (
+                                          <button
+                                            aria-pressed={chat.isPinned}
+                                            className="flex min-h-8 items-center gap-2 rounded-md px-2 text-xs text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-100"
+                                            data-chat-action="pin"
+                                            type="button"
+                                            onClick={() => {
+                                              setActionMenuChatId(null);
+                                              void togglePin(chat);
+                                            }}
+                                          >
+                                            <Pin
+                                              fill={chat.isPinned ? "currentColor" : "none"}
+                                              size={13}
+                                            />
+                                            <span className="truncate">
+                                              {chat.isPinned ? t("chat.unpin") : t("chat.pin")}
+                                            </span>
+                                          </button>
+                                        ) : null}
+                                        {chatScope !== "trash" ? (
+                                          <>
+                                            <button
+                                              className="flex min-h-8 items-center gap-2 rounded-md px-2 text-xs text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-100"
+                                              data-chat-action="archive"
+                                              type="button"
+                                              onClick={() => {
+                                                setActionMenuChatId(null);
+                                                void toggleArchive(chat);
+                                              }}
+                                            >
+                                              {chat.isArchived ? (
+                                                <ArchiveRestore size={13} />
+                                              ) : (
+                                                <Archive size={13} />
+                                              )}
+                                              <span className="truncate">
+                                                {chat.isArchived
+                                                  ? t("chat.unarchive")
+                                                  : t("chat.archive")}
+                                              </span>
+                                            </button>
+                                            <button
+                                              className="flex min-h-8 items-center gap-2 rounded-md px-2 text-xs text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-100"
+                                              data-chat-action="export-archive"
+                                              type="button"
+                                              onClick={() => {
+                                                setActionMenuChatId(null);
+                                                void exportChatArchive(chat);
+                                              }}
+                                            >
+                                              <FileText size={13} />
+                                              <span className="truncate">
+                                                {t("chat.exportArchive")}
+                                              </span>
+                                            </button>
+                                            <button
+                                              className="flex min-h-8 items-center gap-2 rounded-md px-2 text-xs text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-100"
+                                              data-chat-action="rename"
+                                              type="button"
+                                              onClick={() => {
+                                                setActionMenuChatId(null);
+                                                startRename(chat);
+                                              }}
+                                            >
+                                              <Pencil size={13} />
+                                              <span className="truncate">{t("common.edit")}</span>
+                                            </button>
+                                            <button
+                                              className="flex min-h-8 items-center gap-2 rounded-md px-2 text-xs text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-100"
+                                              data-chat-action="export-transcript"
+                                              type="button"
+                                              onClick={() => {
+                                                setActionMenuChatId(null);
+                                                void exportChatTranscript(chat);
+                                              }}
+                                            >
+                                              <Download size={13} />
+                                              <span className="truncate">
+                                                {t("chat.exportMarkdownAction")}
+                                              </span>
+                                            </button>
+                                          </>
+                                        ) : (
+                                          <button
+                                            className="flex min-h-8 items-center gap-2 rounded-md px-2 text-xs text-emerald-300 transition-colors hover:bg-emerald-500/10"
+                                            data-chat-action="restore"
+                                            disabled={loading}
+                                            type="button"
+                                            onClick={() => {
+                                              setActionMenuChatId(null);
+                                              void restoreChat(chat);
+                                            }}
+                                          >
+                                            <RotateCcw size={13} />
+                                            <span className="truncate">
+                                              {t("chat.restoreFromTrash")}
+                                            </span>
+                                          </button>
+                                        )}
+                                        <button
+                                          className="flex min-h-8 items-center gap-2 rounded-md px-2 text-xs text-rose-300 transition-colors hover:bg-rose-500/10"
+                                          data-chat-action={
+                                            chatScope === "trash" ? "permanent-delete" : "trash"
+                                          }
+                                          type="button"
+                                          onClick={() => {
+                                            setActionMenuChatId(null);
+                                            setPendingDeleteChat(chat);
+                                          }}
+                                        >
+                                          <Trash2 size={13} />
+                                          <span className="truncate">
+                                            {chatScope === "trash"
+                                              ? t("chat.permanentlyDelete")
+                                              : t("chat.moveToTrash")}
+                                          </span>
+                                        </button>
+                                      </div>
                                     ) : null}
                                   </div>
                                 );

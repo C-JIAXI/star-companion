@@ -35,7 +35,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     () => (
       <Suspense
         fallback={
-          <div className={`rounded-xl border border-white/10 bg-ink-950/35 ${props.className ?? ""}`}>
+          <div className={`rounded-lg border border-white/10 bg-ink-950/35 ${props.className ?? ""}`}>
             <div
               className="grid place-items-center px-4 text-sm text-slate-500"
               style={{ height: props.height ?? 180 }}

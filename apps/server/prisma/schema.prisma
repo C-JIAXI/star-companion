@@ -8,40 +8,40 @@ datasource db {
 }
 
 model UserSettings {
-  id                   String    @id @default(cuid())
-  activeProvider       String    @default("openai-compatible")
-  apiBaseUrl           String    @default("https://api.openai.com/v1")
+  id                     String    @id @default(cuid())
+  activeProvider         String    @default("openai-compatible")
+  apiBaseUrl             String    @default("https://api.openai.com/v1")
   /// Stored locally with application-level AES-256-GCM encryption at rest.
-  apiKey               String?
-  model                String    @default("gpt-4o-mini")
-  temperature          Float     @default(0.8)
-  maxTokens            Int       @default(800)
-  topP                 Float     @default(1)
+  apiKey                 String?
+  model                  String    @default("gpt-4o-mini")
+  temperature            Float     @default(0.8)
+  maxTokens              Int       @default(800)
+  topP                   Float     @default(1)
   /// UI language. Valid values are "zh-CN" and "en".
-  language             String    @default("zh-CN")
+  language               String    @default("zh-CN")
   /// JSON array of model presets (LEGACY — kept for migration only)
-  models               Json?     @default("[]")
+  models                 Json?     @default("[]")
   /// JSON array of provider profiles. API keys are stored AES-256-GCM encrypted and never serialized.
-  providers            Json?     @default("[]")
+  providers              Json?     @default("[]")
   /// References a ProviderProfile.id within the providers array
-  activeProviderId     String?   @default("")
+  activeProviderId       String?   @default("")
   /// References a ProviderModel.id within the active provider's models array
-  activeModelId        String?   @default("")
+  activeModelId          String?   @default("")
   /// Per-AI-module provider/model references, e.g. { chat: { providerId, modelId } }
-  moduleModelPreferences Json?    @default("{}")
+  moduleModelPreferences Json?     @default("{}")
   /// Reusable local persona/custom-config presets.
-  userPersonaPresets   Json?     @default("[]")
+  userPersonaPresets     Json?     @default("[]")
   /// Local user profile memory summarised from user messages.
-  userProfileSummary   String    @default("")
-  autoSummarizeUser    Boolean   @default(true)
-  showMessageAvatars   Boolean   @default(true)
-  showMessageTimestamps Boolean  @default(false)
-  ttsVoice             String    @default("alloy")
-  ttsPlaybackRate      Float     @default(1.0)
-  ttsAutoPlay          Boolean   @default(false)
-  userProfileUpdatedAt DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  userProfileSummary     String    @default("")
+  autoSummarizeUser      Boolean   @default(true)
+  showMessageAvatars     Boolean   @default(true)
+  showMessageTimestamps  Boolean   @default(false)
+  ttsVoice               String    @default("alloy")
+  ttsPlaybackRate        Float     @default(1.0)
+  ttsAutoPlay            Boolean   @default(false)
+  userProfileUpdatedAt   DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 }
 
 model Character {
@@ -68,33 +68,33 @@ model Character {
 }
 
 model Chat {
-  id                   String    @id @default(cuid())
-  title                String
-  characterId          String?
+  id                    String    @id @default(cuid())
+  title                 String
+  characterId           String?
   /// Origin chat when this chat was created as a branch. No database relation keeps imports portable.
-  parentChatId         String?
+  parentChatId          String?
   /// Message id in the origin chat where this branch was created.
   branchSourceMessageId String?
   /// A saved branch snapshot that does not automatically become the active chat.
-  isCheckpoint         Boolean   @default(false)
+  isCheckpoint          Boolean   @default(false)
   /// User-owned history organization flag. It never affects prompt context.
-  isPinned             Boolean   @default(false)
+  isPinned              Boolean   @default(false)
   /// Hidden from active history without deleting messages or memories.
-  isArchived           Boolean   @default(false)
+  isArchived            Boolean   @default(false)
   /// Soft-deletion marker. Trashed chats retain their messages and memories until permanently deleted.
-  deletedAt            DateTime?
-  backgroundUrl        String    @default("")
-  memoryTurns          Int       @default(12)
-  autoMemoryEnabled    Boolean   @default(true)
-  memoryUpdatedAt      DateTime?
+  deletedAt             DateTime?
+  backgroundUrl         String    @default("")
+  memoryTurns           Int       @default(12)
+  autoMemoryEnabled     Boolean   @default(true)
+  memoryUpdatedAt       DateTime?
   /// Explicit user-authored persona / preference notes for this chat.
-  userPersona          String    @default("")
-  userProfileSummary   String    @default("")
-  userProfileUpdatedAt DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  userPersona           String    @default("")
+  userProfileSummary    String    @default("")
+  userProfileUpdatedAt  DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
-  character Character? @relation(fields: [characterId], references: [id], onDelete: SetNull)
+  character Character?   @relation(fields: [characterId], references: [id], onDelete: SetNull)
   messages  Message[]
   memories  ChatMemory[]
 
@@ -104,17 +104,20 @@ model Chat {
 }
 
 model ChatMemory {
-  id               String    @id @default(cuid())
-  chatId           String
-  title            String
-  content          String
-  keywords         Json      @default("[]")
-  importance       Int       @default(3)
-  enabled          Boolean   @default(true)
-  sourceMessageIds Json      @default("[]")
-  lastMatchedAt    DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  chatId             String
+  title              String
+  content            String
+  keywords           Json      @default("[]")
+  importance         Int       @default(3)
+  enabled            Boolean   @default(true)
+  sourceMessageIds   Json      @default("[]")
+  embedding          Json?
+  embeddingModel     String?
+  embeddingUpdatedAt DateTime?
+  lastMatchedAt      DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
 

@@ -154,7 +154,7 @@ describe("model provider adapters", () => {
       })
     );
 
-    assert.deepEqual(result.models, ["gemini-2.5-flash"]);
+    assert.deepEqual(result.models, ["gemini-2.5-flash", "text-embedding-004"]);
   });
 
   it("tests model connectivity with a real chat completion request", async () => {

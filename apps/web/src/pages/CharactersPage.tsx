@@ -200,7 +200,7 @@ function PasswordDialog({
     <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 p-3 backdrop-blur-sm sm:p-4">
       <section
         aria-labelledby="private-password-dialog-title"
-        className="animate-scale-in flex w-full max-w-md flex-col overflow-hidden rounded-2xl border border-white/10 bg-ink-900 shadow-2xl shadow-black/50"
+        className="animate-scale-in flex w-full max-w-md flex-col overflow-hidden rounded-lg border border-white/[0.1] bg-ink-900 shadow-xl shadow-black/45"
         role="dialog"
       >
         <form onSubmit={submit}>
@@ -1068,7 +1068,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
           <Plus size={14} />
           {t("common.new")}
         </Button>
-        <label className="inline-flex h-9 min-h-[36px] cursor-pointer items-center gap-2 rounded-lg bg-white/5 px-3 text-xs font-medium text-slate-200 transition-colors hover:bg-white/10 focus-within:ring-2 focus-within:ring-white/20">
+        <label className="inline-flex h-9 min-h-[36px] cursor-pointer items-center gap-2 rounded-md border border-white/[0.08] bg-ink-800 px-3 text-xs font-medium text-slate-200 transition-colors hover:border-white/[0.14] hover:bg-ink-700 focus-within:ring-2 focus-within:ring-ember-500/35">
           <FileUp size={14} />
           {t("common.import")}
           <input
@@ -1101,7 +1101,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
             title={t("characters.edit")}
             action={
               <>
-                <div className="inline-flex rounded-lg border border-white/5 bg-white/5 p-1">
+                <div className="inline-flex rounded-md border border-white/[0.08] bg-ink-950/50 p-1">
                   {(["public", "private"] as CharacterExportMode[]).map((mode) => (
                     <button
                       key={mode}
@@ -1135,7 +1135,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
               <ErrorNotice message={error} />
               <SuccessNotice message={status} />
               {selected?.visibility === "private" ? (
-                <div className="rounded-xl border border-amber-400/15 bg-amber-500/8 px-4 py-3 text-sm text-amber-100">
+                <div className="rounded-lg border border-amber-400/15 bg-amber-500/[0.08] px-4 py-3 text-sm text-amber-100">
                   <div className="flex items-center gap-2 font-medium">
                     <Lock size={14} />
                     {selected.canViewPrompt
@@ -1173,7 +1173,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                   <Field container="div" label={t("characters.avatarUrl")}>
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                       {usingUploadedAvatar ? (
-                        <div className="flex min-h-[40px] min-w-[12rem] flex-1 items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 text-sm text-emerald-100 sm:min-h-[44px]">
+                        <div className="flex min-h-[40px] min-w-[12rem] flex-1 items-center gap-2 rounded-md border border-emerald-500/20 bg-emerald-500/5 px-3 text-sm text-emerald-100 sm:min-h-[44px]">
                           <ImagePlus size={15} className="shrink-0 text-emerald-400" />
                           <span className="truncate">{t("characters.avatarLocal")}</span>
                         </div>
@@ -1185,7 +1185,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                           onChange={(event) => setForm({ ...form, avatar: event.target.value })}
                         />
                       )}
-                      <label className="inline-flex min-h-[40px] shrink-0 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-white/5 bg-ink-800 px-3 text-xs font-medium text-slate-200 transition-colors hover:bg-ink-700 focus-within:ring-2 focus-within:ring-ink-600/50 sm:min-h-[44px]">
+                      <label className="inline-flex min-h-[40px] shrink-0 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md border border-white/[0.08] bg-ink-800 px-3 text-xs font-medium text-slate-200 transition-colors hover:border-white/[0.14] hover:bg-ink-700 focus-within:ring-2 focus-within:ring-ember-500/35 sm:min-h-[44px]">
                         <ImagePlus size={14} />
                         {form.avatar
                           ? t("characters.avatarReplace")
@@ -1222,20 +1222,19 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                     />
                   </Field>
                 </div>
-                <div className="group overflow-hidden rounded-xl border border-white/5 bg-white/5 p-0 text-sm transition-all duration-200 hover:border-white/10 hover:bg-white/10">
-                  <div className="relative aspect-video w-full overflow-hidden bg-ink-800 ring-1 ring-white/5 transition-all duration-200 group-hover:ring-ember-500/30">
+                <div className="group overflow-hidden rounded-lg border border-white/[0.08] bg-ink-950/35 p-0 text-sm transition-colors hover:border-white/[0.14]">
+                  <div className="aspect-[4/3] w-full overflow-hidden border-b border-white/[0.08] bg-ink-800">
                     <img
                       alt=""
-                      className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                      className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
                       data-testid="character-cover-preview"
                       src={editorCoverSrc}
                     />
-                    <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
-                    <p className="absolute bottom-2 left-3 right-3 truncate text-sm font-semibold text-white drop-shadow-md">
-                      {form.name || t("common.name")}
-                    </p>
                   </div>
                   <div className="min-w-0 w-full p-4">
+                    <p className="mb-1 truncate text-sm font-semibold text-slate-100">
+                      {form.name || t("common.name")}
+                    </p>
                     <p className="line-clamp-2 text-xs leading-5 text-slate-400">
                       {form.description || t("common.noDescription")}
                     </p>
@@ -1269,15 +1268,15 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                 </div>
               </div>
 
-              <div className="flex rounded-xl border border-white/5 bg-ink-900/80 p-1">
+              <div className="flex overflow-x-auto border-b border-white/[0.08]">
                 {editorSections.map((section) => (
                   <button
                     key={section.id}
                     type="button"
-                    className={`min-h-[48px] flex-1 whitespace-nowrap rounded-lg px-2 text-xs font-medium sm:px-4 sm:text-sm ${
+                    className={`min-h-[44px] flex-1 whitespace-nowrap border-b-2 px-2 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
                       activeEditorSection === section.id
-                        ? "bg-ember-500 text-ink-950 shadow-sm shadow-ember-500/20"
-                        : "text-slate-300 hover:bg-ink-800/75 active:bg-ink-800/90"
+                        ? "border-ember-400 text-ember-100"
+                        : "border-transparent text-slate-400 hover:bg-white/[0.035] hover:text-slate-200"
                     }`}
                     onClick={() => setActiveEditorSection(section.id)}
                   >
@@ -1342,7 +1341,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
 
               {activeEditorSection === "tags" ? (
                 <div className="space-y-4">
-                  <div className="rounded-xl border border-white/5 bg-ink-950/30 p-4">
+                  <div className="rounded-lg border border-white/[0.08] bg-ink-950/30 p-4">
                     <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-100">
                       <Tag size={15} />
                       {t("characters.tags")}
@@ -1376,7 +1375,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                         {form.tags.map((tag) => (
                           <span
                             key={tag}
-                            className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-ember-500/20 bg-ember-500/10 px-2.5 py-1 text-xs font-medium text-ember-100"
+                            className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-ember-500/20 bg-ember-500/10 px-2.5 py-1 text-xs font-medium text-ember-100"
                           >
                             <span className="truncate">{tag}</span>
                             <button
@@ -1429,7 +1428,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                       />
                     </Field>
 
-                    <div className="rounded-xl border border-white/5 bg-ink-950/30 p-4">
+                    <div className="rounded-lg border border-white/[0.08] bg-ink-950/30 p-4">
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div className="space-y-1">
                           <h4 className="text-sm font-semibold text-slate-100">
@@ -1463,12 +1462,12 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                           />
                         </Field>
                         <Field label={t("characters.htmlPreviewRendered")}>
-                          <div className="custom-scrollbar flex min-h-[180px] items-start justify-end gap-3 overflow-y-auto rounded-xl border border-white/5 bg-ink-950/60 p-4">
-                            <article className="order-1 relative self-start max-w-[calc(100%-3.25rem)] overflow-hidden rounded-2xl rounded-br-sm border border-white/5 bg-ink-800/80 p-3 sm:p-4 text-sm text-slate-100 shadow-sm backdrop-blur-sm">
+                          <div className="custom-scrollbar flex min-h-[180px] items-start justify-end gap-3 overflow-y-auto rounded-lg border border-white/[0.08] bg-ink-950/60 p-4">
+                            <article className="order-1 relative self-start max-w-[calc(100%-3.25rem)] overflow-hidden rounded-lg rounded-br-sm border border-white/[0.08] bg-ink-800 p-3 text-sm text-slate-100 sm:p-4">
                               <ScopedHtmlRenderer content={previewMarkup} htmlCss={form.htmlCss} />
                             </article>
                             <div
-                              className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl border text-xs font-bold shadow-md order-2 border-ember-300/40 bg-ink-950/20 text-ink-950 shadow-ember-500/10"
+                              className="order-2 grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-md border border-ember-300/30 bg-ink-950/20 text-xs font-bold text-ink-950"
                               title={form.name || t("common.unknown")}
                             >
                               {form.avatar ? (
@@ -1574,14 +1573,14 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                       </span>
                     </div>
                     {form.loreEntries.length === 0 ? (
-                      <div className="rounded-xl border border-dashed border-white/10 px-4 py-6 text-center">
+                      <div className="rounded-lg border border-dashed border-white/10 px-4 py-6 text-center">
                         <p className="text-sm text-slate-400">{t("characters.loreEntryEmpty")}</p>
                       </div>
                     ) : (
                       <div className="space-y-3">
                         {form.loreEntries.map((entry, index) => (
                           <div
-                            className={`rounded-xl border transition-colors ${
+                            className={`rounded-lg border transition-colors ${
                               entry.enabled
                                 ? "border-white/10 bg-ink-950/40"
                                 : "border-white/5 bg-ink-950/20 opacity-60"
@@ -1810,14 +1809,14 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                     </p>
                   </div>
                   {form.quickReplies.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-white/10 px-4 py-6 text-center">
+                    <div className="rounded-lg border border-dashed border-white/10 px-4 py-6 text-center">
                       <p className="text-sm text-slate-400">{t("characters.quickRepliesEmpty")}</p>
                     </div>
                   ) : (
                     <div className="space-y-3">
                       {form.quickReplies.map((qr, index) => (
                         <div
-                          className="rounded-xl border border-white/10 bg-ink-950/40 transition-colors"
+                          className="rounded-lg border border-white/10 bg-ink-950/40 transition-colors"
                           key={qr._localId}
                         >
                           <div
@@ -1960,7 +1959,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
               />
               <select
                 aria-label={t("characters.sort")}
-                className="h-10 min-w-[9.5rem] appearance-none rounded-lg border border-white/10 bg-ink-900 py-0 pl-9 pr-8 text-xs text-slate-200 outline-none transition-colors hover:border-white/20 focus:border-ember-500 focus:ring-1 focus:ring-ember-500/50"
+                className="h-10 min-w-[9.5rem] appearance-none rounded-md border border-white/10 bg-ink-900 py-0 pl-9 pr-8 text-xs text-slate-200 outline-none transition-colors hover:border-white/20 focus:border-ember-500 focus:ring-1 focus:ring-ember-500/50"
                 data-testid="characters-sort"
                 value={characterSort}
                 onChange={(event) => {
@@ -2015,7 +2014,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                 {t("characters.tagFilter")}
               </span>
               <button
-                className={`rounded-lg border px-2.5 py-1 text-xs transition-colors ${
+                className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${
                   selectedTag
                     ? "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
                     : "border-ember-500/25 bg-ember-500/10 text-ember-100"
@@ -2031,7 +2030,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
               {pagination.availableTags.map((tag) => (
                 <button
                   key={tag}
-                  className={`max-w-full rounded-lg border px-2.5 py-1 text-xs transition-colors ${
+                  className={`max-w-full rounded-md border px-2.5 py-1 text-xs transition-colors ${
                     selectedTag === tag
                       ? "border-ember-500/25 bg-ember-500/10 text-ember-100"
                       : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"

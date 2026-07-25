@@ -407,8 +407,8 @@ const providerModelSchema = z.object({
   label: z.string().min(1),
   model: z.string().min(1),
   capabilities: z
-    .array(z.enum(["text_generation", "audio_transcription", "text_to_speech", "image_generation"]))
-    .max(4)
+    .array(z.enum(["text_generation", "text_embedding", "audio_transcription", "text_to_speech", "image_generation"]))
+    .max(5)
     .transform((capabilities) => Array.from(new Set(capabilities)))
     .optional()
 });
@@ -432,6 +432,7 @@ export const moduleModelPreferencesSchema = z
     chat: moduleModelPreferenceSchema.optional(),
     agent: moduleModelPreferenceSchema.optional(),
     memory: moduleModelPreferenceSchema.optional(),
+    memory_embedding: moduleModelPreferenceSchema.optional(),
     user_profile: moduleModelPreferenceSchema.optional(),
     voice_transcription: moduleModelPreferenceSchema.optional(),
     voice_speech: moduleModelPreferenceSchema.optional(),

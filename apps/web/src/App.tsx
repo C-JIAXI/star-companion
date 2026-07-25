@@ -1,4 +1,4 @@
-import { Menu, MessageSquareText, Settings, Users } from "lucide-react";
+import { Menu, MessageSquarePlus, MessageSquareText, Plus, Settings, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./lib/api";
 import { useI18n, type TranslationKey } from "./i18n";
@@ -7,7 +7,8 @@ import { CharactersPage } from "./pages/CharactersPage";
 import { DocsPage } from "./pages/DocsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ChatHistoryList } from "./components/ChatHistoryList";
-import { ConfirmDialog, Drawer } from "./components/ui";
+import { NewChatDialog } from "./components/NewChatDialog";
+import { ConfirmDialog, Drawer, ErrorNotice } from "./components/ui";
 import { useAppStore } from "./store/useAppStore";
 import { useMobileViewport } from "./lib/useMobileViewport";
 import type { AppSection } from "./types";
@@ -90,6 +91,8 @@ export function App() {
   const appName = t("app.name");
   const active = sectionMeta[activeSection];
   const [showMobileNav, setShowMobileNav] = useState(false);
+  const [showNewChatDialog, setShowNewChatDialog] = useState(false);
+  const [chatCreationError, setChatCreationError] = useState<string | null>(null);
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<AppSection | null>(null);
 
@@ -130,15 +133,18 @@ export function App() {
       });
   }, [setLanguage, setShowMessageAvatars]);
 
-  const navigate = (section: AppSection) => {
-    if (activeSection === "settings" && section !== "settings" && settingsDirty) {
-      setPendingNavigation(section);
-      return;
-    }
-    setActiveSection(section);
-    setShowMobileNav(false);
-    window.history.pushState({}, "", sectionPaths[section]);
-  };
+  const navigate = useCallback(
+    (section: AppSection) => {
+      if (activeSection === "settings" && section !== "settings" && settingsDirty) {
+        setPendingNavigation(section);
+        return;
+      }
+      setActiveSection(section);
+      setShowMobileNav(false);
+      window.history.pushState({}, "", sectionPaths[section]);
+    },
+    [activeSection, setActiveSection, settingsDirty]
+  );
 
   const confirmNavigation = () => {
     if (pendingNavigation) {
@@ -165,7 +171,7 @@ export function App() {
         navigate("chat");
       }
     },
-    [activeSection]
+    [activeSection, navigate]
   );
 
   const triggerChatRefresh = useCallback(() => {
@@ -180,8 +186,8 @@ export function App() {
     [activeSection]
   );
 
-  const handlePlay = useCallback(async (characterId: string) => {
-    try {
+  const createChatForCharacter = useCallback(
+    async (characterId: string) => {
       const chat = await api.chats.create({
         title: "New Chat",
         characterId
@@ -190,22 +196,36 @@ export function App() {
       storeSelectedChatId(chat.id);
       setChatRefreshKey((current) => current + 1);
       navigate("chat");
-    } catch {}
-  }, []);
+    },
+    [navigate]
+  );
+
+  const handlePlay = useCallback(
+    async (characterId: string) => {
+      setChatCreationError(null);
+      try {
+        await createChatForCharacter(characterId);
+      } catch (caught) {
+        setChatCreationError(caught instanceof Error ? caught.message : t("chat.failedCreate"));
+      }
+    },
+    [createChatForCharacter, t]
+  );
 
   return (
-    <div className="h-dvh bg-ink-950 text-slate-100 selection:bg-ember-500/30 safe-area-top safe-area-bottom transition-[height] duration-200">
+    <div className="h-dvh bg-ink-950 text-ink-50 selection:bg-ember-400/25 safe-area-top safe-area-bottom transition-[height] duration-200">
+      <ErrorNotice message={chatCreationError} />
       <Drawer
         open={showMobileNav}
         onClose={() => setShowMobileNav(false)}
         title={
           <span className="flex items-center gap-2">
-            <img className="h-10 w-10 shrink-0 rounded-lg object-cover" src="/app-logo-v2.png" alt="" />
+            <img className="h-9 w-9 shrink-0 rounded-md object-cover" src="/app-logo-v2.png" alt="" />
             <span>{appName}</span>
           </span>
         }
       >
-        <div className="flex h-full flex-col gap-4">
+        <div className="flex h-full flex-col gap-4" data-testid="mobile-nav-content">
           <div>
             <p className="text-xs font-medium text-slate-400">{t("app.tagline")}</p>
             <nav className="mt-4 flex flex-col gap-1">
@@ -215,23 +235,35 @@ export function App() {
 
                 return (
                   <button
-                    className={`group flex min-h-[44px] items-center gap-3 rounded-lg px-3 text-sm font-medium transition-all duration-200 sm:min-h-[48px] ${
+                    className={`group flex min-h-[44px] items-center gap-3 rounded-md border px-3 text-sm font-medium transition-colors ${
                       selected
-                        ? "bg-ember-500/15 text-ember-100 ring-1 ring-ember-500/30"
-                        : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                        ? "border-ember-400/20 bg-ember-500/10 text-ember-100"
+                        : "border-transparent text-ink-300 hover:bg-white/[0.045] hover:text-ink-50"
                     }`}
                     key={item.id}
                     type="button"
                     onClick={() => navigate(item.id)}
                   >
-                    <Icon size={18} className={selected ? "text-ember-300" : "text-slate-400"} />
+                    <Icon size={18} className={selected ? "text-ember-300" : "text-ink-400"} />
                     {t(item.labelKey)}
                   </button>
                 );
               })}
             </nav>
+            <button
+              className="mt-3 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-md border border-ember-400/20 bg-ember-500 px-3 text-sm font-semibold text-ink-950 transition-colors hover:bg-ember-400"
+              data-testid="new-chat-trigger-drawer"
+              type="button"
+              onClick={() => {
+                setShowMobileNav(false);
+                setShowNewChatDialog(true);
+              }}
+            >
+              <MessageSquarePlus size={17} />
+              {t("chat.newChat")}
+            </button>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto border-t border-white/5 pt-4">
+          <div className="min-h-0 flex-1 overflow-y-auto border-t border-white/[0.08] pt-4">
             <ChatHistoryList
               selectedChatId={selectedChatId}
               onSelectChat={handleSelectChat}
@@ -242,33 +274,36 @@ export function App() {
         </div>
       </Drawer>
 
-      <div className="mx-auto flex h-full max-w-[1600px] flex-col lg:flex-row">
-        <aside className="hidden lg:sticky lg:top-0 lg:flex lg:h-full lg:w-56 lg:flex-col lg:border-r lg:border-white/5 lg:bg-ink-900/50 lg:backdrop-blur-xl">
-          <div className="flex shrink-0 items-center justify-between gap-3 p-3 lg:mb-6 lg:pb-0">
+      <div className="flex h-full min-w-0 flex-col lg:flex-row">
+        <aside
+          className="hidden lg:sticky lg:top-0 lg:flex lg:h-full lg:w-60 lg:flex-col lg:border-r lg:border-white/[0.08] lg:bg-ink-900"
+          data-testid="desktop-sidebar"
+        >
+          <div className="flex shrink-0 items-center justify-between gap-3 px-4 py-5">
             <div className="flex items-center gap-3 min-w-0">
               <img
-                className="h-12 w-12 shrink-0 rounded-lg object-cover shadow-md shadow-violet-500/20"
+                className="h-10 w-10 shrink-0 rounded-md object-cover ring-1 ring-white/10"
                 src="/app-logo-v2.png"
                 alt=""
               />
               <div className="min-w-0">
-                <h1 className="truncate text-sm font-bold tracking-tight text-white">{appName}</h1>
-                <p className="truncate text-xs font-medium text-slate-400">{t("app.tagline")}</p>
+                <h1 className="truncate text-sm font-semibold text-ink-50">{appName}</h1>
+                <p className="truncate text-xs text-ink-400">{t("app.tagline")}</p>
               </div>
             </div>
           </div>
 
-          <nav className="shrink-0 px-3 flex flex-col gap-1">
+          <nav className="flex shrink-0 flex-col gap-1 px-3">
             {navItems.map((item) => {
               const Icon = item.icon;
               const selected = isNavItemSelected(item.id);
 
               return (
                 <button
-                  className={`group flex min-h-[40px] items-center gap-2 rounded-lg px-3 text-sm font-medium transition-all duration-200 sm:min-h-[44px] ${
+                  className={`group flex min-h-10 items-center gap-2.5 rounded-md border px-3 text-sm font-medium transition-colors ${
                     selected
-                      ? "bg-ember-500/15 text-ember-100 ring-1 ring-ember-500/30"
-                      : "bg-transparent text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                      ? "border-ember-400/20 bg-ember-500/10 text-ember-100"
+                      : "border-transparent bg-transparent text-ink-300 hover:bg-white/[0.045] hover:text-ink-50"
                   }`}
                   key={item.id}
                   type="button"
@@ -279,7 +314,7 @@ export function App() {
                     className={
                       selected
                         ? "text-ember-300"
-                        : "text-slate-400 group-hover:text-slate-200 transition-colors"
+                        : "text-ink-400 transition-colors group-hover:text-ink-200"
                     }
                   />
                   <span>{t(item.labelKey)}</span>
@@ -288,7 +323,17 @@ export function App() {
             })}
           </nav>
 
-          <div className="min-h-0 flex-1 flex-col overflow-y-auto border-t border-white/5 px-3 pt-4 mt-4 flex">
+          <button
+            className="mx-3 mt-3 flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-md border border-ember-400/20 bg-ember-500 px-3 text-sm font-semibold text-ink-950 transition-colors hover:bg-ember-400"
+            data-testid="new-chat-trigger-desktop"
+            type="button"
+            onClick={() => setShowNewChatDialog(true)}
+          >
+            <MessageSquarePlus size={16} />
+            {t("chat.newChat")}
+          </button>
+
+          <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto border-t border-white/[0.08] px-3 pt-4">
             <ChatHistoryList
               selectedChatId={selectedChatId}
               onSelectChat={handleSelectChat}
@@ -299,9 +344,9 @@ export function App() {
         </aside>
 
         <main className="flex min-w-0 flex-1 flex-col min-h-0 overflow-hidden">
-          <header className="lg:hidden sticky top-0 z-30 flex items-center justify-between gap-2 bg-ink-950/95 px-3 py-2 backdrop-blur-md safe-area-top sm:px-4 sm:py-3">
+          <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-white/[0.08] bg-ink-950/95 px-3 py-2.5 backdrop-blur-md safe-area-top sm:px-4 lg:hidden">
             <button
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200 sm:h-11 sm:w-11"
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-md text-ink-300 transition-colors hover:bg-white/[0.06] hover:text-ink-50"
               type="button"
               aria-label="Toggle navigation"
               onClick={() => setShowMobileNav(true)}
@@ -310,34 +355,48 @@ export function App() {
             </button>
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <img
-                className="h-12 w-12 shrink-0 rounded-lg object-cover shadow-md shadow-violet-500/20"
+                className="h-9 w-9 shrink-0 rounded-md object-cover ring-1 ring-white/10"
                 src="/app-logo-v2.png"
                 alt=""
               />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
+                <p className="truncate text-[11px] font-medium text-ink-400">
                   {appName}
                 </p>
-                <h2 className="truncate text-sm font-semibold tracking-tight text-white">
+                <h2 className="truncate text-sm font-semibold text-ink-50">
                   {t(active.titleKey)}
                 </h2>
               </div>
             </div>
-            {activeSection !== "chat" ? null : <div className="w-10 sm:w-11" />}
+            {activeSection === "chat" ? (
+              <button
+                aria-label={t("chat.newChat")}
+                className="grid h-11 w-11 shrink-0 place-items-center rounded-md text-ink-300 transition-colors hover:bg-white/[0.06] hover:text-ink-50"
+                data-testid="new-chat-trigger-mobile"
+                title={t("chat.newChat")}
+                type="button"
+                onClick={() => setShowNewChatDialog(true)}
+              >
+                <Plus size={20} />
+              </button>
+            ) : (
+              <div className="w-10 sm:w-11" />
+            )}
           </header>
-          <header className="hidden lg:block sticky top-0 z-10 bg-ink-950/80 px-4 pt-4 backdrop-blur-md lg:px-6">
-            <div className="rounded-xl border border-white/5 bg-ink-900/80 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-sm">
-              <h2 className="text-xl font-bold tracking-tight text-slate-100">
+          <header className="sticky top-0 z-20 hidden shrink-0 border-b border-white/[0.08] bg-ink-950/90 px-6 py-4 backdrop-blur-md lg:block lg:px-8">
+            <div>
+              <h2 className="text-lg font-semibold text-ink-50">
                 {t(active.titleKey)}
               </h2>
-              <p className="mt-1 text-sm leading-5 text-slate-400">{t(active.subtitleKey)}</p>
+              <p className="mt-0.5 text-sm leading-5 text-ink-400">{t(active.subtitleKey)}</p>
             </div>
           </header>
-          <div className="animate-fade-in flex-1 min-h-0 overflow-x-hidden overflow-y-auto p-2 sm:p-4 lg:p-6">
+          <div className="animate-fade-in min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-5 lg:p-6 xl:p-8">
             {activeSection === "chat" ? (
               <ChatPage
                 selectedChatId={selectedChatId}
                 onChatsChanged={triggerChatRefresh}
+                onNewChat={() => setShowNewChatDialog(true)}
                 onSelectChat={handleSelectChat}
               />
             ) : null}
@@ -368,6 +427,15 @@ export function App() {
           onConfirm={confirmNavigation}
         />
       ) : null}
+      <NewChatDialog
+        open={showNewChatDialog}
+        onClose={() => setShowNewChatDialog(false)}
+        onCreate={createChatForCharacter}
+        onOpenCharacters={() => {
+          setShowNewChatDialog(false);
+          navigate("characters");
+        }}
+      />
     </div>
   );
 }

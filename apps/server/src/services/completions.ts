@@ -386,7 +386,10 @@ export const fetchAvailableModels = async (settings: UserSettings): Promise<Avai
   const models =
     provider === "google-gemini"
       ? (payload.models ?? [])
-          .filter((model) => model.supportedGenerationMethods?.includes("generateContent") ?? true)
+          .filter((model) => {
+            const methods = model.supportedGenerationMethods;
+            return !methods || methods.includes("generateContent") || methods.includes("embedContent");
+          })
           .map((model) => model.name?.replace(/^models\//, "") ?? "")
       : (payload.data ?? []).map((model) => model.id ?? "");
 

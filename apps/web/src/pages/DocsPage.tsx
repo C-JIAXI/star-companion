@@ -154,7 +154,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "开始聊天",
-              body: "在角色卡上点击游玩，应用会创建一段绑定该角色的新聊天。"
+              body: "可从桌面侧栏、移动端顶部或聊天空状态点击“新建聊天”，搜索并选择角色后立即创建对话；也可以在角色卡上直接点击游玩。"
             },
             {
               title: "逐步调整",
@@ -179,7 +179,11 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "聊天设置",
-              body: "右上角设置菜单可调整记忆轮数、长期记忆、聊天背景、用户设定、用户画像摘要和当前模型。"
+              body: "右上角设置菜单可调整记忆轮数、长期记忆、聊天背景、用户设定、用户画像摘要和当前模型。长期记忆可在设置页单独指定记忆向量模型，使用语义与关键词混合召回；未配置或接口失败时会自动退回关键词。"
+            },
+            {
+              title: "剧情路径",
+              body: "可从任意消息创建分支或保存检查点。聊天工具栏中的剧情路径会展示当前聊天的来路和直接子分支；返回原聊天时会自动定位并高亮当时的分叉消息。"
             },
             {
               title: "AI 标题草案",
@@ -191,7 +195,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "聊天归档",
-              body: "历史列表可归档已完成的聊天而不删除消息或长期记忆，管理模式支持批量归档与恢复；也可导出单段聊天归档，导入时会创建新的聊天而不覆盖来源。"
+              body: "桌面侧栏和移动抽屉会直接显示最多六段置顶或最近活跃聊天，可一步切换。完整历史列表显示最近消息摘要、消息数量和活动时间，便于快速辨认对话；可归档已完成的聊天而不删除消息或长期记忆，管理模式支持批量归档与恢复。"
             },
             {
               title: "聊天回收站",
@@ -407,7 +411,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Start chatting",
-            body: "Click Play on a character card to create a new chat bound to that character."
+            body: "Use New Chat from the desktop sidebar, mobile header, or empty chat state to search for a character and start immediately. You can also click Play on a character card."
           },
           {
             title: "Refine gradually",
@@ -433,7 +437,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Chat settings",
-            body: "The top-right menu controls memory turns, long-term memory, chat background, user notes, profile summary, and the active model."
+            body: "The top-right menu controls memory turns, long-term memory, chat background, user notes, profile summary, and the active model. Settings can assign a separate memory embedding model for hybrid semantic and keyword retrieval, with automatic keyword fallback."
           },
           {
             title: "AI title draft",
@@ -457,7 +461,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Search every chat",
-            body: "History search can switch from chat titles to message content. Find a remembered phrase across all chats, then open the matching conversation at that exact message."
+            body: "The desktop sidebar and mobile drawer expose up to six pinned or recently active chats for one-step switching. Full History rows show the latest message preview, message count, and activity time. Search can switch from chat titles to message content, then open a matching conversation at that exact message."
           },
           {
             title: "Pin important chats",
@@ -470,6 +474,10 @@ const getDocsCopy = (language: string): DocsCopy => {
           {
             title: "Story checkpoints",
             body: "Save a checkpoint from any user or assistant message to preserve a story snapshot without switching away from the current chat. Checkpoints stay linked to their source and can be opened later from History."
+          },
+          {
+            title: "Story paths",
+            body: "Open Story paths from the chat toolbar to see the current ancestry and every direct branch or checkpoint. Returning to the source chat jumps to and highlights the message where the path split."
           },
           {
             title: "Message bookmarks",
@@ -648,11 +656,11 @@ function SectionHeading({ section }: { section: DocsSection }) {
 
   return (
     <div className="flex min-w-0 items-start gap-3">
-      <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.04] text-ember-200">
+      <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-md border border-white/[0.1] bg-white/[0.04] text-ember-200">
         <Icon size={18} />
       </span>
       <div className="min-w-0">
-        <h3 className="text-lg font-semibold tracking-tight text-slate-100">{section.title}</h3>
+        <h3 className="text-lg font-semibold text-ink-50">{section.title}</h3>
         <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-400">{section.description}</p>
       </div>
     </div>
@@ -666,7 +674,7 @@ function GuideSectionView({ section }: { section: GuideSection }) {
         {section.items.map((item, index) => (
           <article
             key={item.title}
-            className="min-w-0 rounded-lg border border-white/5 bg-white/[0.035] p-4 transition-colors hover:border-white/10 hover:bg-white/[0.055]"
+            className="min-w-0 rounded-lg border border-white/[0.08] bg-ink-900 p-4 transition-colors hover:border-white/[0.14] hover:bg-ink-800"
           >
             <p className="text-xs font-semibold tabular-nums text-ember-300">
               {String(index + 1).padStart(2, "0")}
@@ -778,20 +786,20 @@ export function DocsPage() {
       className="mx-auto flex max-w-7xl min-w-0 flex-col gap-6"
       data-testid="docs-page-root"
     >
-      <section className="overflow-hidden rounded-lg border border-white/5 bg-ink-900/70 px-4 py-5 shadow-lg shadow-black/20 sm:px-5 lg:px-6">
+      <section className="border-b border-white/[0.08] pb-6">
         <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ember-300">
+          <p className="section-kicker text-ember-300">
             {copy.eyebrow}
           </p>
           <p className="mt-3 max-w-4xl text-sm leading-7 text-slate-300">{copy.intro}</p>
         </div>
-        <div className="mt-5 grid gap-2 md:grid-cols-3">
+        <div className="mt-5 grid divide-y divide-white/[0.08] border-y border-white/[0.08] md:grid-cols-3 md:divide-x md:divide-y-0">
           {copy.quickFacts.map((fact) => (
             <div
               key={fact.label}
-              className="rounded-lg border border-white/5 bg-white/[0.035] px-3 py-2.5"
+              className="px-3 py-3 md:px-4"
             >
-              <p className="text-xs font-semibold text-slate-500">{fact.label}</p>
+              <p className="section-kicker">{fact.label}</p>
               <p className="mt-1 text-sm leading-6 text-slate-200">{fact.value}</p>
             </div>
           ))}
@@ -801,7 +809,7 @@ export function DocsPage() {
       <div className="grid min-w-0 gap-6 lg:grid-cols-[14rem_minmax(0,1fr)]">
         <aside className="min-w-0 lg:sticky lg:top-0 lg:self-start">
           <nav
-            className="custom-scrollbar flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:rounded-lg lg:border lg:border-white/5 lg:bg-ink-900/50 lg:p-2"
+            className="custom-scrollbar flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:border-l lg:border-white/[0.08] lg:pl-3"
             aria-label={copy.navLabel}
           >
             {copy.sections.map((section) => {
@@ -810,7 +818,7 @@ export function DocsPage() {
                 <a
                   key={section.id}
                   href={`#${section.id}`}
-                  className="inline-flex min-h-[38px] shrink-0 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 text-xs font-medium text-slate-300 transition-colors hover:border-ember-500/40 hover:text-ember-200 lg:border-transparent lg:bg-transparent"
+                  className="inline-flex min-h-[40px] shrink-0 items-center gap-2 rounded-md border border-white/[0.1] bg-white/[0.03] px-3 text-xs font-medium text-ink-300 transition-colors hover:border-ember-500/40 hover:bg-ember-500/[0.06] hover:text-ember-200 lg:border-transparent lg:bg-transparent"
                 >
                   <Icon size={14} className="shrink-0" />
                   <span className="whitespace-nowrap">{section.title}</span>

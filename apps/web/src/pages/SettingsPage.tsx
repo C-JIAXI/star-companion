@@ -71,15 +71,15 @@ const defaultForm: SettingsInput = {
 };
 
 const selectClassName =
-  "min-h-[40px] w-full rounded-lg border border-white/10 bg-ink-950/50 px-3 text-sm text-slate-100 outline-none transition-all hover:border-white/20 focus:border-ember-500 focus:bg-ink-950 focus:ring-1 focus:ring-ember-500/50";
+  "min-h-[44px] w-full rounded-md border border-white/[0.1] bg-ink-950/70 px-3 text-sm text-ink-50 outline-none transition-colors hover:border-white/[0.16] focus:border-ember-400 focus:bg-ink-950 focus:ring-1 focus:ring-ember-400/30 sm:min-h-10";
 
 const settingsPanelClassName =
-  "border-white/5 bg-ink-900/80 shadow-lg shadow-black/20 backdrop-blur-sm";
+  "border-white/[0.08] bg-ink-900";
 
 const settingsSurfaceClassName =
-  "border border-white/5 bg-ink-950/30";
+  "border border-white/[0.07] bg-ink-950/45";
 
-const settingsDividerClassName = "border-white/5";
+const settingsDividerClassName = "border-white/[0.08]";
 const syncRecordStorageKey = "star-companion:lan-sync-records";
 
 const serializeForm = (form: SettingsInput) => JSON.stringify(form);
@@ -149,6 +149,7 @@ const moduleModelRows = [
   { id: "chat", zh: "聊天回复", en: "Chat replies" },
   { id: "agent", zh: "AI Agent", en: "AI Agent" },
   { id: "memory", zh: "长期记忆", en: "Long-term memory" },
+  { id: "memory_embedding", zh: "记忆向量", en: "Memory embeddings" },
   { id: "user_profile", zh: "用户画像", en: "User profile" },
   { id: "voice_transcription", zh: "语音转文字", en: "Voice transcription" },
   { id: "voice_speech", zh: "文字朗读", en: "Text to speech" },
@@ -157,6 +158,7 @@ const moduleModelRows = [
 
 const modelCapabilityRows: Array<{ id: AiModelCapability; zh: string; en: string }> = [
   { id: "text_generation", zh: "文本生成", en: "Text" },
+  { id: "text_embedding", zh: "文本向量", en: "Embedding" },
   { id: "audio_transcription", zh: "语音转写", en: "Transcription" },
   { id: "text_to_speech", zh: "文字朗读", en: "Speech" },
   { id: "image_generation", zh: "生图", en: "Image" }
@@ -202,6 +204,7 @@ const providerTemplates = [
       { label: "GPT-5.5", model: "gpt-5.5" },
       { label: "GPT-5.4 Mini", model: "gpt-5.4-mini" },
       { label: "GPT-5.4 Nano", model: "gpt-5.4-nano" },
+      { label: "Text Embedding 3 Small", model: "text-embedding-3-small", capabilities: ["text_embedding"] },
       { label: "GPT-4o Mini Transcribe", model: "gpt-4o-mini-transcribe", capabilities: ["audio_transcription"] },
       { label: "GPT-4o Mini TTS", model: "gpt-4o-mini-tts", capabilities: ["text_to_speech"] },
       { label: "GPT Image 1", model: "gpt-image-1", capabilities: ["image_generation"] }
@@ -226,7 +229,8 @@ const providerTemplates = [
     defaultModels: [
       { label: "Gemini 3 Pro Preview", model: "gemini-3-pro-preview" },
       { label: "Gemini 3 Flash Preview", model: "gemini-3-flash-preview" },
-      { label: "Gemini 2.5 Flash", model: "gemini-2.5-flash" }
+      { label: "Gemini 2.5 Flash", model: "gemini-2.5-flash" },
+      { label: "Gemini Embedding 001", model: "gemini-embedding-001", capabilities: ["text_embedding"] }
     ]
   },
   {
@@ -494,9 +498,9 @@ function SummaryCard({
   }[tone];
 
   return (
-    <div className={`rounded-xl px-4 py-3 ${toneClassName}`}>
-      <div className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">{label}</div>
-      <div className="mt-2 min-w-0 break-words text-sm font-semibold leading-6 text-slate-100">
+    <div className={`rounded-md border-l-2 px-4 py-3 ${toneClassName}`}>
+      <div className="section-kicker">{label}</div>
+      <div className="mt-1.5 min-w-0 break-words text-sm font-semibold leading-6 text-ink-50">
         {value}
       </div>
     </div>
@@ -1136,11 +1140,11 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="mx-auto max-w-7xl space-y-6">
       <ErrorNotice message={error} />
       <SuccessNotice message={status} />
 
-      <section className={`rounded-2xl border p-4 sm:p-5 ${settingsPanelClassName}`}>
+      <section className="border-b border-white/[0.08] pb-6">
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1.75fr)_minmax(300px,0.95fr)]">
           <div className="grid gap-3 sm:grid-cols-2">
             <SummaryCard
@@ -1169,13 +1173,13 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
             />
           </div>
 
-          <div className={`flex h-full flex-col gap-4 rounded-xl p-4 ${settingsSurfaceClassName}`}>
+          <div className="flex h-full flex-col gap-4 border-l border-white/[0.1] px-4 py-2 xl:px-5">
             <div className="space-y-2">
               <div className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
                 {copy.changesStatus}
               </div>
               <div
-                className={`inline-flex min-h-[32px] items-center rounded-full px-3 text-sm font-semibold ${
+                className={`inline-flex min-h-[30px] items-center rounded-md px-2.5 text-xs font-semibold ${
                   hasUnsavedChanges
                     ? "bg-amber-500/10 text-amber-200 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.16)]"
                     : "bg-emerald-500/[0.06] text-emerald-200 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.16)]"
@@ -1212,8 +1216,8 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         </div>
       </section>
 
-      <div>
-        <div className={`flex rounded-xl border p-1 ${settingsPanelClassName}`}>
+      <div className="border-b border-white/[0.08]">
+        <div className="flex gap-1">
           {([
             ["runtime", copy.runtimeTitle],
             ["providers", copy.providersTitle],
@@ -1224,10 +1228,10 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
             return (
               <button
                 key={section}
-                className={`min-h-[48px] flex-1 whitespace-nowrap rounded-lg px-2 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
+                className={`min-h-[44px] flex-1 whitespace-nowrap border-b-2 px-2 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
                   active
-                    ? "bg-ember-500 text-ink-950 shadow-sm shadow-ember-500/20"
-                    : "text-slate-300 hover:bg-ink-800/75 active:bg-ink-800/90"
+                    ? "border-ember-400 text-ember-200"
+                    : "border-transparent text-ink-400 hover:bg-white/[0.035] hover:text-ink-100"
                 }`}
                 type="button"
                 onClick={() => setActiveSection(section)}
@@ -1246,7 +1250,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
           action={
             activeModelName ? (
               <div
-                className={`max-w-full truncate rounded-full px-3 py-1 text-xs font-medium text-slate-200 ${settingsSurfaceClassName}`}
+                className={`max-w-full truncate rounded-md px-3 py-1 text-xs font-medium text-ink-200 ${settingsSurfaceClassName}`}
                 title={`${copy.activeModel}: ${activeModelName}`}
               >
                 {`${copy.activeModel}: ${activeModelName}`}
@@ -1257,7 +1261,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
           <div className="space-y-6">
             <p className="text-sm leading-6 text-slate-400">{copy.runtimeHelp}</p>
 
-            <div className={`rounded-xl p-4 ${settingsSurfaceClassName}`}>
+            <div className={`rounded-lg p-4 ${settingsSurfaceClassName}`}>
               <div className="space-y-3">
                 <div className="grid gap-4 md:grid-cols-2">
                   <div>
@@ -1528,7 +1532,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
             <p className="text-sm leading-6 text-slate-400">{copy.providersHelp}</p>
 
             {form.providers.length > 0 ? (
-              <div className={`rounded-xl border p-4 ${settingsSurfaceClassName}`}>
+              <div className={`rounded-lg border p-4 ${settingsSurfaceClassName}`}>
                 <div className="mb-3 flex flex-col gap-1">
                   <h3 className="text-sm font-semibold text-slate-100">
                     {language === "zh-CN" ? "模块模型" : "Module models"}
@@ -1595,7 +1599,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
             ) : null}
 
             {form.providers.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-8 text-center text-sm text-slate-500">
+              <div className="rounded-lg border border-dashed border-white/10 bg-ink-950/25 px-4 py-8 text-center text-sm text-slate-500">
                 {copy.providerEmpty}
               </div>
             ) : (
@@ -1617,7 +1621,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                   return (
                     <div
                       key={provider.id}
-                      className={`rounded-xl border px-4 py-4 transition-all duration-200 ${cardClassName}`}
+                      className={`rounded-lg border px-4 py-4 transition-colors ${cardClassName}`}
                     >
                       <div className={`flex flex-col gap-3 border-b pb-4 md:flex-row md:items-start md:justify-between ${settingsDividerClassName}`}>
                         <div className="min-w-0 flex-1 space-y-3">
@@ -2249,7 +2253,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                 }}
               />
               <div
-                className="fixed z-50 max-h-80 w-64 overflow-y-auto rounded-xl border border-white/10 bg-ink-900 p-1 shadow-xl shadow-black/30"
+                className="fixed z-50 max-h-80 w-64 overflow-y-auto rounded-lg border border-white/10 bg-ink-900 p-1 shadow-xl shadow-black/30"
                 style={{ top: dropdownPos.top, left: dropdownPos.left }}
               >
                 {providerTemplates.map((template) => (

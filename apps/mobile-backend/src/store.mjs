@@ -513,6 +513,12 @@ export class MobileStore {
 
   async createMemory(input) {
     const timestamp = now();
+    const embedding =
+      Array.isArray(input.embedding) &&
+      input.embedding.length > 0 &&
+      input.embedding.every((entry) => typeof entry === "number" && Number.isFinite(entry))
+        ? input.embedding
+        : null;
     const memory = {
       id: input.id ?? randomUUID(),
       chatId: input.chatId,
@@ -522,6 +528,9 @@ export class MobileStore {
       importance: input.importance ?? 3,
       enabled: input.enabled ?? true,
       sourceMessageIds: input.sourceMessageIds ?? [],
+      embedding,
+      embeddingModel: embedding ? input.embeddingModel ?? null : null,
+      embeddingUpdatedAt: embedding ? input.embeddingUpdatedAt ?? null : null,
       lastMatchedAt: input.lastMatchedAt ?? null,
       createdAt: input.createdAt ?? timestamp,
       updatedAt: input.updatedAt ?? timestamp
@@ -611,6 +620,9 @@ export class MobileStore {
   }
 
   exportBackup(settings) {
+    const memories = this.readRecords("memory", "", [], "ORDER BY updatedAt DESC").map(
+      ({ embedding: _embedding, ...memory }) => memory
+    );
     return {
       schemaVersion: 1,
       exportedAt: now(),
@@ -623,7 +635,7 @@ export class MobileStore {
         }))
       ),
       messages: clone(this.readRecords("message", "", [], "ORDER BY createdAt ASC")),
-      memories: clone(this.readRecords("memory", "", [], "ORDER BY updatedAt DESC"))
+      memories: clone(memories)
     };
   }
 

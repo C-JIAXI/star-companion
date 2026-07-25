@@ -68,6 +68,24 @@ const createFakeModelServer = () => {
       return;
     }
 
+    if (request.method === "POST" && request.url === "/embeddings") {
+      const body = await readJsonBody(request);
+      const inputs = Array.isArray(body.input) ? body.input : [];
+      response.setHeader("Content-Type", "application/json");
+      response.end(
+        JSON.stringify({
+          model: body.model,
+          data: inputs.map((input, index) => ({
+            index,
+            embedding: /commitment|vowed|harbor|festival/i.test(String(input))
+              ? [0, 1]
+              : [1, 0]
+          }))
+        })
+      );
+      return;
+    }
+
     if (request.method !== "POST" || request.url !== "/chat/completions") {
       response.statusCode = 404;
       response.end("not found");
@@ -122,7 +140,10 @@ const createFakeModelServer = () => {
         ]
       });
     } else if (joinedMessages.includes("Select long-term chat memories")) {
-      const id = joinedMessages.match(/id=([^\s]+)/)?.[1];
+      const semanticId = joinedMessages.match(/id=([^\s]+)\ntitle=Harbor vow/)?.[1];
+      const id = joinedMessages.includes("Current conversation context:\nWhat commitment did they make")
+        ? semanticId
+        : joinedMessages.match(/id=([^\s]+)/)?.[1];
       content = JSON.stringify({ ids: id ? [id] : [] });
     }
 
@@ -296,6 +317,7 @@ try {
         key: "mobile-provider-key",
         models: [
           { id: "mobile-chat", label: "Chat", model: "fake-mobile-model", capabilities: ["text_generation"] },
+          { id: "mobile-embedding", label: "Embedding", model: "fake-mobile-embedding", capabilities: ["text_embedding"] },
           { id: "mobile-stt", label: "Transcription", model: "fake-mobile-transcribe", capabilities: ["audio_transcription"] },
           { id: "mobile-tts", label: "Speech", model: "fake-mobile-tts", capabilities: ["text_to_speech"] },
           { id: "mobile-image", label: "Image", model: "fake-mobile-image", capabilities: ["image_generation"] }
@@ -305,6 +327,7 @@ try {
     activeProviderId: "mobile-provider",
     activeModelId: "mobile-chat",
     moduleModelPreferences: {
+      memory_embedding: { providerId: "mobile-provider", modelId: "mobile-embedding" },
       voice_transcription: { providerId: "mobile-provider", modelId: "mobile-stt" },
       voice_speech: { providerId: "mobile-provider", modelId: "mobile-tts" },
       image_generation: { providerId: "mobile-provider", modelId: "mobile-image" }
@@ -668,6 +691,27 @@ try {
     method: "POST"
   });
   assert.ok(memoryRefresh.length >= 1);
+  assert.equal(memoryRefresh[0].embeddingModel, "openai-compatible:fake-mobile-embedding");
+  assert.ok(memoryRefresh[0].embeddingUpdatedAt);
+
+  const semanticMemory = await request(`/api/chats/${chat.id}/memories`, {
+    method: "POST",
+    body: {
+      title: "Harbor vow",
+      content: "They vowed to meet at the harbor after the winter festival.",
+      keywords: ["harbor", "festival"],
+      importance: 5,
+      enabled: true
+    }
+  });
+  assert.ok(semanticMemory.embeddingUpdatedAt);
+
+  const semanticRecallEvents = await runGeneration(
+    chat.id,
+    "What commitment did they make for after winter?"
+  );
+  const semanticMatchEvent = semanticRecallEvents.find((event) => event.type === "memory_matches");
+  assert.equal(semanticMatchEvent?.entries[0]?.id, semanticMemory.id);
 
   const recallEvents = await runGeneration(chat.id, "What did I say about blue doors?");
   const memoryMatchEvent = recallEvents.find((event) => event.type === "memory_matches");
@@ -679,7 +723,7 @@ try {
   assert.equal(titleSuggestion.title, "Mobile Blue Door");
   const chatAfterTitleSuggestion = await request(`/api/chats/${chat.id}`);
   assert.equal(chatAfterTitleSuggestion.title, chat.title);
-  assert.equal(chatAfterTitleSuggestion.messages.length, 4);
+  assert.equal(chatAfterTitleSuggestion.messages.length, 6);
 
   const agentDraft = await request(`/api/chats/${chat.id}/agent-draft`, {
     method: "POST",
@@ -693,12 +737,12 @@ try {
   assert.equal(Array.isArray(agentDraft.matchedLoreEntries), true);
   assert.equal(Array.isArray(agentDraft.matchedMemoryEntries), true);
   const chatAfterAgentDraft = await request(`/api/chats/${chat.id}`);
-  assert.equal(chatAfterAgentDraft.messages.length, 4);
+  assert.equal(chatAfterAgentDraft.messages.length, 6);
   assert.ok(chatAfterAgentDraft.memories.length >= 1);
 
   const chatArchive = await request(`/api/chats/${chat.id}/archive`);
   assert.equal(chatArchive.archiveVersion, 1);
-  assert.equal(chatArchive.messages.length, 4);
+  assert.equal(chatArchive.messages.length, 6);
   assert.equal(chatArchive.messages[0]?.contextIncluded, false);
   assert.equal(chatArchive.messages[0]?.isBookmarked, true);
   const importedArchive = await request("/api/chats/import-archive", {
@@ -707,7 +751,7 @@ try {
   });
   assert.notEqual(importedArchive.id, chat.id);
   assert.equal(importedArchive.title, "Mobile Imported Archive");
-  assert.equal(importedArchive.messages.length, 4);
+  assert.equal(importedArchive.messages.length, 6);
   assert.equal(importedArchive.messages[0]?.contextIncluded, false);
   assert.equal(importedArchive.messages[0]?.isBookmarked, true);
   assert.ok(importedArchive.memories.length >= 1);
@@ -797,10 +841,11 @@ try {
   assert.equal(backup.chats.length, 1);
   assert.equal(backup.chats[0]?.isPinned, true);
   assert.equal(backup.chats[0]?.isArchived, true);
-  assert.equal(backup.messages.length, 4);
+  assert.equal(backup.messages.length, 6);
   assert.equal("key" in backup.settings.providers[0], false);
   assert.equal(backup.settings.providers[0]?.hasKey, true);
   assert.ok(backup.memories.length >= 1);
+  assert.equal("embedding" in backup.memories[0], false);
 
   const exportedText = await request("/api/exports/text", {
     method: "POST",
@@ -839,7 +884,7 @@ try {
   assert.equal(pulledSyncSummary.direction, "pull");
   assert.equal(pulledSyncSummary.summary.characters, 1);
   assert.equal(pulledSyncSummary.summary.chats, 1);
-  assert.equal(pulledSyncSummary.summary.messages, 4);
+  assert.equal(pulledSyncSummary.summary.messages, 6);
   assert.ok(pulledSyncSummary.summary.memories >= 1);
 
   const pushedSyncSummary = await request("/api/sync/push", {
@@ -852,7 +897,7 @@ try {
   assert.equal(pushedSyncSummary.direction, "push");
   assert.equal(pushedSyncSummary.summary.characters, 1);
   assert.equal(pushedSyncSummary.summary.chats, 1);
-  assert.equal(pushedSyncSummary.summary.messages, 4);
+  assert.equal(pushedSyncSummary.summary.messages, 6);
   assert.ok(pushedSyncSummary.summary.memories >= 1);
 
   console.log("Mobile backend smoke passed");

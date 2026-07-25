@@ -65,7 +65,7 @@ export default function MarkdownEditorInner({
   );
 
   return (
-    <div className={`flex min-h-0 flex-col rounded-xl border border-white/10 bg-ink-950/35 ${className}`}>
+    <div className={`flex min-h-0 flex-col rounded-lg border border-white/10 bg-ink-950/35 ${className}`}>
       <MDEditor
         value={value}
         onChange={(nextValue) => onChange(nextValue ?? "")}

@@ -60,34 +60,27 @@ export function CharacterCard({
     <div
       data-character-id={character.id}
       data-character-favorite={character.isFavorite ? "true" : "false"}
-      className={`group flex flex-col overflow-hidden rounded-xl border bg-white/5 p-0 text-sm transition-all duration-200 active:bg-white/[0.08] ${
+      className={`group flex flex-col overflow-hidden rounded-lg border bg-ink-900 p-0 text-sm transition-colors ${
         selectable
-          ? "cursor-pointer hover:bg-white/10"
-          : "hover:bg-white/10"
+          ? "cursor-pointer hover:bg-ink-800"
+          : "hover:bg-ink-800"
       } ${
         selected
-          ? "border-ember-500/40 shadow-lg shadow-ember-500/10"
-          : "border-white/5 hover:border-white/10"
+          ? "border-ember-400/45"
+          : "border-white/[0.08] hover:border-white/[0.15]"
       }`}
       onClick={selectable ? () => onSelect?.(character.id, !selected) : undefined}
     >
-      <div className="relative aspect-video w-full overflow-hidden bg-ink-800 ring-1 ring-white/5 transition-all duration-200 group-hover:ring-ember-500/30">
+      <div className="relative aspect-[4/3] w-full overflow-hidden border-b border-white/[0.08] bg-ink-800">
         <img
           alt=""
-          className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+          className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
           src={src}
           loading="lazy"
         />
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
-        <p className="absolute bottom-2 left-3 right-3 truncate text-sm font-semibold text-white drop-shadow-md">
-          {character.name}
-          {character.visibility === "private" ? (
-            <Lock size={11} className="ml-1.5 inline-block shrink-0 text-amber-400" />
-          ) : null}
-        </p>
         {selectable ? (
           <label
-            className="absolute right-2 top-2 z-10 flex h-6 w-6 cursor-pointer items-center justify-center rounded-md border border-white/20 bg-black/40 backdrop-blur-sm transition-colors hover:bg-black/60"
+            className="absolute right-2 top-2 z-10 flex h-7 w-7 cursor-pointer items-center justify-center rounded-md border border-white/20 bg-black/65 transition-colors hover:bg-black/80"
             onClick={(event) => event.stopPropagation()}
           >
             <input
@@ -108,8 +101,8 @@ export function CharacterCard({
             aria-pressed={character.isFavorite}
             className={`absolute right-2 top-2 z-10 flex h-10 w-10 items-center justify-center rounded-md border backdrop-blur-sm transition-colors ${
               character.isFavorite
-                ? "border-amber-300/40 bg-black/55 text-amber-300 hover:bg-black/70"
-                : "border-white/20 bg-black/40 text-white/80 hover:bg-black/60 hover:text-amber-200"
+                ? "border-amber-300/40 bg-black/70 text-amber-300 hover:bg-black/80"
+                : "border-white/20 bg-black/60 text-white/80 hover:bg-black/75 hover:text-amber-200"
             }`}
             data-character-action="favorite"
             disabled={favoritePending}
@@ -124,7 +117,13 @@ export function CharacterCard({
           </button>
         )}
       </div>
-      <div className="min-w-0 w-full flex-1 px-4 pb-1 pt-3">
+      <div className="min-w-0 w-full flex-1 px-4 pb-3 pt-3">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <p className="truncate text-sm font-semibold text-ink-50">{character.name}</p>
+          {character.visibility === "private" ? (
+            <Lock size={12} className="shrink-0 text-amber-400" />
+          ) : null}
+        </div>
         <p className="line-clamp-2 text-xs leading-5 text-slate-400">
           {character.visibility === "private" && !character.canViewPrompt
             ? privateSummaryLabel
@@ -135,7 +134,7 @@ export function CharacterCard({
             {character.tags.slice(0, 4).map((tag) => (
               <span
                 key={tag}
-                className="inline-flex max-w-full items-center gap-1 rounded-md border border-white/10 bg-white/5 px-1.5 py-0.5 text-[11px] leading-4 text-slate-300"
+                className="inline-flex max-w-full items-center gap-1 rounded border border-white/[0.08] bg-white/[0.035] px-1.5 py-0.5 text-[11px] leading-4 text-ink-300"
               >
                 <Tag size={10} />
                 <span className="max-w-[7rem] truncate">{tag}</span>
@@ -143,7 +142,7 @@ export function CharacterCard({
             ))}
           </div>
         ) : null}
-        <div className="mt-2 grid gap-1 text-[11px] leading-4 text-slate-500">
+        <div className="mt-3 grid gap-1 border-t border-white/[0.06] pt-2 text-[11px] leading-4 text-ink-500">
           <span className="inline-flex min-w-0 items-center gap-1">
             <CalendarDays size={11} />
             <span className="shrink-0">{createdAtLabel}</span>
@@ -156,7 +155,7 @@ export function CharacterCard({
           </span>
         </div>
       </div>
-      <div className="flex w-full items-center justify-center gap-2 px-3 pb-3 pt-1">
+      <div className="flex w-full items-center justify-center gap-2 border-t border-white/[0.06] px-3 py-3">
         <Button
           className="!min-h-[32px] !h-8 flex-1 !px-2 text-xs"
           onClick={(event) => {

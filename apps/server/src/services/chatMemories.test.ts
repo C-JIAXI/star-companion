@@ -5,6 +5,7 @@ import { prisma } from "../db.js";
 import {
   buildChatMemoryMaintenanceMessages,
   buildMemoryRerankMessages,
+  cosineSimilarity,
   recallChatMemories,
   updateChatMemoriesFromTurn
 } from "./chatMemories.js";
@@ -160,6 +161,71 @@ describe("chat memory helpers", () => {
     });
 
     assert.equal(memories[0]?.title, "Blue door clue");
+  });
+
+  it("recalls semantically related memories without keyword overlap", async () => {
+    const semanticMemory = await prisma.chatMemory.create({
+      data: {
+        chatId: ids.chatId,
+        title: "Harbor vow",
+        content: "They vowed to meet at the old harbor after the winter festival.",
+        keywords: ["harbor", "festival"],
+        importance: 4,
+        enabled: true,
+        sourceMessageIds: []
+      }
+    });
+    globalThis.fetch = (async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { input?: string[] };
+      const inputs = body.input ?? [];
+      return new Response(
+        JSON.stringify({
+          model: "text-embedding-3-small",
+          data: inputs.map((input, index) => ({
+            index,
+            embedding: /commitment|vowed|harbor|festival/i.test(input) ? [0, 1] : [1, 0]
+          }))
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as typeof fetch;
+
+    const recentMessages = await prisma.message.findMany({ where: { chatId: ids.chatId } });
+    const memories = await recallChatMemories({
+      chatId: ids.chatId,
+      query: "What commitment did they make for after winter?",
+      recentMessages,
+      settings: createSettings({
+        providers: [
+          {
+            id: "embedding-provider",
+            label: "Embedding",
+            provider: "openai-compatible",
+            apiBaseUrl: "https://embedding.example/v1",
+            models: [
+              {
+                id: "embedding-model",
+                label: "Embedding",
+                model: "text-embedding-3-small",
+                capabilities: ["text_embedding"]
+              }
+            ]
+          }
+        ],
+        moduleModelPreferences: {
+          memory_embedding: {
+            providerId: "embedding-provider",
+            modelId: "embedding-model"
+          }
+        }
+      })
+    });
+
+    assert.equal(memories[0]?.id, semanticMemory.id);
+    const stored = await prisma.chatMemory.findUniqueOrThrow({ where: { id: semanticMemory.id } });
+    assert.equal(stored.embeddingModel, "openai-compatible:text-embedding-3-small");
+    assert.ok(stored.embeddingUpdatedAt);
+    assert.ok(cosineSimilarity([0, 1], [0, 1]) > cosineSimilarity([0, 1], [1, 0]));
   });
 
   it("returns a maintenance summary when automatic memory creates entries", async () => {

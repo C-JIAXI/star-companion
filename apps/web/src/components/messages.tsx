@@ -99,10 +99,10 @@ function Avatar({
     <div
       data-chat-avatar=""
       data-testid="message-avatar"
-      className={`grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl border shadow-md ${
+      className={`grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-md border ${
         align === "right"
-          ? "order-2 border-ember-300/40 bg-ink-950/20 shadow-ember-500/10"
-          : "order-1 border-white/10 bg-ink-800 shadow-black/20"
+          ? "order-2 border-ember-300/35 bg-ink-950/20"
+          : "order-1 border-white/10 bg-ink-800"
       } ${className}`}
       title={name}
     >
@@ -201,7 +201,7 @@ function ContextInfo({
 
   return (
     <button
-      className="inline-flex min-h-[32px] items-center gap-1.5 rounded-full border border-white/5 bg-white/[0.03] px-2.5 text-xs font-medium text-slate-500 transition-colors hover:border-white/10 hover:bg-white/[0.06] hover:text-slate-300"
+      className="inline-flex min-h-[32px] items-center gap-1.5 rounded-md border border-white/[0.06] bg-white/[0.03] px-2.5 text-xs font-medium text-ink-500 transition-colors hover:border-white/[0.12] hover:bg-white/[0.06] hover:text-ink-300"
       data-chat-context-summary=""
       type="button"
       onClick={onClick}
@@ -295,7 +295,7 @@ export function UserMessageBubble({
     >
       <AvatarSlot align="left" name="You" showAvatar={showAvatar} />
       <article
-        className={`order-1 relative ${bubbleWidthClassName} rounded-2xl rounded-bl-sm bg-gradient-to-br from-ember-400 to-ember-500 p-3 sm:p-4 text-sm text-ink-950 shadow-sm`}
+        className={`order-1 relative ${bubbleWidthClassName} rounded-lg rounded-bl-sm border border-ember-300/20 bg-ember-500 p-3 text-sm text-ink-950 sm:p-4`}
         data-chat-bubble=""
       >
         <MessageBody align="left" content={message.content} renderHtml={false} />
@@ -450,7 +450,7 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
       data-chat-message="assistant"
     >
       <article
-        className={`order-1 relative self-start ${bubbleWidthClassName} overflow-hidden rounded-2xl rounded-br-sm border border-white/5 bg-ink-800/80 p-3 sm:p-4 text-sm text-slate-100 shadow-sm backdrop-blur-sm`}
+        className={`order-1 relative self-start ${bubbleWidthClassName} overflow-hidden rounded-lg rounded-br-sm border border-white/[0.08] bg-ink-800 p-3 text-sm text-ink-50 sm:p-4`}
         data-chat-bubble=""
       >
         <MessageBody content={message.content} htmlCss={htmlCss} />
@@ -650,7 +650,7 @@ export function StreamingBubble({
       data-chat-message="streaming"
     >
       <article
-        className={`order-1 self-start ${bubbleWidthClassName} animate-fade-in overflow-hidden rounded-2xl rounded-br-sm border border-ember-500/20 bg-ink-800/80 p-3 sm:p-4 text-sm text-slate-100 shadow-md backdrop-blur-sm`}
+        className={`order-1 self-start ${bubbleWidthClassName} animate-fade-in overflow-hidden rounded-lg rounded-br-sm border border-ember-400/25 bg-ink-800 p-3 text-sm text-ink-50 sm:p-4`}
         data-chat-bubble=""
       >
         {displayedContent ? (
@@ -698,7 +698,7 @@ export function ErrorBubble({
       data-chat-message="error"
     >
       <article
-        className={`order-1 self-start ${bubbleWidthClassName} animate-fade-in overflow-hidden rounded-2xl rounded-br-sm border border-rose-500/30 bg-rose-950/30 p-3 sm:p-4 text-sm text-rose-200 shadow-md backdrop-blur-sm`}
+        className={`order-1 self-start ${bubbleWidthClassName} animate-fade-in overflow-hidden rounded-lg rounded-br-sm border border-rose-500/30 bg-rose-950/30 p-3 text-sm text-rose-200 sm:p-4`}
         data-chat-bubble=""
       >
         <div className="flex items-start gap-2">

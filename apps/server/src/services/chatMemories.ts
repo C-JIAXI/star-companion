@@ -1,6 +1,7 @@
-import type { ChatMemory, Message, UserSettings } from "@prisma/client";
+import { Prisma, type ChatMemory, type Message, type UserSettings } from "@prisma/client";
 import { prisma } from "../db.js";
 import { completeChatCompletion, type ChatCompletionMessage } from "./completions.js";
+import { generateEmbeddings } from "./embeddings.js";
 import { resolveModuleSettings } from "./moduleModels.js";
 
 const KEYWORD_CANDIDATE_LIMIT = 12;
@@ -8,6 +9,8 @@ const RERANKED_MEMORY_LIMIT = 5;
 const AUTO_MEMORY_THROTTLE_MS = 30_000;
 const RECENT_MESSAGE_LIMIT = 6;
 const EXISTING_MEMORY_LIMIT = 30;
+const EMBEDDING_BATCH_SIZE = 64;
+const SEMANTIC_SIMILARITY_THRESHOLD = 0.25;
 
 export type MatchedMemoryEntry = {
   id: string;
@@ -18,6 +21,8 @@ export type MatchedMemoryEntry = {
   importance: number;
   enabled: boolean;
   score: number;
+  embeddingModel: string | null;
+  embeddingUpdatedAt: string | null;
   lastMatchedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -102,6 +107,123 @@ const tokenize = (value: string) =>
   uniqueStrings(value.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [], 80)
     .filter((token) => token.length > 1);
 
+const toNumberArray = (value: unknown): number[] | null => {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((entry) => typeof entry !== "number" || !Number.isFinite(entry))
+  ) {
+    return null;
+  }
+  return value as number[];
+};
+
+const toMemoryEmbeddingText = (memory: Pick<ChatMemory, "title" | "content" | "keywords">) =>
+  [
+    memory.title.trim(),
+    memory.content.trim(),
+    toStringArray(memory.keywords).length
+      ? `Keywords: ${toStringArray(memory.keywords).join(", ")}`
+      : ""
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 6000);
+
+export const cosineSimilarity = (left: number[], right: number[]) => {
+  if (left.length === 0 || left.length !== right.length) {
+    return 0;
+  }
+
+  let dot = 0;
+  let leftMagnitude = 0;
+  let rightMagnitude = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    dot += left[index] * right[index];
+    leftMagnitude += left[index] * left[index];
+    rightMagnitude += right[index] * right[index];
+  }
+
+  if (leftMagnitude === 0 || rightMagnitude === 0) {
+    return 0;
+  }
+
+  return dot / (Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude));
+};
+
+const toEmbeddingIdentity = (settings: UserSettings) =>
+  `${settings.activeProvider.trim().toLowerCase()}:${settings.model.trim()}`;
+
+const ensureMemoryEmbeddings = async (
+  memories: ChatMemory[],
+  settings: UserSettings,
+  force = false
+) => {
+  let embeddingSettings: UserSettings;
+  try {
+    embeddingSettings = resolveModuleSettings(settings, "memory_embedding");
+  } catch {
+    return null;
+  }
+
+  const embeddingModel = toEmbeddingIdentity(embeddingSettings);
+  const vectors = new Map<string, number[]>();
+  const stale = memories.filter((memory) => {
+    const vector = toNumberArray(memory.embedding);
+    if (!force && memory.embeddingModel === embeddingModel && vector) {
+      vectors.set(memory.id, vector);
+      return false;
+    }
+    return true;
+  });
+
+  try {
+    for (let start = 0; start < stale.length; start += EMBEDDING_BATCH_SIZE) {
+      const batch = stale.slice(start, start + EMBEDDING_BATCH_SIZE);
+      const result = await generateEmbeddings({
+        settings: embeddingSettings,
+        inputs: batch.map(toMemoryEmbeddingText),
+        task: "document"
+      });
+      const updatedAt = new Date();
+
+      for (let index = 0; index < batch.length; index += 1) {
+        const memory = batch[index];
+        const vector = result.vectors[index];
+        vectors.set(memory.id, vector);
+        await prisma.chatMemory.update({
+          where: { id: memory.id },
+          data: {
+            embedding: vector as Prisma.InputJsonValue,
+            embeddingModel,
+            embeddingUpdatedAt: updatedAt
+          }
+        });
+      }
+    }
+
+    return { settings: embeddingSettings, model: embeddingModel, vectors };
+  } catch {
+    return null;
+  }
+};
+
+export const refreshChatMemoryEmbeddings = async ({
+  chatId,
+  settings,
+  force = false
+}: {
+  chatId: string;
+  settings: UserSettings;
+  force?: boolean;
+}) => {
+  const memories = await prisma.chatMemory.findMany({
+    where: { chatId, enabled: true },
+    orderBy: { updatedAt: "desc" }
+  });
+  return ensureMemoryEmbeddings(memories, settings, force);
+};
+
 const toMatchedMemoryEntry = (memory: ChatMemory, score: number): MatchedMemoryEntry => ({
   id: memory.id,
   chatId: memory.chatId,
@@ -111,6 +233,8 @@ const toMatchedMemoryEntry = (memory: ChatMemory, score: number): MatchedMemoryE
   importance: memory.importance,
   enabled: memory.enabled,
   score,
+  embeddingModel: memory.embeddingModel,
+  embeddingUpdatedAt: memory.embeddingUpdatedAt?.toISOString() ?? null,
   lastMatchedAt: memory.lastMatchedAt?.toISOString() ?? null,
   createdAt: memory.createdAt.toISOString(),
   updatedAt: memory.updatedAt.toISOString()
@@ -249,8 +373,42 @@ export const recallChatMemories = async ({
     orderBy: [{ importance: "desc" }, { updatedAt: "desc" }]
   });
   const queryTokens = new Set(tokenize(queryText));
+  const embeddingIndex = await ensureMemoryEmbeddings(memories, settings);
+  let queryVector: number[] | null = null;
+  if (embeddingIndex) {
+    try {
+      const result = await generateEmbeddings({
+        settings: embeddingIndex.settings,
+        inputs: [(query.trim() || queryText).slice(0, 6000)],
+        task: "query"
+      });
+      queryVector = result.vectors[0] ?? null;
+    } catch {
+      queryVector = null;
+    }
+  }
+
   const candidates = memories
-    .map((memory) => toMatchedMemoryEntry(memory, scoreMemory(memory, queryText, queryTokens)))
+    .map((memory) => {
+      const keywordScore = scoreMemory(memory, queryText, queryTokens);
+      if (!queryVector || !embeddingIndex) {
+        return toMatchedMemoryEntry(memory, keywordScore);
+      }
+
+      const memoryVector = embeddingIndex.vectors.get(memory.id);
+      const semanticScore = memoryVector
+        ? Math.max(0, cosineSimilarity(queryVector, memoryVector))
+        : 0;
+      if (keywordScore <= 0 && semanticScore < SEMANTIC_SIMILARITY_THRESHOLD) {
+        return toMatchedMemoryEntry(memory, 0);
+      }
+
+      const normalizedKeywordScore = Math.min(1, keywordScore / 25);
+      const importanceScore = Math.min(1, Math.max(0, memory.importance / 5));
+      const hybridScore =
+        semanticScore * 0.72 + normalizedKeywordScore * 0.23 + importanceScore * 0.05;
+      return toMatchedMemoryEntry(memory, Number((hybridScore * 100).toFixed(2)));
+    })
     .filter((memory) => memory.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, KEYWORD_CANDIDATE_LIMIT);
@@ -463,10 +621,11 @@ export const updateChatMemoriesFromTurn = async ({
   let created = 0;
   let updated = 0;
   let disabled = 0;
+  const changedMemoryIds: string[] = [];
 
   for (const action of actions.slice(0, 8)) {
     if (action.type === "create") {
-      await prisma.chatMemory.create({
+      const memory = await prisma.chatMemory.create({
         data: {
           chatId,
           title: action.title,
@@ -477,6 +636,7 @@ export const updateChatMemoriesFromTurn = async ({
           sourceMessageIds
         }
       });
+      changedMemoryIds.push(memory.id);
       created += 1;
       continue;
     }
@@ -493,9 +653,17 @@ export const updateChatMemoriesFromTurn = async ({
         ...(action.keywords ? { keywords: action.keywords } : {}),
         ...(action.importance ? { importance: action.importance } : {}),
         ...(typeof action.enabled === "boolean" ? { enabled: action.enabled } : {}),
-        sourceMessageIds
+        sourceMessageIds,
+        ...(action.title || action.content || action.keywords
+          ? {
+              embedding: Prisma.JsonNull,
+              embeddingModel: null,
+              embeddingUpdatedAt: null
+            }
+          : {})
       }
     });
+    changedMemoryIds.push(action.id);
     updated += 1;
     if (action.enabled === false) {
       disabled += 1;
@@ -506,6 +674,13 @@ export const updateChatMemoriesFromTurn = async ({
     where: { id: chatId },
     data: { memoryUpdatedAt: new Date() }
   });
+
+  if (changedMemoryIds.length > 0) {
+    const changedMemories = await prisma.chatMemory.findMany({
+      where: { id: { in: changedMemoryIds }, enabled: true }
+    });
+    await ensureMemoryEmbeddings(changedMemories, settings);
+  }
 
   return {
     chatId,

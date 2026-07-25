@@ -4,6 +4,7 @@ export type CharacterVisibility = "public" | "private";
 
 export type AiModelCapability =
   | "text_generation"
+  | "text_embedding"
   | "audio_transcription"
   | "text_to_speech"
   | "image_generation";
@@ -190,6 +191,7 @@ export type AiModuleId =
   | "chat"
   | "agent"
   | "memory"
+  | "memory_embedding"
   | "user_profile"
   | "voice_transcription"
   | "voice_speech"
@@ -199,6 +201,7 @@ export const aiModuleCapability: Record<AiModuleId, AiModelCapability> = {
   chat: "text_generation",
   agent: "text_generation",
   memory: "text_generation",
+  memory_embedding: "text_embedding",
   user_profile: "text_generation",
   voice_transcription: "audio_transcription",
   voice_speech: "text_to_speech",
@@ -207,6 +210,7 @@ export const aiModuleCapability: Record<AiModuleId, AiModelCapability> = {
 
 const knownAiModelCapabilities = new Set<AiModelCapability>([
   "text_generation",
+  "text_embedding",
   "audio_transcription",
   "text_to_speech",
   "image_generation"
@@ -214,6 +218,10 @@ const knownAiModelCapabilities = new Set<AiModelCapability>([
 
 export const inferAiModelCapabilities = (model: string): AiModelCapability[] => {
   const normalized = model.trim().toLowerCase();
+
+  if (/(?:^|[-_/])(?:embedding|embed|bge|e5|gte|nomic|jina|mxbai)(?:[-_/]|$)/.test(normalized)) {
+    return ["text_embedding"];
+  }
 
   if (/(^|[-_/])(?:whisper|transcribe|stt)(?:[-_/]|$)/.test(normalized)) {
     return ["audio_transcription"];
@@ -395,6 +403,12 @@ export const getUserCustomConfigSegments = (value?: string | null) => {
   return [config.prefix.trim(), config.prompt.trim(), config.suffix.trim()].filter(Boolean);
 };
 
+export interface ChatListMessagePreviewDTO {
+  role: Exclude<MessageRole, "system">;
+  content: string;
+  createdAt: string;
+}
+
 export interface ChatDTO {
   id: string;
   title: string;
@@ -407,6 +421,7 @@ export interface ChatDTO {
   deletedAt: string | null;
   backgroundUrl: string;
   messageCount: number;
+  lastMessagePreview?: ChatListMessagePreviewDTO | null;
   memoryTurns: number;
   autoMemoryEnabled: boolean;
   memoryUpdatedAt: string | null;
@@ -529,6 +544,8 @@ export interface ChatMemoryDTO {
   importance: number;
   enabled: boolean;
   sourceMessageIds: string[];
+  embeddingModel?: string | null;
+  embeddingUpdatedAt?: string | null;
   lastMatchedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -552,6 +569,8 @@ export interface MatchedMemoryDTO {
   importance: number;
   enabled: boolean;
   score?: number;
+  embeddingModel?: string | null;
+  embeddingUpdatedAt?: string | null;
   lastMatchedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;

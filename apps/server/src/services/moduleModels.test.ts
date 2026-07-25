@@ -15,6 +15,7 @@ const openAiProvider = {
   apiBaseUrl: "https://example.com/v1",
   models: [
     { id: "chat", label: "Chat", model: "gpt-4o-mini", capabilities: ["text_generation"] },
+    { id: "embedding", label: "Embedding", model: "text-embedding-3-small", capabilities: ["text_embedding"] },
     { id: "stt", label: "STT", model: "gpt-4o-mini-transcribe", capabilities: ["audio_transcription"] },
     { id: "tts", label: "TTS", model: "gpt-4o-mini-tts", capabilities: ["text_to_speech"] },
     { id: "image", label: "Image", model: "gpt-image-1", capabilities: ["image_generation"] }
@@ -26,20 +27,32 @@ describe("moduleModels", () => {
     assert.deepEqual(inferModelCapabilities("whisper-1"), ["audio_transcription"]);
     assert.deepEqual(inferModelCapabilities("tts-1"), ["text_to_speech"]);
     assert.deepEqual(inferModelCapabilities("gpt-image-1"), ["image_generation"]);
+    assert.deepEqual(inferModelCapabilities("text-embedding-3-small"), ["text_embedding"]);
+    assert.deepEqual(inferModelCapabilities("nomic-embed-text"), ["text_embedding"]);
     assert.deepEqual(inferModelCapabilities("local-roleplay-model"), ["text_generation"]);
   });
 
   it("only permits each module to select a compatible model", () => {
     assert.equal(supportsModule(openAiProvider, openAiProvider.models[0]!, "agent"), true);
     assert.equal(supportsModule(openAiProvider, openAiProvider.models[0]!, "image_generation"), false);
-    assert.equal(supportsModule(openAiProvider, openAiProvider.models[3]!, "image_generation"), true);
+    assert.equal(supportsModule(openAiProvider, openAiProvider.models[4]!, "image_generation"), true);
+    assert.equal(supportsModule(openAiProvider, openAiProvider.models[1]!, "memory_embedding"), true);
+    assert.equal(
+      supportsModule(
+        { ...openAiProvider, provider: "anthropic" },
+        openAiProvider.models[1]!,
+        "memory_embedding"
+      ),
+      false
+    );
   });
 
   it("rejects module preferences that point to incompatible models", () => {
     assert.equal(
       validateModuleModelPreferences([openAiProvider], {
         image_generation: { providerId: "openai", modelId: "image" },
-        voice_speech: { providerId: "openai", modelId: "tts" }
+        voice_speech: { providerId: "openai", modelId: "tts" },
+        memory_embedding: { providerId: "openai", modelId: "embedding" }
       }),
       null
     );

@@ -371,11 +371,16 @@ describe("settingsUpdateSchema", () => {
       activeModelId: "model-1",
       moduleModelPreferences: {
         agent: { providerId: "provider-1", modelId: "model-1" },
+        memory_embedding: { providerId: "provider-1", modelId: "model-1" },
         image_generation: { providerId: "provider-1", modelId: "model-1" }
       }
     });
 
     assert.deepEqual(parsed.moduleModelPreferences?.agent, {
+      providerId: "provider-1",
+      modelId: "model-1"
+    });
+    assert.deepEqual(parsed.moduleModelPreferences?.memory_embedding, {
       providerId: "provider-1",
       modelId: "model-1"
     });

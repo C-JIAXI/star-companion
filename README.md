@@ -7,15 +7,16 @@ Local-first AI character chat workspace with web, desktop, and Android builds.
 Current scope:
 
 - Single-user, single-character chat with backend-proxied model requests.
+- A unified New Chat flow is available from the desktop sidebar, mobile header, and empty chat workspace, with paginated character search ordered by recent use.
 - Character cards with local or remote cover images, embedded prompt segments, HTML/CSS presentation, quick replies, embedded lore entries, local favorites, multi-mode library sorting, batch tag organization, and safe duplication that preserves private-card encryption.
-- Chat memory with visible update feedback, reusable local persona presets, user profile summaries, local backup import/export, and manual LAN sync.
+- Chat-scoped long-term memory with automatic maintenance, hybrid semantic-vector and keyword retrieval, visible index status, reusable local persona presets, user profile summaries, local backup import/export, and manual LAN sync.
 - In-chat AI Agent drafts for scene summaries, next-step suggestions, reply drafts, and memory/lore candidates. The Agent is read-only in v1 and does not modify local data automatically.
-- Per-module model preferences for chat, AI Agent, memory maintenance, user profile summaries, voice transcription, text-to-speech, and image generation, with capability-filtered model choices and server-side validation.
+- Per-module model preferences for chat, AI Agent, memory maintenance, memory embeddings, user profile summaries, voice transcription, text-to-speech, and image generation, with capability-filtered model choices and server-side validation.
 - Voice input/transcription, per-reply narration, configurable speech voice and playback speed, optional automatic playback for new replies, and OpenAI-compatible image generation through backend-proxied media endpoints, with an image preview before insertion into a chat draft.
-- Chat branching from any user or assistant message, creating a new chat that preserves the conversation up to that point without copying long-term memories. Branches retain their origin and provide a return-to-source-chat action.
-- Save a checkpoint at any message to keep a story snapshot without leaving the active chat; checkpoints remain linked to their source and can later be opened from History.
+- Chat branching from any user or assistant message, creating a new chat that preserves the conversation up to that point without copying long-term memories. The Story paths navigator shows ancestry and direct child branches, and returning to the source highlights the original split message.
+- Save a checkpoint at any message to keep a story snapshot without leaving the active chat; checkpoints remain linked to their source and appear alongside branches in Story paths.
 - Chat-scoped message search with result jump across long paginated conversations.
-- History search can switch between chat titles and message content across every chat, then open the matching conversation at the exact turn.
+- The sidebar and mobile drawer expose six pinned/recent active chats for one-step switching. Full History rows show the latest user/assistant message preview, message count, and recent activity time; search can switch between chat titles and message content across every chat, then open the matching conversation at the exact turn.
 - Pin frequently used chats so they stay above newer history entries; pin state is included in backups and LAN sync.
 - Archive completed chats to remove them from active history without deleting messages or memories, then restore them individually or in batches from History management mode.
 - Move unwanted chats to Trash without losing messages or long-term memories, restore them later, or permanently delete them through a separate confirmation. Trash state is retained in backups and LAN sync.

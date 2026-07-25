@@ -2,7 +2,7 @@ import { createCipheriv, randomBytes, scryptSync } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 
 type E2ECharacter = {
   id: string;
@@ -15,6 +15,13 @@ type E2ECharacter = {
 type E2EChat = {
   id: string;
   title: string;
+  characterId?: string;
+  messageCount?: number;
+  lastMessagePreview?: {
+    role: "user" | "assistant";
+    content: string;
+    createdAt: string;
+  } | null;
 };
 
 type E2EChatDetails = E2EChat & {
@@ -25,7 +32,13 @@ type E2EProviderModel = {
   id: string;
   label: string;
   model: string;
-  capabilities?: Array<"text_generation" | "audio_transcription" | "text_to_speech" | "image_generation">;
+  capabilities?: Array<
+    "text_generation" |
+    "text_embedding" |
+    "audio_transcription" |
+    "text_to_speech" |
+    "image_generation"
+  >;
 };
 
 type E2EProviderProfile = {
@@ -86,8 +99,13 @@ const selectChatFromHistory = async (page: Page, title: string) => {
     await page.getByRole("button", { name: /Toggle navigation/ }).click();
   }
 
-  await page.getByRole("button", { name: /鍘嗗彶|History/ }).click();
+  await page.getByRole("button", { name: /历史|History/ }).click();
   await page.locator("[data-chat-history-title]").filter({ hasText: title }).first().click();
+};
+
+const clickHistoryRowAction = async (row: Locator, action: string) => {
+  await row.getByTestId("chat-history-row-actions").click();
+  await row.locator(`[data-chat-action="${action}"]`).click();
 };
 
 const createPrivateCharacterCardFile = async (name: string, password: string) => {
@@ -344,6 +362,17 @@ test("chat readiness surfaces missing first-run setup and links to settings", as
   });
 
   await page.goto("/");
+  await expect(page.getByTestId("chat-new-empty-action")).toContainText("Open Characters");
+  const newChatTrigger =
+    (page.viewportSize()?.width ?? 1280) < 1024
+      ? page.getByTestId("new-chat-trigger-mobile")
+      : page.getByTestId("new-chat-trigger-desktop");
+  await newChatTrigger.click();
+  const newChatDialog = page.getByTestId("new-chat-dialog");
+  await expect(newChatDialog).toContainText("There are no characters available for chat yet.");
+  await expect(page.getByTestId("new-chat-open-characters")).toBeVisible();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+
   await page.getByTestId("chat-readiness-trigger").click();
   await expect(page.getByTestId("chat-readiness-dialog")).toBeVisible();
   await expect(page.locator('[data-readiness-item="provider"]')).toContainText("No usable provider yet");
@@ -352,6 +381,121 @@ test("chat readiness surfaces missing first-run setup and links to settings", as
   await page.locator('[data-readiness-action="provider"]').click();
   await expect(page).toHaveURL(/\/settings$/);
   await expect(page.getByRole("heading", { name: "Model Settings" })).toBeVisible();
+});
+
+test("new chat starts from the workspace without visiting the character page", async ({
+  page,
+  request
+}, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const characterName = `Quick Start Character ${suffix}`;
+  let characterId: string | null = null;
+  let chatId: string | null = null;
+
+  try {
+    const characterResponse = await request.post("/api/characters", {
+      data: {
+        name: characterName,
+        description: "A character selected directly from the New Chat dialog.",
+        prefix: "",
+        prompt: "Stay in character.",
+        suffix: ""
+      }
+    });
+    characterId = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data?.id ?? null;
+    expect(characterId).toBeTruthy();
+
+    await page.goto("/");
+    const trigger =
+      (page.viewportSize()?.width ?? 1280) < 1024
+        ? page.getByTestId("new-chat-trigger-mobile")
+        : page.getByTestId("new-chat-trigger-desktop");
+    await trigger.click();
+
+    const dialog = page.getByTestId("new-chat-dialog");
+    await expect(dialog).toBeVisible();
+    await page.getByTestId("new-chat-search").fill(characterName);
+    const characterChoice = dialog.locator(`[data-character-id="${characterId}"]`);
+    await expect(characterChoice).toBeVisible();
+    await characterChoice.click();
+
+    await expect(dialog).toBeHidden();
+    await expect(page.locator("#chat-title")).toContainText("New Chat");
+    await expect(page).toHaveURL(/\/$/);
+
+    const chatsResponse = await request.get("/api/chats");
+    const chats = ((await chatsResponse.json()) as ApiDataResponse<E2EChat[]>).data ?? [];
+    const createdChat = chats.find((chat) => chat.characterId === characterId);
+    expect(createdChat).toBeTruthy();
+    chatId = createdChat?.id ?? null;
+  } finally {
+    if (chatId) await permanentlyDeleteChatViaApi(request, chatId);
+    if (characterId) await request.delete(`/api/characters/${characterId}`);
+  }
+});
+
+test("recent chats switch directly from the sidebar or mobile drawer", async ({
+  page,
+  request
+}, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const targetTitle = `Recent Switch ${suffix}`;
+  const preview = `The route is ready for ${suffix}.`;
+  let characterId: string | null = null;
+  let targetChatId: string | null = null;
+  let otherChatId: string | null = null;
+
+  try {
+    const characterResponse = await request.post("/api/characters", {
+      data: {
+        name: `Recent Character ${suffix}`,
+        description: "Used to verify direct recent-chat navigation.",
+        prefix: "",
+        prompt: "Keep the route concise.",
+        suffix: ""
+      }
+    });
+    characterId = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data?.id ?? null;
+    expect(characterId).toBeTruthy();
+
+    const otherResponse = await request.post("/api/chats", {
+      data: { title: `Older Switch ${suffix}`, characterId }
+    });
+    otherChatId = ((await otherResponse.json()) as ApiDataResponse<E2EChat>).data?.id ?? null;
+    const targetResponse = await request.post("/api/chats", {
+      data: { title: targetTitle, characterId }
+    });
+    targetChatId = ((await targetResponse.json()) as ApiDataResponse<E2EChat>).data?.id ?? null;
+    expect(targetChatId).toBeTruthy();
+
+    await request.post("/api/messages", {
+      data: { chatId: targetChatId, role: "assistant", characterId, content: preview }
+    });
+
+    await page.goto("/");
+    const mobile = (page.viewportSize()?.width ?? 1280) < 1024;
+    if (mobile) {
+      await page.getByRole("button", { name: /Toggle navigation/ }).click();
+    }
+    const navigation = mobile
+      ? page.getByTestId("mobile-nav-content")
+      : page.getByTestId("desktop-sidebar");
+    const recentRow = navigation.locator(
+      `[data-testid="chat-recent-item"][data-chat-id="${targetChatId}"]`
+    );
+    await expect(recentRow).toBeVisible();
+    await expect(recentRow).toContainText(preview);
+    await recentRow.click();
+
+    await expect(page.locator("#chat-title")).toContainText(targetTitle);
+    if (mobile) {
+      await expect(page.getByTestId("mobile-nav-content")).not.toBeInViewport();
+    }
+  } finally {
+    if (targetChatId) await permanentlyDeleteChatViaApi(request, targetChatId);
+    if (otherChatId) await permanentlyDeleteChatViaApi(request, otherChatId);
+    if (characterId) await request.delete(`/api/characters/${characterId}`);
+  }
 });
 
 test("empty chats can generate a character opening without sending a user message", async ({
@@ -1014,7 +1158,10 @@ test("history searches message content across chats and jumps to the matching tu
       await page.getByRole("button", { name: /Toggle navigation/ }).click();
     }
     await page.getByRole("button", { name: /历史|History/ }).click();
-    await page.getByRole("button", { name: /消息|Messages/ }).click();
+    await page
+      .getByRole("group", { name: /历史搜索模式|History search mode/ })
+      .getByRole("button", { name: /^(消息|Messages)$/ })
+      .click();
     await page
       .getByPlaceholder(/搜索全部聊天中的消息|Search messages across all chats/)
       .fill("observatory key");
@@ -1029,6 +1176,70 @@ test("history searches message content across chats and jumps to the matching tu
     await permanentlyDeleteChatViaApi(request, firstChat.id);
     await permanentlyDeleteChatViaApi(request, targetChat.id);
     await request.delete(`/api/characters/${character.id}`);
+  }
+});
+
+test("chat history shows a bounded last-message preview and activity metadata", async ({
+  page,
+  request
+}, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const chatTitle = `Preview Chat ${suffix}`;
+  const assistantPrefix = `The observatory doors closed behind us ${suffix}.`;
+  const assistantContent = `${assistantPrefix}\n${"The signal remains visible. ".repeat(12)}`;
+  let characterId: string | null = null;
+  let chatId: string | null = null;
+
+  try {
+    const characterResponse = await request.post("/api/characters", {
+      data: {
+        name: `Preview Character ${suffix}`,
+        prefix: "",
+        prompt: "Keep the scene moving.",
+        suffix: ""
+      }
+    });
+    characterId = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data?.id ?? null;
+    expect(characterId).toBeTruthy();
+
+    const chatResponse = await request.post("/api/chats", {
+      data: { title: chatTitle, characterId }
+    });
+    chatId = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data?.id ?? null;
+    expect(chatId).toBeTruthy();
+
+    await request.post("/api/messages", {
+      data: { chatId, role: "user", content: "Did anyone follow us?" }
+    });
+    await request.post("/api/messages", {
+      data: { chatId, role: "assistant", characterId, content: assistantContent }
+    });
+
+    const listResponse = await request.get("/api/chats");
+    const listedChats = ((await listResponse.json()) as ApiDataResponse<E2EChat[]>).data ?? [];
+    const listedChat = listedChats.find((chat) => chat.id === chatId);
+    expect(listedChat?.messageCount).toBe(2);
+    expect(listedChat?.lastMessagePreview?.role).toBe("assistant");
+    expect(listedChat?.lastMessagePreview?.content).toContain(assistantPrefix);
+    expect(listedChat?.lastMessagePreview?.content).not.toContain("\n");
+    expect(listedChat?.lastMessagePreview?.content.length).toBeLessThanOrEqual(180);
+
+    await page.goto("/");
+    if ((page.viewportSize()?.width ?? 1280) < 1024) {
+      await page.getByRole("button", { name: /Toggle navigation/ }).click();
+    }
+    await page.getByRole("button", { name: /历史|History/ }).click();
+
+    const row = page.locator(
+      `[data-chat-history-row][data-chat-id="${chatId}"]`
+    );
+    await expect(row).toBeVisible();
+    await expect(row.getByTestId("chat-history-preview")).toContainText(assistantPrefix);
+    await expect(row.getByText(/2 (msg|条)/)).toBeVisible();
+    await expect(row.getByTestId("chat-history-activity")).not.toBeEmpty();
+  } finally {
+    if (chatId) await permanentlyDeleteChatViaApi(request, chatId);
+    if (characterId) await request.delete(`/api/characters/${characterId}`);
   }
 });
 
@@ -1080,8 +1291,9 @@ test("pinned chats move to the top of history and persist", async ({ page, reque
     const rows = page.locator("[data-chat-history-row]");
     await expect(rows).toHaveCount(2);
     const targetRow = page.locator(`[data-chat-history-row][data-chat-id="${targetChatId}"]`);
-    await targetRow.locator('[data-chat-action="pin"]').click();
+    await clickHistoryRowAction(targetRow, "pin");
 
+    await targetRow.getByTestId("chat-history-row-actions").click();
     await expect(targetRow.locator('[data-chat-action="pin"]')).toHaveAttribute("aria-pressed", "true");
     await expect(rows.first()).toHaveAttribute("data-chat-id", targetChatId!);
 
@@ -1140,7 +1352,7 @@ test("archived chats leave active history and can be restored without data loss"
 
     const row = page.locator(`[data-chat-history-row][data-chat-id="${chatId}"]`);
     await expect(row).toBeVisible();
-    await row.locator('[data-chat-action="archive"]').click();
+    await clickHistoryRowAction(row, "archive");
     await expect(row).toHaveCount(0);
 
     await page.getByTestId("chat-history-scope-archived").click();
@@ -1154,7 +1366,7 @@ test("archived chats leave active history and can be restored without data loss"
     expect(archived.data?.messages).toHaveLength(1);
     expect(archived.data?.memories).toHaveLength(1);
 
-    await row.locator('[data-chat-action="archive"]').click();
+    await clickHistoryRowAction(row, "archive");
     await expect(row).toHaveCount(0);
     await page.getByTestId("chat-history-scope-active").click();
     await expect(row).toBeVisible();
@@ -1213,7 +1425,7 @@ test("trashed chats can be restored before a separately confirmed permanent dele
     const row = page.locator(`[data-chat-history-row][data-chat-id="${chatId}"]`);
     await expect(row).toBeVisible();
 
-    await row.locator('[data-chat-action="trash"]').click();
+    await clickHistoryRowAction(row, "trash");
     const trashConfirm = page.getByRole("dialog").last();
     await expect(trashConfirm).toContainText(/消息和长期记忆会保留|messages and long-term memories will be kept/i);
     await trashConfirm.getByRole("button", { name: /移入回收站|Move to Trash/i }).click();
@@ -1228,7 +1440,7 @@ test("trashed chats can be restored before a separately confirmed permanent dele
     await page.getByTestId("chat-history-scope-trash").click();
     await page.getByTestId("chat-history-search").fill(chatTitle);
     await expect(row).toBeVisible();
-    await row.locator('[data-chat-action="restore"]').click();
+    await clickHistoryRowAction(row, "restore");
     await expect(row).toHaveCount(0);
 
     await page.getByTestId("chat-history-scope-active").click();
@@ -1243,7 +1455,7 @@ test("trashed chats can be restored before a separately confirmed permanent dele
     expect(restored.data?.messages).toHaveLength(1);
     expect(restored.data?.memories).toHaveLength(1);
 
-    await row.locator('[data-chat-action="trash"]').click();
+    await clickHistoryRowAction(row, "trash");
     await page
       .getByRole("dialog")
       .last()
@@ -1252,7 +1464,7 @@ test("trashed chats can be restored before a separately confirmed permanent dele
     await page.getByTestId("chat-history-scope-trash").click();
     await page.getByTestId("chat-history-search").fill(chatTitle);
     await expect(row).toBeVisible();
-    await row.locator('[data-chat-action="permanent-delete"]').click();
+    await clickHistoryRowAction(row, "permanent-delete");
     const permanentConfirm = page.getByRole("dialog").last();
     await expect(permanentConfirm).toContainText(/不可撤销|cannot be undone/i);
     await permanentConfirm.getByRole("button", { name: /永久删除|Delete Permanently/i }).click();
@@ -1679,7 +1891,7 @@ test("new assistant replies use the configured voice playback preferences", asyn
 
     await page.goto("/");
     const composer = page.locator("#chat-message-input");
-    await expect(page.getByText(historicalContent)).toBeVisible();
+    await expect(page.getByTestId("chat-message-viewport").getByText(historicalContent)).toBeVisible();
     expect(speechRequests).toHaveLength(0);
     await composer.fill("Can you hear me?");
     await page.locator('#chat-primary-action[data-chat-action="send"]').click();
@@ -1979,7 +2191,11 @@ test("character built-in css previews in the editor and styles only matching cha
 
   const openHistoryAndSelectChat = async (title: string) => {
     await page.getByRole("button", { name: /历史|History/ }).click();
-    await page.getByRole("button", { name: title }).click();
+    await page
+      .getByRole("dialog")
+      .locator("[data-chat-history-row]")
+      .filter({ hasText: title })
+      .click();
   };
 
   const characterA = await createCharacter(characterAName);
@@ -2046,7 +2262,7 @@ test("character built-in css previews in the editor and styles only matching cha
 
     await page.goto("/");
     await openHistoryAndSelectChat(chatATitle);
-    await expect(page.getByText(assistantReplyAText)).toBeVisible();
+    await expect(page.getByTestId("chat-message-viewport").getByText(assistantReplyAText)).toBeVisible();
     await expect(page.locator("body")).not.toHaveCSS("background-color", "rgb(253, 246, 227)");
     await expect(page.locator("#chat-page-root")).not.toHaveCSS(
       "background-color",
@@ -2095,7 +2311,7 @@ test("character built-in css previews in the editor and styles only matching cha
     });
 
     await openHistoryAndSelectChat(chatBTitle);
-    await expect(page.getByText(assistantReplyB)).toBeVisible();
+    await expect(page.getByTestId("chat-message-viewport").getByText(assistantReplyB)).toBeVisible();
     await expect(page.locator("#chat-composer")).not.toHaveCSS(
       "background-color",
       "rgb(17, 24, 39)"
@@ -2137,7 +2353,7 @@ test("character management can create a character with markdown prompt fields", 
 
   await page.goto("/characters");
 
-  await page.getByRole("button", { name: /新建|New/ }).click();
+  await page.getByRole("button", { name: /^(新建|New)$/ }).click();
   await expect(page.getByRole("heading", { name: /创建角色|Create Character/ })).toBeVisible();
   const name = `E2E Character ${testInfo.project.name} ${Date.now()}`;
 
@@ -2440,7 +2656,7 @@ test("mobile chat drawer switches between sections", async ({ page }) => {
   await expect(page.getByRole("heading", { name: /角色工坊|Character Studio/ })).toBeVisible();
 
   await page.getByRole("button", { name: /Toggle navigation/ }).click();
-  await page.getByRole("button", { name: /聊天|Chat/ }).click();
+  await page.getByRole("button", { name: /^(聊天|Chat)$/ }).click();
   await expect(page.getByRole("heading", { name: /消息流|Message Stream|Chat Workbench/ })).toBeVisible();
   await expect(page.getByText(/前往角色中开始聊天吧|Go to Characters to start chatting/)).toBeVisible();
 });
@@ -2538,7 +2754,7 @@ test("chat settings control avatars and message timestamps", async ({
   }
 });
 
-test("chat messages can create a branch from the selected turn", async ({ page, request }) => {
+test("chat branches return to their highlighted source through Story paths", async ({ page, request }) => {
   const suffix = Date.now();
   const characterName = `Branch Character ${suffix}`;
   const chatTitle = `Branch Chat ${suffix}`;
@@ -2575,7 +2791,7 @@ test("chat messages can create a branch from the selected turn", async ({ page, 
       content: firstUserText
     }
   });
-  await request.post("/api/messages", {
+  const assistantResponse = await request.post("/api/messages", {
     data: {
       chatId: chat.id,
       role: "assistant",
@@ -2583,6 +2799,8 @@ test("chat messages can create a branch from the selected turn", async ({ page, 
       content: assistantText
     }
   });
+  expect(assistantResponse.ok()).toBeTruthy();
+  const assistantMessage = (await assistantResponse.json()).data;
   await request.post("/api/messages", {
     data: {
       chatId: chat.id,
@@ -2599,11 +2817,18 @@ test("chat messages can create a branch from the selected turn", async ({ page, 
     await expect(assistantBubble).toBeVisible();
     await assistantBubble.getByRole("button", { name: /从这里创建分支|Branch from here/ }).click();
 
-    await expect(page.getByText(firstUserText)).toBeVisible();
-    await expect(page.getByText(assistantText)).toBeVisible();
-    await expect(page.getByText(secondUserText)).toHaveCount(0);
-    await page.getByTestId("chat-return-to-parent").click();
-    await expect(page.getByText(secondUserText)).toBeVisible();
+    const messageViewport = page.getByTestId("chat-message-viewport");
+    await expect(messageViewport.getByText(firstUserText)).toBeVisible();
+    await expect(messageViewport.getByText(assistantText)).toBeVisible();
+    await expect(messageViewport.getByText(secondUserText)).toHaveCount(0);
+    await page.getByTestId("chat-story-trigger").click();
+    const storyNavigator = page.getByTestId("chat-story-navigator");
+    await expect(storyNavigator.getByTestId("chat-story-path-node")).toHaveCount(2);
+    await storyNavigator
+      .locator(`[data-testid="chat-story-path-node"][data-chat-id="${chat.id}"]`)
+      .click();
+    await expect(messageViewport.getByText(secondUserText)).toBeVisible();
+    await expect(page.locator(`[data-message-id="${assistantMessage.id}"]`)).toHaveClass(/ring-2/);
 
     const chatsResponse = await request.get("/api/chats");
     expect(chatsResponse.ok()).toBeTruthy();
@@ -2619,7 +2844,7 @@ test("chat messages can create a branch from the selected turn", async ({ page, 
   }
 });
 
-test("a checkpoint saves a branch snapshot without switching the active chat", async ({ page, request }) => {
+test("a checkpoint stays in the background and opens from Story paths", async ({ page, request }) => {
   const suffix = Date.now();
   const characterName = `Checkpoint Character ${suffix}`;
   const chatTitle = `Checkpoint Chat ${suffix}`;
@@ -2654,6 +2879,14 @@ test("a checkpoint saves a branch snapshot without switching the active chat", a
     await expect(
       page.getByText(/检查点已保存，可在历史记录中打开。|Checkpoint saved. Open it from History/)
     ).toBeVisible();
+    await page.getByTestId("chat-story-trigger").click();
+    const checkpointPath = page
+      .getByTestId("chat-story-navigator")
+      .getByTestId("chat-story-child")
+      .filter({ hasText: checkpointTitle });
+    await expect(checkpointPath).toContainText(messageText);
+    await checkpointPath.click();
+    await expect(page.locator("#chat-title")).toContainText(checkpointTitle);
 
     const chatsResponse = await request.get("/api/chats");
     expect(chatsResponse.ok()).toBeTruthy();
@@ -3161,7 +3394,7 @@ test("chat custom config saves prefix prompt and suffix from memory settings", a
     await page.goto("/");
     await openChatHistoryAndSelect(page, chatTitle);
     await page.locator("button[aria-expanded]").click();
-    await page.getByRole("button", { name: /自定义配置|Custom Config/ }).click();
+    await page.getByRole("button", { name: /^(自定义配置|Custom Config)$/ }).click();
 
     const customConfigDialog = page.getByRole("dialog");
     const configInputs = customConfigDialog.locator("textarea");
@@ -3200,7 +3433,7 @@ test("chat custom config saves prefix prompt and suffix from memory settings", a
     await page.reload();
     await openChatHistoryAndSelect(page, chatTitle);
     await page.locator("button[aria-expanded]").click();
-    await page.getByRole("button", { name: /自定义配置|Custom Config/ }).click();
+    await page.getByRole("button", { name: /^(自定义配置|Custom Config)$/ }).click();
     await expect(customConfigDialog.locator("textarea").nth(0)).toHaveValue(customConfig.prefix);
     await expect(customConfigDialog.locator("textarea").nth(1)).toHaveValue(customConfig.prompt);
     await expect(customConfigDialog.locator("textarea").nth(2)).toHaveValue(customConfig.suffix);
@@ -3220,6 +3453,7 @@ test("module model selects only show models compatible with that feature", async
       apiBaseUrl: "https://example.com/v1",
       models: [
         { id: "chat", label: "Chat model", model: "gpt-4o-mini", capabilities: ["text_generation"] },
+        { id: "embedding", label: "Embedding model", model: "text-embedding-3-small", capabilities: ["text_embedding"] },
         { id: "speech", label: "Speech model", model: "tts-1", capabilities: ["text_to_speech"] },
         { id: "image", label: "Image model", model: "gpt-image-1", capabilities: ["image_generation"] }
       ]
@@ -3278,6 +3512,12 @@ test("module model selects only show models compatible with that feature", async
 
   const agentOptions = page.getByLabel("AI Agent").locator("option");
   await expect(agentOptions).toHaveText(["Use current chat model", "Capability provider / Chat model"]);
+
+  const embeddingOptions = page.getByLabel("Memory embeddings").locator("option");
+  await expect(embeddingOptions).toHaveText([
+    "Current chat model is incompatible; choose a model",
+    "Capability provider / Embedding model"
+  ]);
 });
 
 test("long-term memory delete confirm stays centered above the memory dialog", async ({
@@ -3344,6 +3584,7 @@ test("long-term memory delete confirm stays centered above the memory dialog", a
     const memoryDialog = page.getByRole("dialog").filter({ hasText: memoryTitle });
     await expect(memoryDialog).toBeVisible();
     await expect(memoryDialog.getByText(memoryTitle)).toBeVisible();
+    await expect(memoryDialog.getByText(/仅关键词|Keywords only/)).toBeVisible();
     await memoryDialog
       .locator(`[data-chat-memory-action="delete"]`)
       .click();
@@ -3424,8 +3665,8 @@ test("long chats paginate and keep messages inside the scrollable viewport", asy
     const viewport = page.getByTestId("chat-message-viewport");
     await expect(viewport).toBeVisible();
     await expect(page.getByTestId("chat-message-pagination")).toBeVisible();
-    await expect(page.getByText("Paging message 89")).toBeVisible();
-    await expect(page.getByText("Paging message 0")).toHaveCount(0);
+    await expect(viewport.getByText("Paging message 89")).toBeVisible();
+    await expect(viewport.getByText("Paging message 0")).toHaveCount(0);
     const metrics = await viewport.evaluate((element) => ({
       clientHeight: element.clientHeight,
       scrollHeight: element.scrollHeight
@@ -3434,8 +3675,8 @@ test("long chats paginate and keep messages inside the scrollable viewport", asy
 
     await page.getByTestId("chat-page-prev").click();
 
-    await expect(page.getByText("Paging message 30")).toBeVisible();
-    await expect(page.getByText("Paging message 89")).toHaveCount(0);
+    await expect(viewport.getByText("Paging message 30")).toBeVisible();
+    await expect(viewport.getByText("Paging message 89")).toHaveCount(0);
 
     await page.getByTestId("chat-search-trigger").click();
     const searchDialog = page.getByRole("dialog");
@@ -3443,8 +3684,8 @@ test("long chats paginate and keep messages inside the scrollable viewport", asy
     await searchDialog.getByRole("button", { name: /搜索|Search/ }).click();
     await expect(page.getByTestId("chat-search-result")).toHaveCount(1);
     await page.getByTestId("chat-search-result").click();
-    await expect(page.getByText("Paging message 5")).toBeVisible();
-    await expect(page.getByText("Paging message 30")).toHaveCount(0);
+    await expect(viewport.getByText("Paging message 5")).toBeVisible();
+    await expect(viewport.getByText("Paging message 30")).toHaveCount(0);
   } finally {
     await permanentlyDeleteChatViaApi(request, chat.id);
     await request.delete(`/api/characters/${character.id}`);

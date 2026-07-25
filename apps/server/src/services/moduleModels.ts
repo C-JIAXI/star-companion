@@ -4,6 +4,7 @@ export type AiModuleId =
   | "chat"
   | "agent"
   | "memory"
+  | "memory_embedding"
   | "user_profile"
   | "voice_transcription"
   | "voice_speech"
@@ -27,6 +28,7 @@ type ProviderProfile = {
 
 type AiModelCapability =
   | "text_generation"
+  | "text_embedding"
   | "audio_transcription"
   | "text_to_speech"
   | "image_generation";
@@ -35,6 +37,7 @@ const moduleCapabilities: Record<AiModuleId, AiModelCapability> = {
   chat: "text_generation",
   agent: "text_generation",
   memory: "text_generation",
+  memory_embedding: "text_embedding",
   user_profile: "text_generation",
   voice_transcription: "audio_transcription",
   voice_speech: "text_to_speech",
@@ -43,6 +46,7 @@ const moduleCapabilities: Record<AiModuleId, AiModelCapability> = {
 
 const validCapabilities = new Set<AiModelCapability>([
   "text_generation",
+  "text_embedding",
   "audio_transcription",
   "text_to_speech",
   "image_generation"
@@ -131,7 +135,7 @@ export const resolveModuleSettings = (
   const model = provider?.models.find((entry) => entry.id === preference.modelId);
 
   if (!provider || !model) {
-    return settings;
+    throw new Error(`The configured ${moduleId} model no longer exists.`);
   }
 
   if (!supportsModule(provider, model, moduleId)) {
@@ -166,6 +170,10 @@ export const normalizeProviderKind = (provider: string) => {
 export const inferModelCapabilities = (model: string): AiModelCapability[] => {
   const normalized = model.trim().toLowerCase();
 
+  if (/(?:^|[-_/])(?:embedding|embed|bge|e5|gte|nomic|jina|mxbai)(?:[-_/]|$)/.test(normalized)) {
+    return ["text_embedding"];
+  }
+
   if (/(^|[-_/])(?:whisper|transcribe|stt)(?:[-_/]|$)/.test(normalized)) {
     return ["audio_transcription"];
   }
@@ -184,8 +192,12 @@ export const supportsModule = (
   model: Pick<ProviderModel, "model" | "capabilities">,
   moduleId: AiModuleId
 ) => {
+  const providerKind = normalizeProviderKind(provider.provider);
   const isMediaModule = ["voice_transcription", "voice_speech", "image_generation"].includes(moduleId);
-  if (isMediaModule && normalizeProviderKind(provider.provider) !== "openai-compatible") {
+  if (isMediaModule && providerKind !== "openai-compatible") {
+    return false;
+  }
+  if (moduleId === "memory_embedding" && providerKind === "anthropic") {
     return false;
   }
 

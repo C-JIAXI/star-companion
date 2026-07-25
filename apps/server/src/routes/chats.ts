@@ -20,7 +20,10 @@ import { createChatAgentDraft } from "../services/chatAgent.js";
 import { createChatOpeningMessage } from "../services/chatOpening.js";
 import { createChatTitleSuggestion } from "../services/chatTitle.js";
 import { exportChatArchive, importChatArchive } from "../services/chatArchives.js";
-import { updateChatMemoriesFromTurn } from "../services/chatMemories.js";
+import {
+  refreshChatMemoryEmbeddings,
+  updateChatMemoriesFromTurn
+} from "../services/chatMemories.js";
 import { getOrCreateSettings } from "./settings.js";
 
 export const chatsRouter = Router();
@@ -40,6 +43,11 @@ const buildMessageSearchSnippet = (content: string, query: string) => {
   return `${prefix}${content.slice(start, end)}${suffix}`;
 };
 
+const buildChatListPreview = (content: string) => {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  return normalized.length > 180 ? `${normalized.slice(0, 179)}…` : normalized;
+};
+
 chatsRouter.get(
   "/",
   asyncHandler(async (_request, response) => {
@@ -50,10 +58,34 @@ chatsRouter.get(
         { isPinned: "desc" },
         { updatedAt: "desc" }
       ],
-      include: { _count: { select: { messages: true } } }
+      include: {
+        _count: { select: { messages: true } },
+        messages: {
+          where: { role: { in: ["user", "assistant"] } },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { role: true, content: true, createdAt: true }
+        }
+      }
     });
 
-    response.json({ ok: true, data: chats.map((chat) => serializeChat(chat, chat._count.messages)) });
+    response.json({
+      ok: true,
+      data: chats.map((chat) => {
+        const lastMessage = chat.messages[0];
+        return {
+          ...serializeChat(chat, chat._count.messages),
+          lastMessagePreview:
+            lastMessage && (lastMessage.role === "user" || lastMessage.role === "assistant")
+              ? {
+                  role: lastMessage.role,
+                  content: buildChatListPreview(lastMessage.content),
+                  createdAt: lastMessage.createdAt.toISOString()
+                }
+              : null
+        };
+      })
+    });
   })
 );
 
@@ -364,12 +396,15 @@ chatsRouter.post(
       throw new HttpError(404, "Chat not found");
     }
 
-    const memory = await prisma.chatMemory.create({
+    const createdMemory = await prisma.chatMemory.create({
       data: {
         ...body,
         chatId
       }
     });
+    const settings = await getOrCreateSettings();
+    await refreshChatMemoryEmbeddings({ chatId, settings });
+    const memory = await prisma.chatMemory.findUniqueOrThrow({ where: { id: createdMemory.id } });
 
     response.status(201).json({ ok: true, data: serializeChatMemory(memory) });
   })
@@ -388,10 +423,28 @@ chatsRouter.put(
       throw new HttpError(404, "Memory not found");
     }
 
-    const memory = await prisma.chatMemory.update({
+    const embeddingSourceChanged =
+      Object.hasOwn(body, "title") ||
+      Object.hasOwn(body, "content") ||
+      Object.hasOwn(body, "keywords");
+    const updatedMemory = await prisma.chatMemory.update({
       where: { id: memoryId },
-      data: body
+      data: {
+        ...body,
+        ...(embeddingSourceChanged
+          ? {
+              embedding: Prisma.JsonNull,
+              embeddingModel: null,
+              embeddingUpdatedAt: null
+            }
+          : {})
+      }
     });
+    const settings = await getOrCreateSettings();
+    if (updatedMemory.enabled) {
+      await refreshChatMemoryEmbeddings({ chatId, settings });
+    }
+    const memory = await prisma.chatMemory.findUniqueOrThrow({ where: { id: memoryId } });
 
     response.json({ ok: true, data: serializeChatMemory(memory) });
   })
@@ -428,6 +481,7 @@ chatsRouter.post(
 
     const settings = await getOrCreateSettings();
     await updateChatMemoriesFromTurn({ chatId, settings });
+    await refreshChatMemoryEmbeddings({ chatId, settings });
     const memories = await prisma.chatMemory.findMany({
       where: { chatId },
       orderBy: [{ enabled: "desc" }, { importance: "desc" }, { updatedAt: "desc" }]

@@ -8,7 +8,12 @@ interface ProviderModel {
   capabilities?: AiModelCapability[];
 }
 
-type AiModelCapability = "text_generation" | "audio_transcription" | "text_to_speech" | "image_generation";
+type AiModelCapability =
+  | "text_generation"
+  | "text_embedding"
+  | "audio_transcription"
+  | "text_to_speech"
+  | "image_generation";
 
 interface ProviderProfile {
   id: string;
@@ -23,6 +28,7 @@ type AiModuleId =
   | "chat"
   | "agent"
   | "memory"
+  | "memory_embedding"
   | "user_profile"
   | "voice_transcription"
   | "voice_speech"
@@ -85,6 +91,7 @@ const toProviderModels = (value: unknown): ProviderModel[] => {
         ? item.capabilities.filter(
             (capability): capability is AiModelCapability =>
               capability === "text_generation" ||
+              capability === "text_embedding" ||
               capability === "audio_transcription" ||
               capability === "text_to_speech" ||
               capability === "image_generation"
@@ -117,6 +124,7 @@ const moduleIds: AiModuleId[] = [
   "chat",
   "agent",
   "memory",
+  "memory_embedding",
   "user_profile",
   "voice_transcription",
   "voice_speech",
@@ -414,6 +422,8 @@ export const serializeChatMemory = (memory: ChatMemory) => ({
   importance: memory.importance,
   enabled: memory.enabled,
   sourceMessageIds: toStringArray(memory.sourceMessageIds),
+  embeddingModel: memory.embeddingModel,
+  embeddingUpdatedAt: memory.embeddingUpdatedAt?.toISOString() ?? null,
   lastMatchedAt: memory.lastMatchedAt?.toISOString() ?? null,
   createdAt: toIso(memory.createdAt),
   updatedAt: toIso(memory.updatedAt)
