@@ -168,6 +168,7 @@ export function CharacterCard({
         </Button>
         <Button
           className="!min-h-[32px] !h-8 flex-1 !px-2 text-xs"
+          data-character-action="edit"
           variant="secondary"
           onClick={(event) => {
             event.stopPropagation();

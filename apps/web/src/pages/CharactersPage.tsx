@@ -289,6 +289,13 @@ const toInput = (form: CharacterForm): CharacterInput => ({
   }))
 });
 
+const serializeCharacterForm = (form: CharacterForm) =>
+  JSON.stringify({
+    ...form,
+    loreEntries: form.loreEntries.map(({ _localId, _collapsed, ...entry }) => entry),
+    quickReplies: form.quickReplies.map(({ _localId, _collapsed, ...reply }) => reply)
+  });
+
 const normalizeTags = (tags: string[]) =>
   Array.from(new Set(tags.map((tag) => tag.trim()).filter(Boolean))).slice(0, 24);
 
@@ -322,7 +329,13 @@ const emptyCharacterPage = {
   availableTags: [] as string[]
 };
 
-export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => void }) {
+export function CharactersPage({
+  onPlay,
+  onDirtyChange
+}: {
+  onPlay: (characterId: string) => void;
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const { language, t } = useI18n();
   const [characters, setCharacters] = useState<CharacterDTO[]>([]);
   const [characterPage, setCharacterPage] = useState(1);
@@ -330,6 +343,9 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedCharacter, setSelectedCharacter] = useState<CharacterDTO | null>(null);
   const [form, setForm] = useState<CharacterForm>(blankForm);
+  const [savedFormSnapshot, setSavedFormSnapshot] = useState(() =>
+    serializeCharacterForm(blankForm)
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTag, setSelectedTag] = useState("");
   const [favoriteOnly, setFavoriteOnly] = useState(false);
@@ -361,6 +377,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
   );
   const [expandedTextField, setExpandedTextField] = useState<ExpandedTextField | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [pendingEditorExit, setPendingEditorExit] = useState<"new" | "list" | null>(null);
   const characterRequestRef = useRef(0);
   const unlockedPasswordRef = useRef<Record<string, string>>({});
   const editorCoverSrc = usePlaceholderSrc(form.avatar, selectedId ?? undefined);
@@ -432,6 +449,9 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
 
   const selected = selectedCharacter;
   const isLockedPrivateCharacter = selected?.visibility === "private" && !selected.canViewPrompt;
+  const currentFormSnapshot = useMemo(() => serializeCharacterForm(form), [form]);
+  const editorOpen = isCreating || Boolean(selectedId && selectedCharacter);
+  const hasUnsavedChanges = editorOpen && currentFormSnapshot !== savedFormSnapshot;
 
   const privateCharacterCopy = useMemo(
     () =>
@@ -537,6 +557,13 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
     }
   };
 
+  const applyCharacterToEditor = (character: CharacterDTO) => {
+    const nextForm = toForm(character);
+    setSelectedCharacter(character);
+    setForm(nextForm);
+    setSavedFormSnapshot(serializeCharacterForm(nextForm));
+  };
+
   const loadCharacters = async (
     nextPage = characterPage,
     nextSearchQuery = searchQuery,
@@ -577,8 +604,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
       if (requestId !== characterRequestRef.current) {
         return;
       }
-      setSelectedCharacter(detail);
-      setForm(toForm(detail));
+      applyCharacterToEditor(detail);
       return;
     }
 
@@ -602,14 +628,35 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
     return () => window.clearTimeout(timeoutId);
   }, [status]);
 
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges) {
+        event.preventDefault();
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  useEffect(() => {
+    onDirtyChange?.(hasUnsavedChanges);
+  }, [hasUnsavedChanges, onDirtyChange]);
+
+  useEffect(
+    () => () => {
+      onDirtyChange?.(false);
+    },
+    [onDirtyChange]
+  );
+
   const selectCharacter = (character: CharacterDTO) => {
     setIsCreating(false);
     setSelectedId(character.id);
     setError(null);
     setStatus(null);
     void resolveCharacterDetail(character).then((detail) => {
-      setSelectedCharacter(detail);
-      setForm(toForm(detail));
+      applyCharacterToEditor(detail);
     });
   };
 
@@ -647,12 +694,48 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
   };
 
   const resetForm = () => {
+    const nextForm = { ...blankForm };
     setIsCreating(true);
     setSelectedId(null);
     setSelectedCharacter(null);
-    setForm({ ...blankForm });
+    setForm(nextForm);
+    setSavedFormSnapshot(serializeCharacterForm(nextForm));
     setError(null);
     setStatus(null);
+  };
+
+  const returnToCharacterList = () => {
+    const nextForm = { ...blankForm };
+    setSelectedId(null);
+    setSelectedCharacter(null);
+    setForm(nextForm);
+    setSavedFormSnapshot(serializeCharacterForm(nextForm));
+    setIsCreating(false);
+    setError(null);
+    setStatus(null);
+  };
+
+  const requestEditorExit = (action: "new" | "list") => {
+    if (hasUnsavedChanges) {
+      setPendingEditorExit(action);
+      return;
+    }
+
+    if (action === "new") {
+      resetForm();
+    } else {
+      returnToCharacterList();
+    }
+  };
+
+  const confirmEditorExit = () => {
+    const action = pendingEditorExit;
+    setPendingEditorExit(null);
+    if (action === "new") {
+      resetForm();
+    } else if (action === "list") {
+      returnToCharacterList();
+    }
   };
 
   const saveCharacter = async () => {
@@ -671,8 +754,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
           toInput(form),
           accessPassword
         );
-        setSelectedCharacter(updated);
-        setForm(toForm(updated));
+        applyCharacterToEditor(updated);
         await loadCharacters(
           characterPage,
           searchQuery,
@@ -689,8 +771,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
         setFavoriteOnly(false);
         setCharacterPage(1);
         setSelectedId(created.id);
-        setSelectedCharacter(created);
-        setForm(toForm(created));
+        applyCharacterToEditor(created);
         await loadCharacters(1, "", "", false, characterSort, created.id);
       }
       setStatus(t("characters.saved"));
@@ -725,8 +806,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
       setCharacterSort("recently_updated");
       setCharacterPage(1);
       setSelectedId(duplicate.id);
-      setSelectedCharacter(duplicate);
-      setForm(toForm(duplicate));
+      applyCharacterToEditor(duplicate);
       setStatus(t("characters.duplicated"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("characters.failedSave"));
@@ -749,6 +829,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
       setSelectedId(null);
       setSelectedCharacter(null);
       setForm(blankForm);
+      setSavedFormSnapshot(serializeCharacterForm(blankForm));
       await loadCharacters();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("characters.failedDelete"));
@@ -935,8 +1016,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
       setFavoriteOnly(false);
       setCharacterPage(1);
       setSelectedId(imported.id);
-      setSelectedCharacter(imported);
-      setForm(toForm(imported));
+      applyCharacterToEditor(imported);
       await loadCharacters(1, "", "", false, characterSort, imported.id);
       setStatus(privateCharacterCopy.imported);
     } catch (caught) {
@@ -996,8 +1076,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
     try {
       const unlocked = await api.characters.unlock(selected.id, password);
       unlockedPasswordRef.current[selected.id] = password;
-      setSelectedCharacter(unlocked);
-      setForm(toForm(unlocked));
+      applyCharacterToEditor(unlocked);
       setStatus(privatePasswordCopy.unlockSuccess);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("characters.failedLoad"));
@@ -1031,8 +1110,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
       if (passwordDialogMode === "export-public") {
         unlockedPasswordRef.current[selected.id] = password;
         const unlocked = await api.characters.unlock(selected.id, password);
-        setSelectedCharacter(unlocked);
-        setForm(toForm(unlocked));
+        applyCharacterToEditor(unlocked);
       }
       await saveJsonFile(
         `${selected.name || "character"}-${
@@ -1060,19 +1138,35 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
         <h2 className="min-w-0 truncate text-sm font-semibold text-slate-100">
           {selectedId ? (selectedCharacter?.name ?? t("characters.edit")) : t("characters.create")}
         </h2>
+        {hasUnsavedChanges ? (
+          <span
+            className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-amber-300"
+            data-testid="character-unsaved-indicator"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-300" />
+            {t("characters.unsavedChanges")}
+          </span>
+        ) : null}
         <Button
           variant="secondary"
-          onClick={resetForm}
+          onClick={() => requestEditorExit("new")}
           className="!h-9 !min-h-[36px] !px-3 text-xs ml-auto"
         >
           <Plus size={14} />
           {t("common.new")}
         </Button>
-        <label className="inline-flex h-9 min-h-[36px] cursor-pointer items-center gap-2 rounded-md border border-white/[0.08] bg-ink-800 px-3 text-xs font-medium text-slate-200 transition-colors hover:border-white/[0.14] hover:bg-ink-700 focus-within:ring-2 focus-within:ring-ember-500/35">
+        <label
+          className={`inline-flex h-9 min-h-[36px] items-center gap-2 rounded-md border border-white/[0.08] bg-ink-800 px-3 text-xs font-medium transition-colors focus-within:ring-2 focus-within:ring-ember-500/35 ${
+            hasUnsavedChanges
+              ? "cursor-not-allowed text-slate-600"
+              : "cursor-pointer text-slate-200 hover:border-white/[0.14] hover:bg-ink-700"
+          }`}
+        >
           <FileUp size={14} />
           {t("common.import")}
           <input
             className="sr-only"
+            disabled={hasUnsavedChanges}
             type="file"
             accept="application/json"
             onChange={(event) => void importCharacter(event.target.files?.[0])}
@@ -1084,13 +1178,9 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
         <div className="space-y-4">
           <button
             className="flex items-center gap-1.5 text-xs font-medium text-slate-400 transition-colors hover:text-slate-200"
+            data-testid="character-editor-back"
             type="button"
-            onClick={() => {
-              setSelectedId(null);
-              setSelectedCharacter(null);
-              setForm({ ...blankForm });
-              setIsCreating(false);
-            }}
+            onClick={() => requestEditorExit("list")}
           >
             <ChevronLeft size={14} />
             {language === "zh-CN" ? "返回角色列表" : "Back to characters"}
@@ -1120,7 +1210,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                   ))}
                 </div>
                 <Button
-                  disabled={!selected}
+                  disabled={!selected || hasUnsavedChanges}
                   variant="ghost"
                   onClick={() => void exportCharacter()}
                   className="!min-h-[36px] !h-9 !px-3 text-xs"
@@ -1907,7 +1997,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
 
               <div className="flex flex-wrap justify-end gap-3 pt-4 border-t border-white/5">
                 <Button
-                  disabled={loading || !selected}
+                  disabled={loading || !selected || hasUnsavedChanges}
                   variant="secondary"
                   onClick={() => void duplicateCharacter()}
                 >
@@ -1923,7 +2013,8 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                   {t("common.delete")}
                 </Button>
                 <Button
-                  disabled={loading || !form.name.trim()}
+                  disabled={loading || !form.name.trim() || !hasUnsavedChanges}
+                  data-testid="character-save"
                   onClick={() => void saveCharacter()}
                 >
                   <Save size={16} />
@@ -2181,6 +2272,17 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
           )}
         </div>
       )}
+      {pendingEditorExit ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={t("characters.discardChangesConfirm")}
+          message={t("characters.discardChangesMessage")}
+          title={t("characters.discardChangesTitle")}
+          variant="danger"
+          onCancel={() => setPendingEditorExit(null)}
+          onConfirm={confirmEditorExit}
+        />
+      ) : null}
       {expandedTextField ? (
         <Modal
           bodyClassName="flex min-h-0 flex-col gap-3 overflow-hidden"

@@ -143,12 +143,14 @@ export function ChatHistoryList({
   selectedChatId,
   onSelectChat,
   onOpenDocs,
-  refreshKey
+  refreshKey,
+  globalSearchRequest = 0
 }: {
   selectedChatId: string | null;
   onSelectChat: (id: string | null) => void;
   onOpenDocs: () => void;
   refreshKey: number;
+  globalSearchRequest?: number;
 }) {
   const { t, language } = useI18n();
   const [open, setOpen] = useState(false);
@@ -156,6 +158,7 @@ export function ChatHistoryList({
   const [characterCache, setCharacterCache] = useState<Map<string, CharacterDTO>>(new Map());
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMode, setSearchMode] = useState<HistorySearchMode>("chats");
+  const [openedFromGlobalSearch, setOpenedFromGlobalSearch] = useState(false);
   const [chatScope, setChatScope] = useState<ChatHistoryScope>("active");
   const [messageSearchResult, setMessageSearchResult] = useState<GlobalChatMessageSearchDTO | null>(null);
   const [messageSearchLoading, setMessageSearchLoading] = useState(false);
@@ -171,6 +174,9 @@ export function ChatHistoryList({
   const [actionMenuChatId, setActionMenuChatId] = useState<string | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
+  const historyTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const focusSearchOnOpenRef = useRef(false);
 
   const loadChats = async () => {
     try {
@@ -336,17 +342,41 @@ export function ChatHistoryList({
     [chatScope, manageMode, onSelectChat]
   );
 
-  const handleOpen = () => {
+  const handleOpen = (mode: HistorySearchMode = "chats", focusSearch = false) => {
     setSearchQuery("");
-    setSearchMode("chats");
+    setSearchMode(mode);
     setChatScope("active");
     setMessageSearchResult(null);
     setManageMode(false);
     setSelectedIds(new Set());
     setActionMenuChatId(null);
+    setOpenedFromGlobalSearch(mode === "messages" && focusSearch);
+    focusSearchOnOpenRef.current = focusSearch;
     void loadChats();
     setOpen(true);
   };
+
+  useEffect(() => {
+    if (
+      globalSearchRequest <= 0 ||
+      !historyTriggerRef.current ||
+      historyTriggerRef.current.offsetParent === null
+    ) {
+      return;
+    }
+
+    handleOpen("messages", true);
+  }, [globalSearchRequest]);
+
+  useEffect(() => {
+    if (!open || !focusSearchOnOpenRef.current) {
+      return;
+    }
+
+    focusSearchOnOpenRef.current = false;
+    const frame = window.requestAnimationFrame(() => searchInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [open]);
 
   const runMessageSearch = async () => {
     if (!searchQuery.trim()) {
@@ -622,20 +652,25 @@ export function ChatHistoryList({
     }
   };
 
-  const modalTitle = manageMode
-    ? language === "zh-CN"
-      ? "管理历史"
-      : "Manage History"
-    : t("chat.history");
+  const modalTitle = openedFromGlobalSearch
+    ? t("chat.globalSearch")
+    : manageMode
+      ? language === "zh-CN"
+        ? "管理历史"
+        : "Manage History"
+      : t("chat.history");
 
   return (
     <>
       <div className="space-y-1">
         <button
+          ref={historyTriggerRef}
+          aria-keyshortcuts="Control+K Meta+K"
           className="flex min-h-9 w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium text-ink-300 transition-colors hover:bg-white/[0.045] hover:text-ink-100"
           data-testid="chat-history-trigger"
+          title={t("chat.globalSearch")}
           type="button"
-          onClick={handleOpen}
+          onClick={() => handleOpen()}
         >
           <History size={14} />
           <span>{t("chat.history")}</span>
@@ -685,7 +720,7 @@ export function ChatHistoryList({
               className="mt-1 flex min-h-8 w-full items-center justify-center rounded-md px-2 text-[11px] font-medium text-ink-500 transition-colors hover:bg-white/[0.045] hover:text-ink-200"
               data-testid="chat-recent-view-all"
               type="button"
-              onClick={handleOpen}
+              onClick={() => handleOpen()}
             >
               {t("chat.viewAllHistory", { count: activeChats.length - recentChats.length })}
             </button>
@@ -792,6 +827,7 @@ export function ChatHistoryList({
                     size={16}
                   />
                   <TextInput
+                    ref={searchInputRef}
                     className={`pl-9 ${searchMode === "chats" && manageMode ? "pr-[180px]" : "pr-12"}`}
                     data-testid="chat-history-search"
                     placeholder={

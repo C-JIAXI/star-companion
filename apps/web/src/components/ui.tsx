@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle, HelpCircle, X } from "lucide-react";
-import { forwardRef, useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type {
   ButtonHTMLAttributes,
@@ -8,6 +8,123 @@ import type {
   ReactNode,
   TextareaHTMLAttributes
 } from "react";
+
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled]):not([type='hidden'])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[contenteditable='true']",
+  "[tabindex]:not([tabindex='-1'])"
+].join(",");
+
+const isVisibleDialog = (element: HTMLElement) =>
+  element.getAttribute("aria-hidden") !== "true" &&
+  !element.closest('[aria-hidden="true"]') &&
+  element.getClientRects().length > 0;
+
+const getTopmostDialog = () => {
+  const dialogs = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-dialog-surface="true"]')
+  ).filter(isVisibleDialog);
+  return dialogs.at(-1) ?? null;
+};
+
+const getFocusableElements = (container: HTMLElement) =>
+  Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (element) => !element.hasAttribute("disabled") && element.getClientRects().length > 0
+  );
+
+function useDialogFocus<T extends HTMLElement>({
+  active,
+  onDismiss,
+  initialFocusSelector
+}: {
+  active: boolean;
+  onDismiss: () => void;
+  initialFocusSelector?: string;
+}) {
+  const surfaceRef = useRef<T>(null);
+  const dismissRef = useRef(onDismiss);
+  const previousFocusRef = useRef<HTMLElement | null>(
+    document.activeElement instanceof HTMLElement ? document.activeElement : null
+  );
+  dismissRef.current = onDismiss;
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+
+    const activeElement =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (activeElement && !surfaceRef.current?.contains(activeElement)) {
+      previousFocusRef.current = activeElement;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const surface = surfaceRef.current;
+      if (!surface || surface.contains(document.activeElement)) {
+        return;
+      }
+
+      const preferred = initialFocusSelector
+        ? surface.querySelector<HTMLElement>(initialFocusSelector)
+        : null;
+      const target =
+        (preferred && !preferred.hasAttribute("disabled") ? preferred : null) ??
+        getFocusableElements(surface)[0] ??
+        surface;
+      target.focus({ preventScroll: true });
+    });
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const surface = surfaceRef.current;
+      if (!surface || getTopmostDialog() !== surface) {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        dismissRef.current();
+        return;
+      }
+
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const focusable = getFocusableElements(surface);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        surface.focus({ preventScroll: true });
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const activeElement = document.activeElement;
+      if (event.shiftKey && (activeElement === first || !surface.contains(activeElement))) {
+        event.preventDefault();
+        last.focus({ preventScroll: true });
+      } else if (!event.shiftKey && (activeElement === last || !surface.contains(activeElement))) {
+        event.preventDefault();
+        first.focus({ preventScroll: true });
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleKeyDown);
+      if (previousFocusRef.current?.isConnected) {
+        previousFocusRef.current.focus({ preventScroll: true });
+      }
+    };
+  }, [active, initialFocusSelector]);
+
+  return surfaceRef;
+}
 
 export function Panel({
   title,
@@ -164,14 +281,17 @@ export function HelpLabel({ label, description }: { label: ReactNode; descriptio
   );
 }
 
-export function TextInput({ className = "", ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return (
+export const TextInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
+  ({ className = "", ...props }, ref) => (
     <input
+      ref={ref}
       className={`min-h-[44px] w-full min-w-0 rounded-md border border-white/[0.1] bg-ink-950/70 px-3 text-sm text-ink-50 outline-none transition-colors placeholder:text-ink-500 hover:border-white/[0.16] focus:border-ember-400 focus:bg-ink-950 focus:ring-1 focus:ring-ember-400/30 sm:min-h-10 ${className}`}
       {...props}
     />
-  );
-}
+  )
+);
+
+TextInput.displayName = "TextInput";
 
 export const TextArea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
   ({ className = "", style, ...props }, ref) => {
@@ -287,6 +407,13 @@ export function Drawer({
   children: ReactNode;
   title?: ReactNode;
 }) {
+  const titleId = useId();
+  const surfaceRef = useDialogFocus<HTMLDivElement>({
+    active: open,
+    onDismiss: onClose,
+    initialFocusSelector: "[data-dialog-close='true']"
+  });
+
   return createPortal(
     <div
       aria-hidden={!open}
@@ -302,17 +429,25 @@ export function Drawer({
         onClick={onClose}
       />
       <div
+        ref={surfaceRef}
+        aria-labelledby={title ? titleId : undefined}
+        aria-modal={open ? true : undefined}
         className={`absolute inset-y-0 left-0 z-10 flex w-[84vw] max-w-[340px] flex-col border-r border-white/[0.1] bg-ink-900 shadow-2xl shadow-black/70 transition-transform duration-300 ease-out will-change-transform safe-area-top safe-area-bottom ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
+        data-dialog-surface="true"
+        role="dialog"
+        tabIndex={-1}
       >
         {title ? (
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/[0.08] px-5 py-4">
-            <h3 className="min-w-0 truncate text-sm font-semibold text-ink-50">
+            <h3 className="min-w-0 truncate text-sm font-semibold text-ink-50" id={titleId}>
               {title}
             </h3>
             <button
+              aria-label="Close"
               className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-ink-400 transition-colors hover:bg-white/[0.06] hover:text-ink-50"
+              data-dialog-close="true"
               type="button"
               onClick={onClose}
             >
@@ -342,23 +477,21 @@ export function Modal({
   panelClassName?: string;
   bodyClassName?: string;
 }) {
+  const titleId = useId();
+  const surfaceRef = useDialogFocus<HTMLElement>({
+    active: true,
+    onDismiss: onClose,
+    initialFocusSelector: "[data-dialog-close='true']"
+  });
+
   useEffect(() => {
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-
     return () => {
       document.body.style.overflow = originalOverflow;
-      window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div
@@ -366,18 +499,24 @@ export function Modal({
       onClick={onClose}
     >
       <section
+        ref={surfaceRef}
+        aria-labelledby={titleId}
+        aria-modal="true"
         className={`animate-modal-enter flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-white/[0.1] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)] ${panelClassName}`}
+        data-dialog-surface="true"
         role="dialog"
+        tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/[0.08] px-5 py-3.5 sm:px-6 sm:py-4">
-          <h3 className="min-w-0 truncate text-base font-semibold text-ink-50">
+          <h3 className="min-w-0 truncate text-base font-semibold text-ink-50" id={titleId}>
             {title}
           </h3>
           <button
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-ink-400 transition-colors hover:bg-white/[0.06] hover:text-ink-50"
-            type="button"
             aria-label="Close"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-ink-400 transition-colors hover:bg-white/[0.06] hover:text-ink-50"
+            data-dialog-close="true"
+            type="button"
             onClick={onClose}
           >
             <X size={16} />
@@ -412,12 +551,35 @@ export function ConfirmDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const titleId = useId();
+  const surfaceRef = useDialogFocus<HTMLElement>({
+    active: true,
+    onDismiss: () => {
+      if (!loading) {
+        onCancel();
+      }
+    },
+    initialFocusSelector: "[data-dialog-cancel='true']"
+  });
+
+  useEffect(() => {
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, []);
+
   return (
     <div className="animate-fade-in fixed inset-0 z-[70] grid place-items-center bg-black/75 p-3 backdrop-blur-sm sm:p-5">
       <section
-        aria-labelledby="confirm-dialog-title"
+        ref={surfaceRef}
+        aria-labelledby={titleId}
+        aria-modal="true"
         className="animate-modal-enter flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-lg border border-white/[0.1] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)]"
+        data-dialog-surface="true"
         role="dialog"
+        tabIndex={-1}
       >
         <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-5 sm:px-6 sm:pb-5 sm:pt-6">
         <div className="flex gap-4">
@@ -427,7 +589,7 @@ export function ConfirmDialog({
           <div className="min-w-0 pt-0.5 sm:pt-1">
             <h3
               className="text-base font-semibold text-ink-50 sm:text-lg"
-              id="confirm-dialog-title"
+              id={titleId}
             >
               {title}
             </h3>
@@ -437,7 +599,12 @@ export function ConfirmDialog({
         </div>
 
         <div className="flex shrink-0 flex-col gap-3 border-t border-white/[0.08] px-5 py-4 sm:flex-row sm:flex-wrap sm:justify-end sm:px-6">
-          <Button disabled={loading} variant="ghost" onClick={onCancel}>
+          <Button
+            data-dialog-cancel="true"
+            disabled={loading}
+            variant="ghost"
+            onClick={onCancel}
+          >
             {cancelLabel}
           </Button>
           <Button disabled={loading} variant={variant} onClick={onConfirm}>

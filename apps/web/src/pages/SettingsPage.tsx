@@ -740,6 +740,13 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     onDirtyChange?.(hasUnsavedChanges);
   }, [hasUnsavedChanges, onDirtyChange]);
 
+  useEffect(
+    () => () => {
+      onDirtyChange?.(false);
+    },
+    [onDirtyChange]
+  );
+
   const activeProviderName = useMemo(() => {
     const provider = form.providers.find((p) => p.id === form.activeProviderId);
     return provider ? getProviderDisplayName(provider, language) : "";

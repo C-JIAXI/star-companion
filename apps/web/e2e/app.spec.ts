@@ -298,6 +298,26 @@ test("direct routes render their workspace headers", async ({ page }) => {
   await expect(page.getByRole("heading", { name: /模型设置|Model Settings/ })).toBeVisible();
 });
 
+test("dialogs trap keyboard focus and restore their trigger", async ({ page }) => {
+  await page.goto("/");
+  const trigger =
+    (page.viewportSize()?.width ?? 1280) < 1024
+      ? page.getByTestId("new-chat-trigger-mobile")
+      : page.getByTestId("new-chat-trigger-desktop");
+  await trigger.click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toHaveAttribute("aria-modal", "true");
+  await expect(dialog.locator(":focus")).toHaveCount(1);
+
+  await page.keyboard.press("Shift+Tab");
+  await expect(dialog.locator(":focus")).toHaveCount(1);
+  await page.keyboard.press("Escape");
+
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
 test("chat readiness surfaces missing first-run setup and links to settings", async ({ page }) => {
   const now = new Date().toISOString();
 
@@ -1229,17 +1249,19 @@ test("history searches message content across chats and jumps to the matching tu
     await page.goto("/");
     const viewport = page.viewportSize();
     if (viewport && viewport.width < 1024) {
-      await page.getByRole("button", { name: /Toggle navigation/ }).click();
+      await page.getByTestId("global-search-trigger-mobile").click();
+    } else {
+      await page.keyboard.press("Control+K");
     }
-    await page.getByRole("button", { name: /历史|History/ }).click();
-    await page
-      .getByRole("group", { name: /历史搜索模式|History search mode/ })
-      .getByRole("button", { name: /^(消息|Messages)$/ })
-      .click();
-    await page
-      .getByPlaceholder(/搜索全部聊天中的消息|Search messages across all chats/)
-      .fill("observatory key");
-    await page.getByRole("button", { name: /搜索全部消息|Search all messages/ }).click();
+    const globalSearchInput = page.getByTestId("chat-history-search");
+    await expect(globalSearchInput).toBeFocused();
+    await expect(
+      page
+        .getByRole("group", { name: /历史搜索模式|History search mode/ })
+        .getByRole("button", { name: /^(消息|Messages)$/ })
+    ).toHaveAttribute("aria-pressed", "true");
+    await globalSearchInput.fill("observatory key");
+    await globalSearchInput.press("Enter");
     await page
       .getByTestId("history-message-search-result")
       .filter({ hasText: targetText })
@@ -2455,6 +2477,95 @@ test("character management can create a character with markdown prompt fields", 
   }
 });
 
+test("character editor protects unsaved changes before leaving", async ({
+  page,
+  request
+}, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const originalName = `Unsaved Character ${suffix}`;
+  const draftName = `${originalName} Draft`;
+  let characterId = "";
+
+  try {
+    const createResponse = await request.post("/api/characters", {
+      data: {
+        name: originalName,
+        description: "Protect this character draft before navigation.",
+        prefix: "",
+        prompt: "Keep the role stable.",
+        suffix: ""
+      }
+    });
+    expect(createResponse.ok()).toBeTruthy();
+    characterId =
+      ((await createResponse.json()) as ApiDataResponse<E2ECharacter>).data?.id ?? "";
+    expect(characterId).toBeTruthy();
+
+    await page.goto("/characters");
+    await page.getByPlaceholder(/搜索角色|Search characters/).fill(originalName);
+    const card = page.locator(`[data-character-id="${characterId}"]`);
+    await expect(card).toBeVisible();
+    await card.locator('[data-character-action="edit"]').click();
+
+    const nameInput = page.getByLabel(/名称|Name/);
+    await nameInput.fill(draftName);
+    await expect(page.getByTestId("character-unsaved-indicator")).toBeVisible();
+    await expect(page.getByTestId("character-save")).toBeEnabled();
+
+    const editorBackButton = page.getByTestId("character-editor-back");
+    await editorBackButton.click();
+    const discardDialog = page.getByRole("dialog");
+    await expect(discardDialog).toContainText(
+      /当前角色还有未保存的内容|This character still has unsaved content/
+    );
+    const cancelDiscardButton = discardDialog.getByRole("button", { name: /取消|Cancel/ });
+    const confirmDiscardButton = discardDialog.getByRole("button", {
+      name: /放弃更改|Discard Changes/
+    });
+    await expect(cancelDiscardButton).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(confirmDiscardButton).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(cancelDiscardButton).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(discardDialog).toBeHidden();
+    await expect(editorBackButton).toBeFocused();
+    await expect(nameInput).toHaveValue(draftName);
+
+    if ((page.viewportSize()?.width ?? 1280) < 1024) {
+      await page.getByRole("button", { name: "Toggle navigation" }).click();
+      await page
+        .getByTestId("mobile-nav-content")
+        .getByRole("button", { name: /^(聊天|Chat)$/ })
+        .click();
+    } else {
+      await page
+        .getByTestId("desktop-sidebar")
+        .getByRole("button", { name: /^(聊天|Chat)$/ })
+        .click();
+    }
+
+    const navigationDialog = page.getByRole("dialog", {
+      name: /未保存的更改|Unsaved Changes/
+    });
+    await expect(navigationDialog).toContainText(
+      /当前页面有未保存的更改|This page has unsaved changes/
+    );
+    await navigationDialog
+      .getByRole("button", { name: /放弃并离开|Discard and Leave/ })
+      .click();
+    await expect(page).toHaveURL(/\/$/);
+
+    const persistedResponse = await request.get(`/api/characters/${characterId}`);
+    const persisted = (await persistedResponse.json()) as ApiDataResponse<E2ECharacter>;
+    expect(persisted.data?.name).toBe(originalName);
+  } finally {
+    if (characterId) {
+      await request.delete(`/api/characters/${characterId}`).catch(() => {});
+    }
+  }
+});
+
 test("character favorites persist and filter the library", async ({ page, request }, testInfo) => {
   const suffix = `${testInfo.project.name}-${Date.now()}`;
   const favoriteName = `Favorite Character ${suffix}`;
@@ -2721,16 +2832,27 @@ test("mobile chat drawer switches between sections", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
 
-  await expect(page.getByRole("button", { name: /Toggle navigation/ })).toBeVisible();
-  await page.getByRole("button", { name: /Toggle navigation/ }).click();
-  await expect(page.getByRole("button", { name: /历史|History/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /文档|Docs/ })).toBeVisible();
+  const navigationTrigger = page.getByRole("button", { name: /Toggle navigation/ });
+  await expect(navigationTrigger).toBeVisible();
+  await navigationTrigger.click();
+  const drawer = page.getByRole("dialog");
+  await expect(drawer).toHaveAttribute("aria-modal", "true");
+  await expect(drawer.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(drawer).toBeHidden();
+  await expect(navigationTrigger).toBeFocused();
 
-  await page.getByRole("button", { name: /角色|Characters/ }).click();
+  await navigationTrigger.click();
+  let mobileDrawer = page.getByTestId("mobile-nav-content");
+  await expect(mobileDrawer.getByRole("button", { name: /历史|History/ })).toBeVisible();
+  await expect(mobileDrawer.getByRole("button", { name: /文档|Docs/ })).toBeVisible();
+
+  await mobileDrawer.getByRole("button", { name: /角色|Characters/ }).click();
   await expect(page.getByRole("heading", { name: /角色工坊|Character Studio/ })).toBeVisible();
 
   await page.getByRole("button", { name: /Toggle navigation/ }).click();
-  await page.getByRole("button", { name: /^(聊天|Chat)$/ }).click();
+  mobileDrawer = page.getByTestId("mobile-nav-content");
+  await mobileDrawer.getByRole("button", { name: /^(聊天|Chat)$/ }).click();
   await expect(page.getByRole("heading", { name: /消息流|Message Stream|Chat Workbench/ })).toBeVisible();
   await expect(page.getByText(/前往角色中开始聊天吧|Go to Characters to start chatting/)).toBeVisible();
 });

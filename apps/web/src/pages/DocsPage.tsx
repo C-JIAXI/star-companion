@@ -150,7 +150,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "创建原创角色",
-              body: "想立即开始时，可在“新建聊天”中使用快速创建，只填写名称和核心设定；需要标签、提示词分段、lore、快捷回复或样式时，再进入角色工坊使用高级编辑器。"
+              body: "想立即开始时，可在“新建聊天”中使用快速创建，只填写名称和核心设定；需要标签、提示词分段、lore、快捷回复或样式时，再进入角色工坊使用高级编辑器。编辑器会标记未保存状态，并在返回、新建角色、切换页面或刷新前提醒。"
             },
             {
               title: "开始聊天",
@@ -195,7 +195,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "聊天归档",
-              body: "桌面侧栏和移动抽屉会直接显示最多六段置顶或最近活跃聊天，可一步切换。完整历史列表显示最近消息摘要、消息数量和活动时间，便于快速辨认对话；可归档已完成的聊天而不删除消息或长期记忆，管理模式支持批量归档与恢复。"
+              body: "桌面侧栏和移动抽屉会直接显示最多六段置顶或最近活跃聊天，可一步切换。移动端顶部搜索入口与完整历史可在聊天标题和全部消息之间切换，并直接跳到命中消息；也可归档已完成的聊天而不删除消息或长期记忆，管理模式支持批量归档与恢复。"
             },
             {
               title: "聊天回收站",
@@ -407,7 +407,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Create an original character",
-            body: "For the fastest start, use Quick Create in New Chat and enter only a name and core definition. Open Character Studio when you need tags, prompt sections, lore, quick replies, or styling."
+            body: "For the fastest start, use Quick Create in New Chat and enter only a name and core definition. Open Character Studio when you need tags, prompt sections, lore, quick replies, or styling. The editor marks unsaved work and warns before returning, starting another character, changing pages, or refreshing."
           },
           {
             title: "Start chatting",
@@ -461,7 +461,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Search every chat",
-            body: "The desktop sidebar and mobile drawer expose up to six pinned or recently active chats for one-step switching. Full History rows show the latest message preview, message count, and activity time. Search can switch from chat titles to message content, then open a matching conversation at that exact message."
+            body: "The desktop sidebar and mobile drawer expose up to six pinned or recently active chats for one-step switching. The mobile header offers direct global search, while full History can switch from chat titles to message content and open a matching conversation at that exact message."
           },
           {
             title: "Pin important chats",

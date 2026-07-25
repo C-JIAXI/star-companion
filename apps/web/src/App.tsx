@@ -4,6 +4,7 @@ import {
   MessageSquarePlus,
   MessageSquareText,
   Plus,
+  Search,
   Settings,
   Users
 } from "lucide-react";
@@ -116,14 +117,16 @@ const sectionFromLocation = () => {
 
 export function App() {
   const { activeSection, setActiveSection, setLanguage, setShowMessageAvatars } = useAppStore();
-  const { language, t } = useI18n();
+  const { t } = useI18n();
   const appName = t("app.name");
   const active = sectionMeta[activeSection];
   const [showMobileNav, setShowMobileNav] = useState(false);
   const [showNewChatDialog, setShowNewChatDialog] = useState(false);
   const [chatCreationError, setChatCreationError] = useState<string | null>(null);
   const [settingsDirty, setSettingsDirty] = useState(false);
+  const [charactersDirty, setCharactersDirty] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<AppSection | null>(null);
+  const [globalSearchRequest, setGlobalSearchRequest] = useState(0);
 
   useMobileViewport();
 
@@ -162,9 +165,44 @@ export function App() {
       });
   }, [setLanguage, setShowMessageAvatars]);
 
+  const openGlobalSearch = useCallback(() => {
+    setGlobalSearchRequest((current) => current + 1);
+  }, []);
+
+  useEffect(() => {
+    const handleGlobalSearchShortcut = (event: KeyboardEvent) => {
+      if (
+        event.key.toLowerCase() !== "k" ||
+        (!event.ctrlKey && !event.metaKey) ||
+        event.altKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+
+      const target = event.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      openGlobalSearch();
+    };
+
+    window.addEventListener("keydown", handleGlobalSearchShortcut);
+    return () => window.removeEventListener("keydown", handleGlobalSearchShortcut);
+  }, [openGlobalSearch]);
+
   const navigate = useCallback(
     (section: AppSection) => {
-      if (activeSection === "settings" && section !== "settings" && settingsDirty) {
+      const activeSectionDirty =
+        (activeSection === "settings" && settingsDirty) ||
+        (activeSection === "characters" && charactersDirty);
+      if (section !== activeSection && activeSectionDirty) {
         setPendingNavigation(section);
         return;
       }
@@ -172,7 +210,7 @@ export function App() {
       setShowMobileNav(false);
       window.history.pushState({}, "", sectionPaths[section]);
     },
-    [activeSection, setActiveSection, settingsDirty]
+    [activeSection, charactersDirty, setActiveSection, settingsDirty]
   );
 
   const confirmNavigation = () => {
@@ -296,6 +334,7 @@ export function App() {
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto border-t border-white/[0.08] pt-4">
             <ChatHistoryList
+              globalSearchRequest={globalSearchRequest}
               selectedChatId={selectedChatId}
               onSelectChat={handleSelectChat}
               onOpenDocs={() => navigate("docs")}
@@ -322,6 +361,17 @@ export function App() {
                 <p className="truncate text-xs text-ink-400">{t("app.tagline")}</p>
               </div>
             </div>
+            <button
+              aria-keyshortcuts="Control+K Meta+K"
+              aria-label={t("chat.globalSearch")}
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-ink-400 transition-colors hover:bg-white/[0.06] hover:text-ink-50"
+              data-testid="global-search-trigger-desktop"
+              title={t("chat.globalSearch")}
+              type="button"
+              onClick={openGlobalSearch}
+            >
+              <Search size={17} />
+            </button>
           </div>
 
           <nav className="flex shrink-0 flex-col gap-1 px-3">
@@ -368,6 +418,7 @@ export function App() {
 
           <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto border-t border-white/[0.08] px-3 pt-4">
             <ChatHistoryList
+              globalSearchRequest={globalSearchRequest}
               selectedChatId={selectedChatId}
               onSelectChat={handleSelectChat}
               onOpenDocs={() => navigate("docs")}
@@ -401,20 +452,30 @@ export function App() {
                 </h2>
               </div>
             </div>
-            {activeSection === "chat" ? (
+            <div className="flex shrink-0 items-center">
               <button
-                aria-label={t("chat.newChat")}
+                aria-label={t("chat.globalSearch")}
                 className="grid h-11 w-11 shrink-0 place-items-center rounded-md text-ink-300 transition-colors hover:bg-white/[0.06] hover:text-ink-50"
-                data-testid="new-chat-trigger-mobile"
-                title={t("chat.newChat")}
+                data-testid="global-search-trigger-mobile"
+                title={t("chat.globalSearch")}
                 type="button"
-                onClick={() => setShowNewChatDialog(true)}
+                onClick={openGlobalSearch}
               >
-                <Plus size={20} />
+                <Search size={19} />
               </button>
-            ) : (
-              <div className="w-10 sm:w-11" />
-            )}
+              {activeSection === "chat" ? (
+                <button
+                  aria-label={t("chat.newChat")}
+                  className="grid h-11 w-11 shrink-0 place-items-center rounded-md text-ink-300 transition-colors hover:bg-white/[0.06] hover:text-ink-50"
+                  data-testid="new-chat-trigger-mobile"
+                  title={t("chat.newChat")}
+                  type="button"
+                  onClick={() => setShowNewChatDialog(true)}
+                >
+                  <Plus size={20} />
+                </button>
+              ) : null}
+            </div>
           </header>
           <header className="sticky top-0 z-20 hidden shrink-0 border-b border-white/[0.08] bg-ink-950/90 px-6 py-4 backdrop-blur-md lg:block lg:px-8">
             <div>
@@ -449,7 +510,10 @@ export function App() {
               ) : null}
               {activeSection === "docs" ? <DocsPage /> : null}
               {activeSection === "characters" ? (
-                <CharactersPage onPlay={(characterId) => void handlePlay(characterId)} />
+                <CharactersPage
+                  onDirtyChange={setCharactersDirty}
+                  onPlay={(characterId) => void handlePlay(characterId)}
+                />
               ) : null}
               {activeSection === "settings" ? (
                 <SettingsPage onDirtyChange={setSettingsDirty} />
@@ -460,16 +524,10 @@ export function App() {
       </div>
       {pendingNavigation ? (
         <ConfirmDialog
-          title={
-            language === "zh-CN" ? "未保存的更改" : "Unsaved Changes"
-          }
-          message={
-            language === "zh-CN"
-              ? "当前设置有未保存的更改，离开将丢失修改。确定离开吗？"
-              : "You have unsaved settings changes. Leaving will discard them. Are you sure?"
-          }
-          confirmLabel={language === "zh-CN" ? "确定离开" : "Leave"}
-          cancelLabel={language === "zh-CN" ? "取消" : "Cancel"}
+          title={t("app.unsavedChangesTitle")}
+          message={t("app.unsavedChangesMessage")}
+          confirmLabel={t("app.unsavedChangesLeave")}
+          cancelLabel={t("common.cancel")}
           variant="danger"
           onCancel={cancelNavigation}
           onConfirm={confirmNavigation}
