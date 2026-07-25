@@ -1,6 +1,7 @@
 import type { ChatMemory, Message, UserSettings } from "@prisma/client";
 import { prisma } from "../db.js";
 import { completeChatCompletion, type ChatCompletionMessage } from "./completions.js";
+import { resolveModuleSettings } from "./moduleModels.js";
 
 const KEYWORD_CANDIDATE_LIMIT = 12;
 const RERANKED_MEMORY_LIMIT = 5;
@@ -199,14 +200,15 @@ const rerankMemories = async (
     return [];
   }
 
-  if (!settings.apiKey) {
+  const moduleSettings = resolveModuleSettings(settings, "memory");
+  if (!moduleSettings.apiKey) {
     return candidates.slice(0, RERANKED_MEMORY_LIMIT);
   }
 
   try {
     const candidateIds = new Set(candidates.map((candidate) => candidate.id));
     const raw = await completeChatCompletion({
-      settings,
+      settings: moduleSettings,
       messages: buildMemoryRerankMessages(queryText, candidates),
       maxTokens: 180,
       temperature: 0
@@ -338,6 +340,14 @@ type MemoryAction =
       enabled?: boolean;
     };
 
+export type MemoryMaintenanceSummary = {
+  chatId: string;
+  created: number;
+  updated: number;
+  disabled: number;
+  memoryUpdatedAt: string | null;
+};
+
 const clampImportance = (value: unknown) =>
   Math.min(5, Math.max(1, typeof value === "number" && Number.isFinite(value) ? Math.round(value) : 3));
 
@@ -412,7 +422,7 @@ export const updateChatMemoriesFromTurn = async ({
   chatId: string;
   settings: UserSettings;
 }) => {
-  const chat = await prisma.chat.findUnique({ where: { id: chatId } });
+  const chat = await prisma.chat.findFirst({ where: { id: chatId, deletedAt: null } });
   if (!chat?.autoMemoryEnabled) {
     return null;
   }
@@ -439,7 +449,7 @@ export const updateChatMemoriesFromTurn = async ({
   }
 
   const raw = await completeChatCompletion({
-    settings,
+    settings: resolveModuleSettings(settings, "memory"),
     messages: buildChatMemoryMaintenanceMessages(existingMemories, recentMessages),
     maxTokens: 1600,
     temperature: 0.2
@@ -450,6 +460,9 @@ export const updateChatMemoriesFromTurn = async ({
   }
   const existingIds = new Set(existingMemories.map((memory) => memory.id));
   const sourceMessageIds = recentMessages.map((message) => message.id);
+  let created = 0;
+  let updated = 0;
+  let disabled = 0;
 
   for (const action of actions.slice(0, 8)) {
     if (action.type === "create") {
@@ -464,6 +477,7 @@ export const updateChatMemoriesFromTurn = async ({
           sourceMessageIds
         }
       });
+      created += 1;
       continue;
     }
 
@@ -482,10 +496,22 @@ export const updateChatMemoriesFromTurn = async ({
         sourceMessageIds
       }
     });
+    updated += 1;
+    if (action.enabled === false) {
+      disabled += 1;
+    }
   }
 
-  return prisma.chat.update({
+  const updatedChat = await prisma.chat.update({
     where: { id: chatId },
     data: { memoryUpdatedAt: new Date() }
   });
+
+  return {
+    chatId,
+    created,
+    updated,
+    disabled,
+    memoryUpdatedAt: updatedChat.memoryUpdatedAt?.toISOString() ?? null
+  } satisfies MemoryMaintenanceSummary;
 };

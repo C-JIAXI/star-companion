@@ -33,7 +33,10 @@ messagesRouter.get(
   asyncHandler(async (request, response) => {
     const query = parseQuery(messageListQuerySchema, request.query);
     const messages = await prisma.message.findMany({
-      where: query.chatId ? { chatId: query.chatId } : undefined,
+      where: {
+        chat: { deletedAt: null },
+        ...(query.chatId ? { chatId: query.chatId } : {})
+      },
       orderBy: { createdAt: "asc" }
     });
 
@@ -45,6 +48,13 @@ messagesRouter.post(
   "/",
   asyncHandler(async (request, response) => {
     const body = parseBody(messageCreateSchema, request.body);
+    const chat = await prisma.chat.findFirst({
+      where: { id: body.chatId, deletedAt: null },
+      select: { id: true }
+    });
+    if (!chat) {
+      throw new HttpError(404, "Chat not found");
+    }
     const data: Prisma.MessageUncheckedCreateInput = {
       ...body,
       tokenUsage: normalizeTokenUsage(body.tokenUsage),
@@ -66,7 +76,9 @@ messagesRouter.get(
   "/:id",
   asyncHandler(async (request, response) => {
     const id = requireParam(request, "id");
-    const message = await prisma.message.findUnique({ where: { id } });
+    const message = await prisma.message.findFirst({
+      where: { id, chat: { deletedAt: null } }
+    });
 
     if (!message) {
       throw new HttpError(404, "Message not found");
@@ -81,6 +93,13 @@ messagesRouter.put(
   asyncHandler(async (request, response) => {
     const id = requireParam(request, "id");
     const body = parseBody(messageUpdateSchema, request.body);
+    const existing = await prisma.message.findFirst({
+      where: { id, chat: { deletedAt: null } },
+      select: { id: true }
+    });
+    if (!existing) {
+      throw new HttpError(404, "Message not found");
+    }
     const data: Prisma.MessageUncheckedUpdateInput = {
       ...body,
       tokenUsage: normalizeTokenUsage(body.tokenUsage),
@@ -106,6 +125,13 @@ messagesRouter.delete(
   "/:id",
   asyncHandler(async (request, response) => {
     const id = requireParam(request, "id");
+    const existing = await prisma.message.findFirst({
+      where: { id, chat: { deletedAt: null } },
+      select: { id: true }
+    });
+    if (!existing) {
+      throw new HttpError(404, "Message not found");
+    }
     const message = await prisma.message.delete({ where: { id } });
 
     await prisma.chat.update({

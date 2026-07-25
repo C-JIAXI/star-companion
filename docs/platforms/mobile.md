@@ -46,7 +46,7 @@ The mobile backend currently covers the core local API surface:
 - health
 - settings, including local API key encryption
 - characters CRUD, public/private import/export, private-card unlock, batch fetch/delete
-- chats CRUD
+- chats CRUD, archive, recoverable Trash, restore, and separately confirmed permanent deletion
 - messages CRUD
 - chat memories CRUD
 - backup import/export

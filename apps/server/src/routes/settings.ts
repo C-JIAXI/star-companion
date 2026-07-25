@@ -5,7 +5,9 @@ import { asyncHandler, parseBody } from "../lib/http.js";
 import { fetchAvailableModels, testModelConnection } from "../services/completions.js";
 import { settingsUpdateSchema, userProfileUpdateSchema } from "../schemas.js";
 import { serializeSettings } from "../serializers.js";
-import { encryptApiKey, hasStoredApiKey } from "../services/apiKeyVault.js";
+import { encryptApiKey, hasStoredApiKey, isEncryptedApiKey } from "../services/apiKeyVault.js";
+import { validateModuleModelPreferences } from "../services/moduleModels.js";
+import { HttpError } from "../lib/http.js";
 
 export const settingsRouter = Router();
 
@@ -13,6 +15,90 @@ const generateId = () => Math.random().toString(36).slice(2, 12);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const normalizeStoredApiKey = (value: unknown) => {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+
+  return isEncryptedApiKey(value) ? value : encryptApiKey(value) ?? undefined;
+};
+
+const getProviderKeys = (providers: Prisma.JsonValue) => {
+  const keys = new Map<string, string>();
+  if (!Array.isArray(providers)) {
+    return keys;
+  }
+
+  for (const provider of providers) {
+    if (!isRecord(provider) || typeof provider.id !== "string") {
+      continue;
+    }
+
+    const key = normalizeStoredApiKey(provider.key);
+    if (key) {
+      keys.set(provider.id, key);
+    }
+  }
+
+  return keys;
+};
+
+const mergeProviderProfiles = (
+  incomingProviders: Array<Record<string, unknown>>,
+  storedProviders: Prisma.JsonValue
+) => {
+  const storedKeys = getProviderKeys(storedProviders);
+
+  return incomingProviders.map((profile) => {
+    const merged = { ...profile };
+    const hasSubmittedKey = Object.prototype.hasOwnProperty.call(profile, "key");
+    const key = hasSubmittedKey
+      ? normalizeStoredApiKey(profile.key)
+      : storedKeys.get(String(profile.id));
+
+    if (key) {
+      merged.key = key;
+    } else {
+      delete merged.key;
+    }
+
+    return merged;
+  });
+};
+
+const encryptLegacyProviderKeys = async (settings: UserSettings) => {
+  const providers = settings.providers;
+  if (!Array.isArray(providers)) {
+    return settings;
+  }
+
+  let changed = false;
+  const encryptedProviders = providers.map((provider) => {
+    if (!isRecord(provider)) {
+      return provider;
+    }
+
+    const key = normalizeStoredApiKey(provider.key);
+    if (!key || key === provider.key) {
+      return provider;
+    }
+
+    changed = true;
+    return { ...provider, key };
+  });
+
+  if (!changed) {
+    return settings;
+  }
+
+  await prisma.userSettings.update({
+    where: { id: settings.id },
+    data: { providers: encryptedProviders as Prisma.JsonArray }
+  });
+
+  return prisma.userSettings.findUniqueOrThrow({ where: { id: settings.id } });
+};
 
 const migrateModelsToProviders = async (settings: UserSettings) => {
   const providers = settings.providers;
@@ -56,14 +142,17 @@ const migrateModelsToProviders = async (settings: UserSettings) => {
     group.models.push({ id: generateId(), label, model: modelId });
   }
 
-  const migratedProviders = Array.from(groupMap.values()).map((group) => ({
-    id: generateId(),
-    label: group.provider || "custom",
-    provider: group.provider,
-    apiBaseUrl: group.apiBaseUrl,
-    key: group.key,
-    models: group.models
-  }));
+  const migratedProviders = Array.from(groupMap.values()).map((group) => {
+    const key = normalizeStoredApiKey(group.key);
+    return {
+      id: generateId(),
+      label: group.provider || "custom",
+      provider: group.provider,
+      apiBaseUrl: group.apiBaseUrl,
+      ...(key ? { key } : {}),
+      models: group.models
+    };
+  });
 
   let activeProviderId = "";
   let activeModelId = "";
@@ -103,7 +192,7 @@ export const getOrCreateSettings = async () => {
   });
 
   if (existing) {
-    return migrateModelsToProviders(existing);
+    return encryptLegacyProviderKeys(await migrateModelsToProviders(existing));
   }
 
   return prisma.userSettings.create({ data: {} });
@@ -159,29 +248,30 @@ settingsRouter.post(
     let activeProvider = "";
     let apiBaseUrl = "";
     let apiKey = settings.apiKey;
+    const providers: unknown[] = Array.isArray(settings.providers) ? settings.providers : [];
+    const storedProvider = providers.find(
+      (provider): provider is Record<string, unknown> =>
+        isRecord(provider) && String(provider.id) === request.params.providerId
+    );
 
     if (body && typeof body === "object" && typeof body.apiBaseUrl === "string") {
       activeProvider = String(body.provider ?? "");
       apiBaseUrl = body.apiBaseUrl;
       if (typeof body.key === "string" && body.key) {
         apiKey = body.key;
+      } else if (typeof storedProvider?.key === "string" && storedProvider.key) {
+        apiKey = storedProvider.key;
       }
     } else {
-      const providers: unknown[] = Array.isArray(settings.providers) ? settings.providers : [];
-      const targetProvider = providers.find(
-        (provider): provider is Record<string, unknown> =>
-          isRecord(provider) && String(provider.id) === request.params.providerId
-      );
-
-      if (!targetProvider) {
+      if (!storedProvider) {
         response.status(404).json({ ok: false, error: "Provider not found" });
         return;
       }
 
-      activeProvider = String(targetProvider.provider ?? "");
-      apiBaseUrl = String(targetProvider.apiBaseUrl ?? "");
-      if (typeof targetProvider.key === "string" && targetProvider.key) {
-        apiKey = targetProvider.key;
+      activeProvider = String(storedProvider.provider ?? "");
+      apiBaseUrl = String(storedProvider.apiBaseUrl ?? "");
+      if (typeof storedProvider.key === "string" && storedProvider.key) {
+        apiKey = storedProvider.key;
       }
     }
 
@@ -206,19 +296,44 @@ settingsRouter.put(
   asyncHandler(async (request, response) => {
     const body = parseBody(settingsUpdateSchema, request.body);
     const existing = await getOrCreateSettings();
+    const existingSettings = serializeSettings(existing);
+    const moduleModelPreferences =
+      body.moduleModelPreferences ?? existingSettings.moduleModelPreferences;
+    const userPersonaPresets = body.userPersonaPresets ?? existingSettings.userPersonaPresets;
 
+    const moduleModelError = validateModuleModelPreferences(
+      body.providers,
+      moduleModelPreferences,
+      body.activeProviderId,
+      body.activeModelId
+    );
+    if (moduleModelError) {
+      throw new HttpError(400, moduleModelError);
+    }
+
+    const storedProviders = mergeProviderProfiles(
+      body.providers as Array<Record<string, unknown>>,
+      existing.providers
+    );
     const activeProfile = body.providers.find((p) => p.id === body.activeProviderId);
+    const storedActiveProfile = storedProviders.find(
+      (profile) => String(profile.id) === body.activeProviderId
+    );
     const activeModel = activeProfile?.models.find((m) => m.id === body.activeModelId);
 
     const resolvedProvider = activeProfile?.provider ?? body.activeProvider;
     const resolvedBaseUrl = activeProfile?.apiBaseUrl ?? body.apiBaseUrl;
     const resolvedModel = activeModel?.model ?? body.model;
-    const resolvedApiKey = activeProfile?.key ?? ("apiKey" in body ? body.apiKey : undefined);
+    const resolvedApiKey =
+      (typeof storedActiveProfile?.key === "string" ? storedActiveProfile.key : undefined) ??
+      ("apiKey" in body ? encryptApiKey(body.apiKey) : undefined);
 
     const data: Prisma.UserSettingsUpdateInput = {
-      providers: body.providers as Prisma.JsonArray,
+      providers: storedProviders as Prisma.JsonArray,
       activeProviderId: body.activeProviderId,
       activeModelId: body.activeModelId,
+      moduleModelPreferences: moduleModelPreferences as Prisma.JsonObject,
+      userPersonaPresets: userPersonaPresets as Prisma.JsonArray,
       activeProvider: resolvedProvider,
       apiBaseUrl: resolvedBaseUrl,
       model: resolvedModel,
@@ -228,10 +343,14 @@ settingsRouter.put(
       language: body.language,
       autoSummarizeUser: body.autoSummarizeUser,
       showMessageAvatars: body.showMessageAvatars,
+      showMessageTimestamps: body.showMessageTimestamps,
+      ttsVoice: body.ttsVoice,
+      ttsPlaybackRate: body.ttsPlaybackRate,
+      ttsAutoPlay: body.ttsAutoPlay,
       userProfileSummary: body.userProfileSummary,
       userProfileUpdatedAt:
         typeof body.userProfileSummary === "string" ? new Date() : undefined,
-      apiKey: resolvedApiKey !== undefined ? encryptApiKey(resolvedApiKey) : undefined
+      apiKey: resolvedApiKey
     };
 
     const settings = await prisma.userSettings.update({

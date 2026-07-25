@@ -4,7 +4,8 @@ import type { UserSettings } from "@prisma/client";
 import {
   completeChatCompletion,
   fetchAvailableModels,
-  streamChatCompletion
+  streamChatCompletion,
+  testModelConnection
 } from "./completions.js";
 
 const originalFetch = globalThis.fetch;
@@ -154,5 +155,39 @@ describe("model provider adapters", () => {
     );
 
     assert.deepEqual(result.models, ["gemini-2.5-flash"]);
+  });
+
+  it("tests model connectivity with a real chat completion request", async () => {
+    const requestedUrls: string[] = [];
+    let requestedBody: unknown = null;
+
+    globalThis.fetch = (async (input, init) => {
+      requestedUrls.push(String(input));
+      requestedBody = JSON.parse(String(init?.body));
+
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "OK" } }]
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as typeof fetch;
+
+    const result = await testModelConnection(
+      createSettings({
+        activeProvider: "openai-compatible",
+        apiBaseUrl: "http://localhost:1234/v1",
+        model: "local-chat-model",
+        temperature: 0.9,
+        maxTokens: 2000
+      })
+    );
+
+    assert.deepEqual(requestedUrls, ["http://localhost:1234/v1/chat/completions"]);
+    assert.equal((requestedBody as { model?: string }).model, "local-chat-model");
+    assert.equal((requestedBody as { max_tokens?: number }).max_tokens, 16);
+    assert.equal((requestedBody as { temperature?: number }).temperature, 0);
+    assert.equal(result.reachable, true);
+    assert.equal(result.model, "local-chat-model");
   });
 });

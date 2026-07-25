@@ -7,9 +7,19 @@ const mobileBackendDir = path.join(rootDir, "apps", "mobile-backend");
 const webNodeDir = path.join(rootDir, "apps", "web", "dist", "nodejs");
 const serverDistSource = path.join(rootDir, "apps", "server", "dist");
 const serverDistTarget = path.join(mobileBackendDir, "server-dist");
+const skipWebNodeCopy = process.env.MOBILE_BACKEND_SKIP_WEB_NODE_COPY === "1";
 
 await rm(serverDistTarget, { recursive: true, force: true });
 await cp(serverDistSource, serverDistTarget, { recursive: true });
+
+if (skipWebNodeCopy) {
+  await writeFile(
+    path.join(serverDistTarget, ".prepared"),
+    `preparedAt=${new Date().toISOString()}\nmode=server-dist-only\n`,
+    "utf8"
+  );
+  process.exit(0);
+}
 
 await rm(webNodeDir, { recursive: true, force: true });
 await mkdir(webNodeDir, { recursive: true });

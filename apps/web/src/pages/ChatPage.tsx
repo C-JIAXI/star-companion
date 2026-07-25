@@ -1,41 +1,64 @@
 import {
   ArrowDown,
+  Bookmark,
   BrainCircuit,
+  CornerUpLeft,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
   Check,
+  Clipboard,
   Download,
   FileText,
   Image,
+  ListChecks,
+  Mic,
+  Pencil,
   Plus,
   RefreshCw,
+  Save,
+  Search,
   Send,
   Settings,
   Sparkles,
   StopCircle,
   Trash2,
   User,
+  Volume2,
+  VolumeX,
   X
 } from "lucide-react";
 import {
   emptyUserCustomConfig,
+  modelSupportsAiModule,
   parseUserCustomConfig,
   serializeUserCustomConfig,
+  type AiModuleId,
   type UserCustomConfigDTO
 } from "@local-roleplay/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
+import {
+  buildChatTranscript,
+  safeChatTranscriptName,
+  type ChatTranscriptFormat
+} from "../lib/chatTranscript";
 import { scopeCharacterChatUiCss } from "../lib/characterHtmlCss";
 import { readFileAsDataUrl, saveTextFile } from "../lib/files";
+import { takeChatMessageJump } from "../lib/messageNavigation";
 import { generateId } from "../lib/uuid";
 import { useWebSocket } from "../lib/useWebSocket";
 import { useAppStore } from "../store/useAppStore";
 import type {
   CharacterDTO,
+  ChatAgentDraftDTO,
+  ChatAgentMode,
   ChatMemoryDTO,
+  ChatMessageSearchDTO,
   ChatDTO,
+  ChatTitleSuggestionDTO,
   ChatWithMessagesDTO,
   GenerationClientMessage,
   GenerationServerMessage,
@@ -43,7 +66,8 @@ import type {
   ProviderProfile,
   PublicUserSettingsDTO,
   SettingsInput,
-  TokenUsageDTO
+  TokenUsageDTO,
+  UserPersonaPresetDTO
 } from "../types";
 import {
   Button,
@@ -67,6 +91,9 @@ import { MarkdownEditor } from "../components/MarkdownEditor";
 import { DebugPromptDrawer } from "../components/DebugPromptDrawer";
 
 const MESSAGES_PER_PAGE = 30;
+const CHAT_DRAFT_STORAGE_PREFIX = "star-companion:chat-draft:";
+const CHAT_QUEUE_STORAGE_PREFIX = "star-companion:chat-queue:";
+const MAX_QUEUED_MESSAGES = 10;
 const GENERATION_ERROR_PREFIX = "[GENERATION_FAILED] ";
 const MAX_CHAT_BACKGROUND_FILE_SIZE = 2 * 1024 * 1024;
 const CHAT_PAGE_STYLE_TAG = "chat-page-character-html-css";
@@ -77,6 +104,23 @@ const emptyMemoryForm = {
   importance: "3",
   enabled: true
 };
+const agentModes: ChatAgentMode[] = [
+  "scene_summary",
+  "next_steps",
+  "reply_drafts",
+  "memory_lore_candidates"
+];
+
+const blobToBase64 = (blob: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = String(reader.result ?? "");
+      resolve(value.includes(",") ? value.split(",").pop() ?? "" : value);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
+    reader.readAsDataURL(blob);
+  });
 
 const isSupportedChatBackgroundUrl = (value: string) => {
   const trimmed = value.trim();
@@ -96,21 +140,112 @@ const isSupportedChatBackgroundUrl = (value: string) => {
   }
 };
 
+const chatDraftStorageKey = (chatId: string) => `${CHAT_DRAFT_STORAGE_PREFIX}${chatId}`;
+
+const readStoredChatDraft = (chatId: string) => {
+  try {
+    return window.localStorage.getItem(chatDraftStorageKey(chatId)) ?? "";
+  } catch {
+    return "";
+  }
+};
+
+const saveStoredChatDraft = (chatId: string, value: string) => {
+  try {
+    if (value) {
+      window.localStorage.setItem(chatDraftStorageKey(chatId), value);
+    } else {
+      window.localStorage.removeItem(chatDraftStorageKey(chatId));
+    }
+  } catch {
+    // Draft persistence is best-effort when browser storage is unavailable.
+  }
+};
+
+type QueuedChatMessage = {
+  id: string;
+  content: string;
+};
+
+const chatQueueStorageKey = (chatId: string) => `${CHAT_QUEUE_STORAGE_PREFIX}${chatId}`;
+
+const readStoredChatQueue = (chatId: string): QueuedChatMessage[] => {
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(chatQueueStorageKey(chatId)) ?? "[]");
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter(
+        (entry): entry is QueuedChatMessage =>
+          Boolean(
+            entry &&
+              typeof entry === "object" &&
+              typeof entry.id === "string" &&
+              typeof entry.content === "string" &&
+              entry.content.trim()
+          )
+      )
+      .slice(0, MAX_QUEUED_MESSAGES)
+      .map((entry) => ({ id: entry.id, content: entry.content.trim() }));
+  } catch {
+    return [];
+  }
+};
+
+const saveStoredChatQueue = (chatId: string, messages: QueuedChatMessage[]) => {
+  try {
+    if (messages.length > 0) {
+      window.sessionStorage.setItem(chatQueueStorageKey(chatId), JSON.stringify(messages));
+    } else {
+      window.sessionStorage.removeItem(chatQueueStorageKey(chatId));
+    }
+  } catch {
+    // Queue persistence is best-effort and intentionally limited to this browser session.
+  }
+};
+
+const hasCompatibleModuleModel = (
+  settings: PublicUserSettingsDTO,
+  moduleId: AiModuleId
+) => {
+  const preference = settings.moduleModelPreferences?.[moduleId];
+  const provider = preference
+    ? settings.providers.find((entry) => entry.id === preference.providerId)
+    : settings.providers.find((entry) => entry.id === settings.activeProviderId);
+  const model = preference
+    ? provider?.models.find((entry) => entry.id === preference.modelId)
+    : provider?.models.find((entry) => entry.id === settings.activeModelId) ?? {
+        model: settings.model
+      };
+
+  return Boolean(model?.model && modelSupportsAiModule(provider?.provider ?? settings.activeProvider, model, moduleId));
+};
+
 export function ChatPage({
   selectedChatId,
-  onChatsChanged
+  onChatsChanged,
+  onSelectChat
 }: {
   selectedChatId: string | null;
   onChatsChanged: () => void;
+  onSelectChat: (id: string | null) => void;
 }) {
   const { language, t } = useI18n();
   const showMessageAvatars = useAppStore((state) => state.showMessageAvatars);
+  const showMessageTimestamps = useAppStore((state) => state.showMessageTimestamps);
   const [characters, setCharacters] = useState<CharacterDTO[]>([]);
   const [activeChat, setActiveChat] = useState<ChatWithMessagesDTO | null>(null);
   const [draft, setDraft] = useState("");
+  const [queuedMessages, setQueuedMessages] = useState<QueuedChatMessage[]>([]);
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingCharacterId, setStreamingCharacterId] = useState<string | null>(null);
+  const [streamingContextCounts, setStreamingContextCounts] = useState<{
+    lore: number;
+    memory: number;
+  } | null>(null);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [generationChatId, setGenerationChatId] = useState<string | null>(null);
   const [editingMessage, setEditingMessage] = useState<MessageDTO | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [memorySettingsOpen, setMemorySettingsOpen] = useState(false);
@@ -140,11 +275,10 @@ export function ChatPage({
   const [settingsProviders, setSettingsProviders] = useState<ProviderProfile[]>([]);
   const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
+  const [hasApiKey, setHasApiKey] = useState(false);
+  const [characterTotal, setCharacterTotal] = useState<number | null>(null);
   const [expandedDialogProviderId, setExpandedDialogProviderId] = useState<string | null>(null);
-  const [runtimeSettings, setRuntimeSettings] = useState<Pick<
-    PublicUserSettingsDTO,
-    "activeProvider" | "apiBaseUrl" | "model" | "temperature" | "maxTokens" | "topP" | "language"
-  > | null>(null);
+  const [runtimeSettings, setRuntimeSettings] = useState<PublicUserSettingsDTO | null>(null);
   const [autoSummarizeUser, setAutoSummarizeUser] = useState(true);
   const [showUserConfigDialog, setShowUserConfigDialog] = useState(false);
   const [showUserProfileDialog, setShowUserProfileDialog] = useState(false);
@@ -152,9 +286,41 @@ export function ChatPage({
   const [modelSwitching, setModelSwitching] = useState(false);
   const [showMemoryDialog, setShowMemoryDialog] = useState(false);
   const [showBackgroundDialog, setShowBackgroundDialog] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [transcriptFormat, setTranscriptFormat] = useState<ChatTranscriptFormat>("markdown");
+  const [transcriptIncludeTimestamps, setTranscriptIncludeTimestamps] = useState(true);
+  const [transcriptExportedAt, setTranscriptExportedAt] = useState(() => new Date().toISOString());
+  const [showReadinessDialog, setShowReadinessDialog] = useState(false);
+  const [showImageDialog, setShowImageDialog] = useState(false);
+  const [imagePromptDraft, setImagePromptDraft] = useState("");
+  const [imageSize, setImageSize] = useState<"1024x1024" | "1024x1536" | "1536x1024" | "auto">(
+    "1024x1024"
+  );
+  const [generatedImagePreview, setGeneratedImagePreview] = useState<{
+    prompt: string;
+    src: string;
+  } | null>(null);
   const [backgroundDraft, setBackgroundDraft] = useState("");
   const [backgroundInputValue, setBackgroundInputValue] = useState("");
   const [debugMessage, setDebugMessage] = useState<MessageDTO | null>(null);
+  const [agentPanelOpen, setAgentPanelOpen] = useState(false);
+  const [agentMode, setAgentMode] = useState<ChatAgentMode>("next_steps");
+  const [agentFocus, setAgentFocus] = useState("");
+  const [agentDraft, setAgentDraft] = useState<ChatAgentDraftDTO | null>(null);
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [messageSearchOpen, setMessageSearchOpen] = useState(false);
+  const [messageSearchQuery, setMessageSearchQuery] = useState("");
+  const [messageSearchResult, setMessageSearchResult] = useState<ChatMessageSearchDTO | null>(null);
+  const [messageSearchLoading, setMessageSearchLoading] = useState(false);
+  const [showBookmarksDialog, setShowBookmarksDialog] = useState(false);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [mediaLoading, setMediaLoading] = useState(false);
+  const [speechPlaying, setSpeechPlaying] = useState(false);
+  const [speechMessageId, setSpeechMessageId] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const speechAudioRef = useRef<HTMLAudioElement | null>(null);
   const [quickRepliesOpen, setQuickRepliesOpen] = useState(() => {
     try {
       return localStorage.getItem("chat.quickRepliesOpen") !== "false";
@@ -173,10 +339,15 @@ export function ChatPage({
   const [editingPersonaDraft, setEditingPersonaDraft] = useState<UserCustomConfigDTO>(() =>
     emptyUserCustomConfig()
   );
+  const [userPersonaPresets, setUserPersonaPresets] = useState<UserPersonaPresetDTO[]>([]);
+  const [personaPresetName, setPersonaPresetName] = useState("");
   const [editingProfileDraft, setEditingProfileDraft] = useState("");
   const [pendingDeleteMessage, setPendingDeleteMessage] = useState<MessageDTO | null>(null);
+  const [pendingCheckpointMessage, setPendingCheckpointMessage] = useState<MessageDTO | null>(null);
+  const [checkpointTitleDraft, setCheckpointTitleDraft] = useState("");
   const [titleEditing, setTitleEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [titleSuggestionLoading, setTitleSuggestionLoading] = useState(false);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const [messagePage, setMessagePage] = useState(1);
   const [error, setError] = useState<string | null>(null);
@@ -184,6 +355,10 @@ export function ChatPage({
   const [loading, setLoading] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const streamingBufferRef = useRef("");
+  const draftChatIdRef = useRef<string | null>(null);
+  const queuedChatIdRef = useRef<string | null>(null);
+  const queuedMessagesRef = useRef<QueuedChatMessage[]>([]);
+  const interruptForQueueRef = useRef(false);
   const draftTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
   const backgroundFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -192,6 +367,7 @@ export function ChatPage({
     totalPages: 1
   });
   const hasMessagesRef = useRef(false);
+  const autoTitleChatIdsRef = useRef(new Set<string>());
 
   const autoResizeDraftTextArea = () => {
     const el = draftTextAreaRef.current;
@@ -267,7 +443,15 @@ export function ChatPage({
     upsertMessage: (message: MessageDTO) => void;
     setStreamingContent: (value: React.SetStateAction<string>) => void;
     chatsChanged: () => void;
-  }>({ upsertMessage: () => {}, setStreamingContent: () => {}, chatsChanged: () => {} });
+    dispatchQueuedMessages: () => void;
+    autoPlayAssistantMessage: (message: MessageDTO) => void;
+  }>({
+    upsertMessage: () => {},
+    setStreamingContent: () => {},
+    chatsChanged: () => {},
+    dispatchQueuedMessages: () => {},
+    autoPlayAssistantMessage: () => {}
+  });
 
   const {
     send: sendWs,
@@ -292,22 +476,33 @@ export function ChatPage({
       if (msg.type === "generation_character_started") {
         setStreamingCharacterId(msg.characterId);
         setStreamingContent("");
+        setStreamingContextCounts(null);
         streamingBufferRef.current = "";
         return;
       }
 
       if (msg.type === "lore_matches") {
+        setStreamingContextCounts((current) => ({
+          lore: msg.entries.length,
+          memory: current?.memory ?? 0
+        }));
         return;
       }
 
       if (msg.type === "memory_matches") {
+        setStreamingContextCounts((current) => ({
+          lore: current?.lore ?? 0,
+          memory: msg.entries.length
+        }));
         return;
       }
 
       if (msg.type === "assistant_message") {
         handlers.upsertMessage(msg.message);
+        handlers.autoPlayAssistantMessage(msg.message);
         setStreamingContent("");
         setStreamingCharacterId(null);
+        setStreamingContextCounts(null);
         streamingBufferRef.current = "";
         return;
       }
@@ -316,6 +511,7 @@ export function ChatPage({
         setActiveRequestId(msg.requestId);
         setStreamingContent("");
         setStreamingCharacterId(null);
+        setStreamingContextCounts(null);
         streamingBufferRef.current = "";
         return;
       }
@@ -329,21 +525,55 @@ export function ChatPage({
         return;
       }
 
+      if (msg.type === "chat_memory_updated") {
+        setActiveChat((current) =>
+          current && current.id === msg.summary.chatId
+            ? { ...current, memoryUpdatedAt: msg.summary.memoryUpdatedAt }
+            : current
+        );
+        setStatus(
+          t("chat.memoryAutoUpdated", {
+            created: msg.summary.created,
+            updated: msg.summary.updated,
+            disabled: msg.summary.disabled
+          })
+        );
+        if (showMemoryDialog) {
+          void loadChatMemories();
+        }
+        return;
+      }
+
       if (msg.type === "generation_done" || msg.type === "generation_stopped") {
+        const shouldDispatchQueue =
+          msg.type === "generation_done" || interruptForQueueRef.current;
+        interruptForQueueRef.current = false;
         setActiveRequestId(null);
+        setGenerationChatId(null);
         setStreamingContent("");
         setStreamingCharacterId(null);
+        setStreamingContextCounts(null);
         streamingBufferRef.current = "";
         setLoading(false);
         handlers.chatsChanged();
+        if (
+          shouldDispatchQueue &&
+          queuedChatIdRef.current &&
+          queuedMessagesRef.current.length > 0
+        ) {
+          handlers.dispatchQueuedMessages();
+        }
         return;
       }
 
       if (msg.type === "error") {
         setError(msg.error);
+        interruptForQueueRef.current = false;
         setActiveRequestId(null);
+        setGenerationChatId(null);
         setStreamingContent("");
         setStreamingCharacterId(null);
+        setStreamingContextCounts(null);
         streamingBufferRef.current = "";
         setLoading(false);
         return;
@@ -355,7 +585,9 @@ export function ChatPage({
     onMessageHandlersRef.current = {
       upsertMessage,
       setStreamingContent,
-      chatsChanged: onChatsChanged
+      chatsChanged: onChatsChanged,
+      dispatchQueuedMessages: onMessageHandlersRef.current.dispatchQueuedMessages,
+      autoPlayAssistantMessage: onMessageHandlersRef.current.autoPlayAssistantMessage
     };
   }, [upsertMessage, setStreamingContent, onChatsChanged]);
 
@@ -390,6 +622,27 @@ export function ChatPage({
     [characters]
   );
 
+  const transcriptPreview = useMemo(() => {
+    if (!activeChat) return "";
+    return buildChatTranscript({
+      chat: activeChat,
+      characterName: activeChat.characterId
+        ? characterMap.get(activeChat.characterId)?.name
+        : undefined,
+      language,
+      format: transcriptFormat,
+      includeTimestamps: transcriptIncludeTimestamps,
+      exportedAt: transcriptExportedAt
+    });
+  }, [
+    activeChat,
+    characterMap,
+    language,
+    transcriptExportedAt,
+    transcriptFormat,
+    transcriptIncludeTimestamps
+  ]);
+
   const activeQuickReplies = useMemo(() => {
     if (!activeChat) {
       return [];
@@ -421,6 +674,106 @@ export function ChatPage({
 
     return characterMap.get(activeChat.characterId)?.htmlCss ?? "";
   }, [activeChat?.characterId, characterMap]);
+
+  const navigateToSection = useCallback((section: "chat" | "characters" | "settings") => {
+    const path = section === "chat" ? "/" : `/${section}`;
+    setShowReadinessDialog(false);
+    window.history.pushState({}, "", path);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, []);
+
+  const activeProviderProfile = useMemo(
+    () => settingsProviders.find((provider) => provider.id === activeProviderId) ?? null,
+    [activeProviderId, settingsProviders]
+  );
+
+  const hasConfiguredProvider = Boolean(
+    activeProviderProfile ||
+      settingsProviders.length > 0 ||
+      (runtimeSettings?.activeProvider.trim() && runtimeSettings.apiBaseUrl.trim())
+  );
+  const hasEffectiveApiKey = hasApiKey || Boolean(activeProviderProfile?.key?.trim());
+  const hasConfiguredModel = Boolean(
+    activeProviderProfile?.models.some((model) => model.id === activeModelId) ||
+      runtimeSettings?.model.trim()
+  );
+  const canTranscribe = runtimeSettings
+    ? hasCompatibleModuleModel(runtimeSettings, "voice_transcription")
+    : true;
+  const canSpeak = runtimeSettings
+    ? hasCompatibleModuleModel(runtimeSettings, "voice_speech")
+    : true;
+  const canGenerateImage = runtimeSettings
+    ? hasCompatibleModuleModel(runtimeSettings, "image_generation")
+    : true;
+  const hasAnyCharacter = (characterTotal ?? characters.length) > 0;
+  const readinessItems = useMemo<
+    {
+      id: string;
+      ready: boolean;
+      title: string;
+      detail: string;
+      actionLabel?: string;
+      onAction?: () => void;
+    }[]
+  >(
+    () => [
+      {
+        id: "provider",
+        ready: hasConfiguredProvider,
+        title: t("chat.readinessProviderTitle"),
+        detail: hasConfiguredProvider
+          ? t("chat.readinessProviderReady")
+          : t("chat.readinessProviderMissing"),
+        actionLabel: t("chat.readinessOpenSettings"),
+        onAction: () => navigateToSection("settings")
+      },
+      {
+        id: "apiKey",
+        ready: hasEffectiveApiKey,
+        title: t("chat.readinessApiKeyTitle"),
+        detail: hasEffectiveApiKey ? t("chat.readinessApiKeyReady") : t("chat.readinessApiKeyMissing"),
+        actionLabel: t("chat.readinessOpenSettings"),
+        onAction: () => navigateToSection("settings")
+      },
+      {
+        id: "model",
+        ready: hasConfiguredModel,
+        title: t("chat.readinessModelTitle"),
+        detail: hasConfiguredModel ? t("chat.readinessModelReady") : t("chat.readinessModelMissing"),
+        actionLabel: t("chat.readinessOpenSettings"),
+        onAction: () => navigateToSection("settings")
+      },
+      {
+        id: "character",
+        ready: hasAnyCharacter,
+        title: t("chat.readinessCharacterTitle"),
+        detail: hasAnyCharacter
+          ? t("chat.readinessCharacterReady", { count: characterTotal ?? characters.length })
+          : t("chat.readinessCharacterMissing"),
+        actionLabel: t("chat.readinessOpenCharacters"),
+        onAction: () => navigateToSection("characters")
+      },
+      {
+        id: "chat",
+        ready: Boolean(activeChat),
+        title: t("chat.readinessChatTitle"),
+        detail: activeChat ? t("chat.readinessChatReady") : t("chat.readinessChatMissing")
+      }
+    ],
+    [
+      activeChat,
+      characterTotal,
+      characters.length,
+      hasAnyCharacter,
+      hasConfiguredModel,
+      hasConfiguredProvider,
+      hasEffectiveApiKey,
+      navigateToSection,
+      t
+    ]
+  );
+  const readinessIssueCount = readinessItems.filter((item) => !item.ready).length;
 
   const mergeCharacterCache = (nextCharacters: CharacterDTO[]) => {
     setCharacters((current) => {
@@ -468,6 +821,15 @@ export function ChatPage({
     const startIndex = (safeMessagePage - 1) * MESSAGES_PER_PAGE;
     return activeChat.messages.slice(startIndex, startIndex + MESSAGES_PER_PAGE);
   }, [activeChat, safeMessagePage]);
+
+  const bookmarkedMessages = useMemo(
+    () =>
+      (activeChat?.messages ?? [])
+        .map((message, index) => ({ message, index }))
+        .filter(({ message }) => message.isBookmarked)
+        .reverse(),
+    [activeChat?.messages]
+  );
 
   const pageRange = useMemo(() => {
     const totalMessages = activeChat?.messages.length ?? 0;
@@ -538,34 +900,129 @@ export function ChatPage({
   const loadSettings = async () => {
     const settings = await api.settings.get();
     setSettingsProviders(settings.providers ?? []);
-    setRuntimeSettings({
-      activeProvider: settings.activeProvider,
-      apiBaseUrl: settings.apiBaseUrl,
-      model: settings.model,
-      temperature: settings.temperature,
-      maxTokens: settings.maxTokens,
-      topP: settings.topP,
-      language: settings.language
-    });
+    setRuntimeSettings(settings);
     setAutoSummarizeUser(settings.autoSummarizeUser);
     useAppStore.getState().setShowMessageAvatars(settings.showMessageAvatars);
+    useAppStore.getState().setShowMessageTimestamps(settings.showMessageTimestamps);
     setActiveProviderId(settings.activeProviderId || null);
     setActiveModelId(settings.activeModelId || null);
+    setHasApiKey(settings.hasApiKey);
+  };
+
+  useEffect(() => {
+    if (!activeChat || activeChat.title !== "New Chat" || autoTitleChatIdsRef.current.has(activeChat.id)) {
+      return;
+    }
+    const conversation = activeChat.messages.filter(
+      (message) => message.role === "user" || message.role === "assistant"
+    );
+    if (
+      conversation.length !== 2 ||
+      !conversation.some((message) => message.role === "user") ||
+      !conversation.some((message) => message.role === "assistant")
+    ) {
+      return;
+    }
+
+    autoTitleChatIdsRef.current.add(activeChat.id);
+    void api.chats
+      .titleSuggestion(activeChat.id)
+      .then((suggestion) => api.chats.update(activeChat.id, { title: suggestion.title }))
+      .then((updated) => applyChatUpdate(updated))
+      .catch(() => {
+        // Automatic titles are best-effort and must never interrupt the first reply.
+      });
+  }, [activeChat]);
+
+  const generateTitleSuggestion = async () => {
+    if (!activeChat) {
+      return;
+    }
+
+    setTitleSuggestionLoading(true);
+    setError(null);
+    try {
+      const suggestion: ChatTitleSuggestionDTO = await api.chats.titleSuggestion(activeChat.id);
+      setTitleDraft(suggestion.title);
+      setTitleEditing(true);
+      setStatus(t("chat.titleSuggestionReady"));
+      setTimeout(() => titleInputRef.current?.focus(), 0);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.titleSuggestionFailed"));
+    } finally {
+      setTitleSuggestionLoading(false);
+    }
+  };
+
+  const replaceQueuedMessages = (messages: QueuedChatMessage[]) => {
+    const next = messages.slice(0, MAX_QUEUED_MESSAGES);
+    queuedMessagesRef.current = next;
+    setQueuedMessages(next);
+    if (queuedChatIdRef.current) {
+      saveStoredChatQueue(queuedChatIdRef.current, next);
+    }
+  };
+
+  const loadReadinessCharacters = async () => {
+    const page = await api.characters.page({ page: 1, pageSize: 1 });
+    setCharacterTotal(page.total);
+    mergeCharacterCache(page.items);
   };
 
   const loadChat = async (id: string | null) => {
+    const previousChatId = draftChatIdRef.current;
+    if (previousChatId && previousChatId !== id) {
+      saveStoredChatDraft(previousChatId, draft);
+    }
+    const previousQueueChatId = queuedChatIdRef.current;
+    if (previousQueueChatId && previousQueueChatId !== id) {
+      saveStoredChatQueue(previousQueueChatId, queuedMessagesRef.current);
+    }
+
     if (!id) {
+      draftChatIdRef.current = null;
+      queuedChatIdRef.current = null;
+      queuedMessagesRef.current = [];
+      setDraft("");
+      setQueuedMessages([]);
       setActiveChat(null);
       hasMessagesRef.current = false;
       setChatMemories([]);
+      setAgentDraft(null);
       return;
     }
+
+    draftChatIdRef.current = id;
+    queuedChatIdRef.current = id;
+    const storedQueue = readStoredChatQueue(id);
+    queuedMessagesRef.current = storedQueue;
+    setQueuedMessages(storedQueue);
+    setDraft(readStoredChatDraft(id));
     const chat = await api.chats.get(id);
     setActiveChat(chat);
+    setAgentDraft(null);
     setChatMemories(chat.memories ?? []);
     setAutoMemoryEnabled(chat.autoMemoryEnabled);
     hasMessagesRef.current = chat.messages.length > 0;
     setMemoryDraft(String(chat.memoryTurns));
+    setMessagePage(1);
+    setHighlightedMessageId(null);
+
+    const pendingMessageJump = takeChatMessageJump(chat.id);
+    if (pendingMessageJump) {
+      setMessagePage(Math.max(1, Math.floor(pendingMessageJump.index / MESSAGES_PER_PAGE) + 1));
+      setHighlightedMessageId(pendingMessageJump.messageId);
+      setTimeout(() => {
+        document
+          .querySelector(`[data-message-id="${pendingMessageJump.messageId}"]`)
+          ?.scrollIntoView({ block: "center", behavior: "smooth" });
+      }, 50);
+      window.setTimeout(() => {
+        setHighlightedMessageId((current) =>
+          current === pendingMessageJump.messageId ? null : current
+        );
+      }, 2400);
+    }
 
     const missingCharacterIds =
       chat.characterId && !characterMap.has(chat.characterId) ? [chat.characterId] : [];
@@ -597,10 +1054,29 @@ export function ChatPage({
   }, [t]);
 
   useEffect(() => {
-    void loadChat(selectedChatId).catch((caught: unknown) =>
-      setError(caught instanceof Error ? caught.message : t("chat.failedLoadChat"))
-    );
-  }, [selectedChatId, t]);
+    void loadReadinessCharacters().catch(() => {
+      setCharacterTotal(null);
+    });
+  }, []);
+
+  useEffect(() => {
+    void loadChat(selectedChatId).catch((caught: unknown) => {
+      const message = caught instanceof Error ? caught.message : t("chat.failedLoadChat");
+      if (selectedChatId && /chat not found/i.test(message)) {
+        onSelectChat(null);
+        return;
+      }
+      setError(message);
+    });
+  }, [onSelectChat, selectedChatId, t]);
+
+  useEffect(() => {
+    if (!selectedChatId || draftChatIdRef.current !== selectedChatId) {
+      return;
+    }
+
+    saveStoredChatDraft(selectedChatId, draft);
+  }, [draft, selectedChatId]);
 
   useEffect(() => {
     const chatId = activeChat?.id ?? null;
@@ -705,19 +1181,13 @@ export function ChatPage({
       if (!current) {
         void api.settings.get().then((settings) => {
           setSettingsProviders(settings.providers ?? []);
-          setRuntimeSettings({
-            activeProvider: settings.activeProvider,
-            apiBaseUrl: settings.apiBaseUrl,
-            model: settings.model,
-            temperature: settings.temperature,
-            maxTokens: settings.maxTokens,
-            topP: settings.topP,
-            language: settings.language
-          });
+          setRuntimeSettings(settings);
           setAutoSummarizeUser(settings.autoSummarizeUser);
           setActiveProviderId(settings.activeProviderId || null);
           setActiveModelId(settings.activeModelId || null);
+          setHasApiKey(settings.hasApiKey);
           useAppStore.getState().setShowMessageAvatars(settings.showMessageAvatars);
+          useAppStore.getState().setShowMessageTimestamps(settings.showMessageTimestamps);
         });
       }
       return !current;
@@ -749,6 +1219,101 @@ export function ChatPage({
     }
   };
 
+  const settingsToInput = (
+    settings: PublicUserSettingsDTO,
+    presets = settings.userPersonaPresets ?? []
+  ): SettingsInput => ({
+    activeProvider: settings.activeProvider,
+    apiBaseUrl: settings.apiBaseUrl,
+    model: settings.model,
+    temperature: settings.temperature,
+    maxTokens: settings.maxTokens,
+    topP: settings.topP,
+    language: settings.language,
+    providers: settings.providers ?? [],
+    activeProviderId: settings.activeProviderId ?? "",
+    activeModelId: settings.activeModelId ?? "",
+    moduleModelPreferences: settings.moduleModelPreferences ?? {},
+    userPersonaPresets: presets,
+    autoSummarizeUser: settings.autoSummarizeUser,
+    showMessageAvatars: settings.showMessageAvatars,
+    showMessageTimestamps: settings.showMessageTimestamps,
+    ttsVoice: settings.ttsVoice,
+    ttsPlaybackRate: settings.ttsPlaybackRate,
+    ttsAutoPlay: settings.ttsAutoPlay,
+    userProfileSummary: settings.userProfileSummary ?? ""
+  });
+
+  const refreshPersonaPresets = async () => {
+    const settings = await api.settings.get();
+    setUserPersonaPresets(settings.userPersonaPresets ?? []);
+    return settings;
+  };
+
+  const savePersonaPreset = async () => {
+    const name = personaPresetName.trim();
+    const hasContent =
+      editingPersonaDraft.prefix.trim() ||
+      editingPersonaDraft.prompt.trim() ||
+      editingPersonaDraft.suffix.trim();
+    if (!name || !hasContent) {
+      setError(t("chat.personaPresetInvalid"));
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const settings = await api.settings.get();
+      const timestamp = new Date().toISOString();
+      const nextPresets: UserPersonaPresetDTO[] = [
+        ...(settings.userPersonaPresets ?? []),
+        {
+          id: generateId(),
+          name,
+          config: editingPersonaDraft,
+          createdAt: timestamp,
+          updatedAt: timestamp
+        }
+      ].slice(-30);
+      const updated = await api.settings.update(settingsToInput(settings, nextPresets));
+      setUserPersonaPresets(updated.userPersonaPresets ?? []);
+      setPersonaPresetName("");
+      setStatus(t("chat.personaPresetSaved"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.personaPresetFailed"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const applyPersonaPreset = (preset: UserPersonaPresetDTO) => {
+    setEditingPersonaDraft(preset.config);
+    setStatus(t("chat.personaPresetApplied"));
+  };
+
+  const deletePersonaPreset = async (preset: UserPersonaPresetDTO) => {
+    if (!window.confirm(t("chat.personaPresetDeleteConfirm", { name: preset.name }))) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const settings = await api.settings.get();
+      const nextPresets = (settings.userPersonaPresets ?? []).filter((entry) => entry.id !== preset.id);
+      const updated = await api.settings.update(settingsToInput(settings, nextPresets));
+      setUserPersonaPresets(updated.userPersonaPresets ?? []);
+      setStatus(t("chat.personaPresetDeleted"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.personaPresetFailed"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const saveUserProfileSummary = async () => {
     if (!activeChat) {
       return;
@@ -774,29 +1339,64 @@ export function ChatPage({
 
   const startEditingUserConfig = () => {
     setEditingPersonaDraft(parseUserCustomConfig(activeChat?.userPersona));
+    setPersonaPresetName("");
     setShowUserConfigDialog(true);
+    setMemorySettingsOpen(false);
+    void refreshPersonaPresets().catch((caught) => {
+      setError(caught instanceof Error ? caught.message : t("chat.personaPresetFailed"));
+    });
+  };
+
+  const openTranscriptExport = () => {
+    if (!activeChat) return;
+    setTranscriptFormat("markdown");
+    setTranscriptIncludeTimestamps(true);
+    setTranscriptExportedAt(new Date().toISOString());
+    setShowExportDialog(true);
     setMemorySettingsOpen(false);
   };
 
-  const exportCurrentChat = async () => {
-    if (!activeChat) return;
+  const downloadCurrentTranscript = async () => {
+    if (!activeChat || !transcriptPreview) return;
     try {
-      const lines = activeChat.messages
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => `${m.role === "user" ? "用户" : "AI"}：${m.content}`);
-      const safeName = activeChat.title.replace(/[^\w一-鿿-]/g, "_").slice(0, 50);
       const date = new Date().toISOString().slice(0, 10);
-      await saveTextFile(`chat-${safeName}-${date}.txt`, lines.join("\n"));
+      const extension = transcriptFormat === "markdown" ? "md" : "txt";
+      const mimeType =
+        transcriptFormat === "markdown"
+          ? "text/markdown;charset=utf-8"
+          : "text/plain;charset=utf-8";
+      await saveTextFile(
+        `chat-${safeChatTranscriptName(activeChat.title)}-${date}.${extension}`,
+        transcriptPreview,
+        mimeType
+      );
       setStatus(t("chat.exportChatSuccess"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedExportChat"));
     }
-    setMemorySettingsOpen(false);
+  };
+
+  const copyCurrentTranscript = async () => {
+    if (!transcriptPreview) return;
+    try {
+      await navigator.clipboard.writeText(transcriptPreview);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = transcriptPreview;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+    setStatus(t("chat.exportCopied"));
   };
 
   const cancelEditingUserConfig = () => {
     setShowUserConfigDialog(false);
     setEditingPersonaDraft(emptyUserCustomConfig());
+    setPersonaPresetName("");
   };
 
   const startEditingProfile = () => {
@@ -867,6 +1467,132 @@ export function ChatPage({
     setShowBackgroundDialog(false);
     setBackgroundDraft("");
     setBackgroundInputValue("");
+  };
+
+  const openAgentPanel = () => {
+    setAgentPanelOpen(true);
+    setMemorySettingsOpen(false);
+  };
+
+  const closeAgentPanel = () => {
+    setAgentPanelOpen(false);
+  };
+
+  const getAgentModeLabel = (mode: ChatAgentMode) => {
+    switch (mode) {
+      case "scene_summary":
+        return t("chat.agentModeSceneSummary");
+      case "next_steps":
+        return t("chat.agentModeNextSteps");
+      case "reply_drafts":
+        return t("chat.agentModeReplyDrafts");
+      case "memory_lore_candidates":
+        return t("chat.agentModeMemoryLore");
+    }
+  };
+
+  const getAgentModeDescription = (mode: ChatAgentMode) => {
+    switch (mode) {
+      case "scene_summary":
+        return t("chat.agentModeSceneSummaryHelp");
+      case "next_steps":
+        return t("chat.agentModeNextStepsHelp");
+      case "reply_drafts":
+        return t("chat.agentModeReplyDraftsHelp");
+      case "memory_lore_candidates":
+        return t("chat.agentModeMemoryLoreHelp");
+    }
+  };
+
+  const runAgentDraft = async () => {
+    if (!activeChat) {
+      return;
+    }
+
+    setAgentLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const draftResult = await api.chats.agentDraft(activeChat.id, {
+        mode: agentMode,
+        focus: agentFocus.trim() || undefined
+      });
+      setAgentDraft(draftResult);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.agentFailed"));
+    } finally {
+      setAgentLoading(false);
+    }
+  };
+
+  const insertAgentDraft = () => {
+    if (!agentDraft?.content.trim()) {
+      return;
+    }
+
+    setDraft(agentDraft.content.trim());
+    requestAnimationFrame(autoResizeDraftTextArea);
+  };
+
+  const copyAgentDraft = async () => {
+    if (!agentDraft?.content.trim()) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(agentDraft.content);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = agentDraft.content;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
+    setStatus(t("chat.agentCopied"));
+  };
+
+  const runMessageSearch = async () => {
+    if (!activeChat || !messageSearchQuery.trim()) {
+      return;
+    }
+
+    setMessageSearchLoading(true);
+    setError(null);
+    try {
+      const result = await api.chats.messageSearch(activeChat.id, messageSearchQuery.trim(), 30);
+      setMessageSearchResult(result);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.searchFailed"));
+    } finally {
+      setMessageSearchLoading(false);
+    }
+  };
+
+  const jumpToMessage = (message: MessageDTO, index: number) => {
+    const targetPage = Math.max(1, Math.floor(index / MESSAGES_PER_PAGE) + 1);
+    setMessagePage(targetPage);
+    setHighlightedMessageId(message.id);
+    setTimeout(() => {
+      document
+        .querySelector(`[data-message-id="${message.id}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 50);
+    window.setTimeout(() => {
+      setHighlightedMessageId((current) => (current === message.id ? null : current));
+    }, 2400);
+  };
+
+  const jumpToMessageSearchResult = (result: ChatMessageSearchDTO["results"][number]) => {
+    setMessageSearchOpen(false);
+    jumpToMessage(result.message, result.index);
+  };
+
+  const jumpToBookmarkedMessage = (message: MessageDTO, index: number) => {
+    setShowBookmarksDialog(false);
+    jumpToMessage(message, index);
   };
 
   const updateUserConfigDraft = (field: keyof UserCustomConfigDTO, value: string) => {
@@ -1137,18 +1863,16 @@ export function ChatPage({
     setMemorySettingsOpen(false);
 
     const payload: SettingsInput = {
+      ...settingsToInput(runtimeSettings),
       activeProvider: provider.provider,
       apiBaseUrl: provider.apiBaseUrl,
       model: model.model,
-      temperature: runtimeSettings.temperature,
-      maxTokens: runtimeSettings.maxTokens,
-      topP: runtimeSettings.topP,
-      language: runtimeSettings.language,
       providers: settingsProviders,
       activeProviderId: providerId,
       activeModelId: modelId,
       autoSummarizeUser,
-      showMessageAvatars
+      showMessageAvatars,
+      showMessageTimestamps
     };
 
     if (provider.key?.trim()) {
@@ -1160,16 +1884,9 @@ export function ChatPage({
       setSettingsProviders(updated.providers ?? []);
       setActiveProviderId(updated.activeProviderId || null);
       setActiveModelId(updated.activeModelId || null);
-      setRuntimeSettings({
-        activeProvider: updated.activeProvider,
-        apiBaseUrl: updated.apiBaseUrl,
-        model: updated.model,
-        temperature: updated.temperature,
-        maxTokens: updated.maxTokens,
-        topP: updated.topP,
-        language: updated.language
-      });
+      setRuntimeSettings(updated);
       useAppStore.getState().setShowMessageAvatars(updated.showMessageAvatars);
+      useAppStore.getState().setShowMessageTimestamps(updated.showMessageTimestamps);
       setStatus(t("chat.modelSwitched", { label: model.label || model.model }));
     } catch (caught) {
       setActiveProviderId(previousProviderId);
@@ -1180,11 +1897,13 @@ export function ChatPage({
     }
   };
 
-  const sendMessage = async () => {
-    if (!activeChat || !draft.trim()) {
+  const startMessageGeneration = async (messageContent: string) => {
+    if (!activeChat || !messageContent.trim()) {
       return;
     }
 
+    const chatId = activeChat.id;
+    const normalizedContent = messageContent.trim();
     setLoading(true);
     setError(null);
     setStatus(null);
@@ -1196,13 +1915,16 @@ export function ChatPage({
       const payload: GenerationClientMessage = {
         type: "generate",
         requestId,
-        chatId: activeChat.id,
-        content: draft.trim()
+        chatId,
+        content: normalizedContent
       };
       setActiveRequestId(requestId);
+      setGenerationChatId(chatId);
       setStreamingContent("");
       setStreamingCharacterId(null);
+      setStreamingContextCounts(null);
       streamingBufferRef.current = "";
+      saveStoredChatDraft(chatId, "");
       setDraft("");
       requestAnimationFrame(() => {
         if (draftTextAreaRef.current) {
@@ -1211,12 +1933,77 @@ export function ChatPage({
       });
       sendWs(payload);
     } catch (caught) {
+      if (draftChatIdRef.current === chatId) {
+        setDraft((current) => current || normalizedContent);
+      } else {
+        saveStoredChatDraft(chatId, normalizedContent);
+      }
       setError(caught instanceof Error ? caught.message : t("chat.failedSend"));
       setLoading(false);
       setActiveRequestId(null);
+      setGenerationChatId(null);
+      setStreamingContextCounts(null);
     } finally {
       // Loading ends when the WebSocket sends generation_done, generation_stopped, or error.
     }
+  };
+
+  const generateOpeningMessage = async () => {
+    if (!activeChat || activeChat.messages.length > 0) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const message = await api.chats.openingMessage(activeChat.id);
+      upsertMessage(message);
+      hasMessagesRef.current = true;
+      setIsNearBottom(true);
+      requestAnimationFrame(() => scrollToBottom());
+      setStatus(t("chat.openingGenerated"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedOpening"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const queueDraftMessage = () => {
+    if (!activeChat || !draft.trim()) {
+      return;
+    }
+    if (queuedMessagesRef.current.length >= MAX_QUEUED_MESSAGES) {
+      setError(t("chat.queueFull"));
+      return;
+    }
+
+    const message: QueuedChatMessage = { id: generateId(), content: draft.trim() };
+    replaceQueuedMessages([...queuedMessagesRef.current, message]);
+    saveStoredChatDraft(activeChat.id, "");
+    setDraft("");
+    setStatus(t("chat.messageQueued"));
+    requestAnimationFrame(() => {
+      if (draftTextAreaRef.current) {
+        draftTextAreaRef.current.style.height = "auto";
+      }
+    });
+  };
+
+  const sendMessage = async () => {
+    if (!activeChat || !draft.trim()) {
+      return;
+    }
+    if (activeRequestId) {
+      queueDraftMessage();
+      return;
+    }
+    if (loading) {
+      return;
+    }
+
+    await startMessageGeneration(draft);
   };
 
   const stopGeneration = () => {
@@ -1230,6 +2017,46 @@ export function ChatPage({
     };
     sendWs(payload);
   };
+
+  const dispatchQueuedMessages = () => {
+    if (
+      !activeChat ||
+      queuedChatIdRef.current !== activeChat.id ||
+      queuedMessagesRef.current.length === 0
+    ) {
+      return;
+    }
+
+    const messageContent = queuedMessagesRef.current.map((message) => message.content).join("\n\n");
+    replaceQueuedMessages([]);
+    void startMessageGeneration(messageContent);
+  };
+
+  const sendQueuedMessagesNow = () => {
+    if (queuedMessagesRef.current.length === 0) {
+      return;
+    }
+    if (activeRequestId) {
+      interruptForQueueRef.current = true;
+      stopGeneration();
+      return;
+    }
+    dispatchQueuedMessages();
+  };
+
+  const editQueuedMessage = (message: QueuedChatMessage) => {
+    replaceQueuedMessages(queuedMessagesRef.current.filter((entry) => entry.id !== message.id));
+    setDraft((current) => (current.trim() ? `${message.content}\n\n${current}` : message.content));
+    requestAnimationFrame(() => draftTextAreaRef.current?.focus());
+  };
+
+  const deleteQueuedMessage = (messageId: string) => {
+    replaceQueuedMessages(queuedMessagesRef.current.filter((entry) => entry.id !== messageId));
+  };
+
+  useEffect(() => {
+    onMessageHandlersRef.current.dispatchQueuedMessages = dispatchQueuedMessages;
+  }, [activeChat, isConnected]);
 
   const regenerateMessage = async (message: MessageDTO) => {
     if (message.role !== "assistant") {
@@ -1249,14 +2076,18 @@ export function ChatPage({
         messageId: message.id
       };
       setActiveRequestId(requestId);
+      setGenerationChatId(message.chatId);
       setStreamingContent("");
       setStreamingCharacterId(message.characterId);
+      setStreamingContextCounts(null);
       streamingBufferRef.current = "";
       sendWs(payload);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedRegenerate"));
       setLoading(false);
       setActiveRequestId(null);
+      setGenerationChatId(null);
+      setStreamingContextCounts(null);
     }
   };
 
@@ -1273,6 +2104,396 @@ export function ChatPage({
       document.execCommand("copy");
       document.body.removeChild(textarea);
     }
+  };
+
+  const toggleMessageContext = async (message: MessageDTO) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const updated = await api.messages.update(message.id, {
+        contextIncluded: !message.contextIncluded
+      });
+      upsertMessage(updated);
+      setStatus(
+        updated.contextIncluded ? t("chat.messageIncludedInContext") : t("chat.messageExcludedFromContext")
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdate"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleMessageBookmark = async (message: MessageDTO) => {
+    try {
+      const updated = await api.messages.update(message.id, {
+        isBookmarked: !message.isBookmarked
+      });
+      upsertMessage(updated);
+      setStatus(t(updated.isBookmarked ? "chat.messageBookmarked" : "chat.messageUnbookmarked"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdate"));
+    }
+  };
+
+  const continueMessage = async (message: MessageDTO) => {
+    if (message.role !== "assistant" || !activeChat) {
+      return;
+    }
+
+    const lastMessage = activeChat.messages[activeChat.messages.length - 1];
+    if (lastMessage?.id !== message.id) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      if (!isConnected) {
+        throw new Error(t("chat.websocketFailed"));
+      }
+      const requestId = generateId();
+      const payload: GenerationClientMessage = {
+        type: "continue",
+        requestId,
+        messageId: message.id
+      };
+      setActiveRequestId(requestId);
+      setGenerationChatId(message.chatId);
+      setStreamingContent("");
+      setStreamingCharacterId(message.characterId);
+      setStreamingContextCounts(null);
+      streamingBufferRef.current = "";
+      sendWs(payload);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedContinue"));
+      setLoading(false);
+      setActiveRequestId(null);
+      setGenerationChatId(null);
+      setStreamingContextCounts(null);
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return;
+
+      const target = event.target as HTMLElement | null;
+      const isComposer = target?.id === "chat-message-input";
+      const isEditable =
+        isComposer ||
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.isContentEditable;
+
+      if (event.key === "Escape" && activeRequestId) {
+        event.preventDefault();
+        stopGeneration();
+        return;
+      }
+
+      if (isComposer && event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        void sendMessage();
+        return;
+      }
+
+      if (isEditable || event.key !== "Enter" || !event.altKey || !activeChat || activeRequestId) {
+        return;
+      }
+
+      const latestAssistant = [...activeChat.messages]
+        .reverse()
+        .find((message) => message.role === "assistant");
+      if (latestAssistant) {
+        event.preventDefault();
+        void continueMessage(latestAssistant);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeChat, activeRequestId, continueMessage, sendMessage, stopGeneration]);
+
+  const createStoryCopy = async (
+    message: MessageDTO,
+    kind: "branch" | "checkpoint",
+    title?: string
+  ) => {
+    if (!activeChat) {
+      return;
+    }
+
+    const isCheckpoint = kind === "checkpoint";
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const branch = await api.chats.branch(activeChat.id, {
+        messageId: message.id,
+        title: title?.trim() || `${activeChat.title} - ${isCheckpoint ? t("chat.checkpoint") : "Branch"}`,
+        kind
+      });
+      onChatsChanged();
+      if (isCheckpoint) {
+        setStatus(t("chat.checkpointCreated"));
+      } else {
+        setActiveChat(branch);
+        setChatMemories(branch.memories ?? []);
+        hasMessagesRef.current = branch.messages.length > 0;
+        setMemoryDraft(String(branch.memoryTurns));
+        onSelectChat(branch.id);
+        setStatus(language === "zh-CN" ? "已创建聊天分支。" : "Chat branch created.");
+        setIsNearBottom(true);
+        requestAnimationFrame(() => scrollToBottom());
+      }
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : language === "zh-CN"
+            ? isCheckpoint
+              ? "创建检查点失败"
+              : "创建聊天分支失败"
+            : isCheckpoint
+              ? "Failed to create checkpoint"
+              : "Failed to create chat branch"
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const branchFromMessage = (message: MessageDTO) => createStoryCopy(message, "branch");
+
+  const checkpointFromMessage = (message: MessageDTO) => {
+    if (!activeChat) {
+      return;
+    }
+    setPendingCheckpointMessage(message);
+    setCheckpointTitleDraft(`${activeChat.title} - ${t("chat.checkpoint")}`);
+  };
+
+  const saveCheckpoint = () => {
+    if (!pendingCheckpointMessage || !checkpointTitleDraft.trim()) {
+      return;
+    }
+    const message = pendingCheckpointMessage;
+    const title = checkpointTitleDraft.trim();
+    setPendingCheckpointMessage(null);
+    setCheckpointTitleDraft("");
+    void createStoryCopy(message, "checkpoint", title);
+  };
+
+  const transcribeRecording = async (blob: Blob) => {
+    setMediaLoading(true);
+    setError(null);
+    try {
+      const text = (
+        await api.media.transcribe({
+          audioBase64: await blobToBase64(blob),
+          mimeType: blob.type || "audio/webm",
+          filename: "recording.webm"
+        })
+      ).text.trim();
+
+      if (text) {
+        setDraft((current) => (current.trim() ? `${current.trim()}\n${text}` : text));
+        setStatus(t("chat.voiceTranscribed"));
+        requestAnimationFrame(autoResizeDraftTextArea);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.voiceFailed"));
+    } finally {
+      setMediaLoading(false);
+    }
+  };
+
+  const toggleVoiceRecording = async () => {
+    if (recording) {
+      mediaRecorderRef.current?.stop();
+      return;
+    }
+
+    if (!canTranscribe) {
+      setError(t("chat.mediaModelMissing"));
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setError(t("chat.voiceUnsupported"));
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      recordingChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recordingChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        setRecording(false);
+        const blob = new Blob(recordingChunksRef.current, {
+          type: recorder.mimeType || "audio/webm"
+        });
+        if (blob.size > 0) {
+          void transcribeRecording(blob);
+        }
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+      setStatus(t("chat.voiceRecording"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.voiceFailed"));
+    }
+  };
+
+  const stopSpeechPlayback = useCallback(() => {
+    const audio = speechAudioRef.current;
+    speechAudioRef.current = null;
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+    setSpeechPlaying(false);
+    setSpeechMessageId(null);
+  }, []);
+
+  const playAssistantMessage = useCallback(async (message: MessageDTO) => {
+    if (!canSpeak) {
+      setError(t("chat.mediaModelMissing"));
+      return;
+    }
+
+    setMediaLoading(true);
+    setError(null);
+    try {
+      stopSpeechPlayback();
+      const speech = await api.media.speech({
+        text: message.content.slice(0, 4000),
+        voice: runtimeSettings?.ttsVoice?.trim() || "alloy",
+        format: "mp3"
+      });
+      const audio = new Audio(`data:${speech.mimeType};base64,${speech.audioBase64}`);
+      audio.playbackRate = Math.min(
+        2,
+        Math.max(0.5, runtimeSettings?.ttsPlaybackRate ?? 1)
+      );
+      audio.onended = () => {
+        if (speechAudioRef.current === audio) {
+          speechAudioRef.current = null;
+          setSpeechPlaying(false);
+          setSpeechMessageId(null);
+        }
+      };
+      audio.onerror = () => {
+        if (speechAudioRef.current === audio) {
+          speechAudioRef.current = null;
+          setSpeechPlaying(false);
+          setSpeechMessageId(null);
+          setError(t("chat.voiceFailed"));
+        }
+      };
+      speechAudioRef.current = audio;
+      setSpeechPlaying(true);
+      setSpeechMessageId(message.id);
+      await audio.play();
+      setStatus(t("chat.voicePlaying"));
+    } catch (caught) {
+      stopSpeechPlayback();
+      setError(caught instanceof Error ? caught.message : t("chat.voiceFailed"));
+    } finally {
+      setMediaLoading(false);
+    }
+  }, [canSpeak, runtimeSettings?.ttsPlaybackRate, runtimeSettings?.ttsVoice, stopSpeechPlayback, t]);
+
+  const speakLatestAssistantMessage = async () => {
+    const latestAssistant = [...(activeChat?.messages ?? [])]
+      .reverse()
+      .find((message) => message.role === "assistant" && message.content.trim());
+    if (!latestAssistant) {
+      setError(t("chat.voiceNoAssistant"));
+      return;
+    }
+    await playAssistantMessage(latestAssistant);
+  };
+
+  useEffect(() => {
+    onMessageHandlersRef.current.autoPlayAssistantMessage = (message) => {
+      if (
+        runtimeSettings?.ttsAutoPlay &&
+        canSpeak &&
+        !recording &&
+        message.chatId === activeChat?.id
+      ) {
+        void playAssistantMessage(message);
+      }
+    };
+  }, [activeChat?.id, canSpeak, playAssistantMessage, recording, runtimeSettings?.ttsAutoPlay]);
+
+  useEffect(() => () => stopSpeechPlayback(), [activeChat?.id, stopSpeechPlayback]);
+
+  useEffect(() => {
+    if (
+      speechMessageId &&
+      !activeChat?.messages.some((message) => message.id === speechMessageId)
+    ) {
+      stopSpeechPlayback();
+    }
+  }, [activeChat?.messages, speechMessageId, stopSpeechPlayback]);
+
+  const openImageDialog = () => {
+    if (!canGenerateImage) {
+      setError(t("chat.mediaModelMissing"));
+      return;
+    }
+
+    setGeneratedImagePreview(null);
+    setShowImageDialog(true);
+  };
+
+  const generateImagePreview = async () => {
+    if (!canGenerateImage || !imagePromptDraft.trim()) {
+      return;
+    }
+
+    setMediaLoading(true);
+    setError(null);
+    try {
+      const prompt = imagePromptDraft.trim();
+      const result = await api.media.image({ prompt, size: imageSize });
+      const image = result.images[0];
+      if (!image) {
+        throw new Error(t("chat.imageEmpty"));
+      }
+      const src = image.b64Json ? `data:${image.mimeType};base64,${image.b64Json}` : image.url;
+      if (!src) {
+        throw new Error(t("chat.imageEmpty"));
+      }
+      setGeneratedImagePreview({ prompt, src });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.imageFailed"));
+    } finally {
+      setMediaLoading(false);
+    }
+  };
+
+  const insertGeneratedImage = () => {
+    if (!generatedImagePreview) {
+      return;
+    }
+
+    const markdown = `![${generatedImagePreview.prompt.replace(/\]/g, "")}](${generatedImagePreview.src})`;
+    setDraft((current) => (current.trim() ? `${current.trim()}\n\n${markdown}` : markdown));
+    setShowImageDialog(false);
+    setGeneratedImagePreview(null);
+    setStatus(t("chat.imageInserted"));
+    requestAnimationFrame(autoResizeDraftTextArea);
   };
 
   const resendMessage = async (message: MessageDTO) => {
@@ -1306,8 +2527,10 @@ export function ChatPage({
         messageId: message.id
       };
       setActiveRequestId(requestId);
+      setGenerationChatId(message.chatId);
       setStreamingContent("");
       setStreamingCharacterId(null);
+      setStreamingContextCounts(null);
       streamingBufferRef.current = "";
       setIsNearBottom(true);
       sendWs(payload);
@@ -1316,6 +2539,8 @@ export function ChatPage({
       setError(caught instanceof Error ? caught.message : t("chat.failedSend"));
       setLoading(false);
       setActiveRequestId(null);
+      setGenerationChatId(null);
+      setStreamingContextCounts(null);
     }
   };
 
@@ -1450,8 +2675,84 @@ export function ChatPage({
               </div>
             }
             action={
-              activeChat ? (
-                <div className="relative" ref={memorySettingsRef}>
+              <div className="flex items-center gap-1">
+                <Button
+                  aria-label={t("chat.readinessTitle")}
+                  className={`!h-8 !min-h-8 !w-8 !p-0 ${
+                    readinessIssueCount > 0 ? "text-amber-300" : "text-emerald-300"
+                  }`}
+                  data-testid="chat-readiness-trigger"
+                  title={t("chat.readinessTitle")}
+                  variant="ghost"
+                  onClick={() => setShowReadinessDialog(true)}
+                >
+                  {readinessIssueCount > 0 ? <CircleAlert size={15} /> : <ListChecks size={15} />}
+                </Button>
+                {activeChat ? (
+                  <>
+                  {activeChat.parentChatId ? (
+                    <Button
+                      aria-label={t("chat.returnToParent")}
+                      className="!h-8 !min-h-8 !w-8 !p-0"
+                      data-testid="chat-return-to-parent"
+                      title={t("chat.returnToParent")}
+                      variant="ghost"
+                      onClick={() => {
+                        if (activeChat.parentChatId) {
+                          onSelectChat(activeChat.parentChatId);
+                        }
+                      }}
+                    >
+                      <CornerUpLeft size={15} />
+                    </Button>
+                  ) : null}
+                  <Button
+                    aria-label={t("chat.searchMessages")}
+                    className="!h-8 !min-h-8 !w-8 !p-0"
+                    data-testid="chat-search-trigger"
+                    title={t("chat.searchMessages")}
+                    variant="ghost"
+                    onClick={() => {
+                      setMessageSearchOpen(true);
+                      setMessageSearchResult(null);
+                    }}
+                  >
+                    <Search size={15} />
+                  </Button>
+                  <Button
+                    aria-label={t("chat.bookmarks")}
+                    className="!h-8 !min-h-8 !w-8 !p-0"
+                    data-testid="chat-bookmarks-trigger"
+                    title={t("chat.bookmarks")}
+                    variant="ghost"
+                    onClick={() => setShowBookmarksDialog(true)}
+                  >
+                    <Bookmark size={15} />
+                  </Button>
+                  <Button
+                    aria-label={t("chat.titleSuggestion")}
+                    className="!h-8 !min-h-8 !w-8 !p-0"
+                    data-testid="chat-title-suggestion-trigger"
+                    disabled={titleSuggestionLoading || activeChat.messages.length === 0}
+                    title={t("chat.titleSuggestion")}
+                    variant="ghost"
+                    onClick={() => void generateTitleSuggestion()}
+                  >
+                    <Sparkles size={15} />
+                  </Button>
+                  <Button
+                    aria-label={t("chat.agentTitle")}
+                    aria-pressed={agentPanelOpen}
+                    className="!h-8 !min-h-8 !w-8 !p-0"
+                    data-testid="chat-agent-trigger"
+                    id="chat-agent-trigger"
+                    title={t("chat.agentTitle")}
+                    variant={agentPanelOpen ? "secondary" : "ghost"}
+                    onClick={openAgentPanel}
+                  >
+                    <BrainCircuit size={15} />
+                  </Button>
+                  <div className="relative" ref={memorySettingsRef}>
                   <Button
                     aria-expanded={memorySettingsOpen}
                     aria-label={t("chat.memorySettings")}
@@ -1506,7 +2807,7 @@ export function ChatPage({
                         <button
                           className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
                           type="button"
-                          onClick={() => void exportCurrentChat()}
+                          onClick={openTranscriptExport}
                         >
                           <span>{t("chat.exportChat")}</span>
                           <Download size={14} className="text-slate-400" />
@@ -1552,8 +2853,10 @@ export function ChatPage({
                       </div>
                     </div>
                   ) : null}
-                </div>
-              ) : null
+                  </div>
+                  </>
+                ) : null}
+              </div>
             }
           >
             <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
@@ -1575,7 +2878,25 @@ export function ChatPage({
               <div className="relative z-10 flex min-h-0 flex-1 flex-col">
                 {!activeChat ? (
                   <div id="chat-empty-state">
-                    <EmptyState>{t("chat.selectOrCreate")}</EmptyState>
+                    <EmptyState>
+                      <div className="flex max-w-md flex-col items-center gap-3">
+                        <p>{t("chat.selectOrCreate")}</p>
+                        <p className="text-xs leading-5 text-slate-500">
+                          {readinessIssueCount > 0
+                            ? t("chat.readinessEmptyNeedsAction", { count: readinessIssueCount })
+                            : t("chat.readinessEmptyReady")}
+                        </p>
+                        <Button
+                          className="!min-h-[40px]"
+                          data-testid="chat-readiness-empty-action"
+                          variant={readinessIssueCount > 0 ? "primary" : "secondary"}
+                          onClick={() => setShowReadinessDialog(true)}
+                        >
+                          <ListChecks size={15} />
+                          {t("chat.readinessOpen")}
+                        </Button>
+                      </div>
+                    </EmptyState>
                   </div>
                 ) : (
                   <div className="flex min-h-0 flex-1 flex-col">
@@ -1652,7 +2973,24 @@ export function ChatPage({
                               className="flex h-full items-center justify-center"
                               id="chat-empty-state"
                             >
-                              <EmptyState>{t("chat.noMessages")}</EmptyState>
+                              <EmptyState>
+                                <div className="flex max-w-md flex-col items-center gap-3">
+                                  <p>{t("chat.noMessages")}</p>
+                                  <p className="text-xs leading-5 text-slate-500">
+                                    {t("chat.openingHelp")}
+                                  </p>
+                                  <Button
+                                    className="!min-h-[40px]"
+                                    data-testid="chat-generate-opening"
+                                    disabled={loading || Boolean(activeRequestId)}
+                                    variant="secondary"
+                                    onClick={() => void generateOpeningMessage()}
+                                  >
+                                    <Sparkles size={15} />
+                                    {loading ? t("chat.openingGenerating") : t("chat.generateOpening")}
+                                  </Button>
+                                </div>
+                              </EmptyState>
                             </div>
                           ) : (
                             pagedMessages.map((message) => {
@@ -1663,6 +3001,10 @@ export function ChatPage({
                               const character = message.characterId
                                 ? characterMap.get(message.characterId)
                                 : undefined;
+                              const messageShellClassName =
+                                highlightedMessageId === message.id
+                                  ? "rounded-2xl ring-2 ring-ember-400/70 ring-offset-2 ring-offset-ink-950 transition"
+                                  : "transition";
                               if (isErrorSystem) {
                                 const errorText = message.content.slice(
                                   GENERATION_ERROR_PREFIX.length
@@ -1671,74 +3013,120 @@ export function ChatPage({
                                   .reverse()
                                   .find((m) => m.role === "assistant");
                                 return (
-                                  <ErrorBubble
+                                  <div
                                     key={message.id}
-                                    characterAvatar={
-                                      lastAssistant?.characterId
-                                        ? characterMap.get(lastAssistant.characterId)?.avatar
-                                        : null
-                                    }
-                                    showAvatar={showMessageAvatars}
-                                    error={errorText}
-                                    onRetry={retryGeneration}
-                                    onDismiss={() =>
-                                      void api.messages.remove(message.id).then(() => {
-                                        setActiveChat((current) =>
-                                          current
-                                            ? {
-                                                ...current,
-                                                messages: current.messages.filter(
-                                                  (m) => m.id !== message.id
-                                                )
-                                              }
-                                            : current
-                                        );
-                                      })
-                                    }
-                                  />
+                                    className={messageShellClassName}
+                                    data-message-id={message.id}
+                                  >
+                                    <ErrorBubble
+                                      characterAvatar={
+                                        lastAssistant?.characterId
+                                          ? characterMap.get(lastAssistant.characterId)?.avatar
+                                          : null
+                                      }
+                                      showAvatar={showMessageAvatars}
+                                      error={errorText}
+                                      onRetry={retryGeneration}
+                                      onDismiss={() =>
+                                        void api.messages.remove(message.id).then(() => {
+                                          setActiveChat((current) =>
+                                            current
+                                              ? {
+                                                  ...current,
+                                                  messages: current.messages.filter(
+                                                    (m) => m.id !== message.id
+                                                  )
+                                                }
+                                              : current
+                                          );
+                                        })
+                                      }
+                                    />
+                                  </div>
                                 );
                               }
                               if (isSystem) {
                                 return (
-                                  <SystemNotification key={message.id} content={message.content} />
+                                  <div
+                                    key={message.id}
+                                    className={messageShellClassName}
+                                    data-message-id={message.id}
+                                  >
+                                    <SystemNotification content={message.content} />
+                                  </div>
                                 );
                               }
 
                               if (isUser) {
                                 return (
-                                  <UserMessageBubble
+                                  <div
                                     key={message.id}
-                                    message={message}
-                                    showAvatar={showMessageAvatars}
-                                    onCopy={() => void copyMessage(message)}
-                                    onEdit={() => startEditingMessage(message)}
-                                    onDelete={() => setPendingDeleteMessage(message)}
-                                    onResend={() => void resendMessage(message)}
-                                  />
+                                    className={messageShellClassName}
+                                    data-message-id={message.id}
+                                  >
+                                    <UserMessageBubble
+                                      message={message}
+                                      showAvatar={showMessageAvatars}
+                                      showTimestamp={showMessageTimestamps}
+                                      onCopy={() => void copyMessage(message)}
+                                      onToggleBookmark={() => void toggleMessageBookmark(message)}
+                                      onToggleContext={() => void toggleMessageContext(message)}
+                                      onBranch={() => void branchFromMessage(message)}
+                                      onCheckpoint={() => void checkpointFromMessage(message)}
+                                      onEdit={() => startEditingMessage(message)}
+                                      onDelete={() => setPendingDeleteMessage(message)}
+                                      onResend={() => void resendMessage(message)}
+                                    />
+                                  </div>
                                 );
                               }
 
                               return (
-                                <AssistantMessageBubble
+                                <div
                                   key={message.id}
-                                  message={message}
-                                  avatar={character?.avatar}
-                                  showAvatar={showMessageAvatars}
-                                  htmlCss={character?.htmlCss}
-                                  tokenUsageFormatter={formatTokenUsage}
-                                  onCopy={() => void copyMessage(message)}
-                                  onRegenerate={() => void regenerateMessage(message)}
-                                  onEdit={() => startEditingMessage(message)}
-                                  onDelete={() => setPendingDeleteMessage(message)}
-                                  onVariantPrev={() => void switchVariant(message, -1)}
-                                  onVariantNext={() => void switchVariant(message, 1)}
-                                  onDebug={setDebugMessage}
-                                  disableRegenerate={Boolean(activeRequestId)}
-                                />
+                                  className={messageShellClassName}
+                                  data-message-id={message.id}
+                                >
+                                  <AssistantMessageBubble
+                                    message={message}
+                                    avatar={character?.avatar}
+                                    showAvatar={showMessageAvatars}
+                                    showTimestamp={showMessageTimestamps}
+                                    htmlCss={character?.htmlCss}
+                                    tokenUsageFormatter={formatTokenUsage}
+                                    onCopy={() => void copyMessage(message)}
+                                    onSpeak={() => {
+                                      if (speechPlaying && speechMessageId === message.id) {
+                                        stopSpeechPlayback();
+                                      } else {
+                                        void playAssistantMessage(message);
+                                      }
+                                    }}
+                                    onToggleBookmark={() => void toggleMessageBookmark(message)}
+                                    onBranch={() => void branchFromMessage(message)}
+                                    onCheckpoint={() => void checkpointFromMessage(message)}
+                                    onToggleContext={() => void toggleMessageContext(message)}
+                                    onContinue={() => void continueMessage(message)}
+                                    onRegenerate={() => void regenerateMessage(message)}
+                                    onEdit={() => startEditingMessage(message)}
+                                    onDelete={() => setPendingDeleteMessage(message)}
+                                    onVariantPrev={() => void switchVariant(message, -1)}
+                                    onVariantNext={() => void switchVariant(message, 1)}
+                                    onDebug={setDebugMessage}
+                                    disableRegenerate={Boolean(activeRequestId)}
+                                    disableSpeech={mediaLoading || recording || !canSpeak}
+                                    speechPlaying={speechPlaying && speechMessageId === message.id}
+                                    canContinue={
+                                      activeChat.messages[activeChat.messages.length - 1]?.id === message.id
+                                    }
+                                    disableContinue={Boolean(activeRequestId)}
+                                  />
+                                </div>
                               );
                             })
                           )}
                           {activeRequestId &&
+                          generationChatId === activeChat.id &&
                           streamingCharacterId &&
                           safeMessagePage >= totalMessagePages ? (
                             <StreamingBubble
@@ -1755,6 +3143,14 @@ export function ChatPage({
                                   : undefined
                               }
                               content={streamingContent}
+                              contextSummary={
+                                streamingContextCounts
+                                  ? {
+                                      loreCount: streamingContextCounts.lore,
+                                      memoryCount: streamingContextCounts.memory
+                                    }
+                                  : undefined
+                              }
                             />
                           ) : null}
                         </div>
@@ -1825,6 +3221,122 @@ export function ChatPage({
                         className="mx-auto max-w-2xl rounded-xl border border-white/5 bg-ink-950/95 p-1.5 shadow-xl shadow-black/30 backdrop-blur-sm sm:p-2 xl:bg-ink-950/40 xl:shadow-none"
                         id="chat-composer"
                       >
+                        {queuedMessages.length > 0 ? (
+                          <div
+                            className="mb-1.5 border-b border-white/5 px-1 pb-2"
+                            data-testid="chat-message-queue"
+                          >
+                            <div className="mb-1 flex items-center justify-between gap-2">
+                              <span className="text-xs font-medium text-slate-400">
+                                {t("chat.queueCount", { count: queuedMessages.length })}
+                              </span>
+                              <button
+                                className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-ember-300 transition-colors hover:bg-ember-500/10 hover:text-ember-200"
+                                data-chat-action="queue-send-now"
+                                title={
+                                  activeRequestId ? t("chat.queueSendNow") : t("chat.queueSend")
+                                }
+                                type="button"
+                                onClick={sendQueuedMessagesNow}
+                              >
+                                <Send size={15} />
+                              </button>
+                            </div>
+                            <div className="max-h-28 space-y-1 overflow-y-auto">
+                              {queuedMessages.map((message) => (
+                                <div
+                                  className="flex min-w-0 items-center gap-1 rounded-md bg-white/[0.035] px-2 py-1"
+                                  data-chat-queue-item=""
+                                  data-queue-id={message.id}
+                                  key={message.id}
+                                >
+                                  <p className="min-w-0 flex-1 truncate text-xs text-slate-300">
+                                    {message.content}
+                                  </p>
+                                  <button
+                                    className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200"
+                                    data-chat-action="queue-edit"
+                                    title={t("chat.queueEdit")}
+                                    type="button"
+                                    onClick={() => editQueuedMessage(message)}
+                                  >
+                                    <Pencil size={13} />
+                                  </button>
+                                  <button
+                                    className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-slate-500 transition-colors hover:bg-rose-500/10 hover:text-rose-300"
+                                    data-chat-action="queue-delete"
+                                    title={t("chat.queueDelete")}
+                                    type="button"
+                                    onClick={() => deleteQueuedMessage(message.id)}
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                        <div className="mb-1 flex items-center gap-1 px-1">
+                          <button
+                            className={`grid h-9 w-9 place-items-center rounded-lg transition-colors ${
+                              recording
+                                ? "bg-rose-500/15 text-rose-300"
+                                : "text-slate-500 hover:bg-white/10 hover:text-slate-200"
+                            } disabled:opacity-40`}
+                            data-chat-action="voice-record"
+                            disabled={mediaLoading || (!recording && !canTranscribe)}
+                            title={
+                              recording
+                                ? t("chat.voiceStop")
+                                : canTranscribe
+                                  ? t("chat.voiceRecord")
+                                  : t("chat.mediaModelMissing")
+                            }
+                            type="button"
+                            onClick={() => void toggleVoiceRecording()}
+                          >
+                            <Mic size={16} />
+                          </button>
+                          <button
+                            className={`grid h-9 w-9 place-items-center rounded-lg transition-colors disabled:opacity-40 ${
+                              speechPlaying
+                                ? "bg-ember-500/15 text-ember-300 hover:bg-ember-500/20"
+                                : "text-slate-500 hover:bg-white/10 hover:text-slate-200"
+                            }`}
+                            data-chat-action="voice-speak"
+                            disabled={mediaLoading || recording || (!canSpeak && !speechPlaying)}
+                            title={
+                              speechPlaying
+                                ? t("chat.voiceStopPlayback")
+                                : canSpeak
+                                  ? t("chat.voiceSpeak")
+                                  : t("chat.mediaModelMissing")
+                            }
+                            type="button"
+                            onClick={() => {
+                              if (speechPlaying) {
+                                stopSpeechPlayback();
+                              } else {
+                                void speakLatestAssistantMessage();
+                              }
+                            }}
+                          >
+                            {speechPlaying ? <VolumeX size={16} /> : <Volume2 size={16} />}
+                          </button>
+                          <button
+                            className="grid h-9 w-9 place-items-center rounded-lg text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200 disabled:opacity-40"
+                            data-chat-action="image-generate"
+                            disabled={mediaLoading || recording || !canGenerateImage}
+                            title={canGenerateImage ? t("chat.imageGenerate") : t("chat.mediaModelMissing")}
+                            type="button"
+                            onClick={openImageDialog}
+                          >
+                            <Image size={16} />
+                          </button>
+                          {mediaLoading ? (
+                            <span className="ml-1 text-xs text-slate-500">{t("chat.mediaWorking")}</span>
+                          ) : null}
+                        </div>
                         <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-1.5 sm:gap-2">
                           <TextArea
                             ref={draftTextAreaRef}
@@ -1847,16 +3359,29 @@ export function ChatPage({
                             }}
                           />
                           {activeRequestId ? (
-                            <Button
-                              className="!min-h-[40px] sm:!min-h-[44px]"
-                              data-chat-action="stop"
-                              id="chat-primary-action"
-                              variant="danger"
-                              onClick={stopGeneration}
-                            >
-                              <StopCircle size={16} />
-                              {t("chat.stop")}
-                            </Button>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-rose-600 text-white transition-colors hover:bg-rose-500 sm:h-11 sm:w-11"
+                                data-chat-action="stop"
+                                title={t("chat.stop")}
+                                type="button"
+                                onClick={stopGeneration}
+                              >
+                                <StopCircle size={17} />
+                              </button>
+                              <Button
+                                className="!min-h-[40px] sm:!min-h-[44px]"
+                                data-chat-action="queue"
+                                disabled={
+                                  !draft.trim() || queuedMessages.length >= MAX_QUEUED_MESSAGES
+                                }
+                                id="chat-primary-action"
+                                onClick={queueDraftMessage}
+                              >
+                                <Send size={16} />
+                                {t("chat.queue")}
+                              </Button>
+                            </div>
                           ) : (
                             <Button
                               className="!min-h-[40px] sm:!min-h-[44px]"
@@ -1877,6 +3402,133 @@ export function ChatPage({
               </div>
             </div>
           </Panel>
+          {activeChat && agentPanelOpen ? (
+            <>
+              <button
+                aria-label={t("chat.agentClose")}
+                className="fixed inset-0 z-40 bg-black/45 sm:hidden"
+                type="button"
+                onClick={closeAgentPanel}
+              />
+              <aside
+                aria-label={t("chat.agentTitle")}
+                className="fixed inset-x-0 bottom-0 z-50 flex max-h-[82dvh] min-h-[420px] flex-col rounded-t-2xl border border-white/10 bg-ink-900/95 p-3 shadow-2xl shadow-black/50 backdrop-blur-xl sm:inset-x-auto sm:bottom-4 sm:right-4 sm:top-24 sm:w-[420px] sm:max-h-none sm:min-h-0 sm:rounded-2xl sm:p-4"
+                data-testid="chat-agent-panel"
+              >
+                <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-3">
+                  <div className="min-w-0">
+                    <h4 className="text-sm font-semibold text-slate-100">
+                      {t("chat.agentTitle")}
+                    </h4>
+                    <p className="mt-1 text-xs leading-5 text-slate-400">
+                      {t("chat.agentHelp")}
+                    </p>
+                  </div>
+                  <button
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200"
+                    type="button"
+                    aria-label={t("chat.agentClose")}
+                    onClick={closeAgentPanel}
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                <div className="custom-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
+                  <div className="grid grid-cols-2 gap-2" role="group" aria-label={t("chat.agentMode")}>
+                    {agentModes.map((mode) => {
+                      const selected = mode === agentMode;
+                      return (
+                        <button
+                          key={mode}
+                          className={`min-h-[72px] rounded-lg border px-3 py-2 text-left transition-colors ${
+                            selected
+                              ? "border-ember-500/40 bg-ember-500/15 text-ember-100"
+                              : "border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/20 hover:bg-white/[0.06]"
+                          }`}
+                          type="button"
+                          onClick={() => setAgentMode(mode)}
+                        >
+                          <span className="block text-xs font-semibold">
+                            {getAgentModeLabel(mode)}
+                          </span>
+                          <span className="mt-1 block text-[11px] leading-4 text-slate-500">
+                            {getAgentModeDescription(mode)}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-slate-300">{t("chat.agentFocus")}</p>
+                    <TextArea
+                      className="!h-24"
+                      maxLength={1000}
+                      placeholder={t("chat.agentFocusPlaceholder")}
+                      value={agentFocus}
+                      onChange={(event) => setAgentFocus(event.target.value)}
+                    />
+                  </div>
+
+                  <Button
+                    className="w-full"
+                    data-testid="chat-agent-run"
+                    disabled={agentLoading}
+                    onClick={() => void runAgentDraft()}
+                  >
+                    <Sparkles size={16} />
+                    {agentLoading ? t("chat.agentRunning") : t("chat.agentRun")}
+                  </Button>
+
+                  <div className="min-h-[180px] rounded-xl border border-white/10 bg-ink-950/50 p-3">
+                    {agentDraft ? (
+                      <div className="space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-100">
+                              {getAgentModeLabel(agentDraft.mode)}
+                            </p>
+                            <p className="mt-1 text-xs text-slate-500">
+                              {t("chat.agentContextCounts", {
+                                lore: agentDraft.matchedLoreEntries.length,
+                                memory: agentDraft.matchedMemoryEntries.length
+                              })}
+                            </p>
+                          </div>
+                          <div className="flex gap-1">
+                            <button
+                              className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200"
+                              type="button"
+                              title={t("common.copy")}
+                              onClick={() => void copyAgentDraft()}
+                            >
+                              <Clipboard size={14} />
+                            </button>
+                            <button
+                              className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200"
+                              type="button"
+                              title={t("chat.agentInsert")}
+                              onClick={insertAgentDraft}
+                            >
+                              <Send size={14} />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="custom-scrollbar max-h-[34dvh] overflow-y-auto whitespace-pre-wrap break-words text-sm leading-6 text-slate-200 sm:max-h-none">
+                          {agentDraft.content}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex h-full min-h-[150px] items-center justify-center text-center text-sm leading-6 text-slate-500">
+                        {t("chat.agentEmpty")}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </aside>
+            </>
+          ) : null}
         </div>
       </div>
       {editingMessage ? (
@@ -1942,6 +3594,48 @@ export function ChatPage({
           </section>
         </div>
       ) : null}
+      {pendingCheckpointMessage ? (
+        <Modal
+          title={t("chat.saveCheckpoint")}
+          onClose={() => {
+            if (!loading) {
+              setPendingCheckpointMessage(null);
+              setCheckpointTitleDraft("");
+            }
+          }}
+        >
+          <div className="space-y-4">
+            <TextInput
+              autoFocus
+              aria-label={t("chat.title")}
+              value={checkpointTitleDraft}
+              onChange={(event) => setCheckpointTitleDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  saveCheckpoint();
+                }
+              }}
+            />
+            <div className="flex justify-end gap-3">
+              <Button
+                disabled={loading}
+                variant="ghost"
+                onClick={() => {
+                  setPendingCheckpointMessage(null);
+                  setCheckpointTitleDraft("");
+                }}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button disabled={loading || !checkpointTitleDraft.trim()} onClick={saveCheckpoint}>
+                <Save size={15} />
+                {t("chat.saveCheckpoint")}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
       {pendingDeleteMessage ? (
         <ConfirmDialog
           cancelLabel={t("common.cancel")}
@@ -1965,12 +3659,255 @@ export function ChatPage({
           onConfirm={() => void deleteLongTermMemory()}
         />
       ) : null}
+      {messageSearchOpen ? (
+        <Modal title={t("chat.searchMessages")} onClose={() => setMessageSearchOpen(false)}>
+          <div className="space-y-4">
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <TextInput
+                autoFocus
+                aria-label={t("chat.searchMessages")}
+                placeholder={t("chat.searchPlaceholder")}
+                value={messageSearchQuery}
+                onChange={(event) => setMessageSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void runMessageSearch();
+                  }
+                }}
+              />
+              <Button
+                className="!min-h-[40px]"
+                disabled={messageSearchLoading || !messageSearchQuery.trim()}
+                type="button"
+                onClick={() => void runMessageSearch()}
+              >
+                <Search size={15} />
+                {messageSearchLoading ? t("chat.searching") : t("chat.searchRun")}
+              </Button>
+            </div>
+            {messageSearchResult ? (
+              <div className="space-y-3" data-testid="chat-search-results">
+                <p className="text-xs text-slate-500">
+                  {t("chat.searchSummary", {
+                    total: messageSearchResult.total,
+                    shown: messageSearchResult.results.length
+                  })}
+                </p>
+                {messageSearchResult.results.length ? (
+                  <div className="grid gap-2">
+                    {messageSearchResult.results.map((result) => {
+                      const roleLabel =
+                        result.message.role === "assistant"
+                          ? t("chat.searchAssistant")
+                          : result.message.role === "system"
+                            ? t("chat.searchSystem")
+                            : t("chat.searchUser");
+                      return (
+                        <button
+                          key={result.message.id}
+                          className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-ember-400/50 hover:bg-ember-500/10"
+                          data-testid="chat-search-result"
+                          type="button"
+                          onClick={() => jumpToMessageSearchResult(result)}
+                        >
+                          <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                            <span className="font-semibold text-slate-300">{roleLabel}</span>
+                            <span>
+                              {t("chat.searchPosition", { index: result.index + 1 })}
+                            </span>
+                          </div>
+                          <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-200">
+                            {result.snippet}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500">{t("chat.searchEmpty")}</p>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">{t("chat.searchHelp")}</p>
+            )}
+          </div>
+        </Modal>
+      ) : null}
+      {showBookmarksDialog ? (
+        <Modal title={t("chat.bookmarks")} onClose={() => setShowBookmarksDialog(false)}>
+          <div className="space-y-4" data-testid="chat-bookmarks-dialog">
+            <p className="text-sm leading-6 text-slate-400">{t("chat.bookmarksHelp")}</p>
+            {bookmarkedMessages.length ? (
+              <div className="grid gap-2">
+                {bookmarkedMessages.map(({ message, index }) => {
+                  const roleLabel =
+                    message.role === "assistant"
+                      ? t("chat.searchAssistant")
+                      : message.role === "system"
+                        ? t("chat.searchSystem")
+                        : t("chat.searchUser");
+                  return (
+                    <button
+                      key={message.id}
+                      className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-ember-400/50 hover:bg-ember-500/10"
+                      data-testid="chat-bookmark-result"
+                      type="button"
+                      onClick={() => jumpToBookmarkedMessage(message, index)}
+                    >
+                      <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <Bookmark className="text-ember-300" fill="currentColor" size={13} />
+                        <span className="font-semibold text-slate-300">{roleLabel}</span>
+                        <span>{t("chat.bookmarkedAt", { index: index + 1 })}</span>
+                      </div>
+                      <p className="line-clamp-3 whitespace-pre-wrap break-words text-sm leading-6 text-slate-200">
+                        {message.content}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">{t("chat.bookmarksEmpty")}</p>
+            )}
+          </div>
+        </Modal>
+      ) : null}
+      {showExportDialog ? (
+        <Modal title={t("chat.exportTranscriptTitle")} onClose={() => setShowExportDialog(false)}>
+          <div className="space-y-4" data-testid="chat-export-dialog">
+            <div
+              aria-label={t("chat.exportFormat")}
+              className="grid grid-cols-2 rounded-lg bg-white/[0.04] p-1"
+              role="group"
+            >
+              {(["markdown", "text"] as const).map((format) => (
+                <button
+                  aria-pressed={transcriptFormat === format}
+                  className={`min-h-9 rounded-md px-3 text-sm font-medium transition-colors ${
+                    transcriptFormat === format
+                      ? "bg-ember-500/15 text-ember-200"
+                      : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                  }`}
+                  data-chat-export-format={format}
+                  key={format}
+                  type="button"
+                  onClick={() => setTranscriptFormat(format)}
+                >
+                  {t(format === "markdown" ? "chat.exportMarkdown" : "chat.exportPlainText")}
+                </button>
+              ))}
+            </div>
+            <label className="flex min-h-10 cursor-pointer items-center gap-3 text-sm text-slate-300">
+              <input
+                checked={transcriptIncludeTimestamps}
+                className="h-4 w-4 accent-ember-500"
+                type="checkbox"
+                onChange={(event) => setTranscriptIncludeTimestamps(event.target.checked)}
+              />
+              {t("chat.exportIncludeTimestamps")}
+            </label>
+            <textarea
+              aria-label={t("chat.exportPreview")}
+              className="custom-scrollbar h-64 w-full resize-none rounded-lg border border-white/10 bg-ink-950/70 p-3 font-mono text-xs leading-5 text-slate-300 outline-none"
+              readOnly
+              value={transcriptPreview}
+            />
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button type="button" variant="secondary" onClick={() => void copyCurrentTranscript()}>
+                <Clipboard size={15} />
+                {t("chat.exportCopy")}
+              </Button>
+              <Button
+                data-chat-action="export-download"
+                type="button"
+                onClick={() => void downloadCurrentTranscript()}
+              >
+                <Download size={15} />
+                {t("chat.exportDownload")}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
       {showUserConfigDialog ? (
         <Modal title={t("chat.userConfigTitle")} onClose={cancelEditingUserConfig}>
           <div className="space-y-4">
             <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
               {t("chat.userConfigHelp")}
             </p>
+            <div
+              className="space-y-3 rounded-xl border border-white/10 bg-white/[0.03] p-4"
+              data-testid="persona-presets"
+            >
+              <div>
+                <p className="text-sm font-semibold text-slate-200">
+                  {t("chat.personaPresetsTitle")}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  {t("chat.personaPresetsHelp")}
+                </p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                <TextInput
+                  aria-label={t("chat.personaPresetName")}
+                  placeholder={t("chat.personaPresetName")}
+                  value={personaPresetName}
+                  onChange={(event) => setPersonaPresetName(event.target.value)}
+                />
+                <Button
+                  className="!min-h-[40px]"
+                  disabled={loading}
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void savePersonaPreset()}
+                >
+                  <Plus size={15} />
+                  {t("chat.personaPresetSave")}
+                </Button>
+              </div>
+              {userPersonaPresets.length ? (
+                <div className="grid gap-2">
+                  {userPersonaPresets.map((preset) => (
+                    <div
+                      key={preset.id}
+                      className="flex flex-col gap-3 rounded-lg border border-white/10 bg-ink-950/40 p-3 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-100">{preset.name}</p>
+                        <p className="mt-1 break-words text-xs leading-5 text-slate-500">
+                          {preset.config.prompt ||
+                            preset.config.prefix ||
+                            preset.config.suffix ||
+                            t("chat.userConfigEmpty")}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Button
+                          className="!min-h-[34px] text-xs"
+                          type="button"
+                          variant="ghost"
+                          onClick={() => applyPersonaPreset(preset)}
+                        >
+                          {t("chat.personaPresetApply")}
+                        </Button>
+                        <button
+                          aria-label={t("chat.personaPresetDelete", { name: preset.name })}
+                          className="grid h-8 w-8 place-items-center rounded-lg text-rose-400 transition-colors hover:bg-rose-500/15"
+                          disabled={loading}
+                          type="button"
+                          onClick={() => void deletePersonaPreset(preset)}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500">{t("chat.personaPresetEmpty")}</p>
+              )}
+            </div>
             <div className="space-y-5">
               <div className="space-y-2">
                 <p className="text-sm font-semibold text-slate-300">{t("chat.userConfigPrefix")}</p>
@@ -2224,6 +4161,95 @@ export function ChatPage({
           </div>
         </Modal>
       ) : null}
+      {showImageDialog ? (
+        <Modal
+          title={t("chat.imageGenerate")}
+          onClose={() => {
+            if (!mediaLoading) {
+              setShowImageDialog(false);
+              setGeneratedImagePreview(null);
+            }
+          }}
+          panelClassName="max-w-2xl"
+        >
+          <div className="space-y-4" data-testid="chat-image-dialog">
+            <p className="text-xs leading-5 text-slate-400">{t("chat.imagePromptHelp")}</p>
+            <TextArea
+              className="min-h-28"
+              maxLength={4000}
+              placeholder={t("chat.imagePrompt")}
+              value={imagePromptDraft}
+              onChange={(event) => {
+                setImagePromptDraft(event.target.value);
+                setGeneratedImagePreview(null);
+              }}
+            />
+            <label className="block space-y-1.5 text-sm font-medium text-slate-300">
+              <span>{t("chat.imageSize")}</span>
+              <select
+                className="chat-input w-full"
+                value={imageSize}
+                onChange={(event) => {
+                  setImageSize(event.target.value as "1024x1024" | "1024x1536" | "1536x1024" | "auto");
+                  setGeneratedImagePreview(null);
+                }}
+              >
+                <option value="1024x1024">1:1 (1024 x 1024)</option>
+                <option value="1024x1536">2:3 (1024 x 1536)</option>
+                <option value="1536x1024">3:2 (1536 x 1024)</option>
+                <option value="auto">{t("common.auto")}</option>
+              </select>
+            </label>
+            <div className="overflow-hidden rounded-lg border border-white/10 bg-ink-950/60">
+              {generatedImagePreview ? (
+                <img
+                  alt={generatedImagePreview.prompt}
+                  className="max-h-[52dvh] w-full object-contain"
+                  data-testid="chat-image-preview"
+                  src={generatedImagePreview.src}
+                />
+              ) : (
+                <div className="flex min-h-48 items-center justify-center px-6 text-center text-sm text-slate-500">
+                  {t("chat.imagePreviewEmpty")}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                className="!min-h-[36px]"
+                disabled={mediaLoading}
+                variant="ghost"
+                onClick={() => {
+                  setShowImageDialog(false);
+                  setGeneratedImagePreview(null);
+                }}
+              >
+                {t("common.cancel")}
+              </Button>
+              {generatedImagePreview ? (
+                <Button
+                  className="!min-h-[36px]"
+                  data-testid="chat-image-insert"
+                  disabled={mediaLoading}
+                  onClick={insertGeneratedImage}
+                >
+                  {t("chat.imageInsert")}
+                </Button>
+              ) : null}
+              <Button
+                className="!min-h-[36px]"
+                data-testid="chat-image-generate"
+                disabled={mediaLoading || !imagePromptDraft.trim()}
+                variant={generatedImagePreview ? "secondary" : "primary"}
+                onClick={() => void generateImagePreview()}
+              >
+                <Image size={15} />
+                {generatedImagePreview ? t("chat.imageRegenerate") : t("chat.imageGenerate")}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
       {showMemoryDialog ? (
         <Modal title={t("chat.memorySettings")} onClose={closeMemoryDialog}>
           <div className="space-y-6">
@@ -2462,6 +4488,61 @@ export function ChatPage({
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+      {showReadinessDialog ? (
+        <Modal
+          title={t("chat.readinessTitle")}
+          onClose={() => setShowReadinessDialog(false)}
+          panelClassName="max-w-xl"
+        >
+          <div className="space-y-4" data-testid="chat-readiness-dialog">
+            <p className="text-sm leading-6 text-slate-400">{t("chat.readinessHelp")}</p>
+            <div className="grid gap-2">
+              {readinessItems.map((item) => (
+                <div
+                  key={item.id}
+                  className={`flex flex-col gap-3 rounded-xl border p-3 sm:flex-row sm:items-center sm:justify-between ${
+                    item.ready
+                      ? "border-emerald-500/20 bg-emerald-500/[0.04]"
+                      : "border-amber-500/25 bg-amber-500/[0.05]"
+                  }`}
+                  data-readiness-item={item.id}
+                >
+                  <div className="flex min-w-0 gap-3">
+                    <span
+                      className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg ${
+                        item.ready
+                          ? "bg-emerald-500/15 text-emerald-300"
+                          : "bg-amber-500/15 text-amber-300"
+                      }`}
+                    >
+                      {item.ready ? <Check size={15} /> : <CircleAlert size={15} />}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-100">{item.title}</p>
+                      <p className="mt-1 text-xs leading-5 text-slate-400">{item.detail}</p>
+                    </div>
+                  </div>
+                  {!item.ready && item.onAction ? (
+                    <Button
+                      className="!min-h-[38px] shrink-0 text-xs"
+                      data-readiness-action={item.id}
+                      variant="secondary"
+                      onClick={item.onAction}
+                    >
+                      {item.actionLabel}
+                    </Button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs leading-5 text-slate-500">
+              {readinessIssueCount > 0
+                ? t("chat.readinessFooterNeedsAction", { count: readinessIssueCount })
+                : t("chat.readinessFooterReady")}
             </div>
           </div>
         </Modal>

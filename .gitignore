@@ -23,6 +23,9 @@ WINDSURF.md
 
 *.log
 tmp-*.png
+.tmp-electron-cache/
+.tmp-electron-dist/
+.tmp-npm-cache/
 .DS_Store
 .vite
 coverage

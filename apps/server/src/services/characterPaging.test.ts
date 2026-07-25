@@ -5,6 +5,7 @@ import { listCharactersPage } from "./characterPaging.js";
 
 const prefix = `Character Paging Test ${Date.now()}`;
 const createdIds: string[] = [];
+const createdChatIds: string[] = [];
 
 describe("listCharactersPage", () => {
   before(async () => {
@@ -17,14 +18,37 @@ describe("listCharactersPage", () => {
           prefix: index === 2 ? "needle-prefix" : "",
           prompt: index === 3 ? "needle-prompt" : "",
           suffix: index === 4 ? "needle-suffix" : "",
-          htmlCss: index === 1 ? ".needle-css { color: red; }" : ""
+          htmlCss: index === 1 ? ".needle-css { color: red; }" : "",
+          isFavorite: index === 4
         }
       });
       createdIds.push(character.id);
     }
+
+    for (const [characterIndex, offset] of [[0, 120_000], [1, 60_000], [1, 0]] as const) {
+      const chat = await prisma.chat.create({
+        data: {
+          title: `${prefix} chat ${characterIndex}-${offset}`,
+          characterId: createdIds[characterIndex],
+          updatedAt: new Date(Date.now() - offset)
+        }
+      });
+      createdChatIds.push(chat.id);
+    }
+
+    const trashedChat = await prisma.chat.create({
+      data: {
+        title: `${prefix} trashed chat`,
+        characterId: createdIds[4],
+        deletedAt: new Date(),
+        updatedAt: new Date(Date.now() + 60_000)
+      }
+    });
+    createdChatIds.push(trashedChat.id);
   });
 
   after(async () => {
+    await prisma.chat.deleteMany({ where: { id: { in: createdChatIds } } }).catch(() => {});
     await prisma.character.deleteMany({ where: { id: { in: createdIds } } }).catch(() => {});
     await prisma.$disconnect();
   });
@@ -57,5 +81,39 @@ describe("listCharactersPage", () => {
 
     assert.equal(result.items.length, 1);
     assert.deepEqual(result.items[0]?.tags, ["needle-tag"]);
+  });
+
+  it("orders favorites first and can return favorites only", async () => {
+    const all = await listCharactersPage({ q: prefix, page: 1, pageSize: 40 });
+    const favorites = await listCharactersPage({
+      q: prefix,
+      favoriteOnly: true,
+      page: 1,
+      pageSize: 40
+    });
+
+    assert.equal(all.items[0]?.isFavorite, true);
+    assert.equal(favorites.total, 1);
+    assert.equal(favorites.items[0]?.name, `${prefix} 4`);
+  });
+
+  it("sorts by name, recent chat activity, and chat count", async () => {
+    const byName = await listCharactersPage({ q: prefix, sort: "name_desc", page: 1, pageSize: 40 });
+    const byRecentChat = await listCharactersPage({
+      q: prefix,
+      sort: "recently_chatted",
+      page: 1,
+      pageSize: 40
+    });
+    const byChatCount = await listCharactersPage({
+      q: prefix,
+      sort: "most_chats",
+      page: 1,
+      pageSize: 40
+    });
+
+    assert.equal(byName.items[0]?.name, `${prefix} 4`);
+    assert.equal(byRecentChat.items[0]?.name, `${prefix} 1`);
+    assert.equal(byChatCount.items[0]?.name, `${prefix} 1`);
   });
 });

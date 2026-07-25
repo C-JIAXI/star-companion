@@ -3,14 +3,107 @@ import { describe, it } from "node:test";
 import { parseBody } from "./lib/http.js";
 import {
   backupImportSchema,
+  chatAgentDraftSchema,
+  chatBatchArchiveSchema,
+  chatBatchPermanentDeleteSchema,
+  chatBatchTrashSchema,
+  chatBranchSchema,
+  continueRequestSchema,
+  chatMessageSearchQuerySchema,
   characterExportSchema,
+  characterBatchTagsSchema,
+  characterDuplicateSchema,
   characterImportSchema,
   characterPageQuerySchema,
   characterUpdateRequestSchema,
   characterUnlockSchema,
   chatUpdateSchema,
-  settingsUpdateSchema
+  imageGenerationSchema,
+  messageUpdateSchema,
+  settingsUpdateSchema,
+  voiceTranscriptionSchema
 } from "./schemas.js";
+
+describe("chatAgentDraftSchema", () => {
+  it("accepts known agent modes and trims optional focus", () => {
+    const parsed = parseBody(chatAgentDraftSchema, {
+      mode: "next_steps",
+      focus: "  focus on the locked door  "
+    });
+
+    assert.deepEqual(parsed, {
+      mode: "next_steps",
+      focus: "focus on the locked door"
+    });
+  });
+
+  it("rejects unknown modes and overlong focus text", () => {
+    assert.throws(() =>
+      parseBody(chatAgentDraftSchema, {
+        mode: "background_task"
+      })
+    );
+    assert.throws(() =>
+      parseBody(chatAgentDraftSchema, {
+        mode: "scene_summary",
+        focus: "x".repeat(1001)
+      })
+    );
+  });
+});
+
+describe("continueRequestSchema", () => {
+  it("requires a request id and assistant message id", () => {
+    assert.deepEqual(
+      parseBody(continueRequestSchema, {
+        type: "continue",
+        requestId: "continue-1",
+        messageId: "assistant-1"
+      }),
+      { type: "continue", requestId: "continue-1", messageId: "assistant-1" }
+    );
+    assert.throws(() => parseBody(continueRequestSchema, { type: "continue", requestId: "" }));
+  });
+});
+
+describe("chatBranchSchema", () => {
+  it("requires a target message id and trims optional title", () => {
+    const parsed = parseBody(chatBranchSchema, {
+      messageId: "message-1",
+      title: "  Branch A  "
+    });
+
+    assert.deepEqual(parsed, {
+      messageId: "message-1",
+      title: "Branch A",
+      kind: "branch"
+    });
+    assert.equal(parseBody(chatBranchSchema, { messageId: "message-1", kind: "checkpoint" }).kind, "checkpoint");
+    assert.throws(() => parseBody(chatBranchSchema, { messageId: "" }));
+  });
+});
+
+describe("chatMessageSearchQuerySchema", () => {
+  it("trims a search query and validates result limits", () => {
+    const parsed = parseBody(chatMessageSearchQuerySchema, {
+      q: "  blue door  ",
+      limit: "50"
+    });
+
+    assert.equal(parsed.q, "blue door");
+    assert.equal(parsed.limit, 50);
+    assert.throws(() => parseBody(chatMessageSearchQuerySchema, { q: "" }));
+    assert.throws(() => parseBody(chatMessageSearchQuerySchema, { q: "blue", limit: "100" }));
+  });
+});
+
+describe("messageUpdateSchema", () => {
+  it("accepts an isolated bookmark update", () => {
+    assert.deepEqual(parseBody(messageUpdateSchema, { isBookmarked: true }), {
+      isBookmarked: true
+    });
+  });
+});
 
 describe("chatUpdateSchema", () => {
   it("does not inject create-time defaults into partial chat updates", () => {
@@ -37,6 +130,55 @@ describe("chatUpdateSchema", () => {
     assert.equal(remote.backgroundUrl, "https://example.com/background.webp");
     assert.equal(uploaded.backgroundUrl, "data:image/png;base64,QUJDRA==");
   });
+
+  it("accepts organization state as history-only chat updates", () => {
+    const parsed = parseBody(chatUpdateSchema, { isPinned: true, isArchived: true });
+
+    assert.deepEqual(parsed, { isPinned: true, isArchived: true });
+  });
+});
+
+describe("chatBatchArchiveSchema", () => {
+  it("accepts up to 100 unique chat ids and an explicit archive state", () => {
+    assert.deepEqual(
+      parseBody(chatBatchArchiveSchema, {
+        ids: ["chat-a", "chat-a", "chat-b"],
+        isArchived: true
+      }),
+      { ids: ["chat-a", "chat-b"], isArchived: true }
+    );
+  });
+
+  it("rejects empty or oversized chat selections", () => {
+    assert.throws(() => parseBody(chatBatchArchiveSchema, { ids: [], isArchived: true }));
+    assert.throws(() =>
+      parseBody(chatBatchArchiveSchema, {
+        ids: Array.from({ length: 101 }, (_, index) => `chat-${index}`),
+        isArchived: false
+      })
+    );
+  });
+});
+
+describe("chat trash schemas", () => {
+  it("deduplicates batch trash ids and requires a known action", () => {
+    assert.deepEqual(
+      parseBody(chatBatchTrashSchema, {
+        ids: ["chat-a", "chat-a", "chat-b"],
+        action: "restore"
+      }),
+      { ids: ["chat-a", "chat-b"], action: "restore" }
+    );
+    assert.throws(() => parseBody(chatBatchTrashSchema, { ids: ["chat-a"], action: "delete" }));
+  });
+
+  it("validates permanent-delete selections", () => {
+    assert.deepEqual(
+      parseBody(chatBatchPermanentDeleteSchema, { ids: ["chat-a", "chat-a"] }),
+      { ids: ["chat-a"] }
+    );
+    assert.throws(() => parseBody(chatBatchPermanentDeleteSchema, { ids: [] }));
+  });
 });
 
 describe("characterUpdateRequestSchema", () => {
@@ -57,10 +199,67 @@ describe("characterUpdateRequestSchema", () => {
     assert.equal("loreEntries" in parsed, false);
     assert.equal("quickReplies" in parsed, false);
   });
+
+  it("accepts an isolated favorite update", () => {
+    assert.deepEqual(parseBody(characterUpdateRequestSchema, { isFavorite: true }), {
+      isFavorite: true
+    });
+  });
+
+  it("accepts local avatar data and rejects oversized avatar payloads", () => {
+    assert.deepEqual(
+      parseBody(characterUpdateRequestSchema, {
+        avatar: "data:image/png;base64,QUJDRA=="
+      }),
+      { avatar: "data:image/png;base64,QUJDRA==" }
+    );
+    assert.throws(() =>
+      parseBody(characterUpdateRequestSchema, {
+        avatar: `data:image/png;base64,${"A".repeat(3_000_000)}`
+      })
+    );
+  });
+});
+
+describe("characterBatchTagsSchema", () => {
+  it("normalizes duplicate ids and tags for an explicit operation", () => {
+    assert.deepEqual(
+      parseBody(characterBatchTagsSchema, {
+        ids: ["character-a", "character-a", "character-b"],
+        operation: "add",
+        tags: [" fantasy ", "Fantasy", "night"]
+      }),
+      {
+        ids: ["character-a", "character-b"],
+        operation: "add",
+        tags: ["fantasy", "night"]
+      }
+    );
+  });
+
+  it("rejects empty selections, unknown operations, and oversized tag sets", () => {
+    assert.throws(() =>
+      parseBody(characterBatchTagsSchema, { ids: [], operation: "add", tags: ["fantasy"] })
+    );
+    assert.throws(() =>
+      parseBody(characterBatchTagsSchema, {
+        ids: ["character-a"],
+        operation: "replace",
+        tags: ["fantasy"]
+      })
+    );
+    assert.throws(() =>
+      parseBody(characterBatchTagsSchema, {
+        ids: ["character-a"],
+        operation: "remove",
+        tags: Array.from({ length: 25 }, (_, index) => `tag-${index}`)
+      })
+    );
+  });
 });
 
 describe("settingsUpdateSchema", () => {
-  it("accepts showMessageAvatars in settings payloads", () => {
+  it("accepts chat display preferences in settings payloads", () => {
     const parsed = parseBody(settingsUpdateSchema, {
       activeProvider: "openai-compatible",
       apiBaseUrl: "https://api.openai.com/v1",
@@ -72,10 +271,28 @@ describe("settingsUpdateSchema", () => {
       providers: [],
       activeProviderId: "",
       activeModelId: "",
-      showMessageAvatars: false
+      showMessageAvatars: false,
+      showMessageTimestamps: true,
+      ttsVoice: "nova",
+      ttsPlaybackRate: 1.25,
+      ttsAutoPlay: true
     });
 
     assert.equal(parsed.showMessageAvatars, false);
+    assert.equal(parsed.showMessageTimestamps, true);
+    assert.equal(parsed.ttsVoice, "nova");
+    assert.equal(parsed.ttsPlaybackRate, 1.25);
+    assert.equal(parsed.ttsAutoPlay, true);
+    assert.equal(parsed.moduleModelPreferences, undefined);
+  });
+
+  it("rejects invalid text-to-speech preferences", () => {
+    assert.throws(() =>
+      parseBody(settingsUpdateSchema, {
+        ttsVoice: " ",
+        ttsPlaybackRate: 2.1
+      })
+    );
   });
 
   it("accepts provider profiles with nested models", () => {
@@ -94,7 +311,7 @@ describe("settingsUpdateSchema", () => {
           provider: "openai",
           apiBaseUrl: "https://api.openai.com/v1",
           models: [
-            { id: "model-1", label: "GPT", model: "gpt-4o-mini" }
+            { id: "model-1", label: "GPT", model: "gpt-4o-mini", capabilities: ["text_generation"] }
           ]
         }
       ],
@@ -103,7 +320,125 @@ describe("settingsUpdateSchema", () => {
     });
 
     assert.equal(parsed.providers[0]?.models[0]?.model, "gpt-4o-mini");
+    assert.deepEqual(parsed.providers[0]?.models[0]?.capabilities, ["text_generation"]);
     assert.equal(parsed.activeProviderId, "provider-1");
+  });
+
+  it("rejects unknown model capabilities", () => {
+    assert.throws(() =>
+      parseBody(settingsUpdateSchema, {
+        activeProvider: "openai-compatible",
+        apiBaseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o-mini",
+        temperature: 0.8,
+        maxTokens: 800,
+        topP: 1,
+        language: "zh-CN",
+        providers: [
+          {
+            id: "provider-1",
+            label: "OpenAI",
+            provider: "openai-compatible",
+            apiBaseUrl: "https://api.openai.com/v1",
+            models: [{ id: "model-1", label: "Bad", model: "bad", capabilities: ["video"] }]
+          }
+        ],
+        activeProviderId: "provider-1",
+        activeModelId: "model-1"
+      })
+    );
+  });
+
+  it("accepts per-module model preferences", () => {
+    const parsed = parseBody(settingsUpdateSchema, {
+      activeProvider: "openai-compatible",
+      apiBaseUrl: "https://api.openai.com/v1",
+      model: "gpt-4o-mini",
+      temperature: 0.8,
+      maxTokens: 800,
+      topP: 1,
+      language: "zh-CN",
+      providers: [
+        {
+          id: "provider-1",
+          label: "OpenAI",
+          provider: "openai-compatible",
+          apiBaseUrl: "https://api.openai.com/v1",
+          models: [{ id: "model-1", label: "Agent", model: "gpt-4o-mini" }]
+        }
+      ],
+      activeProviderId: "provider-1",
+      activeModelId: "model-1",
+      moduleModelPreferences: {
+        agent: { providerId: "provider-1", modelId: "model-1" },
+        image_generation: { providerId: "provider-1", modelId: "model-1" }
+      }
+    });
+
+    assert.deepEqual(parsed.moduleModelPreferences?.agent, {
+      providerId: "provider-1",
+      modelId: "model-1"
+    });
+  });
+
+  it("accepts reusable user persona presets", () => {
+    const parsed = parseBody(settingsUpdateSchema, {
+      activeProvider: "openai-compatible",
+      apiBaseUrl: "https://api.openai.com/v1",
+      model: "gpt-4o-mini",
+      temperature: 0.8,
+      maxTokens: 800,
+      topP: 1,
+      language: "zh-CN",
+      providers: [],
+      activeProviderId: "",
+      activeModelId: "",
+      userPersonaPresets: [
+        {
+          id: "persona-1",
+          name: "Investigator",
+          config: {
+            prefix: "User boundary.",
+            prompt: "User is an investigator.",
+            suffix: "Keep replies concise."
+          }
+        }
+      ]
+    });
+
+    assert.equal(parsed.userPersonaPresets?.[0]?.name, "Investigator");
+    assert.equal(parsed.userPersonaPresets?.[0]?.config.prompt, "User is an investigator.");
+  });
+
+});
+
+describe("characterDuplicateSchema", () => {
+  it("requires a bounded duplicate name", () => {
+    assert.deepEqual(parseBody(characterDuplicateSchema, { name: "  Character copy  " }), {
+      name: "Character copy"
+    });
+    assert.throws(() => parseBody(characterDuplicateSchema, { name: "" }));
+    assert.throws(() => parseBody(characterDuplicateSchema, { name: "x".repeat(121) }));
+  });
+});
+
+describe("media schemas", () => {
+  it("rejects empty voice transcription audio", () => {
+    assert.throws(() =>
+      parseBody(voiceTranscriptionSchema, {
+        audioBase64: "",
+        mimeType: "audio/webm"
+      })
+    );
+  });
+
+  it("accepts image generation prompts", () => {
+    const parsed = parseBody(imageGenerationSchema, {
+      prompt: "a cozy archive room",
+      size: "1024x1024"
+    });
+
+    assert.equal(parsed.prompt, "a cozy archive room");
   });
 });
 
@@ -112,19 +447,32 @@ describe("characterPageQuerySchema", () => {
     assert.deepEqual(parseBody(characterPageQuerySchema, {}), {
       q: "",
       tag: "",
+      favoriteOnly: false,
+      sort: "favorites",
       page: 1,
       pageSize: 40
     });
 
     assert.deepEqual(
-      parseBody(characterPageQuerySchema, { q: "  pilot  ", tag: "  cozy  ", page: "2", pageSize: "500" }),
+      parseBody(characterPageQuerySchema, {
+        q: "  pilot  ",
+        tag: "  cozy  ",
+        favoriteOnly: "true",
+        page: "2",
+        pageSize: "500"
+      }),
       {
         q: "pilot",
         tag: "cozy",
+        favoriteOnly: true,
+        sort: "favorites",
         page: 2,
         pageSize: 100
       }
     );
+
+    assert.equal(parseBody(characterPageQuerySchema, { sort: "recently_chatted" }).sort, "recently_chatted");
+    assert.equal(parseBody(characterPageQuerySchema, { sort: "unknown" }).sort, "favorites");
   });
 });
 
@@ -169,7 +517,8 @@ describe("characterImportSchema", () => {
         prompt: "Prompt",
         suffix: "Suffix",
         htmlCss: "",
-        loreEntries: []
+        loreEntries: [],
+        isFavorite: true
       }
     });
     const privateCard = parseBody(characterImportSchema, {
@@ -197,6 +546,7 @@ describe("characterImportSchema", () => {
     });
 
     assert.equal(publicCard.visibility, "public");
+    assert.equal("isFavorite" in publicCard.character, false);
     assert.equal(privateCard.visibility, "private");
   });
 
@@ -250,6 +600,23 @@ describe("characterImportSchema", () => {
 });
 
 describe("backupImportSchema", () => {
+  it("preserves chat trash timestamps and defaults older backups to active chats", () => {
+    const deletedAt = new Date().toISOString();
+    const parsed = parseBody(backupImportSchema, {
+      schemaVersion: 1,
+      mode: "merge",
+      characters: [],
+      chats: [
+        { id: "trashed-chat", title: "Trashed", characterId: null, deletedAt },
+        { id: "legacy-chat", title: "Legacy", characterId: null }
+      ],
+      messages: []
+    });
+
+    assert.equal(parsed.chats[0]?.deletedAt, deletedAt);
+    assert.equal(parsed.chats[1]?.deletedAt, null);
+  });
+
   it("accepts imported private character backups that preserve encrypted prompt storage", () => {
     const parsed = parseBody(backupImportSchema, {
       schemaVersion: 1,
@@ -282,6 +649,7 @@ describe("backupImportSchema", () => {
             }
           },
           quickReplies: [],
+          isFavorite: true,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }
@@ -305,6 +673,7 @@ describe("backupImportSchema", () => {
         exportSalt: "export-salt"
       }
     });
+    assert.equal(parsed.characters[0]?.isFavorite, true);
   });
 
   it("rejects legacy backup character fields that do not use prefix/prompt/suffix", () => {

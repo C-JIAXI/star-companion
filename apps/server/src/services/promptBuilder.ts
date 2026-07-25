@@ -193,7 +193,7 @@ export const resolveChatCharacterId = async (
   chatId: string,
   requestedCharacterId?: string | null
 ) => {
-  const chat = await prisma.chat.findUnique({ where: { id: chatId } });
+  const chat = await prisma.chat.findFirst({ where: { id: chatId, deletedAt: null } });
   return resolvePromptCharacterId(chat, requestedCharacterId);
 };
 
@@ -218,7 +218,7 @@ export const buildPromptContext = async ({
   matchedLoreEntries: MatchedLoreEntry[];
   matchedMemoryEntries: MatchedMemoryEntry[];
 }> => {
-  const chat = await prisma.chat.findUnique({ where: { id: chatId } });
+  const chat = await prisma.chat.findFirst({ where: { id: chatId, deletedAt: null } });
   const resolvedCharacterId = resolvePromptCharacterId(chat, characterId);
   const character = resolvedCharacterId
     ? await prisma.character.findUnique({ where: { id: resolvedCharacterId } })
@@ -228,6 +228,7 @@ export const buildPromptContext = async ({
   const recentMessagesDesc = await prisma.message.findMany({
     where: {
       chatId,
+      contextIncluded: true,
       ...(before ? { createdAt: { lt: before } } : {})
     },
     orderBy: { createdAt: "desc" },

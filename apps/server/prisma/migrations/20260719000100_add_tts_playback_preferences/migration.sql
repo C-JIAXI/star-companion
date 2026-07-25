@@ -1,0 +1,3 @@
+ALTER TABLE "UserSettings" ADD COLUMN "ttsVoice" TEXT NOT NULL DEFAULT 'alloy';
+ALTER TABLE "UserSettings" ADD COLUMN "ttsPlaybackRate" REAL NOT NULL DEFAULT 1.0;
+ALTER TABLE "UserSettings" ADD COLUMN "ttsAutoPlay" BOOLEAN NOT NULL DEFAULT false;

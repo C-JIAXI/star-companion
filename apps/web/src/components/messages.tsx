@@ -1,13 +1,22 @@
 import {
   AlertTriangle,
+  Bookmark,
   Bug,
+  ChevronsRight,
   ChevronLeft,
   ChevronRight,
   CircleX,
   Copy,
+  Eye,
+  EyeOff,
+  GitBranch,
+  ListTree,
   Pencil,
   RotateCcw,
-  Trash2
+  Save,
+  Trash2,
+  Volume2,
+  VolumeX
 } from "lucide-react";
 import { Marked } from "marked";
 import { memo, useCallback, useMemo } from "react";
@@ -175,6 +184,65 @@ function TokenInfo({
   );
 }
 
+function ContextInfo({
+  loreCount,
+  memoryCount,
+  onClick
+}: {
+  loreCount: number;
+  memoryCount: number;
+  onClick: () => void;
+}) {
+  const { t } = useI18n();
+  const hasContext = loreCount > 0 || memoryCount > 0;
+  const label = hasContext
+    ? t("chat.contextUsed", { lore: loreCount, memory: memoryCount })
+    : t("chat.contextEmpty");
+
+  return (
+    <button
+      className="inline-flex min-h-[32px] items-center gap-1.5 rounded-full border border-white/5 bg-white/[0.03] px-2.5 text-xs font-medium text-slate-500 transition-colors hover:border-white/10 hover:bg-white/[0.06] hover:text-slate-300"
+      data-chat-context-summary=""
+      type="button"
+      onClick={onClick}
+      title={t("debug.open")}
+    >
+      <ListTree size={13} />
+      {label}
+    </button>
+  );
+}
+
+function MessageTimestamp({
+  createdAt,
+  language
+}: {
+  createdAt: string;
+  language: "zh-CN" | "en";
+}) {
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  const formatted = new Intl.DateTimeFormat(language === "zh-CN" ? "zh-CN" : "en-US", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+
+  return (
+    <time
+      className="text-xs font-medium text-current opacity-55"
+      data-chat-message-timestamp=""
+      dateTime={date.toISOString()}
+    >
+      {formatted}
+    </time>
+  );
+}
+
 export function SystemNotification({ content }: { content: string }) {
   return (
     <div className="flex justify-center" data-chat-message="system">
@@ -191,24 +259,38 @@ export function SystemNotification({ content }: { content: string }) {
 export function UserMessageBubble({
   message,
   showAvatar,
+  showTimestamp,
   onCopy,
+  onToggleBookmark,
+  onToggleContext,
+  onBranch,
+  onCheckpoint,
   onEdit,
   onDelete,
   onResend
 }: {
   message: MessageDTO;
   showAvatar: boolean;
+  showTimestamp: boolean;
   onCopy: () => void;
+  onToggleBookmark: () => void;
+  onToggleContext: () => void;
+  onBranch: () => void;
+  onCheckpoint: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onResend: () => void;
 }) {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
+  const branchTitle = language === "zh-CN" ? "从这里创建分支" : "Branch from here";
   const bubbleWidthClassName = getBubbleWidthClassName(showAvatar);
 
   return (
     <div
-      className={`flex items-start justify-start ${showAvatar ? "gap-3" : "gap-0"}`}
+      className={`flex items-start justify-start ${showAvatar ? "gap-3" : "gap-0"} ${
+        message.contextIncluded !== false ? "" : "opacity-60"
+      }`}
+      data-context-included={message.contextIncluded !== false ? "true" : "false"}
       data-chat-message="user"
     >
       <AvatarSlot align="left" name="You" showAvatar={showAvatar} />
@@ -217,7 +299,7 @@ export function UserMessageBubble({
         data-chat-bubble=""
       >
         <MessageBody align="left" content={message.content} renderHtml={false} />
-        <div className="mt-3 flex items-center justify-start gap-0.5 text-xs" data-chat-actions="">
+        <div className="mt-3 flex flex-wrap items-center justify-start gap-0.5 text-xs" data-chat-actions="">
           <button
             className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
             data-chat-action="resend"
@@ -237,6 +319,46 @@ export function UserMessageBubble({
             <Copy size={14} />
           </button>
           <button
+            aria-pressed={message.isBookmarked}
+            className={`inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium active:opacity-70 ${
+              message.isBookmarked ? "text-ink-950" : "text-ink-900/70"
+            }`}
+            data-chat-action="bookmark"
+            type="button"
+            onClick={onToggleBookmark}
+            title={message.isBookmarked ? t("chat.unbookmarkMessage") : t("chat.bookmarkMessage")}
+          >
+            <Bookmark fill={message.isBookmarked ? "currentColor" : "none"} size={14} />
+          </button>
+          <button
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
+            data-chat-action="context-toggle"
+            type="button"
+            onClick={onToggleContext}
+            title={message.contextIncluded ? t("chat.excludeFromContext") : t("chat.includeInContext")}
+          >
+            {message.contextIncluded ? <Eye size={14} /> : <EyeOff size={14} />}
+          </button>
+          <button
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
+            data-chat-action="branch"
+            type="button"
+            onClick={onBranch}
+            aria-label={branchTitle}
+            title={branchTitle}
+          >
+            <GitBranch size={14} />
+          </button>
+          <button
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
+            data-chat-action="checkpoint"
+            type="button"
+            onClick={onCheckpoint}
+            title={t("chat.saveCheckpoint")}
+          >
+            <Save size={14} />
+          </button>
+          <button
             className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
             data-chat-action="edit"
             type="button"
@@ -254,6 +376,7 @@ export function UserMessageBubble({
           >
             <Trash2 size={14} />
           </button>
+          {showTimestamp ? <MessageTimestamp createdAt={message.createdAt} language={language} /> : null}
         </div>
       </article>
     </div>
@@ -264,23 +387,41 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
   message,
   avatar,
   showAvatar,
+  showTimestamp,
   htmlCss,
   tokenUsageFormatter,
   onCopy,
+  onSpeak,
+  onToggleBookmark,
+  onBranch,
+  onCheckpoint,
+  onToggleContext,
+  onContinue,
   onRegenerate,
   onEdit,
   onDelete,
   onVariantPrev,
   onVariantNext,
   onDebug,
-  disableRegenerate
+  disableRegenerate,
+  disableSpeech,
+  speechPlaying,
+  canContinue,
+  disableContinue
 }: {
   message: MessageDTO;
   avatar?: string | null;
   showAvatar: boolean;
+  showTimestamp: boolean;
   htmlCss?: string;
   tokenUsageFormatter: TokenUsageFormatter;
   onCopy: () => void;
+  onSpeak: () => void;
+  onToggleBookmark: () => void;
+  onBranch: () => void;
+  onCheckpoint: () => void;
+  onToggleContext: () => void;
+  onContinue: () => void;
   onRegenerate: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -288,14 +429,24 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
   onVariantNext: () => void;
   onDebug: (message: MessageDTO) => void;
   disableRegenerate: boolean;
+  disableSpeech: boolean;
+  speechPlaying: boolean;
+  canContinue: boolean;
+  disableContinue: boolean;
 }) {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
+  const branchTitle = language === "zh-CN" ? "从这里创建分支" : "Branch from here";
   const bubbleWidthClassName = getBubbleWidthClassName(showAvatar);
   const handleDebug = useCallback(() => onDebug(message), [onDebug, message]);
+  const loreCount = message.loreMatches.length;
+  const memoryCount = message.memoryMatches.length;
 
   return (
     <div
-      className={`flex items-start justify-end ${showAvatar ? "gap-3" : "gap-0"}`}
+      className={`flex items-start justify-end ${showAvatar ? "gap-3" : "gap-0"} ${
+        message.contextIncluded !== false ? "" : "opacity-60"
+      }`}
+      data-context-included={message.contextIncluded !== false ? "true" : "false"}
       data-chat-message="assistant"
     >
       <article
@@ -304,8 +455,18 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
       >
         <MessageBody content={message.content} htmlCss={htmlCss} />
         <div className="mt-3 border-t border-white/5 pt-2">
-          <div className="flex min-w-0 flex-col gap-1.5 text-xs sm:flex-row sm:items-center sm:justify-between">
-            <TokenInfo usage={message.tokenUsage} formatter={tokenUsageFormatter} />
+          <div className="flex min-w-0 flex-col gap-2 text-xs">
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <TokenInfo usage={message.tokenUsage} formatter={tokenUsageFormatter} />
+                {showTimestamp ? <MessageTimestamp createdAt={message.createdAt} language={language} /> : null}
+              </div>
+              <ContextInfo
+                loreCount={loreCount}
+                memoryCount={memoryCount}
+                onClick={handleDebug}
+              />
+            </div>
             <div
               className="flex w-full min-w-0 flex-wrap items-center justify-end gap-0.5 sm:w-auto"
               data-chat-actions=""
@@ -328,6 +489,59 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
                 <Copy size={14} />
               </button>
               <button
+                aria-pressed={speechPlaying}
+                className={`inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium hover:text-slate-200 disabled:opacity-40 active:text-slate-100 ${
+                  speechPlaying ? "text-ember-300" : "text-slate-400"
+                }`}
+                data-chat-action="voice-speak-message"
+                disabled={disableSpeech}
+                type="button"
+                onClick={onSpeak}
+                title={speechPlaying ? t("chat.voiceStopPlayback") : t("chat.voiceSpeakMessage")}
+              >
+                {speechPlaying ? <VolumeX size={14} /> : <Volume2 size={14} />}
+              </button>
+              <button
+                aria-pressed={message.isBookmarked}
+                className={`inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium hover:text-slate-200 active:text-slate-100 ${
+                  message.isBookmarked ? "text-ember-300" : "text-slate-400"
+                }`}
+                data-chat-action="bookmark"
+                type="button"
+                onClick={onToggleBookmark}
+                title={message.isBookmarked ? t("chat.unbookmarkMessage") : t("chat.bookmarkMessage")}
+              >
+                <Bookmark fill={message.isBookmarked ? "currentColor" : "none"} size={14} />
+              </button>
+              <button
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 active:text-slate-100"
+                data-chat-action="context-toggle"
+                type="button"
+                onClick={onToggleContext}
+                title={message.contextIncluded ? t("chat.excludeFromContext") : t("chat.includeInContext")}
+              >
+                {message.contextIncluded ? <Eye size={14} /> : <EyeOff size={14} />}
+              </button>
+              <button
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 active:text-slate-100"
+                data-chat-action="branch"
+                type="button"
+                onClick={onBranch}
+                aria-label={branchTitle}
+                title={branchTitle}
+              >
+                <GitBranch size={14} />
+              </button>
+              <button
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 active:text-slate-100"
+                data-chat-action="checkpoint"
+                type="button"
+                onClick={onCheckpoint}
+                title={t("chat.saveCheckpoint")}
+              >
+                <Save size={14} />
+              </button>
+              <button
                 className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 disabled:opacity-40 active:text-slate-100"
                 data-chat-action="regenerate"
                 type="button"
@@ -337,6 +551,18 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
               >
                 <RotateCcw size={14} />
               </button>
+              {canContinue ? (
+                <button
+                  className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 disabled:opacity-40 active:text-slate-100"
+                  data-chat-action="continue"
+                  type="button"
+                  disabled={disableContinue}
+                  onClick={onContinue}
+                  title={t("chat.continue")}
+                >
+                  <ChevronsRight size={14} />
+                </button>
+              ) : null}
               <button
                 className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 active:text-slate-100"
                 data-chat-action="debug"
@@ -377,13 +603,19 @@ export function StreamingBubble({
   characterAvatar,
   showAvatar,
   htmlCss,
-  content
+  content,
+  contextSummary
 }: {
   characterAvatar?: string | null;
   showAvatar: boolean;
   htmlCss?: string;
   content: string;
+  contextSummary?: {
+    loreCount: number;
+    memoryCount: number;
+  };
 }) {
+  const { t } = useI18n();
   const [displayedContent, setDisplayedContent] = useState("");
   const bufferRef = useRef("");
   const displayedLengthRef = useRef(0);
@@ -430,6 +662,14 @@ export function StreamingBubble({
             <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-ember-400/60 [animation-delay:300ms]"></span>
           </div>
         )}
+        {contextSummary ? (
+          <p className="mt-3 border-t border-white/5 pt-2 text-xs font-medium text-slate-500">
+            {t("chat.contextDuringGeneration", {
+              lore: contextSummary.loreCount,
+              memory: contextSummary.memoryCount
+            })}
+          </p>
+        ) : null}
       </article>
       <AvatarSlot avatar={characterAvatar} className="order-2" showAvatar={showAvatar} />
     </div>

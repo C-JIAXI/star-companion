@@ -24,9 +24,15 @@ const defaultSettings = () => {
     providers: [],
     activeProviderId: "",
     activeModelId: "",
+    moduleModelPreferences: {},
+    userPersonaPresets: [],
     userProfileSummary: "",
     autoSummarizeUser: true,
     showMessageAvatars: true,
+    showMessageTimestamps: false,
+    ttsVoice: "alloy",
+    ttsPlaybackRate: 1,
+    ttsAutoPlay: false,
     userProfileUpdatedAt: null,
     createdAt: timestamp,
     updatedAt: timestamp
@@ -192,7 +198,11 @@ export class MobileStore {
   }
 
   listCharacters() {
-    return clone(this.readRecords("character", "", [], "ORDER BY updatedAt DESC"));
+    return clone(
+      this.readRecords("character", "", [], "ORDER BY updatedAt DESC").sort(
+        (left, right) => Number(right.isFavorite === true) - Number(left.isFavorite === true)
+      )
+    );
   }
 
   getCharacter(id) {
@@ -220,6 +230,7 @@ export class MobileStore {
       openingHtml: input.openingHtml ?? "",
       loreEntries: input.loreEntries ?? [],
       quickReplies: input.quickReplies ?? [],
+      isFavorite: input.isFavorite === true,
       createdAt: input.createdAt ?? timestamp,
       updatedAt: input.updatedAt ?? timestamp
     };
@@ -235,6 +246,25 @@ export class MobileStore {
     await this.writeRecord("character", character);
     await this.persist();
     return clone(character);
+  }
+
+  async batchUpdateCharacterTags(ids, operation, tags, applyOperation) {
+    const characters = ids.map((id) => this.readRecord("character", id));
+    if (characters.some((character) => !character)) {
+      return null;
+    }
+
+    const updates = characters.map((character) => ({
+      ...character,
+      tags: applyOperation(character.tags, operation, tags),
+      updatedAt: now()
+    }));
+
+    for (const character of updates) {
+      await this.writeRecord("character", character);
+    }
+    await this.persist();
+    return updates.length;
   }
 
   async upsertCharacterByCardId(input) {
@@ -265,7 +295,12 @@ export class MobileStore {
       this.readRecords("chat", "", [], "ORDER BY updatedAt DESC").map((chat) => ({
         ...chat,
         messageCount: this.readRecords("message", "AND chatId = ?", [chat.id]).length
-      }))
+      })).sort((a, b) => {
+        const trashOrder = Number(Boolean(a.deletedAt)) - Number(Boolean(b.deletedAt));
+        const archiveOrder = Number(a.isArchived === true) - Number(b.isArchived === true);
+        const pinOrder = Number(b.isPinned === true) - Number(a.isPinned === true);
+        return trashOrder || archiveOrder || pinOrder || String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? ""));
+      })
     );
   }
 
@@ -279,6 +314,12 @@ export class MobileStore {
       id: input.id ?? randomUUID(),
       title: input.title,
       characterId: input.characterId ?? null,
+      parentChatId: input.parentChatId ?? null,
+      branchSourceMessageId: input.branchSourceMessageId ?? null,
+      isCheckpoint: input.isCheckpoint === true,
+      isPinned: input.isPinned === true,
+      isArchived: input.isArchived === true,
+      deletedAt: input.deletedAt ?? null,
       backgroundUrl: input.backgroundUrl ?? "",
       memoryTurns: input.memoryTurns ?? 12,
       autoMemoryEnabled: input.autoMemoryEnabled ?? true,
@@ -303,14 +344,85 @@ export class MobileStore {
     return clone(chat);
   }
 
-  async deleteChat(id) {
-    const existing = await this.deleteRecord("chat", id);
-    if (!existing) {
-      return false;
+  async updateChats(ids, updates) {
+    const timestamp = updates.updatedAt ?? now();
+    let updated = 0;
+    this.db.run("BEGIN");
+    try {
+      for (const id of new Set(ids)) {
+        const existing = this.readRecord("chat", id);
+        if (!existing) continue;
+        await this.writeRecord("chat", { ...existing, ...updates, updatedAt: timestamp });
+        updated += 1;
+      }
+      this.db.run("COMMIT");
+    } catch (error) {
+      this.db.run("ROLLBACK");
+      throw error;
     }
-    this.db.run("DELETE FROM records WHERE type IN ('message', 'memory') AND chatId = ?", [id]);
     await this.persist();
-    return true;
+    return updated;
+  }
+
+  async updateChatTrash(ids, action) {
+    const uniqueIds = [...new Set(ids)];
+    const chats = uniqueIds.map((id) => this.readRecord("chat", id));
+    const expected = action === "trash"
+      ? chats.every((chat) => chat && !chat.deletedAt)
+      : chats.every((chat) => chat?.deletedAt);
+    if (!expected) return null;
+
+    const timestamp = now();
+    this.db.run("BEGIN");
+    try {
+      for (const chat of chats) {
+        await this.writeRecord("chat", {
+          ...chat,
+          ...(action === "trash"
+            ? { deletedAt: timestamp, isArchived: false, isPinned: false }
+            : { deletedAt: null }),
+          updatedAt: timestamp
+        });
+      }
+      this.db.run("COMMIT");
+    } catch (error) {
+      this.db.run("ROLLBACK");
+      throw error;
+    }
+    await this.persist();
+    return uniqueIds.length;
+  }
+
+  async permanentlyDeleteChats(ids) {
+    const uniqueIds = [...new Set(ids)];
+    const chats = uniqueIds.map((id) => this.readRecord("chat", id));
+    if (!chats.every((chat) => chat?.deletedAt)) return null;
+
+    const deletedIds = new Set(uniqueIds);
+    const timestamp = now();
+    this.db.run("BEGIN");
+    try {
+      for (const child of this.readRecords("chat")) {
+        if (child.parentChatId && deletedIds.has(child.parentChatId)) {
+          await this.writeRecord("chat", {
+            ...child,
+            parentChatId: null,
+            branchSourceMessageId: null,
+            updatedAt: timestamp
+          });
+        }
+      }
+      for (const id of uniqueIds) {
+        await this.deleteRecord("chat", id);
+        this.db.run("DELETE FROM records WHERE type IN ('message', 'memory') AND chatId = ?", [id]);
+      }
+      this.db.run("COMMIT");
+    } catch (error) {
+      this.db.run("ROLLBACK");
+      throw error;
+    }
+    await this.persist();
+    return uniqueIds.length;
   }
 
   listMessages(chatId) {
@@ -336,6 +448,8 @@ export class MobileStore {
       role: input.role,
       characterId: input.characterId ?? null,
       content: input.content ?? "",
+      contextIncluded: input.contextIncluded !== false,
+      isBookmarked: input.isBookmarked === true,
       variants: input.variants ?? [],
       activeVariantIndex: input.activeVariantIndex ?? 0,
       tokenUsage: input.tokenUsage ?? null,
@@ -458,6 +572,7 @@ export class MobileStore {
         ...(existing ?? {}),
         ...chat,
         id: chat.id ?? randomUUID(),
+        deletedAt: chat.deletedAt ?? null,
         updatedAt: chat.updatedAt ?? now()
       });
     }
@@ -501,7 +616,12 @@ export class MobileStore {
       exportedAt: now(),
       settings,
       characters: clone(this.readRecords("character", "", [], "ORDER BY updatedAt DESC")),
-      chats: clone(this.readRecords("chat", "", [], "ORDER BY updatedAt DESC")),
+      chats: clone(
+        this.readRecords("chat", "", [], "ORDER BY updatedAt DESC").map((chat) => ({
+          ...chat,
+          deletedAt: chat.deletedAt ?? null
+        }))
+      ),
       messages: clone(this.readRecords("message", "", [], "ORDER BY createdAt ASC")),
       memories: clone(this.readRecords("memory", "", [], "ORDER BY updatedAt DESC"))
     };

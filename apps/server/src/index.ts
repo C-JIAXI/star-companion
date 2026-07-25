@@ -10,6 +10,7 @@ import { backupsRouter } from "./routes/backups.js";
 import { charactersRouter } from "./routes/characters.js";
 import { chatsRouter } from "./routes/chats.js";
 import { messagesRouter } from "./routes/messages.js";
+import { mediaRouter } from "./routes/media.js";
 import { settingsRouter } from "./routes/settings.js";
 import { syncRouter } from "./routes/sync.js";
 import { attachChatSocket } from "./realtime/chatSocket.js";
@@ -23,7 +24,7 @@ app.use(
     credentials: true
   })
 );
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "25mb" }));
 
 app.get("/api/health", async (_request, response, next) => {
   try {
@@ -42,6 +43,7 @@ app.get("/api/health", async (_request, response, next) => {
 app.use("/api/characters", charactersRouter);
 app.use("/api/chats", chatsRouter);
 app.use("/api/messages", messagesRouter);
+app.use("/api/media", mediaRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/backups", backupsRouter);
 app.use("/api/sync", syncRouter);

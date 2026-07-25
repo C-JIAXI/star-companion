@@ -171,7 +171,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           items: [
             {
               title: "发送与停止",
-              body: "输入消息后发送。生成中主按钮会切换为停止，停止后保留已经流式返回的内容。"
+              body: "输入消息后发送。生成期间可继续输入并加入待发送队列；队列可编辑、删除或立即发送，当前回复结束后会合并为下一条消息自动发送。队列只在当前应用会话中保留。停止后仍保留已经流式返回的内容。"
             },
             {
               title: "消息操作",
@@ -180,6 +180,30 @@ const getDocsCopy = (language: string): DocsCopy => {
             {
               title: "聊天设置",
               body: "右上角设置菜单可调整记忆轮数、长期记忆、聊天背景、用户设定、用户画像摘要和当前模型。"
+            },
+            {
+              title: "AI 标题草案",
+              body: "聊天工具栏可根据当前已纳入上下文的消息生成简短标题草案。草案会先放入标题编辑框，确认后才会保存。默认新聊天在首轮对话完成后会自动生成一次标题，手动命名不会被覆盖。"
+            },
+            {
+              title: "继续上次聊天",
+              body: "刷新页面或重新打开应用后，会自动恢复上次选择的聊天；已经删除的聊天不会继续占用当前工作区。"
+            },
+            {
+              title: "聊天归档",
+              body: "历史列表可归档已完成的聊天而不删除消息或长期记忆，管理模式支持批量归档与恢复；也可导出单段聊天归档，导入时会创建新的聊天而不覆盖来源。"
+            },
+            {
+              title: "聊天回收站",
+              body: "删除聊天会先移入回收站并保留消息与长期记忆，可单个或批量恢复。永久删除只在回收站中提供，并有独立确认；回收站状态会进入完整备份和局域网同步。"
+            },
+            {
+              title: "可读聊天记录",
+              body: "聊天设置可预览并导出 Markdown 或纯文本记录，也可直接复制。导出内容包含标题、角色和消息，可选择是否附带每条消息时间；历史列表的一键下载默认使用 Markdown。JSON 聊天归档仍用于完整恢复。"
+            },
+            {
+              title: "语音与图片",
+              body: "输入框工具可录音转写、朗读最近回复和生成图片；每条助手回复也可单独朗读或停止。设置页可指定文字朗读的声音 ID、0.5–2 倍播放速度，并选择是否自动朗读当前聊天中新收到的助手回复。图片会先在预览中展示，确认后才插入输入框。"
             },
             {
               title: "快捷指令",
@@ -196,11 +220,11 @@ const getDocsCopy = (language: string): DocsCopy => {
           items: [
             {
               title: "角色设定",
-              body: "把角色身份、背景、目标、语气、关系和互动边界写清楚。规则越具体，回复越容易保持一致。"
+              body: "把角色身份、背景、目标、语气、关系和互动边界写清楚。封面可填写 HTTPS 图片地址，也可选择 2 MB 内的本地 PNG、JPEG、WebP、GIF 或 AVIF 图片。"
             },
             {
               title: "标签与筛选",
-              body: "为角色添加标签后，角色列表会显示标签筛选；搜索框只按角色名称和简介查找，不会匹配提示词内容。"
+              body: "为角色添加标签后，角色列表会显示标签筛选；搜索框只按角色名称和简介查找，不会匹配提示词内容。批量管理可为当前选中的角色统一添加或移除标签。常用角色可收藏，并可按收藏、最近聊天、聊天数量、更新时间或名称整理角色库。"
             },
             {
               title: "背景词条",
@@ -216,7 +240,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "开场 HTML 与导入导出",
-              body: "开场页面适合展示角色介绍、序章或欢迎页；角色卡支持导入导出。再次导入同一张角色卡会更新原角色，即使角色名称已变更；私密角色内容需密码解锁。"
+              body: "开场页面适合展示角色介绍、序章或欢迎页；角色卡支持导入导出和复制。副本会获得新的角色卡身份，私密角色的副本仍保持加密。再次导入同一张角色卡会更新原角色，即使角色名称已变更。"
             }
           ],
           note: "建议先完善角色设定、标签和背景词条，再按需要添加快捷指令和视觉样式。"
@@ -254,7 +278,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           items: [
             {
               title: "导出范围",
-              body: "完整备份包含角色、聊天和消息；设置会导出模型服务和参数，但不会导出 API Key。"
+              body: "完整备份包含角色、角色收藏状态、聊天和消息；设置会导出模型服务和参数，但不会导出 API Key。角色收藏属于本地偏好，不会写入可分享的角色卡文件。"
             },
             {
               title: "合并导入",
@@ -293,7 +317,7 @@ const getDocsCopy = (language: string): DocsCopy => {
                 { selector: "#chat-quick-replies-toggle", detail: "快捷指令折叠按钮" },
                 { selector: "#chat-composer", detail: "输入区外层容器" },
                 { selector: "#chat-message-input", detail: "消息输入框" },
-                { selector: "#chat-primary-action", detail: "发送或停止按钮" },
+                { selector: "#chat-primary-action", detail: "发送或加入队列按钮" },
                 { selector: "#chat-empty-state", detail: "空状态区域" },
                 { selector: "#chat-opening-frame", detail: "开场 iframe" }
               ]
@@ -401,15 +425,59 @@ const getDocsCopy = (language: string): DocsCopy => {
         items: [
           {
             title: "Send and stop",
-            body: "Send from the composer. While generation streams, the primary button becomes Stop and keeps content already received."
+            body: "Send from the composer. While generation streams, new messages can be queued, edited, deleted, or sent immediately. The queue is combined into the next message after the current reply and lasts only for the current app session. Stopping keeps content already received."
           },
           {
             title: "Message actions",
-            body: "User messages can be copied, edited, deleted, or resent. Character replies can be copied, edited, deleted, regenerated, and switched between variants."
+            body: "User messages can be copied, edited, deleted, or resent. Character replies can be copied, edited, deleted, regenerated, continued when they are the latest reply, and switched between variants."
           },
           {
             title: "Chat settings",
             body: "The top-right menu controls memory turns, long-term memory, chat background, user notes, profile summary, and the active model."
+          },
+          {
+            title: "AI title draft",
+            body: "The chat toolbar can generate a concise title from messages included in context. The suggestion stays in the title editor until you confirm it. Default new chats also receive one title automatically after their first exchange, without overwriting manual names."
+          },
+          {
+            title: "Resume the last chat",
+            body: "After a refresh or restart, the app restores the last selected chat and clears the selection if that chat no longer exists."
+          },
+            {
+              title: "Chat archives",
+              body: "History can export a single chat archive with its character, messages, and long-term memories. Importing always creates a separate chat and never replaces the source."
+            },
+            {
+              title: "Chat Trash",
+              body: "Deleting a chat first moves it to Trash while keeping its messages and long-term memories. Chats can be restored individually or in batches. Permanent deletion is only available in Trash behind a separate confirmation, and Trash state is included in full backups and LAN sync."
+            },
+          {
+            title: "Readable transcripts",
+            body: "Chat settings can preview, copy, or download Markdown and plain-text transcripts with the title, character, and messages. Per-message timestamps are optional, while the History shortcut downloads Markdown by default. JSON chat archives remain the complete restore format."
+          },
+          {
+            title: "Search every chat",
+            body: "History search can switch from chat titles to message content. Find a remembered phrase across all chats, then open the matching conversation at that exact message."
+          },
+          {
+            title: "Pin important chats",
+            body: "Use the pin action in History to keep frequently used chats above newer conversations. Pin state is included in backups and manual LAN sync."
+          },
+          {
+            title: "Archive completed chats",
+            body: "Archive hides a completed chat from active History without deleting its messages or memories. History management mode can archive or restore several chats together; global message search still includes archived chats."
+          },
+          {
+            title: "Story checkpoints",
+            body: "Save a checkpoint from any user or assistant message to preserve a story snapshot without switching away from the current chat. Checkpoints stay linked to their source and can be opened later from History."
+          },
+          {
+            title: "Message bookmarks",
+            body: "Bookmark any user or assistant message, then open the chat toolbar bookmarks list to return to that turn. Bookmarks are saved with backups, chat archives, and branches, but never change model or Agent context."
+          },
+          {
+            title: "Voice and images",
+            body: "Composer tools transcribe recordings, read the latest reply, and generate images; each assistant reply can also be narrated or stopped individually. Settings let you choose a speech voice ID, a 0.5–2x playback rate, and automatic playback for new assistant replies in the current chat. Images are previewed before you insert one into the composer."
           },
           {
             title: "Quick commands",
@@ -427,11 +495,11 @@ const getDocsCopy = (language: string): DocsCopy => {
         items: [
           {
             title: "Character setup",
-            body: "Describe the character's identity, background, goals, voice, relationship, and interaction boundaries. Specific rules make replies steadier."
+            body: "Describe the character's identity, background, goals, voice, relationship, and interaction boundaries. Covers can use an HTTPS URL or a local PNG, JPEG, WebP, GIF, or AVIF image up to 2 MB."
           },
           {
             title: "Tags and filtering",
-            body: "Add tags to organize characters. The character list can filter by tag, while text search only matches character names and descriptions, not prompt content."
+            body: "Add tags to organize characters. Search only matches names and descriptions. Batch management can add or remove tags across the current selection. Favorite frequent characters, then sort the library by favorites, recent chats, chat count, update time, or name."
           },
           {
             title: "Background entries",
@@ -447,7 +515,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Opening HTML and import/export",
-            body: "Opening pages are useful for introductions, prologues, or welcome screens. Character cards support import/export. Re-importing the same character card updates the existing character even if the name changed, and private cards require password unlock."
+            body: "Opening pages are useful for introductions, prologues, or welcome screens. Character cards support import, export, and duplication. A duplicate receives a new card identity, while private duplicates stay encrypted. Re-importing the same card updates the existing character even if its name changed."
           }
         ],
         note: "Start with the character setup, tags, and background entries, then add quick commands and visual styling as needed."
@@ -486,7 +554,7 @@ const getDocsCopy = (language: string): DocsCopy => {
         items: [
           {
             title: "Export contents",
-            body: "Full backups include characters, chats, and messages. Settings export model services and parameters, but not the API key."
+            body: "Full backups include characters, local favorite state, chats, and messages. Settings export model services and parameters, but not the API key. Favorite state is not written into shareable character card files."
           },
           {
             title: "Merge import",
@@ -525,7 +593,7 @@ const getDocsCopy = (language: string): DocsCopy => {
               { selector: "#chat-quick-replies-toggle", detail: "Quick command collapse toggle" },
               { selector: "#chat-composer", detail: "Composer outer container" },
               { selector: "#chat-message-input", detail: "Message input field" },
-              { selector: "#chat-primary-action", detail: "Send or stop button" },
+              { selector: "#chat-primary-action", detail: "Send or queue button" },
               { selector: "#chat-empty-state", detail: "Empty-state container" },
               { selector: "#chat-opening-frame", detail: "Opening iframe" }
             ]

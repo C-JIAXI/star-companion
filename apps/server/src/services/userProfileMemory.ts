@@ -1,6 +1,7 @@
 import type { Chat, UserSettings } from "@prisma/client";
 import { prisma } from "../db.js";
 import { completeChatCompletion, type ChatCompletionMessage } from "./completions.js";
+import { resolveModuleSettings } from "./moduleModels.js";
 
 const MAX_PROFILE_LENGTH = 1800;
 const RECENT_USER_MESSAGE_LIMIT = 16;
@@ -45,7 +46,7 @@ export const updateUserProfileFromChat = async ({
     return null;
   }
 
-  const chat = await prisma.chat.findUnique({ where: { id: chatId } });
+  const chat = await prisma.chat.findFirst({ where: { id: chatId, deletedAt: null } });
   if (!chat) {
     return null;
   }
@@ -70,7 +71,7 @@ export const updateUserProfileFromChat = async ({
 
   const summary = trimUserProfileSummary(
     await completeChatCompletion({
-      settings,
+      settings: resolveModuleSettings(settings, "user_profile"),
       messages: buildUserProfileSummaryMessages(chat.userProfileSummary, recentContents),
       maxTokens: 500,
       temperature: 0.2

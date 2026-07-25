@@ -162,6 +162,69 @@ describe("chat memory helpers", () => {
     assert.equal(memories[0]?.title, "Blue door clue");
   });
 
+  it("returns a maintenance summary when automatic memory creates entries", async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  actions: [
+                    {
+                      type: "create",
+                      title: "Quiet inn preference",
+                      content: "The user prefers quiet inns during travel scenes.",
+                      keywords: ["quiet inn", "travel"],
+                      importance: 4
+                    }
+                  ]
+                })
+              }
+            }
+          ]
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )) as typeof fetch;
+
+    const chat = await prisma.chat.create({
+      data: {
+        title: "Memory summary chat",
+        characterId: ids.characterId
+      }
+    });
+    await prisma.message.create({
+      data: {
+        chatId: chat.id,
+        role: "user",
+        content: "Please remember that I prefer quiet inns.",
+        variants: [],
+        activeVariantIndex: 0
+      }
+    });
+
+    const summary = await updateChatMemoriesFromTurn({
+      chatId: chat.id,
+      settings: createSettings({ apiKey: "sk-test" })
+    });
+
+    assert.deepEqual(summary && {
+      chatId: summary.chatId,
+      created: summary.created,
+      updated: summary.updated,
+      disabled: summary.disabled,
+      hasUpdatedAt: Boolean(summary.memoryUpdatedAt)
+    }, {
+      chatId: chat.id,
+      created: 1,
+      updated: 0,
+      disabled: 0,
+      hasUpdatedAt: true
+    });
+
+    await prisma.chat.delete({ where: { id: chat.id } });
+  });
+
   it("does not throw when memory maintenance receives an empty model content", async () => {
     globalThis.fetch = (async () =>
       new Response(

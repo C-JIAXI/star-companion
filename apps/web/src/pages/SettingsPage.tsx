@@ -12,10 +12,12 @@ import {
   Save,
   ServerCog,
   Trash2,
-  Wifi
+  Wifi,
+  X
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { getAiModelCapabilities, modelSupportsAiModule } from "@local-roleplay/shared";
 import { languageOptions, useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { readFileText, saveJsonFile } from "../lib/files";
@@ -23,6 +25,8 @@ import { generateId } from "../lib/uuid";
 import { useAppStore } from "../store/useAppStore";
 import type {
   AppLanguage,
+  AiModelCapability,
+  AiModuleId,
   BackupImportSummaryDTO,
   LanSyncDirection,
   LanSyncInfoDTO,
@@ -56,7 +60,13 @@ const defaultForm: SettingsInput = {
   providers: [],
   activeProviderId: "",
   activeModelId: "",
+  moduleModelPreferences: {},
+  userPersonaPresets: [],
   showMessageAvatars: true,
+  showMessageTimestamps: false,
+  ttsVoice: "alloy",
+  ttsPlaybackRate: 1,
+  ttsAutoPlay: false,
   userProfileSummary: ""
 };
 
@@ -135,6 +145,37 @@ const toSyncRecord = (result: LanSyncSummaryDTO): SyncRecord => ({
 const describeSummaryCounts = (summary: BackupImportSummaryDTO) =>
   `${summary.characters} / ${summary.chats} / ${summary.messages} / ${summary.memories}`;
 
+const moduleModelRows = [
+  { id: "chat", zh: "聊天回复", en: "Chat replies" },
+  { id: "agent", zh: "AI Agent", en: "AI Agent" },
+  { id: "memory", zh: "长期记忆", en: "Long-term memory" },
+  { id: "user_profile", zh: "用户画像", en: "User profile" },
+  { id: "voice_transcription", zh: "语音转文字", en: "Voice transcription" },
+  { id: "voice_speech", zh: "文字朗读", en: "Text to speech" },
+  { id: "image_generation", zh: "生图", en: "Image generation" }
+] satisfies Array<{ id: AiModuleId; zh: string; en: string }>;
+
+const modelCapabilityRows: Array<{ id: AiModelCapability; zh: string; en: string }> = [
+  { id: "text_generation", zh: "文本生成", en: "Text" },
+  { id: "audio_transcription", zh: "语音转写", en: "Transcription" },
+  { id: "text_to_speech", zh: "文字朗读", en: "Speech" },
+  { id: "image_generation", zh: "生图", en: "Image" }
+];
+
+const removeModuleModelPreferences = (
+  preferences: SettingsInput["moduleModelPreferences"],
+  providerId: string,
+  modelIds?: Set<string>
+) => {
+  const next = { ...(preferences ?? {}) };
+  for (const [moduleId, preference] of Object.entries(next)) {
+    if (preference?.providerId === providerId && (!modelIds || modelIds.has(preference.modelId))) {
+      delete next[moduleId as AiModuleId];
+    }
+  }
+  return next;
+};
+
 const copyTextWithFallback = async (value: string) => {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(value);
@@ -160,7 +201,10 @@ const providerTemplates = [
     defaultModels: [
       { label: "GPT-5.5", model: "gpt-5.5" },
       { label: "GPT-5.4 Mini", model: "gpt-5.4-mini" },
-      { label: "GPT-5.4 Nano", model: "gpt-5.4-nano" }
+      { label: "GPT-5.4 Nano", model: "gpt-5.4-nano" },
+      { label: "GPT-4o Mini Transcribe", model: "gpt-4o-mini-transcribe", capabilities: ["audio_transcription"] },
+      { label: "GPT-4o Mini TTS", model: "gpt-4o-mini-tts", capabilities: ["text_to_speech"] },
+      { label: "GPT Image 1", model: "gpt-image-1", capabilities: ["image_generation"] }
     ]
   },
   {
@@ -487,6 +531,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const copy = useMemo(() => getPageCopy(language), [language]);
   const setLanguage = useAppStore((state) => state.setLanguage);
   const setShowMessageAvatars = useAppStore((state) => state.setShowMessageAvatars);
+  const setShowMessageTimestamps = useAppStore((state) => state.setShowMessageTimestamps);
 
   const [form, setForm] = useState<SettingsInput>(defaultForm);
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -531,17 +576,24 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         providers: settings.providers ?? [],
         activeProviderId: settings.activeProviderId ?? "",
         activeModelId: settings.activeModelId ?? "",
+        moduleModelPreferences: settings.moduleModelPreferences ?? {},
+        userPersonaPresets: settings.userPersonaPresets ?? [],
         showMessageAvatars: settings.showMessageAvatars,
+        showMessageTimestamps: settings.showMessageTimestamps,
+        ttsVoice: settings.ttsVoice ?? "alloy",
+        ttsPlaybackRate: settings.ttsPlaybackRate ?? 1,
+        ttsAutoPlay: settings.ttsAutoPlay ?? false,
         userProfileSummary: settings.userProfileSummary ?? ""
       };
       setForm(nextForm);
       setSavedSnapshot(serializeForm(nextForm));
       setLanguage(settings.language);
       setShowMessageAvatars(settings.showMessageAvatars);
+      setShowMessageTimestamps(settings.showMessageTimestamps);
       setHasApiKey(settings.hasApiKey);
       setClearStoredApiKey(false);
     },
-    [setLanguage, setShowMessageAvatars]
+    [setLanguage, setShowMessageAvatars, setShowMessageTimestamps]
   );
 
   useEffect(() => {
@@ -687,8 +739,14 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         providers: settings.providers ?? [],
         activeProviderId: settings.activeProviderId ?? "",
         activeModelId: settings.activeModelId ?? "",
+        moduleModelPreferences: settings.moduleModelPreferences ?? {},
+        userPersonaPresets: settings.userPersonaPresets ?? [],
         autoSummarizeUser: settings.autoSummarizeUser,
         showMessageAvatars: settings.showMessageAvatars,
+        showMessageTimestamps: settings.showMessageTimestamps,
+        ttsVoice: settings.ttsVoice ?? "alloy",
+        ttsPlaybackRate: settings.ttsPlaybackRate ?? 1,
+        ttsAutoPlay: settings.ttsAutoPlay ?? false,
         userProfileSummary: settings.userProfileSummary ?? ""
       };
 
@@ -698,6 +756,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       setClearStoredApiKey(false);
       setLanguage(settings.language);
       setShowMessageAvatars(settings.showMessageAvatars);
+      setShowMessageTimestamps(settings.showMessageTimestamps);
       setStatus(t("settings.saved"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("settings.failedSave"));
@@ -830,7 +889,8 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       models: template.defaultModels.map((m) => ({
         id: generateId(),
         label: m.label,
-        model: m.model
+        model: m.model,
+        capabilities: "capabilities" in m ? [...m.capabilities] : undefined
       }))
     };
 
@@ -940,6 +1000,11 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
             ? { ...p, models: p.models.filter((m) => !deleteIds.has(m.id)) }
             : p
         ),
+        moduleModelPreferences: removeModuleModelPreferences(
+          current.moduleModelPreferences,
+          providerId,
+          deleteIds
+        ),
         activeModelId: deleteIds.has(current.activeModelId) ? "" : current.activeModelId
       };
     });
@@ -948,10 +1013,62 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   };
 
   const selectModel = (providerId: string, modelId: string) => {
+    setForm((current) => {
+      const provider = current.providers.find((entry) => entry.id === providerId);
+      const model = provider?.models.find((entry) => entry.id === modelId);
+      if (!provider || !model || !modelSupportsAiModule(provider.provider, model, "chat")) {
+        return current;
+      }
+      return {
+        ...current,
+        activeProviderId: providerId,
+        activeModelId: modelId
+      };
+    });
+  };
+
+  const setModuleModelPreference = (moduleId: AiModuleId, value: string) => {
+    setForm((current) => {
+      const nextPreferences = { ...(current.moduleModelPreferences ?? {}) };
+      if (!value) {
+        delete nextPreferences[moduleId];
+      } else {
+        const [providerId, modelId] = value.split("::");
+        if (providerId && modelId) {
+          nextPreferences[moduleId] = { providerId, modelId };
+        }
+      }
+
+      return {
+        ...current,
+        moduleModelPreferences: nextPreferences
+      };
+    });
+  };
+
+  const updateModelCapabilities = (
+    providerId: string,
+    modelId: string,
+    capability: AiModelCapability,
+    enabled: boolean
+  ) => {
     setForm((current) => ({
       ...current,
-      activeProviderId: providerId,
-      activeModelId: modelId
+      providers: current.providers.map((provider) =>
+        provider.id !== providerId
+          ? provider
+          : {
+              ...provider,
+              models: provider.models.map((model) => {
+                if (model.id !== modelId) return model;
+                const currentCapabilities = getAiModelCapabilities(model);
+                const capabilities = enabled
+                  ? [...new Set([...currentCapabilities, capability])]
+                  : currentCapabilities.filter((entry) => entry !== capability);
+                return { ...model, capabilities };
+              })
+            }
+      )
     }));
   };
 
@@ -1074,6 +1191,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
             <div className="mt-auto flex flex-col gap-3">
               <Button
                 className="w-full"
+                data-testid="settings-save"
                 disabled={loading || !hasUnsavedChanges}
                 onClick={() => void saveSettings()}
               >
@@ -1207,6 +1325,97 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                     </span>
                   </label>
                 </Field>
+                <Field label={language === "zh-CN" ? "消息时间" : "Message timestamps"}>
+                  <label className="flex min-h-[40px] cursor-pointer items-center gap-3 rounded-lg border border-white/10 bg-ink-950/50 px-3 text-sm text-slate-100 transition-all hover:border-white/20">
+                    <input
+                      checked={form.showMessageTimestamps ?? false}
+                      type="checkbox"
+                      className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          showMessageTimestamps: event.target.checked
+                        }))
+                      }
+                    />
+                    <span className="text-sm text-slate-200">
+                      {language === "zh-CN" ? "在每条聊天消息下显示发送时间" : "Show the sent time below each chat message"}
+                    </span>
+                  </label>
+                </Field>
+              </div>
+              <div className={`border-t py-6 ${settingsDividerClassName}`}>
+                <SettingsSectionHeading
+                  title={t("settings.voicePlayback")}
+                  description={t("settings.voicePlaybackHelp")}
+                />
+                <div className="mt-5 grid gap-5 md:grid-cols-3">
+                  <Field label={t("settings.ttsVoice")}>
+                    <TextInput
+                      aria-label={t("settings.ttsVoice")}
+                      data-testid="settings-tts-voice"
+                      list="tts-voice-options"
+                      maxLength={80}
+                      value={form.ttsVoice ?? "alloy"}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          ttsVoice: event.target.value
+                        }))
+                      }
+                    />
+                    <datalist id="tts-voice-options">
+                      {['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'].map((voice) => (
+                        <option key={voice} value={voice} />
+                      ))}
+                    </datalist>
+                  </Field>
+                  <Field label={t("settings.ttsPlaybackRate")}>
+                    <TextInput
+                      aria-label={t("settings.ttsPlaybackRate")}
+                      data-testid="settings-tts-playback-rate"
+                      max={2}
+                      min={0.5}
+                      step={0.1}
+                      type="number"
+                      value={form.ttsPlaybackRate ?? 1}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          ttsPlaybackRate: Number(event.target.value)
+                        }))
+                      }
+                      onBlur={() =>
+                        setForm((current) => ({
+                          ...current,
+                          ttsPlaybackRate: Math.min(
+                            2,
+                            Math.max(0.5, current.ttsPlaybackRate || 1)
+                          )
+                        }))
+                      }
+                    />
+                  </Field>
+                  <Field label={t("settings.ttsAutoPlay")}>
+                    <label className="flex min-h-[40px] cursor-pointer items-center gap-3 rounded-lg border border-white/10 bg-ink-950/50 px-3 text-sm text-slate-100 transition-all hover:border-white/20 sm:min-h-[44px]">
+                      <input
+                        checked={form.ttsAutoPlay ?? false}
+                        data-testid="settings-tts-auto-play"
+                        type="checkbox"
+                        className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            ttsAutoPlay: event.target.checked
+                          }))
+                        }
+                      />
+                      <span className="text-sm text-slate-200">
+                        {t("settings.ttsAutoPlayHelp")}
+                      </span>
+                    </label>
+                  </Field>
+                </div>
               </div>
               <SettingsSectionHeading
                 title={copy.samplingBlockTitle}
@@ -1317,6 +1526,73 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         >
           <div className="space-y-4">
             <p className="text-sm leading-6 text-slate-400">{copy.providersHelp}</p>
+
+            {form.providers.length > 0 ? (
+              <div className={`rounded-xl border p-4 ${settingsSurfaceClassName}`}>
+                <div className="mb-3 flex flex-col gap-1">
+                  <h3 className="text-sm font-semibold text-slate-100">
+                    {language === "zh-CN" ? "模块模型" : "Module models"}
+                  </h3>
+                  <p className="text-xs leading-5 text-slate-500">
+                    {language === "zh-CN"
+                      ? "仅显示已标注兼容该功能的模型；留空则使用当前聊天模型。"
+                      : "Only compatible models are shown. Leave blank to use the current chat model."}
+                  </p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  {moduleModelRows.map((row) => {
+                    const selected = form.moduleModelPreferences?.[row.id];
+                    const value = selected ? `${selected.providerId}::${selected.modelId}` : "";
+                    const compatibleModels = form.providers.flatMap((provider) =>
+                      provider.models
+                        .filter((model) => modelSupportsAiModule(provider.provider, model, row.id))
+                        .map((model) => ({ provider, model }))
+                    );
+                    const activeProvider = form.providers.find(
+                      (provider) => provider.id === form.activeProviderId
+                    );
+                    const activeModel = activeProvider?.models.find(
+                      (model) => model.id === form.activeModelId
+                    );
+                    const fallbackCompatible = Boolean(
+                      activeModel &&
+                        activeProvider &&
+                        modelSupportsAiModule(activeProvider.provider, activeModel, row.id)
+                    );
+
+                    return (
+                      <Field key={row.id} label={language === "zh-CN" ? row.zh : row.en}>
+                        <select
+                          className={selectClassName}
+                          value={value}
+                          onChange={(event) => setModuleModelPreference(row.id, event.target.value)}
+                        >
+                          <option value="">
+                            {fallbackCompatible
+                              ? (language === "zh-CN" ? "使用当前聊天模型" : "Use current chat model")
+                              : (language === "zh-CN"
+                                  ? "当前聊天模型不兼容，请选择模型"
+                                  : "Current chat model is incompatible; choose a model")}
+                          </option>
+                          {compatibleModels.map(({ provider, model }) => (
+                            <option key={`${provider.id}:${model.id}`} value={`${provider.id}::${model.id}`}>
+                              {`${getProviderDisplayName(provider, language)} / ${model.label || model.model}`}
+                            </option>
+                          ))}
+                        </select>
+                        {compatibleModels.length === 0 ? (
+                          <span className="text-xs leading-5 text-amber-300/90">
+                            {language === "zh-CN"
+                              ? "没有已标注支持此功能的模型。请在下方模型列表勾选对应能力，或导入兼容模型。"
+                              : "No model is marked compatible. Set its capability below or import a compatible model."}
+                          </span>
+                        ) : null}
+                      </Field>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
 
             {form.providers.length === 0 ? (
               <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-8 text-center text-sm text-slate-500">
@@ -1434,15 +1710,33 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                               />
                             </Field>
                             <Field label={copy.providerKey}>
-                              <TextInput
-                                type="password"
-                                value={provider.key ?? ""}
-                                onChange={(event) =>
-                                  updateProvider(provider.id, {
-                                    key: event.target.value || undefined
-                                  })
-                                }
-                              />
+                              <div className="flex gap-2">
+                                <TextInput
+                                  type="password"
+                                  value={provider.key ?? ""}
+                                  placeholder={
+                                    provider.hasKey
+                                      ? language === "zh-CN"
+                                        ? "已保存；输入可替换"
+                                        : "Stored; enter to replace"
+                                      : undefined
+                                  }
+                                  onChange={(event) =>
+                                    updateProvider(provider.id, { key: event.target.value })
+                                  }
+                                />
+                                {provider.hasKey && provider.key === undefined ? (
+                                  <Button
+                                    aria-label={language === "zh-CN" ? "清除专用 API Key" : "Clear dedicated API key"}
+                                    className="!min-h-[40px] !w-10 !px-0"
+                                    title={language === "zh-CN" ? "清除专用 API Key" : "Clear dedicated API key"}
+                                    variant="secondary"
+                                    onClick={() => updateProvider(provider.id, { key: "" })}
+                                  >
+                                    <X size={16} />
+                                  </Button>
+                                ) : null}
+                              </div>
                             </Field>
                           </div>
 
@@ -1514,6 +1808,8 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                                   const isModelActive =
                                     provider.id === form.activeProviderId &&
                                     model.id === form.activeModelId;
+                                  const supportsChat = modelSupportsAiModule(provider.provider, model, "chat");
+                                  const capabilities = getAiModelCapabilities(model);
 
                                   return (
                                     <div
@@ -1551,8 +1847,12 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                                               ? "h-3.5 w-3.5 border-ember-400 bg-ember-400 shadow-[0_0_6px_rgba(251,146,60,0.4)]"
                                               : "h-3.5 w-3.5 border-slate-500 bg-transparent hover:border-slate-300"
                                         }`}
-                                        disabled={manageMode}
-                                        title={language === "zh-CN" ? "设为当前模型" : "Set as active model"}
+                                        disabled={manageMode || !supportsChat}
+                                        title={
+                                          supportsChat
+                                            ? (language === "zh-CN" ? "设为当前聊天模型" : "Set as current chat model")
+                                            : (language === "zh-CN" ? "该模型不支持文本聊天" : "This model does not support text chat")
+                                        }
                                         type="button"
                                         onClick={() => selectModel(provider.id, model.id)}
                                       />
@@ -1565,6 +1865,27 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                                           updateModel(provider.id, model.id, { model: event.target.value, label: event.target.value })
                                         }
                                       />
+                                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-l border-white/10 pl-2 text-[11px] text-slate-400">
+                                        {modelCapabilityRows.map((capability) => (
+                                          <label key={capability.id} className="flex cursor-pointer items-center gap-1 whitespace-nowrap">
+                                            <input
+                                              checked={capabilities.includes(capability.id)}
+                                              className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
+                                              disabled={manageMode}
+                                              type="checkbox"
+                                              onChange={(event) =>
+                                                updateModelCapabilities(
+                                                  provider.id,
+                                                  model.id,
+                                                  capability.id,
+                                                  event.target.checked
+                                                )
+                                              }
+                                            />
+                                            {language === "zh-CN" ? capability.zh : capability.en}
+                                          </label>
+                                        ))}
+                                      </div>
                                       {!manageMode ? (
                                       <Button
                                         className="!min-h-[28px] !w-7 !p-0 opacity-0 transition-opacity group-hover:opacity-100"
@@ -1845,6 +2166,10 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
             setForm((current) => ({
               ...current,
               providers: current.providers.filter((p) => p.id !== pendingDeleteProviderId),
+              moduleModelPreferences: removeModuleModelPreferences(
+                current.moduleModelPreferences,
+                pendingDeleteProviderId
+              ),
               activeProviderId:
                 current.activeProviderId === pendingDeleteProviderId
                   ? ""
@@ -1881,6 +2206,11 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                       models: p.models.filter((m) => m.id !== pendingDeleteModel.modelId)
                     }
                   : p
+              ),
+              moduleModelPreferences: removeModuleModelPreferences(
+                current.moduleModelPreferences,
+                pendingDeleteModel.providerId,
+                new Set([pendingDeleteModel.modelId])
               ),
               activeModelId:
                 current.activeModelId === pendingDeleteModel.modelId

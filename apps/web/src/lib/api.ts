@@ -3,21 +3,44 @@ import type {
   AvailableModelsDTO,
   BackupDTO,
   BackupImportSummaryDTO,
+  ChatAgentDraftDTO,
+  ChatAgentDraftRequestDTO,
+  ChatBatchArchiveRequestDTO,
+  ChatBatchArchiveResultDTO,
+  ChatBatchPermanentDeleteRequestDTO,
+  ChatBatchPermanentDeleteResultDTO,
+  ChatBatchTrashRequestDTO,
+  ChatBatchTrashResultDTO,
+  ChatBranchRequestDTO,
+  ChatArchiveDTO,
+  ChatArchiveImportDTO,
+  ChatMessageSearchDTO,
   CharacterCardDTO,
+  CharacterBatchTagsRequestDTO,
+  CharacterBatchTagsResultDTO,
   CharacterCardImportInput,
   CharacterDTO,
   CharacterExportMode,
   CharacterInput,
+  CharacterSortMode,
   ChatMemoryDTO,
   ChatMemoryInput,
   ChatDTO,
   ChatInput,
+  ChatTitleSuggestionDTO,
   ChatWithMessagesDTO,
   LanSyncInfoDTO,
   LanSyncRequestDTO,
   LanSyncSummaryDTO,
+  ImageGenerationDTO,
+  ImageGenerationRequestDTO,
+  GlobalChatMessageSearchDTO,
   MessageDTO,
   MessageInput,
+  VoiceSpeechDTO,
+  VoiceSpeechRequestDTO,
+  VoiceTranscriptionDTO,
+  VoiceTranscriptionRequestDTO,
   PaginatedCharactersDTO,
   PublicUserSettingsDTO,
   SettingsInput
@@ -107,13 +130,28 @@ export const api = {
   characters: {
     list: () => request<CharacterDTO[]>("/api/characters"),
     get: (id: string) => request<CharacterDTO>(`/api/characters/${id}`),
-    page: (query: { q?: string; tag?: string; page?: number; pageSize?: number } = {}) => {
+    page: (
+      query: {
+        q?: string;
+        tag?: string;
+        favoriteOnly?: boolean;
+        sort?: CharacterSortMode;
+        page?: number;
+        pageSize?: number;
+      } = {}
+    ) => {
       const params = new URLSearchParams();
       if (query.q?.trim()) {
         params.set("q", query.q.trim());
       }
       if (query.tag?.trim()) {
         params.set("tag", query.tag.trim());
+      }
+      if (query.favoriteOnly) {
+        params.set("favoriteOnly", "true");
+      }
+      if (query.sort) {
+        params.set("sort", query.sort);
       }
       if (query.page !== undefined) {
         params.set("page", String(query.page));
@@ -126,6 +164,11 @@ export const api = {
     },
     create: (input: CharacterInput) =>
       request<CharacterDTO>("/api/characters", { method: "POST", body: input }),
+    duplicate: (id: string, name: string) =>
+      request<CharacterDTO>(`/api/characters/${id}/duplicate`, {
+        method: "POST",
+        body: { name }
+      }),
     import: (input: CharacterCardImportInput) =>
       request<CharacterDTO>("/api/characters/import", { method: "POST", body: input }),
     export: (id: string, visibility: CharacterExportMode, password?: string) =>
@@ -149,6 +192,11 @@ export const api = {
         method: "POST",
         body: { ids }
       }),
+    batchTags: (input: CharacterBatchTagsRequestDTO) =>
+      request<CharacterBatchTagsResultDTO>("/api/characters/batch-tags", {
+        method: "POST",
+        body: input
+      }),
     batchFetch: (ids: string[]) =>
       request<CharacterDTO[]>("/api/characters/batch-fetch", {
         method: "POST",
@@ -161,7 +209,55 @@ export const api = {
     get: (id: string) => request<ChatWithMessagesDTO>(`/api/chats/${id}`),
     update: (id: string, input: Partial<ChatInput>) =>
       request<ChatDTO>(`/api/chats/${id}`, { method: "PUT", body: input }),
+    batchArchive: (input: ChatBatchArchiveRequestDTO) =>
+      request<ChatBatchArchiveResultDTO>("/api/chats/batch-archive", {
+        method: "POST",
+        body: input
+      }),
+    batchTrash: (input: ChatBatchTrashRequestDTO) =>
+      request<ChatBatchTrashResultDTO>("/api/chats/batch-trash", {
+        method: "POST",
+        body: input
+      }),
+    batchPermanentlyRemove: (input: ChatBatchPermanentDeleteRequestDTO) =>
+      request<ChatBatchPermanentDeleteResultDTO>("/api/chats/batch-permanent-delete", {
+        method: "POST",
+        body: input
+      }),
     remove: (id: string) => request<void>(`/api/chats/${id}`, { method: "DELETE" }),
+    restore: (id: string) =>
+      request<ChatDTO>(`/api/chats/${id}/restore`, { method: "POST" }),
+    permanentlyRemove: (id: string) =>
+      request<void>(`/api/chats/${id}/permanent`, { method: "DELETE" }),
+    exportArchive: (id: string) => request<ChatArchiveDTO>(`/api/chats/${id}/archive`),
+    importArchive: (input: ChatArchiveImportDTO) =>
+      request<ChatWithMessagesDTO>("/api/chats/import-archive", { method: "POST", body: input }),
+    agentDraft: (id: string, input: ChatAgentDraftRequestDTO) =>
+      request<ChatAgentDraftDTO>(`/api/chats/${id}/agent-draft`, {
+        method: "POST",
+        body: input
+      }),
+    titleSuggestion: (id: string) =>
+      request<ChatTitleSuggestionDTO>(`/api/chats/${id}/title-suggestion`, {
+        method: "POST"
+      }),
+    openingMessage: (id: string) =>
+      request<MessageDTO>(`/api/chats/${id}/opening-message`, {
+        method: "POST"
+      }),
+    branch: (id: string, input: ChatBranchRequestDTO) =>
+      request<ChatWithMessagesDTO>(`/api/chats/${id}/branches`, {
+        method: "POST",
+        body: input
+      }),
+    messageSearch: (id: string, query: string, limit = 20) =>
+      request<ChatMessageSearchDTO>(
+        `/api/chats/${id}/message-search?q=${encodeURIComponent(query)}&limit=${limit}`
+      ),
+    globalMessageSearch: (query: string, limit = 20) =>
+      request<GlobalChatMessageSearchDTO>(
+        `/api/chats/message-search?q=${encodeURIComponent(query)}&limit=${limit}`
+      ),
     memories: {
       list: (chatId: string) => request<ChatMemoryDTO[]>(`/api/chats/${chatId}/memories`),
       create: (chatId: string, input: ChatMemoryInput) =>
@@ -188,6 +284,23 @@ export const api = {
     update: (id: string, input: Partial<MessageInput>) =>
       request<MessageDTO>(`/api/messages/${id}`, { method: "PUT", body: input }),
     remove: (id: string) => request<void>(`/api/messages/${id}`, { method: "DELETE" })
+  },
+  media: {
+    transcribe: (input: VoiceTranscriptionRequestDTO) =>
+      request<VoiceTranscriptionDTO>("/api/media/voice/transcriptions", {
+        method: "POST",
+        body: input
+      }),
+    speech: (input: VoiceSpeechRequestDTO) =>
+      request<VoiceSpeechDTO>("/api/media/voice/speech", {
+        method: "POST",
+        body: input
+      }),
+    image: (input: ImageGenerationRequestDTO) =>
+      request<ImageGenerationDTO>("/api/media/images/generations", {
+        method: "POST",
+        body: input
+      })
   },
   settings: {
     get: () => request<PublicUserSettingsDTO>("/api/settings"),

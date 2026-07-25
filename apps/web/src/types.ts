@@ -1,25 +1,48 @@
 import type {
   CharacterCardDTO,
+  CharacterBatchTagsRequestDTO,
+  CharacterBatchTagsResultDTO,
   CharacterDTO,
+  CharacterSortMode,
   CharacterExportMode,
   CharacterLoreEntryDTO,
   CharacterVisibility,
+  ChatAgentDraftDTO,
+  ChatAgentDraftRequestDTO,
+  ChatAgentMode,
+  ChatBatchArchiveRequestDTO,
+  ChatBatchArchiveResultDTO,
+  ChatBatchPermanentDeleteRequestDTO,
+  ChatBatchPermanentDeleteResultDTO,
+  ChatBatchTrashRequestDTO,
+  ChatBatchTrashResultDTO,
+  ChatBranchRequestDTO,
+  ChatArchiveDTO,
+  ChatArchiveImportDTO,
+  GlobalChatMessageSearchDTO,
+  ChatMessageSearchDTO,
   ChatMemoryDTO,
   ChatMemoryInput,
   ChatDTO,
+  ChatTitleSuggestionDTO,
   ChatWithMessagesDTO,
   GenerationClientMessage,
   GenerationServerMessage,
   AppLanguage,
+  AiModelCapability,
+  AiModuleId,
   AvailableModelsDTO,
   BackupDTO,
   BackupImportSummaryDTO,
+  ImageGenerationDTO,
+  ImageGenerationRequestDTO,
   LoreEntryScope,
   LoreTriggerMode,
   LanSyncDirection,
   LanSyncInfoDTO,
   LanSyncRequestDTO,
   LanSyncSummaryDTO,
+  ModuleModelPreferencesDTO,
   MatchedLoreEntryDTO,
   MatchedMemoryDTO,
   MessageDTO,
@@ -29,7 +52,12 @@ import type {
   PaginatedCharactersDTO,
   PublicUserSettingsDTO,
   QuickReplyDTO,
-  TokenUsageDTO
+  TokenUsageDTO,
+  UserPersonaPresetDTO,
+  VoiceSpeechDTO,
+  VoiceSpeechRequestDTO,
+  VoiceTranscriptionDTO,
+  VoiceTranscriptionRequestDTO
 } from "@local-roleplay/shared";
 
 export type AppSection = "chat" | "docs" | "characters" | "settings";
@@ -57,6 +85,7 @@ export type CharacterInput = {
   openingHtml?: string;
   loreEntries?: (Omit<CharacterLoreEntryDTO, "id"> & { id?: string })[];
   quickReplies?: (Omit<QuickReplyDTO, "id"> & { id?: string })[];
+  isFavorite?: boolean;
 };
 
 export type CharacterCardImportInput = CharacterCardDTO;
@@ -64,6 +93,8 @@ export type CharacterCardImportInput = CharacterCardDTO;
 export type ChatInput = {
   title: string;
   characterId: string;
+  isPinned?: boolean;
+  isArchived?: boolean;
   backgroundUrl?: string;
   memoryTurns?: number;
   autoMemoryEnabled?: boolean;
@@ -76,6 +107,8 @@ export type MessageInput = {
   role: MessageRole;
   characterId?: string | null;
   content: string;
+  contextIncluded?: boolean;
+  isBookmarked?: boolean;
   variants?: string[];
   activeVariantIndex?: number;
   memoryMatches?: MatchedMemoryDTO[];
@@ -93,33 +126,62 @@ export type SettingsInput = {
   providers: ProviderProfile[];
   activeProviderId: string;
   activeModelId: string;
+  moduleModelPreferences?: ModuleModelPreferencesDTO;
+  userPersonaPresets?: UserPersonaPresetDTO[];
   autoSummarizeUser?: boolean;
   showMessageAvatars?: boolean;
+  showMessageTimestamps?: boolean;
+  ttsVoice?: string;
+  ttsPlaybackRate?: number;
+  ttsAutoPlay?: boolean;
   userProfileSummary?: string;
 };
 
 export type {
   CharacterCardDTO,
+  CharacterBatchTagsRequestDTO,
+  CharacterBatchTagsResultDTO,
   CharacterDTO,
+  CharacterSortMode,
   CharacterExportMode,
   CharacterLoreEntryDTO,
   CharacterVisibility,
+  ChatAgentDraftDTO,
+  ChatAgentDraftRequestDTO,
+  ChatAgentMode,
+  ChatBatchArchiveRequestDTO,
+  ChatBatchArchiveResultDTO,
+  ChatBatchPermanentDeleteRequestDTO,
+  ChatBatchPermanentDeleteResultDTO,
+  ChatBatchTrashRequestDTO,
+  ChatBatchTrashResultDTO,
+  ChatBranchRequestDTO,
+  ChatArchiveDTO,
+  ChatArchiveImportDTO,
+  GlobalChatMessageSearchDTO,
+  ChatMessageSearchDTO,
   ChatMemoryDTO,
   ChatMemoryInput,
   ChatDTO,
+  ChatTitleSuggestionDTO,
   ChatWithMessagesDTO,
   GenerationClientMessage,
   GenerationServerMessage,
   AppLanguage,
+  AiModelCapability,
+  AiModuleId,
   AvailableModelsDTO,
   BackupDTO,
   BackupImportSummaryDTO,
+  ImageGenerationDTO,
+  ImageGenerationRequestDTO,
   LoreEntryScope,
   LoreTriggerMode,
   LanSyncDirection,
   LanSyncInfoDTO,
   LanSyncRequestDTO,
   LanSyncSummaryDTO,
+  ModuleModelPreferencesDTO,
   MatchedLoreEntryDTO,
   MatchedMemoryDTO,
   MessageDTO,
@@ -129,5 +191,10 @@ export type {
   PaginatedCharactersDTO,
   PublicUserSettingsDTO,
   QuickReplyDTO,
-  TokenUsageDTO
+  TokenUsageDTO,
+  UserPersonaPresetDTO,
+  VoiceSpeechDTO,
+  VoiceSpeechRequestDTO,
+  VoiceTranscriptionDTO,
+  VoiceTranscriptionRequestDTO
 };

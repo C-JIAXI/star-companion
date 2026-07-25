@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import { HttpError } from "../lib/http.js";
 import {
   assertCharacterUnlockPassword,
+  buildCharacterDuplicateData,
+  buildCharacterUpdateData,
   canExportCharacterPublicly,
   createCharacterExportCard,
   importCharacterCard,
@@ -14,6 +16,7 @@ const baseCharacter = {
   cardId: "private-card-test-character",
   name: "Private Card Test Character",
   avatar: null,
+  description: "Private card test.",
   prefix: "Stay in character.",
   prompt: "This private prompt must remain hidden until the password is provided.",
   suffix: "Keep replies concise.",
@@ -102,5 +105,41 @@ describe("character private cards", () => {
     assert.doesNotThrow(() =>
       assertCharacterUnlockPassword({ loreEntries: imported.loreEntries }, "open-sesame")
     );
+  });
+
+  it("updates local favorite metadata without decrypting private prompts", () => {
+    const exported = createCharacterExportCard(baseCharacter, "private", "open-sesame");
+    const imported = importCharacterCard(exported);
+    const update = buildCharacterUpdateData(
+      { ...baseCharacter, loreEntries: imported.loreEntries },
+      { isFavorite: true }
+    );
+
+    assert.equal(update.isFavorite, true);
+    assert.equal("loreEntries" in update, false);
+  });
+
+  it("duplicates private character storage without exposing its prompt", () => {
+    const exported = createCharacterExportCard(baseCharacter, "private", "open-sesame");
+    const imported = importCharacterCard(exported);
+    const duplicate = buildCharacterDuplicateData(
+      {
+        id: "source-id",
+        ...baseCharacter,
+        openingHtml: "",
+        tags: [],
+        loreEntries: imported.loreEntries,
+        quickReplies: [],
+        isFavorite: true,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      },
+      "Private Card Test Character copy"
+    );
+
+    assert.equal(duplicate.name, "Private Card Test Character copy");
+    assert.equal(duplicate.isFavorite, false);
+    assert.deepEqual(duplicate.loreEntries, imported.loreEntries);
+    assert.equal("cardId" in duplicate, false);
   });
 });

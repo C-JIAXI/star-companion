@@ -86,6 +86,7 @@ export const importBackup = async (backup: BackupImportData) =>
         openingHtml: character.openingHtml ?? "",
         loreEntries: character.loreEntries ?? [],
         quickReplies: character.quickReplies ?? [],
+        isFavorite: character.isFavorite,
         ...importedDates(character)
       };
 
@@ -111,6 +112,12 @@ export const importBackup = async (backup: BackupImportData) =>
       const data = {
         title: chat.title,
         characterId: characterExists?.id ?? null,
+        parentChatId: chat.parentChatId ?? null,
+        branchSourceMessageId: chat.branchSourceMessageId ?? null,
+        isCheckpoint: chat.isCheckpoint,
+        isPinned: chat.isPinned,
+        isArchived: chat.isArchived,
+        deletedAt: chat.deletedAt ? new Date(chat.deletedAt) : null,
         backgroundUrl: chat.backgroundUrl,
         memoryTurns: chat.memoryTurns,
         autoMemoryEnabled: chat.autoMemoryEnabled,
@@ -188,6 +195,8 @@ export const importBackup = async (backup: BackupImportData) =>
         role: message.role,
         characterId: characterExists?.id ?? null,
         content: message.content,
+        contextIncluded: message.contextIncluded,
+        isBookmarked: message.isBookmarked,
         variants: message.variants,
         activeVariantIndex: message.activeVariantIndex,
         tokenUsage: message.tokenUsage ?? undefined,

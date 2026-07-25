@@ -723,6 +723,7 @@ export const buildCharacterUpdateData = (
     tags?: Prisma.InputJsonValue;
     loreEntries?: Prisma.InputJsonValue;
     quickReplies?: Prisma.InputJsonValue;
+    isFavorite?: boolean;
   },
   password?: string
 ): Prisma.CharacterUpdateInput => {
@@ -733,7 +734,6 @@ export const buildCharacterUpdateData = (
     };
   }
 
-  const { access, fields } = decryptStoredPromptFields(character.loreEntries, password);
   const hasPrivateUpdates =
     updates.prefix !== undefined ||
     updates.prompt !== undefined ||
@@ -741,29 +741,39 @@ export const buildCharacterUpdateData = (
     updates.htmlCss !== undefined ||
     updates.loreEntries !== undefined;
 
-  if (hasPrivateUpdates) {
-    assertPrivateCharacterPassword(access, password, {
-      missingMessage: "Private character password is required to update prompt content",
-      invalidMessage: "Private character password is invalid"
-    });
+  if (!hasPrivateUpdates) {
+    return {
+      name: updates.name,
+      avatar: "avatar" in updates ? updates.avatar : undefined,
+      description: "description" in updates ? updates.description : undefined,
+      tags: updates.tags,
+      isFavorite: updates.isFavorite,
+      openingHtml: updates.openingHtml,
+      quickReplies: updates.quickReplies
+    };
   }
 
-  const nextFields: CharacterPromptFields = hasPrivateUpdates
-    ? {
-        prefix: updates.prefix ?? fields.prefix,
-        prompt: updates.prompt ?? fields.prompt,
-        suffix: updates.suffix ?? fields.suffix,
-        htmlCss: updates.htmlCss ?? fields.htmlCss,
-        loreEntries:
-          updates.loreEntries !== undefined ? toCharacterLoreEntries(updates.loreEntries) : fields.loreEntries
-      }
-    : fields;
+  const { access, fields } = decryptStoredPromptFields(character.loreEntries, password);
+  assertPrivateCharacterPassword(access, password, {
+    missingMessage: "Private character password is required to update prompt content",
+    invalidMessage: "Private character password is invalid"
+  });
+
+  const nextFields: CharacterPromptFields = {
+    prefix: updates.prefix ?? fields.prefix,
+    prompt: updates.prompt ?? fields.prompt,
+    suffix: updates.suffix ?? fields.suffix,
+    htmlCss: updates.htmlCss ?? fields.htmlCss,
+    loreEntries:
+      updates.loreEntries !== undefined ? toCharacterLoreEntries(updates.loreEntries) : fields.loreEntries
+  };
 
   return {
     name: updates.name,
     avatar: "avatar" in updates ? updates.avatar : undefined,
     description: "description" in updates ? updates.description : undefined,
     tags: updates.tags,
+    isFavorite: updates.isFavorite,
     openingHtml: updates.openingHtml,
     prefix: "",
     prompt: "",
@@ -773,3 +783,21 @@ export const buildCharacterUpdateData = (
     quickReplies: updates.quickReplies
   };
 };
+
+export const buildCharacterDuplicateData = (
+  character: Character,
+  name: string
+): Prisma.CharacterCreateInput => ({
+  name,
+  avatar: character.avatar,
+  description: character.description,
+  prefix: character.prefix,
+  prompt: character.prompt,
+  suffix: character.suffix,
+  htmlCss: character.htmlCss,
+  openingHtml: character.openingHtml,
+  tags: character.tags as Prisma.InputJsonValue,
+  loreEntries: character.loreEntries as Prisma.InputJsonValue,
+  quickReplies: character.quickReplies as Prisma.InputJsonValue,
+  isFavorite: false
+});

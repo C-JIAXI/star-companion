@@ -1,19 +1,25 @@
 import {
+  AlertTriangle,
+  ArrowUpDown,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   CalendarDays,
   Download,
   FileUp,
+  ImagePlus,
   Lock,
   Maximize2,
+  Minus,
   Plus,
   Save,
   Search,
+  Star,
   Tag,
   Trash2,
   X,
   CheckSquare,
+  Copy,
   Square
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
@@ -22,14 +28,16 @@ import { MarkdownEditor } from "../components/MarkdownEditor";
 import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
-import { readFileText, saveJsonFile } from "../lib/files";
+import { readFileAsDataUrl, readFileText, saveJsonFile } from "../lib/files";
 import { usePlaceholderSrc } from "../placeholderImages";
 import type {
   CharacterCardImportInput,
+  CharacterBatchTagsRequestDTO,
   CharacterDTO,
   CharacterExportMode,
   CharacterInput,
   CharacterLoreEntryDTO,
+  CharacterSortMode,
   QuickReplyDTO
 } from "../types";
 import {
@@ -47,6 +55,14 @@ import {
 } from "../components/ui";
 
 const CHARACTER_PAGE_SIZE = 40;
+const MAX_CHARACTER_AVATAR_FILE_SIZE = 2 * 1024 * 1024;
+const CHARACTER_AVATAR_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/avif"
+]);
 
 const blankLoreEntry = (): CharacterLoreEntryDTO & { _localId: string; _collapsed: boolean } => ({
   id: "",
@@ -316,6 +332,9 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
   const [form, setForm] = useState<CharacterForm>(blankForm);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTag, setSelectedTag] = useState("");
+  const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [characterSort, setCharacterSort] = useState<CharacterSortMode>("favorites");
+  const [favoritePendingId, setFavoritePendingId] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -327,6 +346,11 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
   const [activeEditorSection, setActiveEditorSection] = useState<EditorSectionId>("prompt");
   const [batchMode, setBatchMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchTagDialogOpen, setBatchTagDialogOpen] = useState(false);
+  const [batchTagOperation, setBatchTagOperation] = useState<"add" | "remove">("add");
+  const [batchTagInput, setBatchTagInput] = useState("");
+  const [batchTags, setBatchTags] = useState<string[]>([]);
+  const [batchTagError, setBatchTagError] = useState<string | null>(null);
   const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false);
   const [pageInputValue, setPageInputValue] = useState("");
   const [previewTemplateId, setPreviewTemplateId] = useState<HtmlPreviewTemplateId>(
@@ -340,6 +364,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
   const characterRequestRef = useRef(0);
   const unlockedPasswordRef = useRef<Record<string, string>>({});
   const editorCoverSrc = usePlaceholderSrc(form.avatar, selectedId ?? undefined);
+  const usingUploadedAvatar = form.avatar.startsWith("data:image/");
   const expandedTextFieldTitle =
     expandedTextField === "htmlCss"
       ? t("characters.htmlCss")
@@ -389,6 +414,18 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
       { id: "opening" as const, label: t("characters.editorSectionOpening") },
       { id: "lore" as const, label: t("characters.editorSectionLore") },
       { id: "quickReplies" as const, label: t("characters.editorSectionQuickReplies") }
+    ],
+    [t]
+  );
+
+  const characterSortOptions = useMemo(
+    () => [
+      { value: "favorites" as const, label: t("characters.sortFavorites") },
+      { value: "recently_chatted" as const, label: t("characters.sortRecentlyChatted") },
+      { value: "most_chats" as const, label: t("characters.sortMostChats") },
+      { value: "recently_updated" as const, label: t("characters.sortRecentlyUpdated") },
+      { value: "name_asc" as const, label: t("characters.sortNameAsc") },
+      { value: "name_desc" as const, label: t("characters.sortNameDesc") }
     ],
     [t]
   );
@@ -504,6 +541,8 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
     nextPage = characterPage,
     nextSearchQuery = searchQuery,
     nextSelectedTag = selectedTag,
+    nextFavoriteOnly = favoriteOnly,
+    nextSort = characterSort,
     nextSelectedId = selectedId
   ) => {
     const requestId = characterRequestRef.current + 1;
@@ -511,6 +550,8 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
     const data = await api.characters.page({
       q: nextSearchQuery,
       tag: nextSelectedTag,
+      favoriteOnly: nextFavoriteOnly,
+      sort: nextSort,
       page: nextPage,
       pageSize: CHARACTER_PAGE_SIZE
     });
@@ -550,7 +591,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
     void loadCharacters().catch((caught: unknown) =>
       setError(caught instanceof Error ? caught.message : t("characters.failedLoad"))
     );
-  }, [characterPage, searchQuery, selectedTag, t]);
+  }, [characterPage, searchQuery, selectedTag, favoriteOnly, characterSort, t]);
 
   useEffect(() => {
     if (!status) {
@@ -570,6 +611,39 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
       setSelectedCharacter(detail);
       setForm(toForm(detail));
     });
+  };
+
+  const toggleFavorite = async (character: CharacterDTO) => {
+    if (favoritePendingId) {
+      return;
+    }
+
+    setFavoritePendingId(character.id);
+    setError(null);
+    setStatus(null);
+    try {
+      const updated = await api.characters.update(character.id, {
+        isFavorite: !character.isFavorite
+      });
+      setSelectedCharacter((current) =>
+        current?.id === updated.id ? { ...current, isFavorite: updated.isFavorite } : current
+      );
+      await loadCharacters(
+        characterPage,
+        searchQuery,
+        selectedTag,
+        favoriteOnly,
+        characterSort,
+        selectedId
+      );
+      setStatus(
+        updated.isFavorite ? t("characters.favorited") : t("characters.unfavorited")
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("characters.failedSave"));
+    } finally {
+      setFavoritePendingId(null);
+    }
   };
 
   const resetForm = () => {
@@ -599,17 +673,25 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
         );
         setSelectedCharacter(updated);
         setForm(toForm(updated));
-        await loadCharacters(characterPage, searchQuery, selectedTag, updated.id);
+        await loadCharacters(
+          characterPage,
+          searchQuery,
+          selectedTag,
+          favoriteOnly,
+          characterSort,
+          updated.id
+        );
       } else {
         const created = await api.characters.create(toInput(form));
         setIsCreating(false);
         setSearchQuery("");
         setSelectedTag("");
+        setFavoriteOnly(false);
         setCharacterPage(1);
         setSelectedId(created.id);
         setSelectedCharacter(created);
         setForm(toForm(created));
-        await loadCharacters(1, "", "", created.id);
+        await loadCharacters(1, "", "", false, characterSort, created.id);
       }
       setStatus(t("characters.saved"));
     } catch (caught) {
@@ -619,6 +701,35 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
       } else {
         setError(message || t("characters.failedSave"));
       }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const duplicateCharacter = async () => {
+    if (!selected) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const duplicate = await api.characters.duplicate(
+        selected.id,
+        `${selected.name} ${t("characters.copySuffix")}`
+      );
+      setSearchQuery("");
+      setSelectedTag("");
+      setFavoriteOnly(false);
+      setCharacterSort("recently_updated");
+      setCharacterPage(1);
+      setSelectedId(duplicate.id);
+      setSelectedCharacter(duplicate);
+      setForm(toForm(duplicate));
+      setStatus(t("characters.duplicated"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("characters.failedSave"));
     } finally {
       setLoading(false);
     }
@@ -663,6 +774,69 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
       await loadCharacters();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("characters.failedDelete"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openBatchTagDialog = (operation: "add" | "remove") => {
+    setBatchTagOperation(operation);
+    setBatchTagInput("");
+    setBatchTags([]);
+    setBatchTagError(null);
+    setBatchTagDialogOpen(true);
+  };
+
+  const addBatchTags = (rawValue: string) => {
+    setBatchTags((current) => normalizeTags([...current, ...splitTagInput(rawValue)]));
+    setBatchTagInput("");
+    setBatchTagError(null);
+  };
+
+  const toggleBatchTag = (tag: string) => {
+    setBatchTagError(null);
+    setBatchTags((current) =>
+      current.some((candidate) => candidate.toLowerCase() === tag.toLowerCase())
+        ? current.filter((candidate) => candidate.toLowerCase() !== tag.toLowerCase())
+        : normalizeTags([...current, tag])
+    );
+  };
+
+  const applyBatchTags = async () => {
+    if (selectedIds.size === 0 || batchTags.length === 0) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setBatchTagError(null);
+    setStatus(null);
+    try {
+      const input: CharacterBatchTagsRequestDTO = {
+        ids: Array.from(selectedIds),
+        operation: batchTagOperation,
+        tags: batchTags
+      };
+      const result = await api.characters.batchTags(input);
+      setBatchTagDialogOpen(false);
+      setSelectedIds(new Set());
+      setBatchMode(false);
+      await loadCharacters();
+      setStatus(
+        t(
+          batchTagOperation === "add"
+            ? "characters.batchTagsAdded"
+            : "characters.batchTagsRemoved",
+          { count: result.updated }
+        )
+      );
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "";
+      setBatchTagError(
+        message.includes("more than 24 tags")
+          ? t("characters.batchTagsLimit")
+          : message || t("characters.batchTagsFailed")
+      );
     } finally {
       setLoading(false);
     }
@@ -758,16 +932,41 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
       delete unlockedPasswordRef.current[imported.id];
       setSearchQuery("");
       setSelectedTag("");
+      setFavoriteOnly(false);
       setCharacterPage(1);
       setSelectedId(imported.id);
       setSelectedCharacter(imported);
       setForm(toForm(imported));
-      await loadCharacters(1, "", "", imported.id);
+      await loadCharacters(1, "", "", false, characterSort, imported.id);
       setStatus(privateCharacterCopy.imported);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("characters.failedImport"));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const updateAvatarFile = async (file: File | undefined) => {
+    if (!file) {
+      return;
+    }
+
+    if (!CHARACTER_AVATAR_MIME_TYPES.has(file.type)) {
+      setError(t("characters.avatarInvalid"));
+      return;
+    }
+    if (file.size > MAX_CHARACTER_AVATAR_FILE_SIZE) {
+      setError(t("characters.avatarTooLarge"));
+      return;
+    }
+
+    try {
+      const avatar = await readFileAsDataUrl(file);
+      setForm((current) => ({ ...current, avatar }));
+      setError(null);
+      setStatus(t("characters.avatarUploaded"));
+    } catch {
+      setError(t("characters.avatarUploadFailed"));
     }
   };
 
@@ -971,11 +1170,49 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                       onChange={(event) => setForm({ ...form, name: event.target.value })}
                     />
                   </Field>
-                  <Field label={t("characters.avatarUrl")}>
-                    <TextInput
-                      value={form.avatar}
-                      onChange={(event) => setForm({ ...form, avatar: event.target.value })}
-                    />
+                  <Field container="div" label={t("characters.avatarUrl")}>
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      {usingUploadedAvatar ? (
+                        <div className="flex min-h-[40px] min-w-[12rem] flex-1 items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 text-sm text-emerald-100 sm:min-h-[44px]">
+                          <ImagePlus size={15} className="shrink-0 text-emerald-400" />
+                          <span className="truncate">{t("characters.avatarLocal")}</span>
+                        </div>
+                      ) : (
+                        <TextInput
+                          className="min-w-[12rem] flex-1"
+                          placeholder={t("characters.avatarUrlPlaceholder")}
+                          value={form.avatar}
+                          onChange={(event) => setForm({ ...form, avatar: event.target.value })}
+                        />
+                      )}
+                      <label className="inline-flex min-h-[40px] shrink-0 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-white/5 bg-ink-800 px-3 text-xs font-medium text-slate-200 transition-colors hover:bg-ink-700 focus-within:ring-2 focus-within:ring-ink-600/50 sm:min-h-[44px]">
+                        <ImagePlus size={14} />
+                        {form.avatar
+                          ? t("characters.avatarReplace")
+                          : t("characters.avatarUpload")}
+                        <input
+                          accept="image/png,image/jpeg,image/webp,image/gif,image/avif"
+                          className="sr-only"
+                          data-testid="character-avatar-upload"
+                          type="file"
+                          onChange={(event) => {
+                            void updateAvatarFile(event.target.files?.[0]);
+                            event.currentTarget.value = "";
+                          }}
+                        />
+                      </label>
+                      {form.avatar ? (
+                        <Button
+                          aria-label={t("characters.avatarRemove")}
+                          className="!h-10 !min-h-[40px] !w-10 !px-0 sm:!h-11 sm:!min-h-[44px] sm:!w-11"
+                          title={t("characters.avatarRemove")}
+                          variant="ghost"
+                          onClick={() => setForm({ ...form, avatar: "" })}
+                        >
+                          <X size={16} />
+                        </Button>
+                      ) : null}
+                    </div>
                   </Field>
                   <Field label={t("characters.description")}>
                     <TextArea
@@ -990,6 +1227,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                     <img
                       alt=""
                       className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                      data-testid="character-cover-preview"
                       src={editorCoverSrc}
                     />
                     <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
@@ -1671,6 +1909,14 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
               <div className="flex flex-wrap justify-end gap-3 pt-4 border-t border-white/5">
                 <Button
                   disabled={loading || !selected}
+                  variant="secondary"
+                  onClick={() => void duplicateCharacter()}
+                >
+                  <Copy size={16} />
+                  {t("characters.duplicate")}
+                </Button>
+                <Button
+                  disabled={loading || !selected}
                   variant="danger"
                   onClick={() => setDeleteConfirmOpen(true)}
                 >
@@ -1690,8 +1936,8 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
         </div>
       ) : (
         <div className="space-y-4">
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[14rem] flex-1">
               <Search
                 className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
                 size={16}
@@ -1706,7 +1952,50 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                 }}
               />
             </div>
+            <label className="relative shrink-0">
+              <span className="sr-only">{t("characters.sort")}</span>
+              <ArrowUpDown
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                size={14}
+              />
+              <select
+                aria-label={t("characters.sort")}
+                className="h-10 min-w-[9.5rem] appearance-none rounded-lg border border-white/10 bg-ink-900 py-0 pl-9 pr-8 text-xs text-slate-200 outline-none transition-colors hover:border-white/20 focus:border-ember-500 focus:ring-1 focus:ring-ember-500/50"
+                data-testid="characters-sort"
+                value={characterSort}
+                onChange={(event) => {
+                  setCharacterSort(event.target.value as CharacterSortMode);
+                  setCharacterPage(1);
+                  setSelectedIds(new Set());
+                }}
+              >
+                {characterSortOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500"
+                size={14}
+              />
+            </label>
             <Button
+              aria-pressed={favoriteOnly}
+              className="!min-h-[40px] !px-3 text-xs"
+              data-testid="characters-favorites-filter"
+              variant={favoriteOnly ? "secondary" : "ghost"}
+              onClick={() => {
+                setFavoriteOnly((current) => !current);
+                setCharacterPage(1);
+                setSelectedIds(new Set());
+              }}
+            >
+              <Star size={14} fill={favoriteOnly ? "currentColor" : "none"} />
+              {t("characters.favorites")}
+            </Button>
+            <Button
+              data-testid="characters-batch-mode"
               className="!min-h-[40px] !px-3 text-xs"
               variant={batchMode ? "secondary" : "ghost"}
               onClick={() => {
@@ -1715,9 +2004,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
               }}
             >
               {batchMode ? <CheckSquare size={14} /> : <Square size={14} />}
-              {batchMode
-                ? (language === "zh-CN" ? "退出批量" : "Exit Batch")
-                : (language === "zh-CN" ? "批量管理" : "Batch Manage")}
+              {batchMode ? t("characters.batchExit") : t("characters.batchManage")}
             </Button>
           </div>
 
@@ -1762,7 +2049,7 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
           ) : null}
 
           {batchMode && characters.length > 0 ? (
-            <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-xs text-slate-300">
+            <div className="flex flex-col gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300 sm:flex-row sm:items-center sm:justify-between sm:px-4">
               <label className="flex cursor-pointer items-center gap-2">
                 <input
                   checked={selectedIds.size === characters.length && characters.length > 0}
@@ -1770,21 +2057,40 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                   className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
                   onChange={toggleSelectAll}
                 />
-                {language === "zh-CN"
-                  ? `全选本页 (${selectedIds.size}/${characters.length})`
-                  : `Select all on page (${selectedIds.size}/${characters.length})`}
+                {t("characters.batchSelectPage", {
+                  selected: selectedIds.size,
+                  total: characters.length
+                })}
               </label>
               {selectedIds.size > 0 ? (
-                <Button
-                  className="!min-h-[28px] !px-2 text-xs"
-                  variant="danger"
-                  onClick={() => setBatchDeleteConfirmOpen(true)}
-                >
-                  <Trash2 size={12} />
-                  {language === "zh-CN"
-                    ? `删除选中 (${selectedIds.size})`
-                    : `Delete selected (${selectedIds.size})`}
-                </Button>
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                  <Button
+                    className="!min-h-[30px] !px-2.5 text-xs"
+                    data-testid="characters-batch-add-tags"
+                    variant="secondary"
+                    onClick={() => openBatchTagDialog("add")}
+                  >
+                    <Plus size={12} />
+                    {t("characters.batchAddTags")}
+                  </Button>
+                  <Button
+                    className="!min-h-[30px] !px-2.5 text-xs"
+                    data-testid="characters-batch-remove-tags"
+                    variant="secondary"
+                    onClick={() => openBatchTagDialog("remove")}
+                  >
+                    <Minus size={12} />
+                    {t("characters.batchRemoveTags")}
+                  </Button>
+                  <Button
+                    className="!min-h-[30px] !px-2.5 text-xs"
+                    variant="danger"
+                    onClick={() => setBatchDeleteConfirmOpen(true)}
+                  >
+                    <Trash2 size={12} />
+                    {t("characters.batchDeleteSelected", { count: selectedIds.size })}
+                  </Button>
+                </div>
               ) : null}
             </div>
           ) : null}
@@ -1792,7 +2098,11 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
           <ErrorNotice message={error} />
           <SuccessNotice message={status} />
 
-          {characters.length === 0 && pagination.total === 0 && !searchQuery.trim() && !selectedTag ? (
+          {characters.length === 0 &&
+          pagination.total === 0 &&
+          !searchQuery.trim() &&
+          !selectedTag &&
+          !favoriteOnly ? (
             <div className="flex items-center justify-center py-16">
               <EmptyState>{t("characters.noCharacters")}</EmptyState>
             </div>
@@ -1814,8 +2124,12 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
                     locale={language === "zh-CN" ? "zh-CN" : "en"}
                     playLabel={t("characters.play")}
                     editLabel={t("common.edit")}
+                    favoriteLabel={t("characters.favorite")}
+                    unfavoriteLabel={t("characters.unfavorite")}
                     onPlay={batchMode ? () => {} : onPlay}
                     onEdit={batchMode ? () => {} : selectCharacter}
+                    onToggleFavorite={toggleFavorite}
+                    favoritePending={favoritePendingId === character.id}
                     selectable={batchMode}
                     selected={selectedIds.has(character.id)}
                     onSelect={toggleSelectCharacter}
@@ -1949,6 +2263,149 @@ export function CharactersPage({ onPlay }: { onPlay: (characterId: string) => vo
           onCancel={() => setBatchDeleteConfirmOpen(false)}
           onConfirm={() => void batchDeleteCharacters()}
         />
+      ) : null}
+      {batchTagDialogOpen ? (
+        <Modal
+          panelClassName="max-w-xl"
+          title={t("characters.batchTagsTitle")}
+          onClose={() => setBatchTagDialogOpen(false)}
+        >
+          <div className="space-y-5" data-testid="characters-batch-tags-dialog">
+            <p className="text-sm leading-6 text-slate-400">
+              {t("characters.batchTagsDescription", { count: selectedIds.size })}
+            </p>
+            <div
+              aria-label={t("characters.batchTagsTitle")}
+              className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-ink-950/60 p-1"
+              role="group"
+            >
+              <button
+                aria-pressed={batchTagOperation === "add"}
+                className={`flex min-h-9 items-center justify-center gap-2 rounded-md px-3 text-xs font-medium transition-colors ${
+                  batchTagOperation === "add"
+                    ? "bg-ember-500 text-white"
+                    : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                }`}
+                type="button"
+                onClick={() => setBatchTagOperation("add")}
+              >
+                <Plus size={14} />
+                {t("characters.batchAddTags")}
+              </button>
+              <button
+                aria-pressed={batchTagOperation === "remove"}
+                className={`flex min-h-9 items-center justify-center gap-2 rounded-md px-3 text-xs font-medium transition-colors ${
+                  batchTagOperation === "remove"
+                    ? "bg-ember-500 text-white"
+                    : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                }`}
+                type="button"
+                onClick={() => setBatchTagOperation("remove")}
+              >
+                <Minus size={14} />
+                {t("characters.batchRemoveTags")}
+              </button>
+            </div>
+            <Field label={t("characters.batchTagsSelected")}>
+              <div className="flex gap-2">
+                <TextInput
+                  data-testid="characters-batch-tags-input"
+                  placeholder={t("characters.tagInputPlaceholder")}
+                  value={batchTagInput}
+                  onChange={(event) => setBatchTagInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      addBatchTags(batchTagInput);
+                    }
+                  }}
+                />
+                <Button
+                  className="shrink-0"
+                  disabled={!batchTagInput.trim()}
+                  variant="secondary"
+                  onClick={() => addBatchTags(batchTagInput)}
+                >
+                  <Plus size={14} />
+                  {t("characters.tagAdd")}
+                </Button>
+              </div>
+            </Field>
+            {batchTags.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {batchTags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex max-w-full items-center gap-1 rounded-md border border-ember-500/25 bg-ember-500/10 py-1 pl-2.5 pr-1 text-xs text-ember-100"
+                  >
+                    <span className="max-w-[12rem] truncate">{tag}</span>
+                    <button
+                      aria-label={t("characters.batchTagRemoveDraft", { tag })}
+                      className="grid h-6 w-6 shrink-0 place-items-center rounded text-ember-200/70 hover:bg-white/10 hover:text-white"
+                      type="button"
+                      onClick={() => toggleBatchTag(tag)}
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500">{t("characters.batchTagsEmpty")}</p>
+            )}
+            {pagination.availableTags.length > 0 ? (
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-slate-400">
+                  {t("characters.batchTagsAvailable")}
+                </p>
+                <div className="flex max-h-32 flex-wrap gap-2 overflow-y-auto pr-1">
+                  {pagination.availableTags.map((tag) => {
+                    const selected = batchTags.some(
+                      (candidate) => candidate.toLowerCase() === tag.toLowerCase()
+                    );
+                    return (
+                      <button
+                        key={tag}
+                        aria-pressed={selected}
+                        className={`max-w-full rounded-md border px-2.5 py-1 text-xs transition-colors ${
+                          selected
+                            ? "border-ember-500/30 bg-ember-500/10 text-ember-100"
+                            : "border-white/10 text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                        }`}
+                        type="button"
+                        onClick={() => toggleBatchTag(tag)}
+                      >
+                        <span className="block max-w-[12rem] truncate">{tag}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+            {batchTagError ? (
+              <div
+                className="flex items-start gap-2 rounded-md border border-rose-500/25 bg-rose-950/20 px-3 py-2.5 text-xs leading-5 text-rose-100"
+                role="alert"
+              >
+                <AlertTriangle className="mt-0.5 shrink-0 text-rose-400" size={15} />
+                <span>{batchTagError}</span>
+              </div>
+            ) : null}
+            <div className="flex flex-col-reverse gap-2 border-t border-white/[0.06] pt-4 sm:flex-row sm:justify-end">
+              <Button variant="ghost" onClick={() => setBatchTagDialogOpen(false)}>
+                {t("common.cancel")}
+              </Button>
+              <Button
+                data-testid="characters-batch-tags-apply"
+                disabled={loading || batchTags.length === 0}
+                onClick={() => void applyBatchTags()}
+              >
+                <Tag size={14} />
+                {t("characters.batchTagsApply", { count: selectedIds.size })}
+              </Button>
+            </div>
+          </div>
+        </Modal>
       ) : null}
     </>
   );

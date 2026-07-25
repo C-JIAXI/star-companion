@@ -1,6 +1,7 @@
 import type { RawData, WebSocket, WebSocketServer } from "ws";
 import { prisma } from "../db.js";
 import {
+  continueRequestSchema,
   generationRequestSchema,
   regenerateRequestSchema,
   resendRequestSchema,
@@ -10,6 +11,7 @@ import { serializeMessage } from "../serializers.js";
 import { getOrCreateSettings } from "../routes/settings.js";
 import { estimateTokenUsage, streamChatCompletion, type TokenUsage } from "../services/completions.js";
 import { updateChatMemoriesFromTurn, type MatchedMemoryEntry } from "../services/chatMemories.js";
+import { resolveModuleSettings } from "../services/moduleModels.js";
 import { appendVariant, buildPromptContext, type MatchedLoreEntry } from "../services/promptBuilder.js";
 import { updateUserProfileFromChat } from "../services/userProfileMemory.js";
 
@@ -63,7 +65,8 @@ const streamAssistantReply = async ({
   total,
   before,
   targetMessageId,
-  excludeMessageIds
+  excludeMessageIds,
+  continuationTargetMessageId
 }: {
   socket: WebSocket;
   requestId: string;
@@ -75,6 +78,7 @@ const streamAssistantReply = async ({
   before?: Date;
   targetMessageId?: string;
   excludeMessageIds?: string[];
+  continuationTargetMessageId?: string;
 }) => {
   sendJson(socket, {
     type: "generation_character_started",
@@ -84,7 +88,7 @@ const streamAssistantReply = async ({
     total
   });
 
-  const settings = await getOrCreateSettings();
+  const settings = resolveModuleSettings(await getOrCreateSettings(), "chat");
   const context = await buildPromptContext({
     chatId,
     characterId,
@@ -103,6 +107,17 @@ const streamAssistantReply = async ({
     entries: context.matchedMemoryEntries
   });
 
+  const completionMessages = continuationTargetMessageId
+    ? [
+        ...context.messages,
+        {
+          role: "user" as const,
+          content:
+            "Continue the immediately preceding assistant reply from its exact ending. Return only the continuation, without repeating or summarizing any existing text."
+        }
+      ]
+    : context.messages;
+
   let assistantContent = "";
   let stopped = false;
   let tokenUsage: TokenUsage | null = null;
@@ -110,7 +125,7 @@ const streamAssistantReply = async ({
   try {
     for await (const event of streamChatCompletion({
       settings,
-      messages: context.messages,
+      messages: completionMessages,
       signal: abortController.signal
     })) {
       if (event.type === "usage") {
@@ -132,8 +147,16 @@ const streamAssistantReply = async ({
   if (stopped) {
     if (assistantContent.trim()) {
       assistantContent = stripThinkingTags(assistantContent);
-      tokenUsage ??= estimateTokenUsage(context.messages, assistantContent);
-      const message = targetMessageId
+      tokenUsage ??= estimateTokenUsage(completionMessages, assistantContent);
+      const message = continuationTargetMessageId
+        ? await appendAssistantContinuation(
+            continuationTargetMessageId,
+            assistantContent,
+            tokenUsage,
+            context.matchedLoreEntries,
+            context.matchedMemoryEntries
+          )
+        : targetMessageId
         ? await updateAssistantVariant(
             targetMessageId,
             assistantContent,
@@ -174,8 +197,16 @@ const streamAssistantReply = async ({
     throw new Error(errorText);
   }
 
-  tokenUsage ??= estimateTokenUsage(context.messages, assistantContent);
-  const message = targetMessageId
+  tokenUsage ??= estimateTokenUsage(completionMessages, assistantContent);
+  const message = continuationTargetMessageId
+    ? await appendAssistantContinuation(
+        continuationTargetMessageId,
+        assistantContent,
+        tokenUsage,
+        context.matchedLoreEntries,
+        context.matchedMemoryEntries
+      )
+    : targetMessageId
     ? await updateAssistantVariant(
         targetMessageId,
         assistantContent,
@@ -228,6 +259,15 @@ const createAssistantMessage = (
     }
   });
 
+const joinAssistantContinuation = (existing: string, continuation: string) => {
+  if (!existing || !continuation || /\s$/.test(existing) || /^\s/.test(continuation)) {
+    return `${existing}${continuation}`;
+  }
+
+  const needsWordBoundary = /[A-Za-z0-9.!?;:)]$/.test(existing) && /^[A-Za-z0-9]/.test(continuation);
+  return `${existing}${needsWordBoundary ? " " : ""}${continuation}`;
+};
+
 const updateAssistantVariant = async (
   messageId: string,
   content: string,
@@ -235,7 +275,9 @@ const updateAssistantVariant = async (
   loreMatches: MatchedLoreEntry[],
   memoryMatches: MatchedMemoryEntry[]
 ) => {
-  const targetMessage = await prisma.message.findUnique({ where: { id: messageId } });
+  const targetMessage = await prisma.message.findFirst({
+    where: { id: messageId, chat: { deletedAt: null } }
+  });
   if (!targetMessage) {
     throw new Error("Assistant message not found");
   }
@@ -247,6 +289,48 @@ const updateAssistantVariant = async (
       content,
       variants,
       activeVariantIndex: variants.length - 1,
+      tokenUsage,
+      loreMatches,
+      memoryMatches
+    }
+  });
+};
+
+const appendAssistantContinuation = async (
+  messageId: string,
+  continuation: string,
+  tokenUsage: TokenUsage,
+  loreMatches: MatchedLoreEntry[],
+  memoryMatches: MatchedMemoryEntry[]
+) => {
+  const targetMessage = await prisma.message.findFirst({
+    where: { id: messageId, chat: { deletedAt: null } }
+  });
+  if (!targetMessage) {
+    throw new Error("Assistant message not found");
+  }
+
+  const content = joinAssistantContinuation(targetMessage.content, continuation);
+  const variants = Array.isArray(targetMessage.variants)
+    ? targetMessage.variants.filter((value): value is string => typeof value === "string")
+    : [];
+  const activeVariantIndex = Math.min(
+    Math.max(targetMessage.activeVariantIndex, 0),
+    Math.max(variants.length - 1, 0)
+  );
+
+  if (variants.length === 0) {
+    variants.push(content);
+  } else {
+    variants[activeVariantIndex] = content;
+  }
+
+  return prisma.message.update({
+    where: { id: messageId },
+    data: {
+      content,
+      variants,
+      activeVariantIndex,
       tokenUsage,
       loreMatches,
       memoryMatches
@@ -268,7 +352,7 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
   try {
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
 
-    const chat = await prisma.chat.findUnique({ where: { id: request.chatId } });
+    const chat = await prisma.chat.findFirst({ where: { id: request.chatId, deletedAt: null } });
     if (!chat) {
       throw new Error("Chat not found");
     }
@@ -308,12 +392,12 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
 
     if (!stopped) {
       try {
-        const settings = await getOrCreateSettings();
+        const settings = resolveModuleSettings(await getOrCreateSettings(), "chat");
         const updatedChat = await updateUserProfileFromChat({
           chatId: request.chatId,
           settings
         });
-        await updateChatMemoriesFromTurn({
+        const memorySummary = await updateChatMemoriesFromTurn({
           chatId: request.chatId,
           settings
         });
@@ -323,6 +407,16 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
             requestId: request.requestId,
             summary: updatedChat.userProfileSummary,
             updatedAt: updatedChat.userProfileUpdatedAt?.toISOString() ?? null
+          });
+        }
+        if (
+          memorySummary &&
+          memorySummary.created + memorySummary.updated + memorySummary.disabled > 0
+        ) {
+          sendJson(socket, {
+            type: "chat_memory_updated",
+            requestId: request.requestId,
+            summary: memorySummary
           });
         }
       } catch {
@@ -356,7 +450,9 @@ const handleRegenerate = async (socket: WebSocket, rawMessage: unknown) => {
   try {
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
 
-    const targetMessage = await prisma.message.findUnique({ where: { id: request.messageId } });
+    const targetMessage = await prisma.message.findFirst({
+      where: { id: request.messageId, chat: { deletedAt: null } }
+    });
     if (!targetMessage || targetMessage.role !== "assistant") {
       throw new Error("Assistant message not found");
     }
@@ -385,6 +481,58 @@ const handleRegenerate = async (socket: WebSocket, rawMessage: unknown) => {
   }
 };
 
+const handleContinue = async (socket: WebSocket, rawMessage: unknown) => {
+  const parsed = continueRequestSchema.safeParse(rawMessage);
+  if (!parsed.success) {
+    sendJson(socket, { type: "error", error: "Invalid continue request" });
+    return;
+  }
+
+  const request = parsed.data;
+  const abortController = new AbortController();
+  controllers.set(request.requestId, abortController);
+
+  try {
+    sendJson(socket, { type: "generation_started", requestId: request.requestId });
+
+    const targetMessage = await prisma.message.findFirst({
+      where: { id: request.messageId, chat: { deletedAt: null } }
+    });
+    if (!targetMessage || targetMessage.role !== "assistant") {
+      throw new Error("Assistant message not found");
+    }
+
+    const latestMessage = await prisma.message.findFirst({
+      where: { chatId: targetMessage.chatId },
+      orderBy: { createdAt: "desc" }
+    });
+    if (latestMessage?.id !== targetMessage.id) {
+      throw new Error("Only the latest assistant message can be continued");
+    }
+
+    const stopped = await streamAssistantReply({
+      socket,
+      requestId: request.requestId,
+      chatId: targetMessage.chatId,
+      characterId: targetMessage.characterId,
+      abortController,
+      index: 0,
+      total: 1,
+      continuationTargetMessageId: targetMessage.id
+    });
+
+    sendJson(socket, {
+      type: stopped ? "generation_stopped" : "generation_done",
+      requestId: request.requestId
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Continue failed";
+    sendJson(socket, { type: "error", requestId: request.requestId, error: message });
+  } finally {
+    controllers.delete(request.requestId);
+  }
+};
+
 const handleResend = async (socket: WebSocket, rawMessage: unknown) => {
   const parsed = resendRequestSchema.safeParse(rawMessage);
   if (!parsed.success) {
@@ -397,7 +545,9 @@ const handleResend = async (socket: WebSocket, rawMessage: unknown) => {
   controllers.set(request.requestId, abortController);
 
   try {
-    const targetMessage = await prisma.message.findUnique({ where: { id: request.messageId } });
+    const targetMessage = await prisma.message.findFirst({
+      where: { id: request.messageId, chat: { deletedAt: null } }
+    });
     if (!targetMessage || targetMessage.role !== "user") {
       throw new Error("User message not found");
     }
@@ -414,7 +564,9 @@ const handleResend = async (socket: WebSocket, rawMessage: unknown) => {
       where: { id: { in: subsequentMessages.map((m) => m.id) } }
     });
 
-    const chat = await prisma.chat.findUnique({ where: { id: targetMessage.chatId } });
+    const chat = await prisma.chat.findFirst({
+      where: { id: targetMessage.chatId, deletedAt: null }
+    });
     if (!chat) {
       throw new Error("Chat not found");
     }
@@ -455,12 +607,12 @@ const handleResend = async (socket: WebSocket, rawMessage: unknown) => {
 
     if (!stopped) {
       try {
-        const settings = await getOrCreateSettings();
+        const settings = resolveModuleSettings(await getOrCreateSettings(), "chat");
         const updatedChat = await updateUserProfileFromChat({
           chatId: targetMessage.chatId,
           settings
         });
-        await updateChatMemoriesFromTurn({
+        const memorySummary = await updateChatMemoriesFromTurn({
           chatId: targetMessage.chatId,
           settings
         });
@@ -470,6 +622,16 @@ const handleResend = async (socket: WebSocket, rawMessage: unknown) => {
             requestId: request.requestId,
             summary: updatedChat.userProfileSummary,
             updatedAt: updatedChat.userProfileUpdatedAt?.toISOString() ?? null
+          });
+        }
+        if (
+          memorySummary &&
+          memorySummary.created + memorySummary.updated + memorySummary.disabled > 0
+        ) {
+          sendJson(socket, {
+            type: "chat_memory_updated",
+            requestId: request.requestId,
+            summary: memorySummary
           });
         }
       } catch {
@@ -525,6 +687,11 @@ export const attachChatSocket = (wsServer: WebSocketServer, appName: string) => 
 
         if (messageType === "regenerate") {
           void handleRegenerate(socket, parsed);
+          return;
+        }
+
+        if (messageType === "continue") {
+          void handleContinue(socket, parsed);
           return;
         }
 

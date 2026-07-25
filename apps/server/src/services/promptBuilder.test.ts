@@ -348,6 +348,23 @@ describe("buildPromptContext", () => {
     assert.doesNotMatch(promptText, /Hidden suffix instruction\./);
   });
 
+  it("keeps excluded messages in storage but omits them from prompt context", async () => {
+    await prisma.message.create({
+      data: {
+        chatId: ids.chatId,
+        role: "user",
+        content: "Excluded context marker must not reach the model.",
+        contextIncluded: false,
+        variants: [],
+        activeVariantIndex: 0
+      }
+    });
+
+    const context = await buildPromptContext({ chatId: ids.chatId, settings: testSettings });
+    const promptText = context.messages.map((message) => message.content).join("\n\n");
+    assert.doesNotMatch(promptText, /Excluded context marker/);
+  });
+
   it("injects always-active lore even when a chat has no messages", async () => {
     const character = await prisma.character.create({
       data: {

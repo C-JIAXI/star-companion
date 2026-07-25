@@ -4,7 +4,9 @@ import { asyncHandler, HttpError, parseBody, parseQuery, requireParam } from "..
 import {
   characterBatchDeleteSchema,
   characterBatchFetchSchema,
+  characterBatchTagsSchema,
   characterCreateSchema,
+  characterDuplicateSchema,
   characterExportSchema,
   characterImportSchema,
   characterPageQuerySchema,
@@ -15,12 +17,14 @@ import { serializeCharacter } from "../serializers.js";
 import { listCharactersPage } from "../services/characterPaging.js";
 import {
   assertCharacterUnlockPassword,
+  buildCharacterDuplicateData,
   buildCharacterUpdateData,
   canExportCharacterPublicly,
   createCharacterExportCard,
   importCharacterCard,
   reEncryptImportedCharacter
 } from "../services/characterCards.js";
+import { applyCharacterTagOperation } from "../services/characterTags.js";
 
 export const charactersRouter = Router();
 
@@ -28,7 +32,7 @@ charactersRouter.get(
   "/",
   asyncHandler(async (_request, response) => {
     const characters = await prisma.character.findMany({
-      orderBy: { updatedAt: "desc" }
+      orderBy: [{ isFavorite: "desc" }, { updatedAt: "desc" }]
     });
 
     response.json({ ok: true, data: characters.map((character) => serializeCharacter(character)) });
@@ -75,6 +79,25 @@ charactersRouter.post(
     }
 
     const character = await prisma.character.create({ data });
+
+    response.status(201).json({ ok: true, data: serializeCharacter(character) });
+  })
+);
+
+charactersRouter.post(
+  "/:id/duplicate",
+  asyncHandler(async (request, response) => {
+    const id = requireParam(request, "id");
+    const body = parseBody(characterDuplicateSchema, request.body);
+    const source = await prisma.character.findUnique({ where: { id } });
+
+    if (!source) {
+      throw new HttpError(404, "Character not found");
+    }
+
+    const character = await prisma.character.create({
+      data: buildCharacterDuplicateData(source, body.name)
+    });
 
     response.status(201).json({ ok: true, data: serializeCharacter(character) });
   })
@@ -191,6 +214,45 @@ charactersRouter.post(
     });
 
     response.json({ ok: true, data: { deleted: result.count } });
+  })
+);
+
+charactersRouter.post(
+  "/batch-tags",
+  asyncHandler(async (request, response) => {
+    const body = parseBody(characterBatchTagsSchema, request.body);
+    const characters = await prisma.character.findMany({
+      where: { id: { in: body.ids } },
+      select: { id: true, tags: true }
+    });
+
+    if (characters.length !== body.ids.length) {
+      throw new HttpError(404, "One or more characters were not found");
+    }
+
+    let updates: Array<{ id: string; tags: string[] }>;
+    try {
+      updates = characters.map((character) => ({
+        id: character.id,
+        tags: applyCharacterTagOperation(character.tags, body.operation, body.tags)
+      }));
+    } catch (error) {
+      if (error instanceof RangeError) {
+        throw new HttpError(400, error.message);
+      }
+      throw error;
+    }
+
+    await prisma.$transaction(
+      updates.map((update) =>
+        prisma.character.update({
+          where: { id: update.id },
+          data: { tags: update.tags }
+        })
+      )
+    );
+
+    response.json({ ok: true, data: { updated: updates.length } });
   })
 );
 

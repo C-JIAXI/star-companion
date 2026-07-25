@@ -508,7 +508,6 @@ export const buildCharacterUpdateData = (character, updates, password) => {
     };
   }
 
-  const { access, fields } = decryptStoredPromptFields(character.loreEntries, password);
   const hasPrivateUpdates =
     updates.prefix !== undefined ||
     updates.prompt !== undefined ||
@@ -516,28 +515,38 @@ export const buildCharacterUpdateData = (character, updates, password) => {
     updates.htmlCss !== undefined ||
     updates.loreEntries !== undefined;
 
-  if (hasPrivateUpdates) {
-    assertPrivateCharacterPassword(access, password, {
-      missingMessage: "Private character password is required to update prompt content",
-      invalidMessage: "Private character password is invalid"
-    });
+  if (!hasPrivateUpdates) {
+    return {
+      name: updates.name,
+      avatar: "avatar" in updates ? updates.avatar : undefined,
+      description: "description" in updates ? updates.description : undefined,
+      tags: updates.tags,
+      isFavorite: updates.isFavorite,
+      openingHtml: updates.openingHtml,
+      quickReplies: updates.quickReplies
+    };
   }
 
-  const nextFields = hasPrivateUpdates
-    ? {
-        prefix: updates.prefix ?? fields.prefix,
-        prompt: updates.prompt ?? fields.prompt,
-        suffix: updates.suffix ?? fields.suffix,
-        htmlCss: updates.htmlCss ?? fields.htmlCss,
-        loreEntries: updates.loreEntries !== undefined ? toCharacterLoreEntries(updates.loreEntries) : fields.loreEntries
-      }
-    : fields;
+  const { access, fields } = decryptStoredPromptFields(character.loreEntries, password);
+  assertPrivateCharacterPassword(access, password, {
+    missingMessage: "Private character password is required to update prompt content",
+    invalidMessage: "Private character password is invalid"
+  });
+
+  const nextFields = {
+    prefix: updates.prefix ?? fields.prefix,
+    prompt: updates.prompt ?? fields.prompt,
+    suffix: updates.suffix ?? fields.suffix,
+    htmlCss: updates.htmlCss ?? fields.htmlCss,
+    loreEntries: updates.loreEntries !== undefined ? toCharacterLoreEntries(updates.loreEntries) : fields.loreEntries
+  };
 
   return {
     name: updates.name,
     avatar: "avatar" in updates ? updates.avatar : undefined,
     description: "description" in updates ? updates.description : undefined,
     tags: updates.tags,
+    isFavorite: updates.isFavorite,
     openingHtml: updates.openingHtml,
     prefix: "",
     prompt: "",

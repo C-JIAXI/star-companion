@@ -1,4 +1,4 @@
-import { CalendarDays, Lock, Settings, Sparkles, Tag } from "lucide-react";
+import { CalendarDays, Lock, Settings, Sparkles, Star, Tag } from "lucide-react";
 import type { CharacterDTO } from "../types";
 import { usePlaceholderSrc } from "../placeholderImages";
 import { Button } from "./ui";
@@ -12,8 +12,12 @@ interface CharacterCardProps {
   locale: string;
   playLabel: string;
   editLabel: string;
+  favoriteLabel: string;
+  unfavoriteLabel: string;
   onPlay: (id: string) => void;
   onEdit: (character: CharacterDTO) => void;
+  onToggleFavorite: (character: CharacterDTO) => void;
+  favoritePending?: boolean;
   selectable?: boolean;
   selected?: boolean;
   onSelect?: (id: string, selected: boolean) => void;
@@ -28,8 +32,12 @@ export function CharacterCard({
   locale,
   playLabel,
   editLabel,
+  favoriteLabel,
+  unfavoriteLabel,
   onPlay,
   onEdit,
+  onToggleFavorite,
+  favoritePending,
   selectable,
   selected,
   onSelect
@@ -50,6 +58,8 @@ export function CharacterCard({
 
   return (
     <div
+      data-character-id={character.id}
+      data-character-favorite={character.isFavorite ? "true" : "false"}
       className={`group flex flex-col overflow-hidden rounded-xl border bg-white/5 p-0 text-sm transition-all duration-200 active:bg-white/[0.08] ${
         selectable
           ? "cursor-pointer hover:bg-white/10"
@@ -92,7 +102,27 @@ export function CharacterCard({
               </svg>
             ) : null}
           </label>
-        ) : null}
+        ) : (
+          <button
+            aria-label={character.isFavorite ? unfavoriteLabel : favoriteLabel}
+            aria-pressed={character.isFavorite}
+            className={`absolute right-2 top-2 z-10 flex h-10 w-10 items-center justify-center rounded-md border backdrop-blur-sm transition-colors ${
+              character.isFavorite
+                ? "border-amber-300/40 bg-black/55 text-amber-300 hover:bg-black/70"
+                : "border-white/20 bg-black/40 text-white/80 hover:bg-black/60 hover:text-amber-200"
+            }`}
+            data-character-action="favorite"
+            disabled={favoritePending}
+            title={character.isFavorite ? unfavoriteLabel : favoriteLabel}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleFavorite(character);
+            }}
+          >
+            <Star size={18} fill={character.isFavorite ? "currentColor" : "none"} />
+          </button>
+        )}
       </div>
       <div className="min-w-0 w-full flex-1 px-4 pb-1 pt-3">
         <p className="line-clamp-2 text-xs leading-5 text-slate-400">

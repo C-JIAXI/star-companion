@@ -21,16 +21,24 @@ model UserSettings {
   language             String    @default("zh-CN")
   /// JSON array of model presets (LEGACY — kept for migration only)
   models               Json?     @default("[]")
-  /// JSON array of provider profiles: [{ id, label, provider, apiBaseUrl, key, models }]
+  /// JSON array of provider profiles. API keys are stored AES-256-GCM encrypted and never serialized.
   providers            Json?     @default("[]")
   /// References a ProviderProfile.id within the providers array
   activeProviderId     String?   @default("")
   /// References a ProviderModel.id within the active provider's models array
   activeModelId        String?   @default("")
+  /// Per-AI-module provider/model references, e.g. { chat: { providerId, modelId } }
+  moduleModelPreferences Json?    @default("{}")
+  /// Reusable local persona/custom-config presets.
+  userPersonaPresets   Json?     @default("[]")
   /// Local user profile memory summarised from user messages.
   userProfileSummary   String    @default("")
   autoSummarizeUser    Boolean   @default(true)
   showMessageAvatars   Boolean   @default(true)
+  showMessageTimestamps Boolean  @default(false)
+  ttsVoice             String    @default("alloy")
+  ttsPlaybackRate      Float     @default(1.0)
+  ttsAutoPlay          Boolean   @default(false)
   userProfileUpdatedAt DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
@@ -50,6 +58,8 @@ model Character {
   tags         Json     @default("[]")
   loreEntries  Json     @default("[]")
   quickReplies Json     @default("[]")
+  /// Local user preference. Included in backups, excluded from character card exports.
+  isFavorite   Boolean  @default(false)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -61,6 +71,18 @@ model Chat {
   id                   String    @id @default(cuid())
   title                String
   characterId          String?
+  /// Origin chat when this chat was created as a branch. No database relation keeps imports portable.
+  parentChatId         String?
+  /// Message id in the origin chat where this branch was created.
+  branchSourceMessageId String?
+  /// A saved branch snapshot that does not automatically become the active chat.
+  isCheckpoint         Boolean   @default(false)
+  /// User-owned history organization flag. It never affects prompt context.
+  isPinned             Boolean   @default(false)
+  /// Hidden from active history without deleting messages or memories.
+  isArchived           Boolean   @default(false)
+  /// Soft-deletion marker. Trashed chats retain their messages and memories until permanently deleted.
+  deletedAt            DateTime?
   backgroundUrl        String    @default("")
   memoryTurns          Int       @default(12)
   autoMemoryEnabled    Boolean   @default(true)
@@ -77,6 +99,8 @@ model Chat {
   memories  ChatMemory[]
 
   @@index([characterId])
+  @@index([parentChatId])
+  @@index([deletedAt, isArchived, isPinned, updatedAt])
 }
 
 model ChatMemory {
@@ -106,6 +130,10 @@ model Message {
   role               String
   characterId        String?
   content            String
+  /// Whether this message is included in subsequent model and Agent context.
+  contextIncluded    Boolean  @default(true)
+  /// User-owned navigation marker. It never affects model or Agent context.
+  isBookmarked       Boolean  @default(false)
   variants           Json     @default("[]")
   activeVariantIndex Int      @default(0)
   tokenUsage         Json?
@@ -119,5 +147,6 @@ model Message {
 
   @@index([chatId])
   @@index([chatId, createdAt])
+  @@index([chatId, isBookmarked, createdAt])
   @@index([characterId])
 }

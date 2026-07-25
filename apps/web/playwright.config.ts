@@ -3,6 +3,9 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
+  // All projects share the app's local SQLite database during E2E runs.
+  workers: 2,
+  timeout: 45_000,
   reporter: "list",
   use: {
     baseURL: "http://127.0.0.1:5173",

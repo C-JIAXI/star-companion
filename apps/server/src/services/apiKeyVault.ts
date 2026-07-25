@@ -3,6 +3,9 @@ import { serverConfig } from "../config.js";
 
 const ENCRYPTED_PREFIX = "enc:v1:";
 
+export const isEncryptedApiKey = (value: string | null | undefined) =>
+  Boolean(value?.startsWith(ENCRYPTED_PREFIX));
+
 const encryptionKey = () =>
   createHash("sha256").update(serverConfig.apiKeyEncryptionSecret).digest();
 

@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import net from "node:net";
+import { createServer } from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
@@ -122,6 +123,152 @@ const requestData = async (baseUrl, pathname, options = {}) => {
   return payload.data;
 };
 
+const permanentlyDeleteChat = async (baseUrl, chatId) => {
+  await request(baseUrl, `/api/chats/${chatId}`, { method: "DELETE", expectedStatus: 204 });
+  await request(baseUrl, `/api/chats/${chatId}/permanent`, { method: "DELETE", expectedStatus: 204 });
+};
+
+const runSocketRequest = (baseUrl, input) =>
+  new Promise((resolve, reject) => {
+    const requestId = `smoke-ws-${Date.now()}`;
+    const events = [];
+    const socket = new WebSocket(`${baseUrl.replace(/^http/, "ws")}/ws`);
+    const timeout = setTimeout(() => {
+      socket.close();
+      reject(new Error(`Timed out waiting for ${input.type}`));
+    }, 10_000);
+
+    socket.addEventListener("open", () => {
+      socket.send(JSON.stringify({ ...input, requestId }));
+    });
+    socket.addEventListener("message", (raw) => {
+      const event = JSON.parse(String(raw.data));
+      events.push(event);
+      if (event.type === "error" && event.requestId === requestId) {
+        clearTimeout(timeout);
+        socket.close();
+        reject(new Error(event.error));
+      }
+      if (
+        (event.type === "generation_done" || event.type === "generation_stopped") &&
+        event.requestId === requestId
+      ) {
+        clearTimeout(timeout);
+        socket.close();
+        resolve(events);
+      }
+    });
+    socket.addEventListener("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+
+const readJsonBody = (request) =>
+  new Promise((resolve, reject) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      try {
+        resolve(body ? JSON.parse(body) : {});
+      } catch (error) {
+        reject(error);
+      }
+    });
+    request.on("error", reject);
+  });
+
+const readRawBody = (request) =>
+  new Promise((resolve, reject) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => resolve(Buffer.concat(chunks)));
+    request.on("error", reject);
+  });
+
+const createFakeModelServer = (port) => {
+  let chatCompletionRequests = 0;
+  let lastChatCompletionBody = null;
+
+  const server = createServer(async (request, response) => {
+    if (request.method === "GET" && request.url === "/models") {
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ data: [{ id: "fake-agent-model" }] }));
+      return;
+    }
+
+    if (request.method === "POST" && request.url === "/audio/transcriptions") {
+      await readRawBody(request);
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ text: "transcribed smoke audio" }));
+      return;
+    }
+
+    if (request.method === "POST" && request.url === "/audio/speech") {
+      await readJsonBody(request);
+      response.setHeader("Content-Type", "audio/mpeg");
+      response.end(Buffer.from("fake-audio"));
+      return;
+    }
+
+    if (request.method === "POST" && request.url === "/images/generations") {
+      await readJsonBody(request);
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ data: [{ b64_json: Buffer.from("fake-image").toString("base64") }] }));
+      return;
+    }
+
+    if (request.method !== "POST" || request.url !== "/chat/completions") {
+      response.statusCode = 404;
+      response.end("not found");
+      return;
+    }
+
+    const body = await readJsonBody(request);
+    chatCompletionRequests += 1;
+    lastChatCompletionBody = body;
+    const joinedMessages = (body.messages ?? []).map((message) => message.content ?? "").join("\n\n");
+    const content = joinedMessages.includes("read-only context assistant")
+      ? "Agent draft: check the smoke path and ask for the next diagnostic signal."
+      : joinedMessages.includes("Generate a concise title for this local-first")
+        ? '"Smoke Title Suggestion"'
+        : "Smoke model reply.";
+
+    if (body.stream) {
+      const streamContent = joinedMessages.includes("Continue the immediately preceding assistant reply")
+        ? " Continued."
+        : "Smoke model reply.";
+      response.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive"
+      });
+      response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: streamContent } }] })}\n\n`);
+      response.write('data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}\n\n');
+      response.end("data: [DONE]\n\n");
+      return;
+    }
+
+    response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify({ choices: [{ message: { content } }] }));
+  });
+
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve({
+        close: () => server.close(),
+        getChatCompletionRequests: () => chatCompletionRequests,
+        getLastChatCompletionBody: () => lastChatCompletionBody
+      });
+    });
+  });
+};
+
 const removeWithRetry = async (target) => {
   for (let attempt = 0; attempt < 6; attempt += 1) {
     try {
@@ -236,6 +383,7 @@ const initializeFreshDatabase = async (dbPath) => {
 const main = async () => {
   const runId = `smoke-api-${Date.now()}`;
   const port = await getFreePort();
+  const modelPort = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const tempDbDir = path.join(prismaTmpRoot, runId);
   const tempDbPath = path.join(tempDbDir, "smoke.db");
@@ -248,10 +396,13 @@ const main = async () => {
   };
 
   let server = null;
+  let fakeModelServer = null;
 
   await mkdir(tempDbDir, { recursive: true });
 
   try {
+    fakeModelServer = await createFakeModelServer(modelPort);
+
     // Prisma schema engine currently fails on fresh SQLite in this environment,
     // so smoke tests bootstrap the schema by replaying committed migration SQL.
     log("Initializing a fresh smoke database from Prisma migration SQL");
@@ -270,29 +421,61 @@ const main = async () => {
 
     const settingsPayload = {
       activeProvider: "openai-compatible",
-      apiBaseUrl: "https://api.openai.com/v1",
+      apiBaseUrl: `http://127.0.0.1:${modelPort}`,
       apiKey: "sk-smoke-test-key",
-      model: "gpt-4o-mini",
+      model: "fake-agent-model",
       temperature: 0.7,
       maxTokens: 1024,
       topP: 0.95,
       language: "en",
       autoSummarizeUser: false,
       showMessageAvatars: false,
+      showMessageTimestamps: true,
+      ttsVoice: "nova",
+      ttsPlaybackRate: 1.25,
+      ttsAutoPlay: true,
       userProfileSummary: "",
       providers: [
         {
           id: "smoke-provider",
           label: "Smoke Provider",
           provider: "openai-compatible",
-          apiBaseUrl: "https://api.openai.com/v1",
+          apiBaseUrl: `http://127.0.0.1:${modelPort}`,
+          key: "smoke-provider-key",
           models: [
-            { id: "smoke-model", label: "Smoke Model", model: "gpt-4o-mini" }
+            {
+              id: "smoke-model",
+              label: "Smoke Model",
+              model: "fake-agent-model",
+              capabilities: [
+                "text_generation",
+                "audio_transcription",
+                "text_to_speech",
+                "image_generation"
+              ]
+            }
           ]
         }
       ],
       activeProviderId: "smoke-provider",
-      activeModelId: "smoke-model"
+      activeModelId: "smoke-model",
+      moduleModelPreferences: {
+        agent: { providerId: "smoke-provider", modelId: "smoke-model" },
+        image_generation: { providerId: "smoke-provider", modelId: "smoke-model" }
+      },
+      userPersonaPresets: [
+        {
+          id: "smoke-persona",
+          name: "Smoke Persona",
+          config: {
+            prefix: "User boundary.",
+            prompt: "User likes practical tests.",
+            suffix: "Keep it brief."
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }
+      ]
     };
     const updatedSettings = await requestData(baseUrl, "/api/settings", {
       method: "PUT",
@@ -300,8 +483,54 @@ const main = async () => {
     });
     assert.equal(updatedSettings.language, "en");
     assert.equal(updatedSettings.showMessageAvatars, false);
+    assert.equal(updatedSettings.showMessageTimestamps, true);
+    assert.equal(updatedSettings.ttsVoice, "nova");
+    assert.equal(updatedSettings.ttsPlaybackRate, 1.25);
+    assert.equal(updatedSettings.ttsAutoPlay, true);
     assert.equal(updatedSettings.hasApiKey, true);
     assert.equal("apiKey" in updatedSettings, false);
+    assert.equal("key" in updatedSettings.providers[0], false);
+    assert.equal(updatedSettings.providers[0]?.hasKey, true);
+    assert.deepEqual(updatedSettings.moduleModelPreferences.agent, {
+      providerId: "smoke-provider",
+      modelId: "smoke-model"
+    });
+    assert.equal(updatedSettings.userPersonaPresets[0]?.name, "Smoke Persona");
+    assert.equal(updatedSettings.userPersonaPresets[0]?.config.prompt, "User likes practical tests.");
+
+    const preservedSettings = await requestData(baseUrl, "/api/settings", {
+      method: "PUT",
+      body: {
+        ...settingsPayload,
+        apiKey: undefined,
+        moduleModelPreferences: undefined,
+        userPersonaPresets: undefined,
+        providers: updatedSettings.providers
+      }
+    });
+    assert.deepEqual(preservedSettings.moduleModelPreferences.agent, {
+      providerId: "smoke-provider",
+      modelId: "smoke-model"
+    });
+    assert.equal(preservedSettings.userPersonaPresets[0]?.name, "Smoke Persona");
+    assert.equal(preservedSettings.ttsVoice, "nova");
+    assert.equal(preservedSettings.ttsPlaybackRate, 1.25);
+    assert.equal(preservedSettings.ttsAutoPlay, true);
+    assert.equal("key" in preservedSettings.providers[0], false);
+    assert.equal(preservedSettings.providers[0]?.hasKey, true);
+
+    const importedProviderModels = await requestData(
+      baseUrl,
+      "/api/settings/providers/smoke-provider/models",
+      {
+        method: "POST",
+        body: {
+          provider: "openai-compatible",
+          apiBaseUrl: `http://127.0.0.1:${modelPort}`
+        }
+      }
+    );
+    assert.deepEqual(importedProviderModels.models, ["fake-agent-model"]);
 
     const profileSettings = await requestData(baseUrl, "/api/settings/user-profile", {
       method: "PUT",
@@ -319,10 +548,19 @@ const main = async () => {
     assert.equal(fetchedSettings.userProfileSummary, "Prefers terse technical answers.");
     assert.equal("apiKey" in fetchedSettings, false);
 
+    const testRequestCountBefore = fakeModelServer.getChatCompletionRequests();
+    const connectionTest = await requestData(baseUrl, "/api/settings/test", { method: "POST" });
+    assert.equal(connectionTest.reachable, true);
+    assert.equal(connectionTest.model, "fake-agent-model");
+    assert.equal(fakeModelServer.getChatCompletionRequests(), testRequestCountBefore + 1);
+    assert.equal(fakeModelServer.getLastChatCompletionBody().model, "fake-agent-model");
+    assert.equal(fakeModelServer.getLastChatCompletionBody().stream, false);
+
     log("Verifying character CRUD, paging, export, import, and unlock flows");
+    const localAvatar = "data:image/png;base64,QUJDRA==";
     const characterPayload = {
       name: `Smoke Character ${runId}`,
-      avatar: null,
+      avatar: localAvatar,
       description: "Character used by the API smoke test.",
       tags: ["smoke", "sentinel"],
       prefix: "Stay in character.",
@@ -359,6 +597,7 @@ const main = async () => {
     assert.equal(createdCharacter.canViewPrompt, true);
     assert.equal(typeof createdCharacter.cardId, "string");
     assert.equal(createdCharacter.cardId.length > 0, true);
+    assert.equal(createdCharacter.avatar, localAvatar);
     assert.deepEqual(createdCharacter.tags, characterPayload.tags);
 
     const characterList = await requestData(baseUrl, "/api/characters");
@@ -422,6 +661,18 @@ const main = async () => {
     assert.equal(updatedCharacter.openingHtml, characterUpdatePayload.openingHtml);
     assert.equal(updatedCharacter.quickReplies[0].label, "Diagnostics");
 
+    const favoriteCharacter = await requestData(baseUrl, `/api/characters/${createdCharacter.id}`, {
+      method: "PUT",
+      body: { isFavorite: true }
+    });
+    assert.equal(favoriteCharacter.isFavorite, true);
+    const favoriteCharacters = await requestData(
+      baseUrl,
+      `/api/characters/page?${new URLSearchParams({ favoriteOnly: "true" }).toString()}`
+    );
+    assert.equal(favoriteCharacters.items.some((item) => item.id === createdCharacter.id), true);
+    assert.equal(favoriteCharacters.items.every((item) => item.isFavorite === true), true);
+
     const fetchedCharacterAfterUpdate = await requestData(
       baseUrl,
       `/api/characters/${createdCharacter.id}`
@@ -446,6 +697,8 @@ const main = async () => {
       "public export should keep the current prompt"
     );
     assert.deepEqual(publicCard.character.tags, characterPayload.tags);
+    assert.equal(publicCard.character.avatar, localAvatar);
+    assert.equal("isFavorite" in publicCard.character, false);
 
     const renamedPublicCard = {
       ...publicCard,
@@ -527,6 +780,66 @@ const main = async () => {
     assert.equal(importedPrivateBackupCharacter.canViewPrompt, false);
     assert.equal(importedPrivateBackupCharacter.prompt, "");
 
+    const duplicatedPrivateCharacter = await requestData(
+      baseUrl,
+      `/api/characters/${importedPrivateCharacter.id}/duplicate`,
+      {
+        method: "POST",
+        expectedStatus: 201,
+        body: { name: `AAA Smoke Character Copy ${runId}` }
+      }
+    );
+    assert.notEqual(duplicatedPrivateCharacter.id, importedPrivateCharacter.id);
+    assert.notEqual(duplicatedPrivateCharacter.cardId, importedPrivateCharacter.cardId);
+    assert.equal(duplicatedPrivateCharacter.visibility, "private");
+    assert.equal(duplicatedPrivateCharacter.canViewPrompt, false);
+    assert.equal(duplicatedPrivateCharacter.isFavorite, false);
+    const batchTagAdd = await requestData(baseUrl, "/api/characters/batch-tags", {
+      method: "POST",
+      body: {
+        ids: [createdCharacter.id, duplicatedPrivateCharacter.id],
+        operation: "add",
+        tags: ["batch-managed", "sentinel"]
+      }
+    });
+    assert.equal(batchTagAdd.updated, 2);
+    const batchTaggedPublicCharacter = await requestData(
+      baseUrl,
+      `/api/characters/${createdCharacter.id}`
+    );
+    const batchTaggedPrivateCharacter = await requestData(
+      baseUrl,
+      `/api/characters/${duplicatedPrivateCharacter.id}`
+    );
+    assert.equal(batchTaggedPublicCharacter.tags.includes("batch-managed"), true);
+    assert.equal(batchTaggedPublicCharacter.tags.filter((tag) => tag === "sentinel").length, 1);
+    assert.equal(batchTaggedPrivateCharacter.tags.includes("batch-managed"), true);
+    assert.equal(batchTaggedPrivateCharacter.canViewPrompt, false);
+    const batchTagRemove = await requestData(baseUrl, "/api/characters/batch-tags", {
+      method: "POST",
+      body: {
+        ids: [createdCharacter.id, duplicatedPrivateCharacter.id],
+        operation: "remove",
+        tags: ["batch-managed"]
+      }
+    });
+    assert.equal(batchTagRemove.updated, 2);
+    assert.equal(
+      (
+        await requestData(baseUrl, `/api/characters/${duplicatedPrivateCharacter.id}`)
+      ).tags.includes("batch-managed"),
+      false
+    );
+    const nameSortedCharacters = await requestData(
+      baseUrl,
+      `/api/characters/page?${new URLSearchParams({ q: "Smoke Character", sort: "name_asc" }).toString()}`
+    );
+    assert.equal(nameSortedCharacters.items[0]?.id, duplicatedPrivateCharacter.id);
+    await request(baseUrl, `/api/characters/${duplicatedPrivateCharacter.id}`, {
+      method: "DELETE",
+      expectedStatus: 204
+    });
+
     const unlockedPrivateCharacter = await requestData(
       baseUrl,
       `/api/characters/${importedPrivateCharacter.id}/unlock`,
@@ -566,18 +879,120 @@ const main = async () => {
     assert.ok(listedChat);
     assert.equal(listedChat.messageCount, 0);
 
+    const openingChat = await requestData(baseUrl, "/api/chats", {
+      method: "POST",
+      expectedStatus: 201,
+      body: {
+        title: `Smoke Opening Chat ${runId}`,
+        characterId: createdCharacter.id
+      }
+    });
+    const openingMessage = await requestData(baseUrl, `/api/chats/${openingChat.id}/opening-message`, {
+      method: "POST",
+      expectedStatus: 201
+    });
+    assert.equal(openingMessage.role, "assistant");
+    assert.equal(openingMessage.characterId, createdCharacter.id);
+    assert.equal(openingMessage.variants.length, 1);
+    assert.match(openingMessage.content, /Smoke model reply/);
+    const openingChatWithMessages = await requestData(baseUrl, `/api/chats/${openingChat.id}`);
+    assert.equal(openingChatWithMessages.messages.length, 1);
+    await request(baseUrl, `/api/chats/${openingChat.id}/opening-message`, {
+      method: "POST",
+      expectedStatus: 409
+    });
+    await request(baseUrl, `/api/chats/${openingChat.id}`, {
+      method: "DELETE",
+      expectedStatus: 204
+    });
+    const chatsWithTrashedOpening = await requestData(baseUrl, "/api/chats");
+    assert.ok(chatsWithTrashedOpening.find((chat) => chat.id === openingChat.id)?.deletedAt);
+    const backupWithTrashedOpening = await requestData(baseUrl, "/api/backups/export");
+    assert.ok(backupWithTrashedOpening.chats.find((chat) => chat.id === openingChat.id)?.deletedAt);
+    await request(baseUrl, `/api/chats/${openingChat.id}`, { expectedStatus: 404 });
+    const restoredOpeningChat = await requestData(baseUrl, `/api/chats/${openingChat.id}/restore`, {
+      method: "POST"
+    });
+    assert.equal(restoredOpeningChat.deletedAt, null);
+    assert.equal((await requestData(baseUrl, `/api/chats/${openingChat.id}`)).messages.length, 1);
+    await permanentlyDeleteChat(baseUrl, openingChat.id);
+
     const updatedChat = await requestData(baseUrl, `/api/chats/${createdChat.id}`, {
       method: "PUT",
       body: {
         backgroundUrl: "https://example.com/background-updated.png",
         memoryTurns: 16,
         autoMemoryEnabled: false,
+        isPinned: true,
+        isArchived: true,
         userPersona: "Focus on concise diagnostics."
       }
     });
     assert.equal(updatedChat.backgroundUrl, "https://example.com/background-updated.png");
     assert.equal(updatedChat.memoryTurns, 16);
     assert.equal(updatedChat.autoMemoryEnabled, false);
+    assert.equal(updatedChat.isPinned, true);
+    assert.equal(updatedChat.isArchived, true);
+
+    const restoredBatch = await requestData(baseUrl, "/api/chats/batch-archive", {
+      method: "POST",
+      body: { ids: [createdChat.id], isArchived: false }
+    });
+    assert.equal(restoredBatch.updated, 1);
+    assert.equal((await requestData(baseUrl, `/api/chats/${createdChat.id}`)).isArchived, false);
+    const archivedBatch = await requestData(baseUrl, "/api/chats/batch-archive", {
+      method: "POST",
+      body: { ids: [createdChat.id], isArchived: true }
+    });
+    assert.equal(archivedBatch.updated, 1);
+    assert.equal((await requestData(baseUrl, `/api/chats/${createdChat.id}`)).isArchived, true);
+
+    const activeOrderingChat = await requestData(baseUrl, "/api/chats", {
+      method: "POST",
+      expectedStatus: 201,
+      body: { title: `Smoke Active Ordering ${runId}`, characterId: createdCharacter.id }
+    });
+    const chatsAfterPin = await requestData(baseUrl, "/api/chats");
+    assert.equal(chatsAfterPin[0]?.id, activeOrderingChat.id);
+    assert.equal(chatsAfterPin.find((chat) => chat.id === createdChat.id)?.isArchived, true);
+    await permanentlyDeleteChat(baseUrl, activeOrderingChat.id);
+
+    const batchTrashChats = [];
+    for (const title of [`Smoke Batch Trash A ${runId}`, `Smoke Batch Trash B ${runId}`]) {
+      batchTrashChats.push(
+        await requestData(baseUrl, "/api/chats", {
+          method: "POST",
+          expectedStatus: 201,
+          body: { title, characterId: createdCharacter.id }
+        })
+      );
+    }
+    const batchTrashIds = batchTrashChats.map((chat) => chat.id);
+    assert.equal(
+      (await requestData(baseUrl, "/api/chats/batch-trash", {
+        method: "POST",
+        body: { ids: batchTrashIds, action: "trash" }
+      })).updated,
+      2
+    );
+    assert.equal(
+      (await requestData(baseUrl, "/api/chats/batch-trash", {
+        method: "POST",
+        body: { ids: batchTrashIds, action: "restore" }
+      })).updated,
+      2
+    );
+    await requestData(baseUrl, "/api/chats/batch-trash", {
+      method: "POST",
+      body: { ids: batchTrashIds, action: "trash" }
+    });
+    assert.equal(
+      (await requestData(baseUrl, "/api/chats/batch-permanent-delete", {
+        method: "POST",
+        body: { ids: batchTrashIds }
+      })).deleted,
+      2
+    );
 
     const createdMemory = await requestData(baseUrl, `/api/chats/${createdChat.id}/memories`, {
       method: "POST",
@@ -628,7 +1043,7 @@ const main = async () => {
         chatId: createdChat.id,
         role: "assistant",
         characterId: createdCharacter.id,
-        content: "Smoke path is nominal.",
+        content: "Nominal status confirmed.",
         variants: ["Smoke path is nominal.", "Nominal status confirmed."],
         activeVariantIndex: 1,
         tokenUsage: {
@@ -669,14 +1084,174 @@ const main = async () => {
     assert.equal(assistantMessage.tokenUsage.totalTokens, 19);
     assert.equal(assistantMessage.memoryMatches[0].id, createdMemory.id);
 
+    const excludedUserMessage = await requestData(baseUrl, `/api/messages/${userMessage.id}`, {
+      method: "PUT",
+      body: { contextIncluded: false, isBookmarked: true }
+    });
+    assert.equal(excludedUserMessage.contextIncluded, false);
+    assert.equal(excludedUserMessage.isBookmarked, true);
+
+    const globalMessageSearch = await requestData(
+      baseUrl,
+      `/api/chats/message-search?${new URLSearchParams({ q: "Smoke path", limit: "5" }).toString()}`
+    );
+    assert.ok(globalMessageSearch.total >= 1);
+    assert.equal(globalMessageSearch.results[0]?.chat.id, createdChat.id);
+    assert.equal(globalMessageSearch.results[0]?.chat.isArchived, true);
+    assert.match(globalMessageSearch.results[0]?.snippet ?? "", /Smoke path/i);
+
+    const continuationEvents = await runSocketRequest(baseUrl, {
+      type: "continue",
+      messageId: assistantMessage.id
+    });
+    const continuedMessage = continuationEvents.find((event) => event.type === "assistant_message")?.message;
+    assert.equal(continuedMessage?.id, assistantMessage.id);
+    assert.equal(continuedMessage?.content, "Nominal status confirmed. Continued.");
+    assert.equal(continuedMessage?.variants.length, 2);
+    assert.equal(continuedMessage?.variants[1], "Nominal status confirmed. Continued.");
+
     const listedMessages = await requestData(
       baseUrl,
       `/api/messages?${new URLSearchParams({ chatId: createdChat.id }).toString()}`
     );
     assert.equal(listedMessages.length, 2);
+    assert.equal(listedMessages[1]?.content, "Nominal status confirmed. Continued.");
 
     const chatWithMessages = await requestData(baseUrl, `/api/chats/${createdChat.id}`);
     assert.equal(chatWithMessages.messages.length, 2);
+
+    const messageSearch = await requestData(
+      baseUrl,
+      `/api/chats/${createdChat.id}/message-search?${new URLSearchParams({
+        q: "nominal",
+        limit: "5"
+      }).toString()}`
+    );
+    assert.equal(messageSearch.total, 1);
+    assert.equal(messageSearch.results[0]?.index, 1);
+    assert.equal(messageSearch.results[0]?.message.id, assistantMessage.id);
+    assert.match(messageSearch.results[0]?.snippet ?? "", /nominal/i);
+
+    const titleSuggestion = await requestData(baseUrl, `/api/chats/${createdChat.id}/title-suggestion`, {
+      method: "POST"
+    });
+    assert.equal(titleSuggestion.title, "Smoke Title Suggestion");
+    const chatAfterTitleSuggestion = await requestData(baseUrl, `/api/chats/${createdChat.id}`);
+    assert.equal(chatAfterTitleSuggestion.title, createdChat.title);
+    assert.equal(chatAfterTitleSuggestion.messages.length, 2);
+
+    const agentDraft = await requestData(baseUrl, `/api/chats/${createdChat.id}/agent-draft`, {
+      method: "POST",
+      body: {
+        mode: "next_steps",
+        focus: "smoke path"
+      }
+    });
+    assert.equal(agentDraft.mode, "next_steps");
+    assert.match(agentDraft.content, /Agent draft/);
+    assert.equal(Array.isArray(agentDraft.matchedLoreEntries), true);
+    assert.equal(Array.isArray(agentDraft.matchedMemoryEntries), true);
+    const chatAfterAgentDraft = await requestData(baseUrl, `/api/chats/${createdChat.id}`);
+    assert.equal(chatAfterAgentDraft.messages.length, 2);
+    assert.equal(chatAfterAgentDraft.memories.length, 1);
+
+    const chatArchive = await requestData(baseUrl, `/api/chats/${createdChat.id}/archive`);
+    assert.equal(chatArchive.archiveVersion, 1);
+    assert.equal(chatArchive.messages.length, 2);
+    assert.equal(chatArchive.messages[0]?.contextIncluded, false);
+    assert.equal(chatArchive.messages[0]?.isBookmarked, true);
+    assert.equal(chatArchive.memories.length, 1);
+    assert.equal(chatArchive.chat.isArchived, true);
+    const importedArchive = await requestData(baseUrl, "/api/chats/import-archive", {
+      method: "POST",
+      expectedStatus: 201,
+      body: { archive: chatArchive, title: "Imported Smoke Archive" }
+    });
+    assert.notEqual(importedArchive.id, createdChat.id);
+    assert.equal(importedArchive.title, "Imported Smoke Archive");
+    assert.equal(importedArchive.messages.length, 2);
+    assert.equal(importedArchive.messages[0]?.contextIncluded, false);
+    assert.equal(importedArchive.messages[0]?.isBookmarked, true);
+    assert.equal(importedArchive.memories.length, 1);
+    assert.equal(importedArchive.isArchived, false);
+    await permanentlyDeleteChat(baseUrl, importedArchive.id);
+
+    const branchedChat = await requestData(baseUrl, `/api/chats/${createdChat.id}/branches`, {
+      method: "POST",
+      expectedStatus: 201,
+      body: {
+        messageId: assistantMessage.id,
+        title: "Smoke Branch"
+      }
+    });
+    assert.equal(branchedChat.title, "Smoke Branch");
+    assert.equal(branchedChat.parentChatId, createdChat.id);
+    assert.equal(branchedChat.branchSourceMessageId, assistantMessage.id);
+    assert.equal(branchedChat.messages.length, 2);
+    assert.equal(branchedChat.messages[0]?.contextIncluded, false);
+    assert.equal(branchedChat.messages[0]?.isBookmarked, true);
+    assert.equal(branchedChat.memories.length, 0);
+    await permanentlyDeleteChat(baseUrl, branchedChat.id);
+
+    const checkpointChat = await requestData(baseUrl, `/api/chats/${createdChat.id}/branches`, {
+      method: "POST",
+      expectedStatus: 201,
+      body: { messageId: assistantMessage.id, title: "Smoke Checkpoint", kind: "checkpoint" }
+    });
+    assert.equal(checkpointChat.isCheckpoint, true);
+    assert.equal(checkpointChat.parentChatId, createdChat.id);
+    assert.equal(checkpointChat.messages.length, 2);
+    assert.equal(checkpointChat.memories.length, 0);
+    await permanentlyDeleteChat(baseUrl, checkpointChat.id);
+
+    const lineageParent = await requestData(baseUrl, "/api/chats", {
+      method: "POST",
+      expectedStatus: 201,
+      body: { title: "Lineage cleanup parent", characterId: createdCharacter.id }
+    });
+    const lineageSource = await requestData(baseUrl, "/api/messages", {
+      method: "POST",
+      expectedStatus: 201,
+      body: { chatId: lineageParent.id, role: "user", content: "Lineage source" }
+    });
+    const detachedBranch = await requestData(baseUrl, `/api/chats/${lineageParent.id}/branches`, {
+      method: "POST",
+      expectedStatus: 201,
+      body: { messageId: lineageSource.id, title: "Lineage cleanup branch" }
+    });
+    await request(baseUrl, `/api/chats/${lineageParent.id}`, { method: "DELETE", expectedStatus: 204 });
+    const branchWhileParentIsTrashed = await requestData(baseUrl, `/api/chats/${detachedBranch.id}`);
+    assert.equal(branchWhileParentIsTrashed.parentChatId, lineageParent.id);
+    await request(baseUrl, `/api/chats/${lineageParent.id}/permanent`, {
+      method: "DELETE",
+      expectedStatus: 204
+    });
+    const detachedBranchAfterParentDelete = await requestData(baseUrl, `/api/chats/${detachedBranch.id}`);
+    assert.equal(detachedBranchAfterParentDelete.parentChatId, null);
+    assert.equal(detachedBranchAfterParentDelete.branchSourceMessageId, null);
+    await permanentlyDeleteChat(baseUrl, detachedBranch.id);
+
+    const transcription = await requestData(baseUrl, "/api/media/voice/transcriptions", {
+      method: "POST",
+      body: {
+        audioBase64: Buffer.from("fake audio").toString("base64"),
+        mimeType: "audio/webm"
+      }
+    });
+    assert.equal(transcription.text, "transcribed smoke audio");
+    assert.equal(transcription.model, "fake-agent-model");
+
+    const speech = await requestData(baseUrl, "/api/media/voice/speech", {
+      method: "POST",
+      body: { text: "Read this smoke line.", voice: "alloy", format: "mp3" }
+    });
+    assert.equal(speech.audioBase64, Buffer.from("fake-audio").toString("base64"));
+
+    const image = await requestData(baseUrl, "/api/media/images/generations", {
+      method: "POST",
+      body: { prompt: "smoke image", size: "1024x1024" }
+    });
+    assert.equal(image.images[0]?.b64Json, Buffer.from("fake-image").toString("base64"));
 
     const updatedMessage = await requestData(baseUrl, `/api/messages/${assistantMessage.id}`, {
       method: "PUT",
@@ -698,8 +1273,16 @@ const main = async () => {
     assert.ok(exportedBackup.settings);
     assert.equal(exportedBackup.characters.length, 2);
     assert.equal(exportedBackup.chats.length, 1);
+    assert.equal(exportedBackup.chats[0]?.isPinned, true);
+    assert.equal(exportedBackup.chats[0]?.isArchived, true);
     assert.equal(exportedBackup.messages.length, 2);
     assert.equal(exportedBackup.memories.length, 1);
+    assert.equal(
+      exportedBackup.characters.find((character) => character.id === createdCharacter.id)?.isFavorite,
+      true
+    );
+    assert.equal("key" in exportedBackup.settings.providers[0], false);
+    assert.equal(exportedBackup.settings.providers[0]?.hasKey, true);
     const exportedPrivateBackupCharacter = exportedBackup.characters.find(
       (character) => character.id === importedPrivateBackupCharacter.id
     );
@@ -798,11 +1381,22 @@ const main = async () => {
       method: "DELETE",
       expectedStatus: 204
     });
+    const hiddenTrashSearch = await requestData(
+      baseUrl,
+      `/api/chats/message-search?${new URLSearchParams({ q: "Smoke path", limit: "5" }).toString()}`
+    );
+    assert.equal(hiddenTrashSearch.results.some((result) => result.chat.id === createdChat.id), false);
     const messagesAfterChatDelete = await requestData(
       baseUrl,
       `/api/messages?${new URLSearchParams({ chatId: createdChat.id }).toString()}`
     );
     assert.equal(messagesAfterChatDelete.length, 0);
+    const restoredChat = await requestData(baseUrl, `/api/chats/${createdChat.id}/restore`, {
+      method: "POST"
+    });
+    assert.equal(restoredChat.deletedAt, null);
+    assert.equal((await requestData(baseUrl, `/api/chats/${createdChat.id}`)).messages.length, 1);
+    await permanentlyDeleteChat(baseUrl, createdChat.id);
 
     await request(baseUrl, `/api/characters/${importedPublicCharacter.id}`, {
       method: "DELETE",
@@ -823,6 +1417,7 @@ const main = async () => {
     log("Smoke API checks passed");
   } finally {
     await stopProcess(server?.child);
+    fakeModelServer?.close();
     await removeWithRetry(tempDbDir);
   }
 };

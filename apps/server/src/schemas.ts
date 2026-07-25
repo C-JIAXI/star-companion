@@ -95,9 +95,11 @@ const backgroundUrlSchema = z
     "Background URL must be an https/http image URL or a data image URL."
   );
 
+const characterAvatarSchema = z.string().trim().max(3_000_000).nullable().optional();
+
 export const characterCreateSchema = z.object({
   name: z.string().trim().min(1),
-  avatar: z.string().trim().nullable().optional(),
+  avatar: characterAvatarSchema,
   description: z.string().default(""),
   tags: characterTagsSchema,
   prefix: z.string().default(""),
@@ -111,7 +113,7 @@ export const characterCreateSchema = z.object({
 
 const characterUpdateFieldsSchema = z.object({
   name: z.string().trim().min(1).optional(),
-  avatar: z.string().trim().nullable().optional(),
+  avatar: characterAvatarSchema,
   description: z.string().optional(),
   tags: characterTagsSchema.optional(),
   prefix: z.string().optional(),
@@ -120,7 +122,8 @@ const characterUpdateFieldsSchema = z.object({
   htmlCss: z.string().optional(),
   openingHtml: z.string().optional(),
   loreEntries: loreEntriesInputSchema.optional(),
-  quickReplies: quickRepliesInputSchema.optional()
+  quickReplies: quickRepliesInputSchema.optional(),
+  isFavorite: z.boolean().optional()
 });
 
 export const characterUpdateSchema = characterUpdateFieldsSchema.refine(
@@ -153,7 +156,7 @@ const publicCharacterCardSchema = z.object({
   cardId: idSchema,
   exportedAt: z.string().datetime().optional(),
   character: characterCreateSchema.extend({
-    avatar: z.string().trim().nullable().optional()
+    avatar: characterAvatarSchema
   })
 });
 
@@ -183,7 +186,7 @@ const privateCharacterCardSchema = z.object({
   exportedAt: z.string().datetime().optional(),
   character: z.object({
     name: z.string().trim().min(1),
-    avatar: z.string().trim().nullable().optional(),
+    avatar: characterAvatarSchema,
     description: z.string().optional(),
     tags: characterTagsSchema.optional(),
     openingHtml: z.string().optional(),
@@ -222,8 +225,31 @@ export const characterBatchDeleteSchema = z.object({
   ids: z.array(idSchema).min(1).max(100)
 });
 
+export const characterBatchTagsSchema = z.object({
+  ids: z
+    .array(idSchema)
+    .min(1)
+    .max(100)
+    .transform((ids) => Array.from(new Set(ids))),
+  operation: z.enum(["add", "remove"]),
+  tags: z
+    .array(z.string().trim().min(1).max(40))
+    .min(1)
+    .max(24)
+    .transform((tags) =>
+      tags.filter(
+        (tag, index) =>
+          tags.findIndex((candidate) => candidate.toLowerCase() === tag.toLowerCase()) === index
+      )
+    )
+});
+
 export const characterBatchFetchSchema = z.object({
   ids: z.array(idSchema).min(1).max(50)
+});
+
+export const characterDuplicateSchema = z.object({
+  name: z.string().trim().min(1).max(120)
 });
 
 export const characterPageQuerySchema = z
@@ -234,12 +260,35 @@ export const characterPageQuerySchema = z
     tag: z
       .preprocess((value) => (Array.isArray(value) ? value[0] : value), z.string().trim().catch(""))
       .default(""),
+    favoriteOnly: z
+      .preprocess(
+        (value) => (Array.isArray(value) ? value[0] : value),
+        z.enum(["true", "false"]).transform((value) => value === "true").catch(false)
+      )
+      .default(false),
+    sort: z
+      .preprocess(
+        (value) => (Array.isArray(value) ? value[0] : value),
+        z
+          .enum([
+            "favorites",
+            "recently_chatted",
+            "most_chats",
+            "recently_updated",
+            "name_asc",
+            "name_desc"
+          ])
+          .catch("favorites")
+      )
+      .default("favorites"),
     page: toPositiveInt(1),
     pageSize: toPositiveInt(40)
   })
   .transform((query) => ({
     q: query.q,
     tag: query.tag,
+    favoriteOnly: query.favoriteOnly,
+    sort: query.sort,
     page: query.page,
     pageSize: Math.min(query.pageSize, 100)
   }));
@@ -258,6 +307,8 @@ export const chatUpdateSchema = z
   .object({
     title: z.string().trim().min(1).optional(),
     characterId: idSchema.nullable().optional(),
+    isPinned: z.boolean().optional(),
+    isArchived: z.boolean().optional(),
     backgroundUrl: backgroundUrlSchema.optional(),
     memoryTurns: z.number().int().min(1).max(50).optional(),
     autoMemoryEnabled: z.boolean().optional(),
@@ -265,6 +316,22 @@ export const chatUpdateSchema = z
     userProfileSummary: z.string().optional()
   })
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");
+
+export const chatBatchArchiveSchema = z.object({
+  ids: z.array(idSchema).min(1).max(100).transform((ids) => [...new Set(ids)]),
+  isArchived: z.boolean()
+});
+
+const chatBatchIdsSchema = z.array(idSchema).min(1).max(100).transform((ids) => [...new Set(ids)]);
+
+export const chatBatchTrashSchema = z.object({
+  ids: chatBatchIdsSchema,
+  action: z.enum(["trash", "restore"])
+});
+
+export const chatBatchPermanentDeleteSchema = z.object({
+  ids: chatBatchIdsSchema
+});
 
 export const chatMemoryCreateSchema = z.object({
   title: z.string().trim().min(1).max(80),
@@ -286,11 +353,24 @@ export const chatMemoryUpdateSchema = z
   })
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");
 
+export const chatAgentDraftSchema = z.object({
+  mode: z.enum(["scene_summary", "next_steps", "reply_drafts", "memory_lore_candidates"]),
+  focus: z.string().trim().max(1000).optional()
+});
+
+export const chatBranchSchema = z.object({
+  messageId: idSchema,
+  title: z.string().trim().min(1).max(120).optional(),
+  kind: z.enum(["branch", "checkpoint"]).default("branch")
+});
+
 export const messageCreateSchema = z.object({
   chatId: idSchema,
   role: z.enum(["user", "assistant", "system"]),
   characterId: idSchema.nullable().optional(),
   content: z.string(),
+  contextIncluded: z.boolean().default(true),
+  isBookmarked: z.boolean().default(false),
   variants: z.array(z.string()).default([]),
   activeVariantIndex: z.number().int().min(0).default(0),
   tokenUsage: tokenUsageSchema.nullable().optional(),
@@ -300,10 +380,12 @@ export const messageCreateSchema = z.object({
 
 export const messageUpdateSchema = z
   .object({
-    role: z.enum(["user", "assistant", "system"]).optional(),
-    characterId: idSchema.nullable().optional(),
-    content: z.string().optional(),
-    variants: z.array(z.string()).optional(),
+  role: z.enum(["user", "assistant", "system"]).optional(),
+  characterId: idSchema.nullable().optional(),
+  content: z.string().optional(),
+  contextIncluded: z.boolean().optional(),
+  isBookmarked: z.boolean().optional(),
+  variants: z.array(z.string()).optional(),
   activeVariantIndex: z.number().int().min(0).optional(),
   tokenUsage: tokenUsageSchema.nullable().optional(),
   loreMatches: z.array(loreMatchSchema).nullable().optional(),
@@ -315,10 +397,20 @@ export const messageListQuerySchema = z.object({
   chatId: idSchema.optional()
 });
 
+export const chatMessageSearchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(200),
+  limit: z.coerce.number().int().min(1).max(50).default(20)
+});
+
 const providerModelSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
-  model: z.string().min(1)
+  model: z.string().min(1),
+  capabilities: z
+    .array(z.enum(["text_generation", "audio_transcription", "text_to_speech", "image_generation"]))
+    .max(4)
+    .transform((capabilities) => Array.from(new Set(capabilities)))
+    .optional()
 });
 
 const providerProfileSchema = z.object({
@@ -328,6 +420,34 @@ const providerProfileSchema = z.object({
   apiBaseUrl: z.string().url(),
   key: z.string().optional(),
   models: z.array(providerModelSchema).default([])
+});
+
+const moduleModelPreferenceSchema = z.object({
+  providerId: z.string().min(1),
+  modelId: z.string().min(1)
+});
+
+export const moduleModelPreferencesSchema = z
+  .object({
+    chat: moduleModelPreferenceSchema.optional(),
+    agent: moduleModelPreferenceSchema.optional(),
+    memory: moduleModelPreferenceSchema.optional(),
+    user_profile: moduleModelPreferenceSchema.optional(),
+    voice_transcription: moduleModelPreferenceSchema.optional(),
+    voice_speech: moduleModelPreferenceSchema.optional(),
+    image_generation: moduleModelPreferenceSchema.optional()
+  });
+
+const userPersonaPresetSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  name: z.string().trim().min(1).max(80),
+  config: z.object({
+    prefix: z.string().max(4000).default(""),
+    prompt: z.string().max(12000).default(""),
+    suffix: z.string().max(4000).default("")
+  }),
+  createdAt: z.string().datetime().optional(),
+  updatedAt: z.string().datetime().optional()
 });
 
 export const settingsUpdateSchema = z.object({
@@ -341,10 +461,16 @@ export const settingsUpdateSchema = z.object({
   language: z.enum(["zh-CN", "en"]).default("zh-CN"),
   autoSummarizeUser: z.boolean().optional(),
   showMessageAvatars: z.boolean().optional(),
+  showMessageTimestamps: z.boolean().optional(),
+  ttsVoice: z.string().trim().min(1).max(80).optional(),
+  ttsPlaybackRate: z.number().min(0.5).max(2).optional(),
+  ttsAutoPlay: z.boolean().optional(),
   userProfileSummary: z.string().max(4000).optional(),
   providers: z.array(providerProfileSchema).default([]),
   activeProviderId: z.string().default(""),
   activeModelId: z.string().default(""),
+  moduleModelPreferences: moduleModelPreferencesSchema.optional(),
+  userPersonaPresets: z.array(userPersonaPresetSchema).max(30).optional(),
   models: z
     .array(
       z.object({
@@ -378,6 +504,12 @@ export const regenerateRequestSchema = z.object({
   messageId: idSchema
 });
 
+export const continueRequestSchema = z.object({
+  type: z.literal("continue"),
+  requestId: z.string().min(1),
+  messageId: idSchema
+});
+
 export const resendRequestSchema = z.object({
   type: z.literal("resend"),
   requestId: z.string().min(1),
@@ -399,7 +531,7 @@ const backupCharacterSchema = z
     id: idSchema.optional(),
     cardId: idSchema,
     name: z.string().trim().min(1),
-    avatar: z.string().trim().nullable().optional(),
+    avatar: characterAvatarSchema,
     description: z.string(),
     tags: characterTagsSchema,
     prefix: z.string(),
@@ -409,6 +541,7 @@ const backupCharacterSchema = z
     openingHtml: z.string(),
     loreEntries: backupLoreEntriesSchema,
     quickReplies: quickRepliesSchema,
+    isFavorite: z.boolean().default(false),
     createdAt: backupDateSchema,
     updatedAt: backupDateSchema
   })
@@ -426,6 +559,7 @@ const backupCharacterSchema = z
     openingHtml: character.openingHtml,
     loreEntries: character.loreEntries,
     quickReplies: character.quickReplies,
+    isFavorite: character.isFavorite,
     createdAt: character.createdAt,
     updatedAt: character.updatedAt
   }));
@@ -433,6 +567,12 @@ const backupCharacterSchema = z
 const backupChatSchema = chatCreateSchema.extend({
   id: idSchema.optional(),
   characterId: idSchema.nullable(),
+  parentChatId: idSchema.nullable().optional(),
+  branchSourceMessageId: idSchema.nullable().optional(),
+  isCheckpoint: z.boolean().default(false),
+  isPinned: z.boolean().default(false),
+  isArchived: z.boolean().default(false),
+  deletedAt: z.string().datetime().nullable().default(null),
   createdAt: backupDateSchema,
   updatedAt: backupDateSchema
 });
@@ -460,6 +600,35 @@ export const backupImportSchema = z.object({
   messages: z.array(backupMessageSchema).default([]),
   memories: z.array(backupMemorySchema).default([]),
   mode: z.enum(["merge", "replace"]).default("merge")
+});
+
+export const chatArchiveImportSchema = z.object({
+  archive: z.object({
+    archiveVersion: z.literal(1),
+    exportedAt: z.string().datetime(),
+    chat: backupChatSchema,
+    character: backupCharacterSchema.nullable(),
+    messages: z.array(backupMessageSchema).max(10_000),
+    memories: z.array(backupMemorySchema).max(500)
+  }),
+  title: z.string().trim().min(1).max(120).optional()
+});
+
+export const voiceTranscriptionSchema = z.object({
+  audioBase64: z.string().min(1).max(16_000_000),
+  mimeType: z.string().trim().min(1).max(100),
+  filename: z.string().trim().max(120).optional()
+});
+
+export const voiceSpeechSchema = z.object({
+  text: z.string().trim().min(1).max(4000),
+  voice: z.string().trim().min(1).max(80).default("alloy"),
+  format: z.enum(["mp3", "opus", "aac", "flac", "wav", "pcm"]).default("mp3")
+});
+
+export const imageGenerationSchema = z.object({
+  prompt: z.string().trim().min(1).max(4000),
+  size: z.enum(["1024x1024", "1024x1536", "1536x1024", "auto"]).default("1024x1024")
 });
 
 export const lanSyncRequestSchema = z.object({

@@ -18,20 +18,24 @@ interface AppState {
   activeSection: AppSection;
   language: AppLanguage;
   showMessageAvatars: boolean;
+  showMessageTimestamps: boolean;
   setActiveSection: (section: AppSection) => void;
   setLanguage: (language: AppLanguage) => void;
   setShowMessageAvatars: (showMessageAvatars: boolean) => void;
+  setShowMessageTimestamps: (showMessageTimestamps: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
   activeSection: "chat",
   language: getInitialLanguage(),
   showMessageAvatars: true,
+  showMessageTimestamps: false,
   setActiveSection: (activeSection) => set({ activeSection }),
   setLanguage: (language) => {
     window.localStorage.setItem("app-language", language);
     document.documentElement.lang = language;
     set({ language });
   },
-  setShowMessageAvatars: (showMessageAvatars) => set({ showMessageAvatars })
+  setShowMessageAvatars: (showMessageAvatars) => set({ showMessageAvatars }),
+  setShowMessageTimestamps: (showMessageTimestamps) => set({ showMessageTimestamps })
 }));

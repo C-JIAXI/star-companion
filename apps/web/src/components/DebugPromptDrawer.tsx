@@ -37,6 +37,7 @@ function CollapsibleSection({
             ? "text-xs font-medium text-slate-400"
             : "text-xs font-semibold uppercase tracking-wider text-slate-400"
         }`}
+        data-debug-section-toggle={id}
         type="button"
         onClick={() => onToggle(id)}
       >

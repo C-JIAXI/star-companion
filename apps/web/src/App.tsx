@@ -47,6 +47,29 @@ const sectionPaths: Record<AppSection, string> = {
   settings: "/settings"
 };
 
+const SELECTED_CHAT_STORAGE_KEY = "star-companion:selected-chat";
+
+const getStoredSelectedChatId = () => {
+  try {
+    const chatId = window.localStorage.getItem(SELECTED_CHAT_STORAGE_KEY)?.trim();
+    return chatId || null;
+  } catch {
+    return null;
+  }
+};
+
+const storeSelectedChatId = (chatId: string | null) => {
+  try {
+    if (chatId) {
+      window.localStorage.setItem(SELECTED_CHAT_STORAGE_KEY, chatId);
+    } else {
+      window.localStorage.removeItem(SELECTED_CHAT_STORAGE_KEY);
+    }
+  } catch {
+    // Selection persistence is best-effort when browser storage is unavailable.
+  }
+};
+
 const sectionFromLocation = () => {
   const hashSection = window.location.hash.replace(/^#\/?/, "");
   if (isSection(hashSection)) {
@@ -100,6 +123,7 @@ export function App() {
       .then((settings) => {
         setLanguage(settings.language);
         setShowMessageAvatars(settings.showMessageAvatars);
+        useAppStore.getState().setShowMessageTimestamps(settings.showMessageTimestamps);
       })
       .catch(() => {
         document.documentElement.lang = useAppStore.getState().language;
@@ -129,12 +153,13 @@ export function App() {
     setPendingNavigation(null);
   };
 
-  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(getStoredSelectedChatId);
   const [chatRefreshKey, setChatRefreshKey] = useState(0);
 
   const handleSelectChat = useCallback(
     (id: string | null) => {
       setSelectedChatId(id);
+      storeSelectedChatId(id);
       setShowMobileNav(false);
       if (id && activeSection !== "chat") {
         navigate("chat");
@@ -162,6 +187,7 @@ export function App() {
         characterId
       });
       setSelectedChatId(chat.id);
+      storeSelectedChatId(chat.id);
       setChatRefreshKey((current) => current + 1);
       navigate("chat");
     } catch {}
@@ -309,7 +335,11 @@ export function App() {
           </header>
           <div className="animate-fade-in flex-1 min-h-0 overflow-x-hidden overflow-y-auto p-2 sm:p-4 lg:p-6">
             {activeSection === "chat" ? (
-              <ChatPage selectedChatId={selectedChatId} onChatsChanged={triggerChatRefresh} />
+              <ChatPage
+                selectedChatId={selectedChatId}
+                onChatsChanged={triggerChatRefresh}
+                onSelectChat={handleSelectChat}
+              />
             ) : null}
             {activeSection === "docs" ? <DocsPage /> : null}
             {activeSection === "characters" ? (

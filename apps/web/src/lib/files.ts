@@ -55,8 +55,12 @@ export const downloadJson = (filename: string, data: unknown) => {
   );
 };
 
-export const downloadText = (filename: string, text: string) => {
-  saveBlob(filename, new Blob([text], { type: "text/plain;charset=utf-8" }));
+export const downloadText = (
+  filename: string,
+  text: string,
+  mimeType = "text/plain;charset=utf-8"
+) => {
+  saveBlob(filename, new Blob([text], { type: mimeType }));
 };
 
 export const saveJsonFile = async (filename: string, data: unknown) => {
@@ -68,7 +72,11 @@ export const saveJsonFile = async (filename: string, data: unknown) => {
   downloadJson(filename, data);
 };
 
-export const saveTextFile = async (filename: string, text: string) => {
+export const saveTextFile = async (
+  filename: string,
+  text: string,
+  mimeType = "text/plain;charset=utf-8"
+) => {
   if (isNativeAndroid()) {
     const response = await fetch(resolveApiUrl("/api/exports/text"), {
       method: "POST",
@@ -89,7 +97,7 @@ export const saveTextFile = async (filename: string, text: string) => {
     return;
   }
 
-  downloadText(filename, text);
+  downloadText(filename, text, mimeType);
 };
 
 export const readFileText = (file: File) =>

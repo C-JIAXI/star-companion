@@ -329,7 +329,30 @@ const parseGeminiText = (payload: unknown) => {
 };
 
 export const testModelConnection = async (settings: UserSettings): Promise<ConnectionTestResult> => {
-  await fetchAvailableModels(settings);
+  const content = (
+    await completeChatCompletion({
+      settings: {
+        ...settings,
+        temperature: 0,
+        maxTokens: Math.min(Math.max(settings.maxTokens, 1), 16)
+      },
+      messages: [
+        {
+          role: "system",
+          content:
+            "/no_think\nYou are testing whether the configured model can generate a chat completion. Reply with exactly OK."
+        },
+        {
+          role: "user",
+          content: "Connection test"
+        }
+      ]
+    })
+  ).trim();
+
+  if (!content) {
+    throw new Error("Model connection test returned an empty response");
+  }
 
   return {
     reachable: true,

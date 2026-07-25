@@ -5,15 +5,41 @@ interface ProviderModel {
   id: string;
   label: string;
   model: string;
+  capabilities?: AiModelCapability[];
 }
+
+type AiModelCapability = "text_generation" | "audio_transcription" | "text_to_speech" | "image_generation";
 
 interface ProviderProfile {
   id: string;
   label: string;
   provider: string;
   apiBaseUrl: string;
-  key?: string;
+  hasKey?: boolean;
   models: ProviderModel[];
+}
+
+type AiModuleId =
+  | "chat"
+  | "agent"
+  | "memory"
+  | "user_profile"
+  | "voice_transcription"
+  | "voice_speech"
+  | "image_generation";
+
+type ModuleModelPreferences = Partial<Record<AiModuleId, { providerId: string; modelId: string }>>;
+
+interface UserPersonaPreset {
+  id: string;
+  name: string;
+  config: {
+    prefix: string;
+    prompt: string;
+    suffix: string;
+  };
+  createdAt: string;
+  updatedAt: string;
 }
 
 const toIso = (date: Date) => date.toISOString();
@@ -54,7 +80,16 @@ const toProviderModels = (value: unknown): ProviderModel[] => {
     .map((item) => ({
       id: String(item.id ?? ""),
       label: String(item.label ?? ""),
-      model: String(item.model ?? "")
+      model: String(item.model ?? ""),
+      capabilities: Array.isArray(item.capabilities)
+        ? item.capabilities.filter(
+            (capability): capability is AiModelCapability =>
+              capability === "text_generation" ||
+              capability === "audio_transcription" ||
+              capability === "text_to_speech" ||
+              capability === "image_generation"
+          )
+        : undefined
     }));
 };
 
@@ -73,9 +108,84 @@ const toProviderProfiles = (value: Prisma.JsonValue): ProviderProfile[] => {
       label: String(item.label ?? ""),
       provider: String(item.provider ?? ""),
       apiBaseUrl: String(item.apiBaseUrl ?? ""),
-      key: typeof item.key === "string" ? item.key : undefined,
+      hasKey: typeof item.key === "string" && Boolean(item.key.trim()),
       models: toProviderModels(item.models)
     }));
+};
+
+const moduleIds: AiModuleId[] = [
+  "chat",
+  "agent",
+  "memory",
+  "user_profile",
+  "voice_transcription",
+  "voice_speech",
+  "image_generation"
+];
+
+const toModuleModelPreferences = (value: Prisma.JsonValue): ModuleModelPreferences => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const raw = value as Record<string, unknown>;
+  const preferences: ModuleModelPreferences = {};
+
+  for (const moduleId of moduleIds) {
+    const entry = raw[moduleId];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+
+    const typed = entry as Record<string, unknown>;
+    if (typeof typed.providerId === "string" && typeof typed.modelId === "string") {
+      preferences[moduleId] = {
+        providerId: typed.providerId,
+        modelId: typed.modelId
+      };
+    }
+  }
+
+  return preferences;
+};
+
+const toUserPersonaPresets = (value: Prisma.JsonValue): UserPersonaPreset[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry): UserPersonaPreset | null => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return null;
+      }
+
+      const raw = entry as Record<string, unknown>;
+      const config = raw.config;
+      if (
+        typeof raw.id !== "string" ||
+        typeof raw.name !== "string" ||
+        !config ||
+        typeof config !== "object" ||
+        Array.isArray(config)
+      ) {
+        return null;
+      }
+
+      const typedConfig = config as Record<string, unknown>;
+      return {
+        id: raw.id,
+        name: raw.name,
+        config: {
+          prefix: typeof typedConfig.prefix === "string" ? typedConfig.prefix : "",
+          prompt: typeof typedConfig.prompt === "string" ? typedConfig.prompt : "",
+          suffix: typeof typedConfig.suffix === "string" ? typedConfig.suffix : ""
+        },
+        createdAt: typeof raw.createdAt === "string" ? raw.createdAt : toIso(new Date(0)),
+        updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : toIso(new Date(0))
+      };
+    })
+    .filter((entry): entry is UserPersonaPreset => Boolean(entry));
 };
 
 const toTokenUsage = (value: Prisma.JsonValue | null) => {
@@ -217,9 +327,15 @@ export const serializeSettings = (settings: UserSettings) => ({
   providers: toProviderProfiles(settings.providers),
   activeProviderId: settings.activeProviderId ?? "",
   activeModelId: settings.activeModelId ?? "",
+  moduleModelPreferences: toModuleModelPreferences(settings.moduleModelPreferences),
+  userPersonaPresets: toUserPersonaPresets(settings.userPersonaPresets),
   userProfileSummary: settings.userProfileSummary,
   autoSummarizeUser: settings.autoSummarizeUser,
   showMessageAvatars: settings.showMessageAvatars,
+  showMessageTimestamps: settings.showMessageTimestamps,
+  ttsVoice: settings.ttsVoice,
+  ttsPlaybackRate: settings.ttsPlaybackRate,
+  ttsAutoPlay: settings.ttsAutoPlay,
   userProfileUpdatedAt: settings.userProfileUpdatedAt?.toISOString() ?? null,
   createdAt: toIso(settings.createdAt),
   updatedAt: toIso(settings.updatedAt)
@@ -259,6 +375,7 @@ export const serializeCharacter = (character: Character, password?: string) => {
     openingHtml: resolved.openingHtml,
     loreEntries: resolved.loreEntries,
     quickReplies,
+    isFavorite: character.isFavorite,
     visibility: resolved.visibility,
     canViewPrompt: resolved.canViewPrompt,
     createdAt: toIso(character.createdAt),
@@ -270,6 +387,12 @@ export const serializeChat = (chat: Chat, messageCount?: number) => ({
   id: chat.id,
   title: chat.title,
   characterId: chat.characterId,
+  parentChatId: chat.parentChatId,
+  branchSourceMessageId: chat.branchSourceMessageId,
+  isCheckpoint: chat.isCheckpoint,
+  isPinned: chat.isPinned,
+  isArchived: chat.isArchived,
+  deletedAt: chat.deletedAt?.toISOString() ?? null,
   backgroundUrl: chat.backgroundUrl,
   messageCount: messageCount ?? 0,
   memoryTurns: chat.memoryTurns,
@@ -302,6 +425,8 @@ export const serializeMessage = (message: Message) => ({
   role: message.role === "assistant" || message.role === "system" ? message.role : "user",
   characterId: message.characterId,
   content: message.content,
+  contextIncluded: message.contextIncluded,
+  isBookmarked: message.isBookmarked,
   variants: toStringArray(message.variants),
   activeVariantIndex: message.activeVariantIndex,
   tokenUsage: toTokenUsage(message.tokenUsage),
@@ -325,6 +450,7 @@ export const serializeCharacterForBackup = (character: Character) => ({
   openingHtml: character.openingHtml ?? "",
   loreEntries: character.loreEntries,
   quickReplies: character.quickReplies,
+  isFavorite: character.isFavorite,
   createdAt: toIso(character.createdAt),
   updatedAt: toIso(character.updatedAt)
 });
