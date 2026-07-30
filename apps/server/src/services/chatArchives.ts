@@ -64,6 +64,7 @@ export const importChatArchive = async ({ archive, title }: ChatArchiveImportInp
         title: title ?? archive.chat.title,
         characterId,
         isCheckpoint: archive.chat.isCheckpoint,
+        folder: archive.chat.folder,
         backgroundUrl: archive.chat.backgroundUrl,
         memoryTurns: archive.chat.memoryTurns,
         autoMemoryEnabled: archive.chat.autoMemoryEnabled,

@@ -12,6 +12,8 @@ import type {
   ChatAgentMode,
   ChatBatchArchiveRequestDTO,
   ChatBatchArchiveResultDTO,
+  ChatBatchFolderRequestDTO,
+  ChatBatchFolderResultDTO,
   ChatBatchPermanentDeleteRequestDTO,
   ChatBatchPermanentDeleteResultDTO,
   ChatBatchTrashRequestDTO,
@@ -95,6 +97,7 @@ export type ChatInput = {
   characterId: string;
   isPinned?: boolean;
   isArchived?: boolean;
+  folder?: string;
   backgroundUrl?: string;
   memoryTurns?: number;
   autoMemoryEnabled?: boolean;
@@ -151,6 +154,8 @@ export type {
   ChatAgentMode,
   ChatBatchArchiveRequestDTO,
   ChatBatchArchiveResultDTO,
+  ChatBatchFolderRequestDTO,
+  ChatBatchFolderResultDTO,
   ChatBatchPermanentDeleteRequestDTO,
   ChatBatchPermanentDeleteResultDTO,
   ChatBatchTrashRequestDTO,

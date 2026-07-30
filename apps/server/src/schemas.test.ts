@@ -5,6 +5,7 @@ import {
   backupImportSchema,
   chatAgentDraftSchema,
   chatBatchArchiveSchema,
+  chatBatchFolderSchema,
   chatBatchPermanentDeleteSchema,
   chatBatchTrashSchema,
   chatBranchSchema,
@@ -132,9 +133,14 @@ describe("chatUpdateSchema", () => {
   });
 
   it("accepts organization state as history-only chat updates", () => {
-    const parsed = parseBody(chatUpdateSchema, { isPinned: true, isArchived: true });
+    const parsed = parseBody(chatUpdateSchema, {
+      isPinned: true,
+      isArchived: true,
+      folder: "  Main story  "
+    });
 
-    assert.deepEqual(parsed, { isPinned: true, isArchived: true });
+    assert.deepEqual(parsed, { isPinned: true, isArchived: true, folder: "Main story" });
+    assert.throws(() => parseBody(chatUpdateSchema, { folder: "x".repeat(81) }));
   });
 });
 
@@ -157,6 +163,19 @@ describe("chatBatchArchiveSchema", () => {
         isArchived: false
       })
     );
+  });
+});
+
+describe("chatBatchFolderSchema", () => {
+  it("deduplicates selected chats and trims a folder name", () => {
+    assert.deepEqual(
+      parseBody(chatBatchFolderSchema, {
+        ids: ["chat-a", "chat-a", "chat-b"],
+        folder: "  Main story  "
+      }),
+      { ids: ["chat-a", "chat-b"], folder: "Main story" }
+    );
+    assert.throws(() => parseBody(chatBatchFolderSchema, { ids: [], folder: "Main story" }));
   });
 });
 

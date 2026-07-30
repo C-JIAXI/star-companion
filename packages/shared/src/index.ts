@@ -418,6 +418,7 @@ export interface ChatDTO {
   isCheckpoint: boolean;
   isPinned: boolean;
   isArchived: boolean;
+  folder: string;
   deletedAt: string | null;
   backgroundUrl: string;
   messageCount: number;
@@ -438,6 +439,15 @@ export interface ChatBatchArchiveRequestDTO {
 }
 
 export interface ChatBatchArchiveResultDTO {
+  updated: number;
+}
+
+export interface ChatBatchFolderRequestDTO {
+  ids: string[];
+  folder: string;
+}
+
+export interface ChatBatchFolderResultDTO {
   updated: number;
 }
 

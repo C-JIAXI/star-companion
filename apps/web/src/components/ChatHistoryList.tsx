@@ -3,6 +3,7 @@ import {
   ArchiveRestore,
   Download,
   FileText,
+  Folder,
   GitBranch,
   History,
   MessageSquarePlus,
@@ -160,6 +161,7 @@ export function ChatHistoryList({
   const [searchMode, setSearchMode] = useState<HistorySearchMode>("chats");
   const [openedFromGlobalSearch, setOpenedFromGlobalSearch] = useState(false);
   const [chatScope, setChatScope] = useState<ChatHistoryScope>("active");
+  const [folderFilter, setFolderFilter] = useState("all");
   const [messageSearchResult, setMessageSearchResult] = useState<GlobalChatMessageSearchDTO | null>(null);
   const [messageSearchLoading, setMessageSearchLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -172,6 +174,9 @@ export function ChatHistoryList({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [actionMenuChatId, setActionMenuChatId] = useState<string | null>(null);
+  const [folderEditingChat, setFolderEditingChat] = useState<ChatDTO | null>(null);
+  const [folderEditingIds, setFolderEditingIds] = useState<string[] | null>(null);
+  const [folderDraft, setFolderDraft] = useState("");
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
   const historyTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -234,11 +239,17 @@ export function ChatHistoryList({
       }
       return !chat.deletedAt && chat.isArchived === (chatScope === "archived");
     });
+    const folderFilteredChats =
+      folderFilter === "all"
+        ? scopedChats
+        : folderFilter === "unfiled"
+          ? scopedChats.filter((chat) => !chat.folder)
+          : scopedChats.filter((chat) => chat.folder === folderFilter);
     if (!searchQuery.trim()) {
-      return scopedChats;
+      return folderFilteredChats;
     }
     const q = searchQuery.trim().toLowerCase();
-    return scopedChats.filter(
+    return folderFilteredChats.filter(
       (chat) =>
         chat.title.toLowerCase().includes(q) ||
         characterCache
@@ -246,7 +257,21 @@ export function ChatHistoryList({
           ?.name.toLowerCase()
           .includes(q)
     );
-  }, [chats, searchQuery, characterCache, chatScope]);
+  }, [chats, searchQuery, characterCache, chatScope, folderFilter]);
+
+  const folderOptions = useMemo(() => {
+    const folders = new Set(
+      chats
+        .filter((chat) =>
+          chatScope === "trash"
+            ? Boolean(chat.deletedAt)
+            : !chat.deletedAt && chat.isArchived === (chatScope === "archived")
+        )
+        .map((chat) => chat.folder)
+        .filter(Boolean)
+    );
+    return [...folders].sort((a, b) => a.localeCompare(b, language === "zh-CN" ? "zh-CN" : "en"));
+  }, [chats, chatScope, language]);
 
   const scopeCounts = useMemo(
     () => ({
@@ -346,6 +371,7 @@ export function ChatHistoryList({
     setSearchQuery("");
     setSearchMode(mode);
     setChatScope("active");
+    setFolderFilter("all");
     setMessageSearchResult(null);
     setManageMode(false);
     setSelectedIds(new Set());
@@ -602,6 +628,64 @@ export function ChatHistoryList({
     }
   };
 
+  const startFolderEdit = (chat: ChatDTO) => {
+    setFolderEditingChat(chat);
+    setFolderDraft(chat.folder);
+  };
+
+  const saveFolder = async () => {
+    if (!folderEditingChat) {
+      return;
+    }
+
+    const folder = folderDraft.trim();
+    setLoading(true);
+    setError(null);
+    try {
+      const updated = await api.chats.update(folderEditingChat.id, { folder });
+      setChats((current) =>
+        current.map((chat) =>
+          chat.id === updated.id
+            ? { ...chat, ...updated, lastMessagePreview: chat.lastMessagePreview }
+            : chat
+        )
+      );
+      setFolderEditingChat(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdate"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const startBatchFolderEdit = () => {
+    if (selectedIds.size === 0) {
+      return;
+    }
+    setFolderDraft("");
+    setFolderEditingIds([...selectedIds]);
+  };
+
+  const saveBatchFolder = async () => {
+    if (!folderEditingIds?.length) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      await api.chats.batchFolder({ ids: folderEditingIds, folder: folderDraft.trim() });
+      setFolderEditingIds(null);
+      setSelectedIds(new Set());
+      setManageMode(false);
+      await loadChats();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdate"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const exportChatTranscript = async (chat: ChatDTO) => {
     try {
       const data = await api.chats.get(chat.id);
@@ -788,11 +872,12 @@ export function ChatHistoryList({
                   ))}
                 </div>
                 {searchMode === "chats" ? (
-                  <div
-                    aria-label={t("chat.historyScope")}
-                    className="grid grid-cols-3 rounded-md border border-white/[0.08] bg-ink-950/45 p-1"
-                    role="group"
-                  >
+                  <>
+                    <div
+                      aria-label={t("chat.historyScope")}
+                      className="grid grid-cols-3 rounded-md border border-white/[0.08] bg-ink-950/45 p-1"
+                      role="group"
+                    >
                     {(["active", "archived", "trash"] as const).map((scope) => (
                       <button
                         aria-pressed={chatScope === scope}
@@ -806,6 +891,7 @@ export function ChatHistoryList({
                         type="button"
                         onClick={() => {
                           setChatScope(scope);
+                          setFolderFilter("all");
                           setSearchQuery("");
                           setManageMode(false);
                           setSelectedIds(new Set());
@@ -819,7 +905,32 @@ export function ChatHistoryList({
                             : t("chat.historyTrash")} ({scopeCounts[scope]})
                       </button>
                     ))}
-                  </div>
+                    </div>
+                    <label className="flex min-h-9 items-center gap-2 rounded-md border border-white/[0.08] bg-ink-950/35 px-2.5 text-xs text-slate-400">
+                    <Folder size={13} className="shrink-0 text-slate-500" />
+                    <span className="shrink-0">{language === "zh-CN" ? "文件夹" : "Folder"}</span>
+                    <select
+                      aria-label={language === "zh-CN" ? "筛选聊天文件夹" : "Filter chat folders"}
+                      className="min-w-0 flex-1 bg-transparent text-xs text-slate-200 outline-none"
+                      data-testid="chat-history-folder-filter"
+                      value={folderFilter}
+                      onChange={(event) => {
+                        setFolderFilter(event.target.value);
+                        setManageMode(false);
+                        setSelectedIds(new Set());
+                        setActionMenuChatId(null);
+                      }}
+                    >
+                      <option value="all">{language === "zh-CN" ? "全部文件夹" : "All folders"}</option>
+                      <option value="unfiled">{language === "zh-CN" ? "未分类" : "Unfiled"}</option>
+                      {folderOptions.map((folder) => (
+                        <option key={folder} value={folder}>
+                          {folder}
+                        </option>
+                      ))}
+                    </select>
+                    </label>
+                  </>
                 ) : null}
                 <div className="relative">
                   <Search
@@ -881,6 +992,20 @@ export function ChatHistoryList({
                               ? "全选"
                               : "All"}
                         </button>
+                        {selectedIds.size > 0 ? (
+                          <button
+                            aria-label={language === "zh-CN" ? "移动选中聊天到文件夹" : "Move selected chats to folder"}
+                            className="flex items-center gap-1 rounded-md bg-sky-500/15 px-1.5 py-1 text-xs font-medium text-sky-200 transition-colors hover:bg-sky-500/25"
+                            data-testid="chat-history-batch-folder"
+                            disabled={loading}
+                            title={language === "zh-CN" ? "移动到文件夹" : "Move to folder"}
+                            type="button"
+                            onClick={startBatchFolderEdit}
+                          >
+                            <Folder size={11} />
+                            {selectedIds.size}
+                          </button>
+                        ) : null}
                         {selectedIds.size > 0 ? (
                           <button
                             aria-label={
@@ -1174,6 +1299,12 @@ export function ChatHistoryList({
                                                 count: chat.messageCount
                                               })}
                                             </span>
+                                            {chat.folder ? (
+                                              <span className="inline-flex min-w-0 shrink items-center gap-1 truncate text-slate-400">
+                                                <Folder size={10} />
+                                                <span className="truncate">{chat.folder}</span>
+                                              </span>
+                                            ) : null}
                                           </div>
                                         </>
                                       )}
@@ -1248,6 +1379,26 @@ export function ChatHistoryList({
                                                 {chat.isArchived
                                                   ? t("chat.unarchive")
                                                   : t("chat.archive")}
+                                              </span>
+                                            </button>
+                                            <button
+                                              className="flex min-h-8 items-center gap-2 rounded-md px-2 text-xs text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-100"
+                                              data-chat-action="folder"
+                                              type="button"
+                                              onClick={() => {
+                                                setActionMenuChatId(null);
+                                                startFolderEdit(chat);
+                                              }}
+                                            >
+                                              <Folder size={13} />
+                                              <span className="truncate">
+                                                {chat.folder
+                                                  ? language === "zh-CN"
+                                                    ? "整理文件夹"
+                                                    : "Organize folder"
+                                                  : language === "zh-CN"
+                                                    ? "加入文件夹"
+                                                    : "Add to folder"}
                                               </span>
                                             </button>
                                             <button
@@ -1374,6 +1525,104 @@ export function ChatHistoryList({
               onCancel={() => setPendingDeleteChat(null)}
               onConfirm={() => void deleteChat()}
             />,
+            document.body
+          )
+        : null}
+
+      {folderEditingChat
+        ? createPortal(
+            <Modal
+              title={language === "zh-CN" ? "整理聊天文件夹" : "Organize Chat Folder"}
+              onClose={() => setFolderEditingChat(null)}
+            >
+              <div className="space-y-4">
+                <p className="text-sm leading-6 text-slate-400">
+                  {language === "zh-CN"
+                    ? "为这条对话输入文件夹名称；留空即可移回未分类。"
+                    : "Enter a folder name for this chat. Leave it empty to move the chat back to Unfiled."}
+                </p>
+                <TextInput
+                  aria-label={language === "zh-CN" ? "聊天文件夹名称" : "Chat folder name"}
+                  autoFocus
+                  maxLength={80}
+                  placeholder={language === "zh-CN" ? "例如：主线剧情" : "For example: Main story"}
+                  value={folderDraft}
+                  onChange={(event) => setFolderDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void saveFolder();
+                    }
+                  }}
+                />
+                <div className="flex justify-end gap-2">
+                  <button
+                    className="min-h-9 rounded-md px-3 text-sm font-medium text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-100"
+                    type="button"
+                    onClick={() => setFolderEditingChat(null)}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                  <button
+                    className="min-h-9 rounded-md bg-ember-500 px-3 text-sm font-semibold text-ink-950 transition-colors hover:bg-ember-400 disabled:opacity-50"
+                    disabled={loading}
+                    type="button"
+                    onClick={() => void saveFolder()}
+                  >
+                    {t("common.save")}
+                  </button>
+                </div>
+              </div>
+            </Modal>,
+            document.body
+          )
+        : null}
+
+      {folderEditingIds
+        ? createPortal(
+            <Modal
+              title={language === "zh-CN" ? "批量整理聊天文件夹" : "Organize Selected Chats"}
+              onClose={() => setFolderEditingIds(null)}
+            >
+              <div className="space-y-4">
+                <p className="text-sm leading-6 text-slate-400">
+                  {language === "zh-CN"
+                    ? `将选中的 ${folderEditingIds.length} 条对话移动到同一文件夹；留空即可移回未分类。`
+                    : `Move ${folderEditingIds.length} selected chat(s) to one folder. Leave it empty to move them back to Unfiled.`}
+                </p>
+                <TextInput
+                  aria-label={language === "zh-CN" ? "目标聊天文件夹名称" : "Destination chat folder name"}
+                  autoFocus
+                  maxLength={80}
+                  placeholder={language === "zh-CN" ? "例如：主线剧情" : "For example: Main story"}
+                  value={folderDraft}
+                  onChange={(event) => setFolderDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void saveBatchFolder();
+                    }
+                  }}
+                />
+                <div className="flex justify-end gap-2">
+                  <button
+                    className="min-h-9 rounded-md px-3 text-sm font-medium text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-100"
+                    type="button"
+                    onClick={() => setFolderEditingIds(null)}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                  <button
+                    className="min-h-9 rounded-md bg-ember-500 px-3 text-sm font-semibold text-ink-950 transition-colors hover:bg-ember-400 disabled:opacity-50"
+                    disabled={loading}
+                    type="button"
+                    onClick={() => void saveBatchFolder()}
+                  >
+                    {t("common.save")}
+                  </button>
+                </div>
+              </div>
+            </Modal>,
             document.body
           )
         : null}

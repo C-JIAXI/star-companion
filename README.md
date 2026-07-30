@@ -19,6 +19,7 @@ Current scope:
 - The sidebar and mobile drawer expose six pinned/recent active chats for one-step switching. Full History rows show the latest user/assistant message preview, message count, and recent activity time; global search opens directly from the mobile header or `Ctrl/Cmd+K` on desktop, can switch between chat titles and message content across every chat, then opens the matching conversation at the exact turn.
 - Pin frequently used chats so they stay above newer history entries; pin state is included in backups and LAN sync.
 - Archive completed chats to remove them from active history without deleting messages or memories, then restore them individually or in batches from History management mode.
+- Organize long-running story lines with lightweight chat folders. Filter any History scope by folder, create or clear a folder from a chat action menu, and keep folder metadata in backups, LAN sync, branches, and JSON chat archives.
 - Move unwanted chats to Trash without losing messages or long-term memories, restore them later, or permanently delete them through a separate confirmation. Trash state is retained in backups and LAN sync.
 - Queue messages while a reply is generating, then edit, delete, or send them immediately; queued items are combined and sent automatically after the current response and remain session-only.
 - Persistent message bookmarks with a chat-local list that jumps to saved turns across paginated conversations; bookmarks never affect model context.
@@ -33,6 +34,18 @@ Current scope:
 - Continue the latest assistant reply in place when a response is truncated or the scene needs to carry on; continuation keeps the current message and variant instead of creating a fake user turn.
 - Generate a concise AI title draft from included chat messages, then review and save it explicitly; title suggestions never overwrite chat history automatically.
 - Default `New Chat` conversations receive one automatic AI title after the first user/assistant exchange; manually named chats are never overwritten.
+
+## Local Development
+
+```bash
+npm install
+npm run db:generate
+npm run dev
+```
+
+`npm run dev` creates the default local SQLite database from the checked-in SQL migrations only when it does not already exist. It never overwrites an existing database. Open `http://localhost:5173` after the server is ready.
+
+For a manual first-time database initialization, run `npm run db:init`. This avoids relying on Prisma's SQLite migration engine in Windows development environments.
 
 # License
 

@@ -400,6 +400,7 @@ export const serializeChat = (chat: Chat, messageCount?: number) => ({
   isCheckpoint: chat.isCheckpoint,
   isPinned: chat.isPinned,
   isArchived: chat.isArchived,
+  folder: chat.folder,
   deletedAt: chat.deletedAt?.toISOString() ?? null,
   backgroundUrl: chat.backgroundUrl,
   messageCount: messageCount ?? 0,

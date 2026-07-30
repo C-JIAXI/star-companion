@@ -296,6 +296,7 @@ export const characterPageQuerySchema = z
 export const chatCreateSchema = z.object({
   title: z.string().trim().min(1),
   characterId: idSchema,
+  folder: z.string().trim().max(80).default(""),
   backgroundUrl: backgroundUrlSchema.default(""),
   memoryTurns: z.number().int().min(1).max(50).default(12),
   autoMemoryEnabled: z.boolean().default(true),
@@ -309,6 +310,7 @@ export const chatUpdateSchema = z
     characterId: idSchema.nullable().optional(),
     isPinned: z.boolean().optional(),
     isArchived: z.boolean().optional(),
+    folder: z.string().trim().max(80).optional(),
     backgroundUrl: backgroundUrlSchema.optional(),
     memoryTurns: z.number().int().min(1).max(50).optional(),
     autoMemoryEnabled: z.boolean().optional(),
@@ -320,6 +322,11 @@ export const chatUpdateSchema = z
 export const chatBatchArchiveSchema = z.object({
   ids: z.array(idSchema).min(1).max(100).transform((ids) => [...new Set(ids)]),
   isArchived: z.boolean()
+});
+
+export const chatBatchFolderSchema = z.object({
+  ids: z.array(idSchema).min(1).max(100).transform((ids) => [...new Set(ids)]),
+  folder: z.string().trim().max(80)
 });
 
 const chatBatchIdsSchema = z.array(idSchema).min(1).max(100).transform((ids) => [...new Set(ids)]);
@@ -573,6 +580,7 @@ const backupChatSchema = chatCreateSchema.extend({
   isCheckpoint: z.boolean().default(false),
   isPinned: z.boolean().default(false),
   isArchived: z.boolean().default(false),
+  folder: z.string().trim().max(80).default(""),
   deletedAt: z.string().datetime().nullable().default(null),
   createdAt: backupDateSchema,
   updatedAt: backupDateSchema

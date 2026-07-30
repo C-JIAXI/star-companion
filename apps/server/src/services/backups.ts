@@ -117,6 +117,7 @@ export const importBackup = async (backup: BackupImportData) =>
         isCheckpoint: chat.isCheckpoint,
         isPinned: chat.isPinned,
         isArchived: chat.isArchived,
+        folder: chat.folder,
         deletedAt: chat.deletedAt ? new Date(chat.deletedAt) : null,
         backgroundUrl: chat.backgroundUrl,
         memoryTurns: chat.memoryTurns,

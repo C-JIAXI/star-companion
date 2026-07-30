@@ -195,7 +195,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "聊天归档",
-              body: "桌面侧栏和移动抽屉会直接显示最多六段置顶或最近活跃聊天，可一步切换。移动端顶部搜索入口与完整历史可在聊天标题和全部消息之间切换，并直接跳到命中消息；也可归档已完成的聊天而不删除消息或长期记忆，管理模式支持批量归档与恢复。"
+              body: "桌面侧栏和移动抽屉会直接显示最多六段置顶或最近活跃聊天，可一步切换。移动端顶部搜索入口与完整历史可在聊天标题和全部消息之间切换，并直接跳到命中消息；也可按轻量文件夹筛选和整理剧情线，或归档已完成的聊天而不删除消息或长期记忆，管理模式支持批量归档与恢复。"
             },
             {
               title: "聊天回收站",
@@ -470,6 +470,10 @@ const getDocsCopy = (language: string): DocsCopy => {
           {
             title: "Archive completed chats",
             body: "Archive hides a completed chat from active History without deleting its messages or memories. History management mode can archive or restore several chats together; global message search still includes archived chats."
+          },
+          {
+            title: "Organize story folders",
+            body: "Use the folder action in any History row to group long-running story lines, or leave it empty to return a chat to Unfiled. The folder filter works in active, archived, and Trash scopes, and folder names stay with branches, full backups, LAN sync, and JSON chat archives."
           },
           {
             title: "Story checkpoints",

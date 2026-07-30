@@ -876,6 +876,7 @@ const main = async () => {
     const chatPayload = {
       title: `Smoke Chat ${runId}`,
       characterId: createdCharacter.id,
+      folder: "Smoke folder",
       backgroundUrl: "https://example.com/background.png",
       memoryTurns: 10,
       userPersona: "Be direct.",
@@ -887,7 +888,15 @@ const main = async () => {
       body: chatPayload
     });
     assert.equal(createdChat.characterId, createdCharacter.id);
+    assert.equal(createdChat.folder, "Smoke folder");
     assert.equal(createdChat.autoMemoryEnabled, true);
+
+    const batchFolderResult = await requestData(baseUrl, "/api/chats/batch-folder", {
+      method: "POST",
+      body: { ids: [createdChat.id], folder: "Smoke folder updated" }
+    });
+    assert.equal(batchFolderResult.updated, 1);
+    assert.equal((await requestData(baseUrl, `/api/chats/${createdChat.id}`)).folder, "Smoke folder updated");
 
     const listedChats = await requestData(baseUrl, "/api/chats");
     const listedChat = listedChats.find((item) => item.id === createdChat.id);
@@ -1213,6 +1222,7 @@ const main = async () => {
       }
     });
     assert.equal(branchedChat.title, "Smoke Branch");
+    assert.equal(branchedChat.folder, "Smoke folder updated");
     assert.equal(branchedChat.parentChatId, createdChat.id);
     assert.equal(branchedChat.branchSourceMessageId, assistantMessage.id);
     assert.equal(branchedChat.messages.length, 2);

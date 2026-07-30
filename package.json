@@ -18,7 +18,7 @@
   "main": "apps/desktop/main.cjs",
   "scripts": {
     "postinstall": "node scripts/dev/install-subprojects.mjs",
-    "dev": "concurrently -n shared,server,web -c cyan,green,magenta \"npm run dev --prefix packages/shared\" \"npm run dev --prefix apps/server\" \"npm run dev --prefix apps/web\"",
+    "dev": "node scripts/dev/ensure-dev-db.mjs && concurrently -n shared,server,web -c cyan,green,magenta \"npm run dev --prefix packages/shared\" \"npm run dev --prefix apps/server\" \"npm run dev --prefix apps/web\"",
     "build": "npm run build --prefix packages/shared && npm run build --prefix apps/server && npm run build --prefix apps/web",
     "desktop:icon": "node scripts/desktop/generate-desktop-icon.mjs",
     "desktop:prepare": "npm run desktop:icon && node scripts/desktop/prepare-desktop-resources.mjs",
@@ -37,6 +37,7 @@
     "lint": "npm run lint --prefix packages/shared && npm run lint --prefix apps/server && npm run lint --prefix apps/web",
     "format": "prettier --write .",
     "db:generate": "npm run db:generate --prefix apps/server",
+    "db:init": "node scripts/dev/init-dev-db.mjs",
     "db:push": "npm run db:push --prefix apps/server",
     "db:migrate": "npm run db:migrate --prefix apps/server",
     "db:migrate:deploy": "npm run db:migrate:deploy --prefix apps/server"

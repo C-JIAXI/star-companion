@@ -9,7 +9,9 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..");
 const prismaDir = path.join(repoRoot, "apps", "server", "prisma");
 const migrationsDir = path.join(prismaDir, "migrations");
-const dbPath = path.join(prismaDir, "dev.db");
+const dbPath = process.env.STAR_COMPANION_DEV_DATABASE_PATH
+  ? path.resolve(process.env.STAR_COMPANION_DEV_DATABASE_PATH)
+  : path.join(prismaDir, "dev.db");
 
 const log = (message) => console.log(`[init-dev-db] ${message}`);
 

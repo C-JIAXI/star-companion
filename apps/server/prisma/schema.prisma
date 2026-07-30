@@ -81,6 +81,8 @@ model Chat {
   isPinned              Boolean   @default(false)
   /// Hidden from active history without deleting messages or memories.
   isArchived            Boolean   @default(false)
+  /// User-owned history folder. It never affects prompt context or memory retrieval.
+  folder                String    @default("")
   /// Soft-deletion marker. Trashed chats retain their messages and memories until permanently deleted.
   deletedAt             DateTime?
   backgroundUrl         String    @default("")
@@ -100,7 +102,7 @@ model Chat {
 
   @@index([characterId])
   @@index([parentChatId])
-  @@index([deletedAt, isArchived, isPinned, updatedAt])
+  @@index([deletedAt, isArchived, folder, isPinned, updatedAt])
 }
 
 model ChatMemory {

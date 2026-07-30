@@ -7,6 +7,8 @@ import type {
   ChatAgentDraftRequestDTO,
   ChatBatchArchiveRequestDTO,
   ChatBatchArchiveResultDTO,
+  ChatBatchFolderRequestDTO,
+  ChatBatchFolderResultDTO,
   ChatBatchPermanentDeleteRequestDTO,
   ChatBatchPermanentDeleteResultDTO,
   ChatBatchTrashRequestDTO,
@@ -211,6 +213,11 @@ export const api = {
       request<ChatDTO>(`/api/chats/${id}`, { method: "PUT", body: input }),
     batchArchive: (input: ChatBatchArchiveRequestDTO) =>
       request<ChatBatchArchiveResultDTO>("/api/chats/batch-archive", {
+        method: "POST",
+        body: input
+      }),
+    batchFolder: (input: ChatBatchFolderRequestDTO) =>
+      request<ChatBatchFolderResultDTO>("/api/chats/batch-folder", {
         method: "POST",
         body: input
       }),

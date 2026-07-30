@@ -2048,6 +2048,87 @@ test("history manage mode archives and restores multiple chats together", async 
   }
 });
 
+test("chat history filters and reorganizes chats by folder", async ({ page, request }, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const characterName = `Folder Character ${suffix}`;
+  const firstTitle = `Folder Chat One ${suffix}`;
+  const secondTitle = `Folder Chat Two ${suffix}`;
+  const mainFolder = `Main story ${suffix}`;
+  const sideFolder = `Side story ${suffix}`;
+  const archiveFolder = `Archive folder ${suffix}`;
+  let characterId: string | null = null;
+  const chatIds: string[] = [];
+
+  try {
+    const characterResponse = await request.post("/api/characters", {
+      data: { name: characterName, prefix: "", prompt: "", suffix: "" }
+    });
+    characterId = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data?.id ?? null;
+    expect(characterId).toBeTruthy();
+
+    for (const [title, folder] of [
+      [firstTitle, mainFolder],
+      [secondTitle, sideFolder]
+    ]) {
+      const chatResponse = await request.post("/api/chats", {
+        data: { title, characterId, folder }
+      });
+      const chatId = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data?.id;
+      expect(chatId).toBeTruthy();
+      chatIds.push(chatId!);
+    }
+
+    await page.goto("/");
+    if ((page.viewportSize()?.width ?? 0) < 1024) {
+      await page.getByRole("button", { name: /Toggle navigation/ }).click();
+    }
+    await page.locator('[data-testid="chat-history-trigger"]:visible').click();
+
+    const folderFilter = page.getByTestId("chat-history-folder-filter");
+    await folderFilter.selectOption(mainFolder);
+    await expect(page.locator("[data-chat-history-row]")).toHaveCount(1);
+    await expect(page.locator("[data-chat-history-row]")).toContainText(firstTitle);
+
+    const firstRow = page.locator("[data-chat-history-row]").filter({ hasText: firstTitle });
+    await clickHistoryRowAction(firstRow, "folder");
+    const folderDialog = page.getByRole("dialog", { name: /整理聊天文件夹|Organize Chat Folder/ });
+    await folderDialog.getByRole("textbox").fill(sideFolder);
+    await folderDialog.getByRole("button", { name: /保存|Save/ }).click();
+    await expect(folderDialog).toBeHidden();
+
+    await folderFilter.selectOption(sideFolder);
+    await expect(page.locator("[data-chat-history-row]")).toHaveCount(2);
+    await expect(
+      page.locator("[data-chat-history-row]").filter({ hasText: firstTitle })
+    ).toHaveCount(1);
+    await expect(
+      page.locator("[data-chat-history-row]").filter({ hasText: secondTitle })
+    ).toHaveCount(1);
+
+    await page.getByTestId("chat-history-manage").click();
+    await page.getByTestId("chat-history-select-all").click();
+    await page.getByTestId("chat-history-batch-folder").click();
+    const batchFolderDialog = page.getByRole("dialog", {
+      name: /批量整理聊天文件夹|Organize Selected Chats/
+    });
+    await batchFolderDialog.getByRole("textbox").fill(archiveFolder);
+    await batchFolderDialog.getByRole("button", { name: /保存|Save/ }).click();
+    await expect(batchFolderDialog).toBeHidden();
+    await folderFilter.selectOption(archiveFolder);
+    await expect(page.locator("[data-chat-history-row]")).toHaveCount(2);
+
+    const updated = (await (await request.get(`/api/chats/${chatIds[0]}`)).json()) as ApiDataResponse<{
+      folder: string;
+    }>;
+    expect(updated.data?.folder).toBe(archiveFolder);
+  } finally {
+    for (const chatId of chatIds) {
+      await permanentlyDeleteChatViaApi(request, chatId);
+    }
+    if (characterId) await request.delete(`/api/characters/${characterId}`);
+  }
+});
+
 test("unconfigured media tools open the matching module model setting", async ({
   page,
   request

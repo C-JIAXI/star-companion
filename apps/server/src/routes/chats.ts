@@ -6,6 +6,7 @@ import {
   chatAgentDraftSchema,
   chatArchiveImportSchema,
   chatBatchArchiveSchema,
+  chatBatchFolderSchema,
   chatBatchPermanentDeleteSchema,
   chatBatchTrashSchema,
   chatBranchSchema,
@@ -106,6 +107,26 @@ chatsRouter.post(
     const result = await prisma.chat.updateMany({
       where: { id: { in: body.ids }, deletedAt: null },
       data: { isArchived: body.isArchived }
+    });
+
+    response.json({ ok: true, data: { updated: result.count } });
+  })
+);
+
+chatsRouter.post(
+  "/batch-folder",
+  asyncHandler(async (request, response) => {
+    const body = parseBody(chatBatchFolderSchema, request.body);
+    const result = await prisma.$transaction(async (tx) => {
+      const found = await tx.chat.count({ where: { id: { in: body.ids } } });
+      if (found !== body.ids.length) {
+        throw new HttpError(404, "One or more chats were not found");
+      }
+
+      return tx.chat.updateMany({
+        where: { id: { in: body.ids } },
+        data: { folder: body.folder }
+      });
     });
 
     response.json({ ok: true, data: { updated: result.count } });
@@ -236,6 +257,7 @@ chatsRouter.post(
         parentChatId: chat.id,
         branchSourceMessageId: chat.messages[targetIndex]?.id ?? null,
         isCheckpoint,
+        folder: chat.folder,
         backgroundUrl: chat.backgroundUrl,
         memoryTurns: chat.memoryTurns,
         autoMemoryEnabled: chat.autoMemoryEnabled,
