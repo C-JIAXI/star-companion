@@ -283,6 +283,11 @@ export const api = {
       request<MessageDTO>("/api/messages", { method: "POST", body: input }),
     update: (id: string, input: Partial<MessageInput>) =>
       request<MessageDTO>(`/api/messages/${id}`, { method: "PUT", body: input }),
+    removeTimeline: (id: string) =>
+      request<{ chatId: string; deletedCount: number }>(
+        `/api/messages/${id}/timeline`,
+        { method: "DELETE" }
+      ),
     remove: (id: string) => request<void>(`/api/messages/${id}`, { method: "DELETE" })
   },
   media: {

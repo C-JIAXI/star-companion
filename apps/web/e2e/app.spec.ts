@@ -849,6 +849,156 @@ test("messages queued during generation can be managed and send after the reply"
   }
 });
 
+test("message deletion previews its exact timeline impact before changing data", async ({
+  page,
+  request
+}, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const characterName = `Delete Safety Character ${suffix}`;
+  const chatTitle = `Delete Safety Chat ${suffix}`;
+  const firstUser = `The first user turn stays ${suffix}`;
+  const firstAssistant = `The first assistant reply stays initially ${suffix}`;
+  const secondUser = `Delete from this user turn ${suffix}`;
+  const secondAssistant = `This following reply is also removed ${suffix}`;
+  let characterId: string | null = null;
+  let chatId: string | null = null;
+
+  try {
+    const characterResponse = await request.post("/api/characters", {
+      data: {
+        name: characterName,
+        avatar: null,
+        description: "",
+        tags: [],
+        prefix: "",
+        prompt: "",
+        suffix: "",
+        htmlCss: "",
+        openingHtml: "",
+        loreEntries: [],
+        quickReplies: []
+      }
+    });
+    characterId = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data?.id ?? null;
+    const chatResponse = await request.post("/api/chats", {
+      data: { title: chatTitle, characterId }
+    });
+    chatId = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data?.id ?? null;
+    expect(chatId).toBeTruthy();
+
+    for (const message of [
+      { role: "user", content: firstUser, characterId: null },
+      { role: "assistant", content: firstAssistant, characterId },
+      { role: "user", content: secondUser, characterId: null },
+      { role: "assistant", content: secondAssistant, characterId }
+    ]) {
+      const response = await request.post("/api/messages", {
+        data: { chatId, ...message }
+      });
+      expect(response.ok()).toBeTruthy();
+    }
+
+    await page.goto("/");
+    await openChatHistoryAndSelect(page, chatTitle);
+
+    const secondUserBubble = page
+      .locator('[data-chat-message="user"]')
+      .filter({ hasText: secondUser });
+    await secondUserBubble.locator('[data-chat-action="delete"]').click();
+
+    const deleteDialog = page.getByRole("dialog", {
+      name: /删除消息|Delete Message/
+    });
+    await expect(deleteDialog.getByTestId("delete-message-impact")).toContainText(
+      /紧随其后的 1 条消息，共 2 条|next message \(2 total\)/
+    );
+    await expect(deleteDialog.getByTestId("delete-message-preview")).toContainText(
+      secondUser
+    );
+    await expect(
+      deleteDialog.getByRole("button", {
+        name: /删除 2 条消息|Delete 2 messages/
+      })
+    ).toBeVisible();
+
+    await deleteDialog.getByRole("button", { name: /取消|Cancel/ }).click();
+    await expect(deleteDialog).toBeHidden();
+    const unchangedResponse = await request.get(`/api/chats/${chatId}`);
+    const unchanged = (await unchangedResponse.json()) as ApiDataResponse<{
+      messages: Array<{ content: string }>;
+    }>;
+    expect(unchanged.data?.messages.map((message) => message.content)).toEqual([
+      firstUser,
+      firstAssistant,
+      secondUser,
+      secondAssistant
+    ]);
+
+    let failedDeleteOnce = false;
+    await page.route("**/api/messages/*/timeline", async (route) => {
+      if (route.request().method() === "DELETE" && !failedDeleteOnce) {
+        failedDeleteOnce = true;
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: false, error: "Simulated delete failure" })
+        });
+        return;
+      }
+      await route.continue();
+    });
+    await secondUserBubble.locator('[data-chat-action="delete"]').click();
+    await deleteDialog
+      .getByRole("button", { name: /删除 2 条消息|Delete 2 messages/ })
+      .click();
+    await expect(deleteDialog).toBeHidden();
+    await expect(page.getByText("Simulated delete failure", { exact: true })).toBeVisible();
+    await expect(
+      page.getByTestId("chat-message-viewport").getByText(secondAssistant, {
+        exact: true
+      })
+    ).toBeVisible();
+    await page.unroute("**/api/messages/*/timeline");
+
+    await secondUserBubble.locator('[data-chat-action="delete"]').click();
+    await deleteDialog
+      .getByRole("button", { name: /删除 2 条消息|Delete 2 messages/ })
+      .click();
+    await expect(deleteDialog).toBeHidden();
+    const messageViewport = page.getByTestId("chat-message-viewport");
+    await expect(messageViewport.getByText(secondUser, { exact: true })).toBeHidden();
+    await expect(messageViewport.getByText(secondAssistant, { exact: true })).toBeHidden();
+    await expect(messageViewport.getByText(firstUser, { exact: true })).toBeVisible();
+    await expect(messageViewport.getByText(firstAssistant, { exact: true })).toBeVisible();
+
+    const firstAssistantBubble = page
+      .locator('[data-chat-message="assistant"]')
+      .filter({ hasText: firstAssistant });
+    await firstAssistantBubble.locator('[data-chat-action="delete"]').click();
+    await expect(deleteDialog.getByTestId("delete-message-impact")).toContainText(
+      /只会删除当前这一条消息|Only this message will be removed/
+    );
+    await expect(deleteDialog.getByTestId("delete-message-preview")).toContainText(
+      firstAssistant
+    );
+    await deleteDialog.getByRole("button", { name: /^删除$|^Delete$/ }).click();
+    await expect(deleteDialog).toBeHidden();
+    await expect(messageViewport.getByText(firstAssistant, { exact: true })).toBeHidden();
+    await expect(messageViewport.getByText(firstUser, { exact: true })).toBeVisible();
+
+    const remainingResponse = await request.get(`/api/chats/${chatId}`);
+    const remaining = (await remainingResponse.json()) as ApiDataResponse<{
+      messages: Array<{ content: string }>;
+    }>;
+    expect(remaining.data?.messages.map((message) => message.content)).toEqual([
+      firstUser
+    ]);
+  } finally {
+    if (chatId) await permanentlyDeleteChatViaApi(request, chatId);
+    if (characterId) await request.delete(`/api/characters/${characterId}`);
+  }
+});
+
 test("chat agent panel generates a read-only draft and inserts it into the composer", async ({
   page,
   request
@@ -1650,6 +1800,133 @@ test("history manage mode archives and restores multiple chats together", async 
     for (const chatId of chatIds) {
       await permanentlyDeleteChatViaApi(request, chatId);
     }
+    if (characterId) await request.delete(`/api/characters/${characterId}`);
+  }
+});
+
+test("unconfigured media tools open the matching module model setting", async ({
+  page,
+  request
+}, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const characterName = `Media Setup Character ${suffix}`;
+  const chatTitle = `Media Setup Chat ${suffix}`;
+  let characterId: string | null = null;
+  let chatId: string | null = null;
+  const now = new Date().toISOString();
+
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          id: "media-setup-settings-e2e",
+          activeProvider: "openai-compatible",
+          apiBaseUrl: "https://example.invalid/v1",
+          model: "chat-model",
+          temperature: 0.8,
+          maxTokens: 800,
+          topP: 1,
+          language: "en",
+          providers: [
+            {
+              id: "media-setup-provider",
+              label: "Chat provider",
+              provider: "openai-compatible",
+              apiBaseUrl: "https://example.invalid/v1",
+              models: [
+                {
+                  id: "chat-model",
+                  label: "Chat model",
+                  model: "chat-model",
+                  capabilities: ["text_generation"]
+                }
+              ]
+            }
+          ],
+          activeProviderId: "media-setup-provider",
+          activeModelId: "chat-model",
+          moduleModelPreferences: {},
+          userProfileSummary: "",
+          autoSummarizeUser: true,
+          showMessageAvatars: true,
+          showMessageTimestamps: false,
+          userProfileUpdatedAt: null,
+          createdAt: now,
+          updatedAt: now,
+          hasApiKey: true
+        }
+      })
+    });
+  });
+
+  try {
+    const characterResponse = await request.post("/api/characters", {
+      data: {
+        name: characterName,
+        avatar: null,
+        description: "",
+        tags: [],
+        prefix: "",
+        prompt: "",
+        suffix: "",
+        htmlCss: "",
+        openingHtml: "",
+        loreEntries: [],
+        quickReplies: []
+      }
+    });
+    characterId = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data?.id ?? null;
+    const chatResponse = await request.post("/api/chats", {
+      data: { title: chatTitle, characterId }
+    });
+    chatId = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data?.id ?? null;
+
+    await page.goto("/");
+    await openChatHistoryAndSelect(page, chatTitle);
+
+    const recordButton = page.locator('[data-chat-action="voice-record"]');
+    const speechButton = page.locator('[data-chat-action="voice-speak"]');
+    const imageButton = page.locator('[data-chat-action="image-generate"]');
+    await expect(recordButton).toBeEnabled();
+    await expect(recordButton).toHaveAttribute(
+      "aria-label",
+      "Configure voice transcription model"
+    );
+    await expect(speechButton).toBeEnabled();
+    await expect(speechButton).toHaveAttribute(
+      "aria-label",
+      "Configure text-to-speech model"
+    );
+    await expect(imageButton).toBeEnabled();
+    await expect(imageButton).toHaveAttribute(
+      "aria-label",
+      "Configure image generation model"
+    );
+
+    await imageButton.click();
+    await expect(page).toHaveURL(
+      /\/settings\?section=providers&focus=module-image_generation$/
+    );
+    await expect(page.getByTestId("settings-section-providers")).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+    const focusedRow = page.locator('[data-module-model="image_generation"]');
+    await expect(focusedRow).toHaveAttribute("data-module-model-focused", "true");
+    await expect(focusedRow).toBeInViewport();
+    await expect(focusedRow.locator("select")).toBeFocused();
+    await expect(focusedRow).toContainText(
+      "Choose a compatible model for this feature"
+    );
+  } finally {
+    if (chatId) await permanentlyDeleteChatViaApi(request, chatId);
     if (characterId) await request.delete(`/api/characters/${characterId}`);
   }
 });

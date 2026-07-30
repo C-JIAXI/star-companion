@@ -12,7 +12,7 @@ Current scope:
 - Chat-scoped long-term memory with automatic maintenance, hybrid semantic-vector and keyword retrieval, visible index status, reusable local persona presets, user profile summaries, local backup import/export, and manual LAN sync.
 - In-chat AI Agent drafts for scene summaries, next-step suggestions, reply drafts, and memory/lore candidates. The Agent is read-only in v1 and does not modify local data automatically.
 - Per-module model preferences for chat, AI Agent, memory maintenance, memory embeddings, user profile summaries, voice transcription, text-to-speech, and image generation, with capability-filtered model choices and server-side validation.
-- Voice input/transcription, per-reply narration, configurable speech voice and playback speed, optional automatic playback for new replies, and OpenAI-compatible image generation through backend-proxied media endpoints, with an image preview before insertion into a chat draft.
+- Voice input/transcription, per-reply narration, configurable speech voice and playback speed, optional automatic playback for new replies, and OpenAI-compatible image generation through backend-proxied media endpoints, with an image preview before insertion into a chat draft. Unconfigured media tools remain actionable and deep-link to the exact compatible-model setting instead of becoming dead controls.
 - Chat branching from any user or assistant message, creating a new chat that preserves the conversation up to that point without copying long-term memories. The Story paths navigator shows ancestry and direct child branches, and returning to the source highlights the original split message.
 - Save a checkpoint at any message to keep a story snapshot without leaving the active chat; checkpoints remain linked to their source and appear alongside branches in Story paths.
 - Chat-scoped message search with result jump across long paginated conversations.
@@ -27,7 +27,7 @@ Current scope:
 - Restore the last selected chat after a refresh or app restart, while clearing stale local selections if the chat no longer exists.
 - Message-level context control: retain a message in the transcript while excluding it from future model and AI Agent context.
 - Optional per-message timestamps help track long-running chat chronology without changing the default chat layout.
-- Dialogs, destructive confirmations, and the mobile navigation drawer keep keyboard focus inside the active surface, close with Escape, and restore focus to the originating control.
+- Dialogs, destructive confirmations, and the mobile navigation drawer keep keyboard focus inside the active surface, close with Escape, and restore focus to the originating control. Message deletion previews the target and states whether one reply or the selected user turn plus every following message will be removed; timeline deletion is committed atomically by the server.
 - Chat readiness checks deep-link missing provider, API key, and model items into a focused three-step setup guide, with save/test actions kept available after long provider forms; the real generation test catches connection issues before chat generation fails.
 - Character opening generation for empty chats, stored as a normal assistant message that can be edited or regenerated.
 - Continue the latest assistant reply in place when a response is truncated or the scene needs to carry on; continuation keeps the current message and variant instead of creating a fake user turn.

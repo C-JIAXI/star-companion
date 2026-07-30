@@ -405,6 +405,7 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
   onDebug,
   disableRegenerate,
   disableSpeech,
+  speechAvailable,
   speechPlaying,
   canContinue,
   disableContinue
@@ -430,6 +431,7 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
   onDebug: (message: MessageDTO) => void;
   disableRegenerate: boolean;
   disableSpeech: boolean;
+  speechAvailable: boolean;
   speechPlaying: boolean;
   canContinue: boolean;
   disableContinue: boolean;
@@ -491,13 +493,30 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
               <button
                 aria-pressed={speechPlaying}
                 className={`inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium hover:text-slate-200 disabled:opacity-40 active:text-slate-100 ${
-                  speechPlaying ? "text-ember-300" : "text-slate-400"
+                  speechPlaying
+                    ? "text-ember-300"
+                    : speechAvailable
+                      ? "text-slate-400"
+                      : "text-amber-300/80"
                 }`}
                 data-chat-action="voice-speak-message"
                 disabled={disableSpeech}
                 type="button"
                 onClick={onSpeak}
-                title={speechPlaying ? t("chat.voiceStopPlayback") : t("chat.voiceSpeakMessage")}
+                title={
+                  speechPlaying
+                    ? t("chat.voiceStopPlayback")
+                    : speechAvailable
+                      ? t("chat.voiceSpeakMessage")
+                      : t("chat.voiceSpeakSetup")
+                }
+                aria-label={
+                  speechPlaying
+                    ? t("chat.voiceStopPlayback")
+                    : speechAvailable
+                      ? t("chat.voiceSpeakMessage")
+                      : t("chat.voiceSpeakSetup")
+                }
               >
                 {speechPlaying ? <VolumeX size={14} /> : <Volume2 size={14} />}
               </button>

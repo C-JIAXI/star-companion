@@ -481,19 +481,38 @@ const getPageCopy = (language: AppLanguage) =>
 
 type SettingsSection = "runtime" | "providers" | "backup";
 type SettingsSetupFocus = "provider" | "api-key" | "model";
+type SettingsModuleFocus = `module-${AiModuleId}`;
+type SettingsFocus = SettingsSetupFocus | SettingsModuleFocus;
+
+const isSettingsSetupFocus = (
+  focus: SettingsFocus | null
+): focus is SettingsSetupFocus =>
+  focus === "provider" || focus === "api-key" || focus === "model";
+
+const getFocusedModuleId = (focus: SettingsFocus | null): AiModuleId | null => {
+  if (!focus?.startsWith("module-")) {
+    return null;
+  }
+
+  const moduleId = focus.slice("module-".length) as AiModuleId;
+  return moduleModelRows.some((row) => row.id === moduleId) ? moduleId : null;
+};
 
 const readSettingsLocation = () => {
   const params = new URLSearchParams(window.location.search);
   const section = params.get("section");
   const focus = params.get("focus");
+  const moduleFocus = moduleModelRows
+    .map((row) => `module-${row.id}` as SettingsModuleFocus)
+    .find((value) => value === focus);
 
   return {
     section: section === "providers" || section === "backup" ? section : "runtime",
     focus:
       focus === "provider" || focus === "api-key" || focus === "model"
         ? focus
-        : null
-  } satisfies { section: SettingsSection; focus: SettingsSetupFocus | null };
+        : moduleFocus ?? null
+  } satisfies { section: SettingsSection; focus: SettingsFocus | null };
 };
 
 const providerCanRunWithoutKey = (provider: ProviderProfile) => {
@@ -598,6 +617,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const addProviderButtonRef = useRef<HTMLDivElement>(null);
   const setupAutoExpandedRef = useRef(false);
   const setupGuideRef = useRef<HTMLElement>(null);
+  const focusedModuleRowRef = useRef<HTMLDivElement>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
 
   const applyLoadedSettings = useCallback(
@@ -724,7 +744,9 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     }
   ];
   const setupReadyCount = setupSteps.filter((step) => step.ready).length;
-  const showSetupGuide = Boolean(settingsLocation.focus) || !setupProviderReady;
+  const focusedModuleId = getFocusedModuleId(settingsLocation.focus);
+  const showSetupGuide =
+    isSettingsSetupFocus(settingsLocation.focus) || !setupProviderReady;
 
   useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => {
@@ -795,6 +817,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   useEffect(() => {
     if (
       !settingsLocation.focus ||
+      !isSettingsSetupFocus(settingsLocation.focus) ||
       setupAutoExpandedRef.current ||
       form.providers.length === 0
     ) {
@@ -811,15 +834,23 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   }, [form.activeProviderId, form.providers, settingsLocation.focus]);
 
   useEffect(() => {
-    if (!settingsLocation.focus || savedSnapshot === null) {
+    if (savedSnapshot === null) {
       return;
     }
 
     const frameId = window.requestAnimationFrame(() => {
-      setupGuideRef.current?.scrollIntoView({ block: "start" });
+      if (isSettingsSetupFocus(settingsLocation.focus)) {
+        setupGuideRef.current?.scrollIntoView({ block: "start" });
+        return;
+      }
+
+      if (focusedModuleId) {
+        focusedModuleRowRef.current?.scrollIntoView({ block: "center" });
+        focusedModuleRowRef.current?.querySelector("select")?.focus();
+      }
     });
     return () => window.cancelAnimationFrame(frameId);
-  }, [savedSnapshot, settingsLocation.focus]);
+  }, [focusedModuleId, savedSnapshot, settingsLocation.focus]);
 
   useEffect(() => {
     setSelectedModelIds(new Set());
@@ -1728,6 +1759,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                   {moduleModelRows.map((row) => {
                     const selected = form.moduleModelPreferences?.[row.id];
                     const value = selected ? `${selected.providerId}::${selected.modelId}` : "";
+                    const focused = focusedModuleId === row.id;
                     const compatibleModels = form.providers.flatMap((provider) =>
                       provider.models
                         .filter((model) => modelSupportsAiModule(provider.provider, model, row.id))
@@ -1746,33 +1778,50 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                     );
 
                     return (
-                      <Field key={row.id} label={language === "zh-CN" ? row.zh : row.en}>
-                        <select
-                          className={selectClassName}
-                          value={value}
-                          onChange={(event) => setModuleModelPreference(row.id, event.target.value)}
-                        >
-                          <option value="">
-                            {fallbackCompatible
-                              ? (language === "zh-CN" ? "使用当前聊天模型" : "Use current chat model")
-                              : (language === "zh-CN"
-                                  ? "当前聊天模型不兼容，请选择模型"
-                                  : "Current chat model is incompatible; choose a model")}
-                          </option>
-                          {compatibleModels.map(({ provider, model }) => (
-                            <option key={`${provider.id}:${model.id}`} value={`${provider.id}::${model.id}`}>
-                              {`${getProviderDisplayName(provider, language)} / ${model.label || model.model}`}
+                      <div
+                        className={`rounded-md border p-2 transition-colors ${
+                          focused
+                            ? "border-amber-300/50 bg-amber-400/[0.06]"
+                            : "border-transparent"
+                        }`}
+                        data-module-model={row.id}
+                        data-module-model-focused={focused ? "true" : "false"}
+                        key={row.id}
+                        ref={focused ? focusedModuleRowRef : undefined}
+                      >
+                        <Field label={language === "zh-CN" ? row.zh : row.en}>
+                          <select
+                            className={selectClassName}
+                            value={value}
+                            onChange={(event) => setModuleModelPreference(row.id, event.target.value)}
+                          >
+                            <option value="">
+                              {fallbackCompatible
+                                ? (language === "zh-CN" ? "使用当前聊天模型" : "Use current chat model")
+                                : (language === "zh-CN"
+                                    ? "当前聊天模型不兼容，请选择模型"
+                                    : "Current chat model is incompatible; choose a model")}
                             </option>
-                          ))}
-                        </select>
-                        {compatibleModels.length === 0 ? (
-                          <span className="text-xs leading-5 text-amber-300/90">
-                            {language === "zh-CN"
-                              ? "没有已标注支持此功能的模型。请在下方模型列表勾选对应能力，或导入兼容模型。"
-                              : "No model is marked compatible. Set its capability below or import a compatible model."}
-                          </span>
-                        ) : null}
-                      </Field>
+                            {compatibleModels.map(({ provider, model }) => (
+                              <option key={`${provider.id}:${model.id}`} value={`${provider.id}::${model.id}`}>
+                                {`${getProviderDisplayName(provider, language)} / ${model.label || model.model}`}
+                              </option>
+                            ))}
+                          </select>
+                          {focused ? (
+                            <span className="text-xs leading-5 text-amber-200">
+                              {t("settings.moduleModelFocusHint")}
+                            </span>
+                          ) : null}
+                          {compatibleModels.length === 0 ? (
+                            <span className="text-xs leading-5 text-amber-300/90">
+                              {language === "zh-CN"
+                                ? "没有已标注支持此功能的模型。请在下方模型列表勾选对应能力，或导入兼容模型。"
+                                : "No model is marked compatible. Set its capability below or import a compatible model."}
+                            </span>
+                          ) : null}
+                        </Field>
+                      </div>
                     );
                   })}
                 </div>

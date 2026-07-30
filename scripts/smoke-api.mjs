@@ -1395,6 +1395,38 @@ const main = async () => {
       "backup restore should preserve imported private character prompts"
     );
 
+    const timelineUserMessage = await requestData(baseUrl, "/api/messages", {
+      method: "POST",
+      expectedStatus: 201,
+      body: {
+        chatId: createdChat.id,
+        role: "user",
+        content: "Remove this smoke timeline from here."
+      }
+    });
+    await requestData(baseUrl, "/api/messages", {
+      method: "POST",
+      expectedStatus: 201,
+      body: {
+        chatId: createdChat.id,
+        role: "assistant",
+        characterId: createdCharacter.id,
+        content: "This follow-up should be deleted atomically."
+      }
+    });
+    const timelineDeletion = await requestData(
+      baseUrl,
+      `/api/messages/${timelineUserMessage.id}/timeline`,
+      { method: "DELETE" }
+    );
+    assert.equal(timelineDeletion.chatId, createdChat.id);
+    assert.equal(timelineDeletion.deletedCount, 2);
+    const messagesAfterTimelineDeletion = await requestData(
+      baseUrl,
+      `/api/messages?${new URLSearchParams({ chatId: createdChat.id }).toString()}`
+    );
+    assert.equal(messagesAfterTimelineDeletion.length, 2);
+
     await request(baseUrl, `/api/messages/${assistantMessage.id}`, {
       method: "DELETE",
       expectedStatus: 204

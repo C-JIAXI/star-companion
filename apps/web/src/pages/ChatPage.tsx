@@ -112,6 +112,13 @@ const agentModes: ChatAgentMode[] = [
   "memory_lore_candidates"
 ];
 
+const getMessagePreview = (content: string, maxLength = 180) => {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength).trimEnd()}…`
+    : normalized;
+};
+
 const blobToBase64 = (blob: Blob) =>
   new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -350,6 +357,7 @@ export function ChatPage({
   const [personaPresetName, setPersonaPresetName] = useState("");
   const [editingProfileDraft, setEditingProfileDraft] = useState("");
   const [pendingDeleteMessage, setPendingDeleteMessage] = useState<MessageDTO | null>(null);
+  const [messageDeleteLoading, setMessageDeleteLoading] = useState(false);
   const [pendingCheckpointMessage, setPendingCheckpointMessage] = useState<MessageDTO | null>(null);
   const [checkpointTitleDraft, setCheckpointTitleDraft] = useState("");
   const [titleEditing, setTitleEditing] = useState(false);
@@ -506,7 +514,9 @@ export function ChatPage({
 
       if (msg.type === "assistant_message") {
         handlers.upsertMessage(msg.message);
-        handlers.autoPlayAssistantMessage(msg.message);
+        window.requestAnimationFrame(() => {
+          onMessageHandlersRef.current.autoPlayAssistantMessage(msg.message);
+        });
         setStreamingContent("");
         setStreamingCharacterId(null);
         setStreamingContextCounts(null);
@@ -685,7 +695,11 @@ export function ChatPage({
   const navigateToSection = useCallback(
     (
       section: "chat" | "characters" | "settings",
-      settingsFocus?: "provider" | "api-key" | "model"
+      settingsFocus?:
+        | "provider"
+        | "api-key"
+        | "model"
+        | `module-${AiModuleId}`
     ) => {
       const path =
         section === "chat"
@@ -698,6 +712,11 @@ export function ChatPage({
       window.dispatchEvent(new PopStateEvent("popstate"));
     },
     []
+  );
+
+  const openModuleModelSettings = useCallback(
+    (moduleId: AiModuleId) => navigateToSection("settings", `module-${moduleId}`),
+    [navigateToSection]
   );
 
   const activeProviderProfile = useMemo(
@@ -863,6 +882,27 @@ export function ChatPage({
     const end = Math.min(start + pagedMessages.length - 1, totalMessages);
     return { start, end, total: totalMessages };
   }, [activeChat?.messages.length, pagedMessages.length, safeMessagePage]);
+
+  const pendingDeleteImpact = useMemo(() => {
+    if (!pendingDeleteMessage) {
+      return null;
+    }
+
+    const messages = activeChat?.messages ?? [];
+    const targetIndex = messages.findIndex(
+      (message) => message.id === pendingDeleteMessage.id
+    );
+    const affectedMessages =
+      pendingDeleteMessage.role === "user" && targetIndex >= 0
+        ? messages.slice(targetIndex)
+        : [pendingDeleteMessage];
+
+    return {
+      total: affectedMessages.length,
+      following: Math.max(0, affectedMessages.length - 1),
+      preview: getMessagePreview(pendingDeleteMessage.content)
+    };
+  }, [activeChat?.messages, pendingDeleteMessage]);
 
   const paginationCopy =
     language === "zh-CN"
@@ -2394,7 +2434,7 @@ export function ChatPage({
     }
 
     if (!canTranscribe) {
-      setError(t("chat.mediaModelMissing"));
+      openModuleModelSettings("voice_transcription");
       return;
     }
 
@@ -2444,7 +2484,7 @@ export function ChatPage({
 
   const playAssistantMessage = useCallback(async (message: MessageDTO) => {
     if (!canSpeak) {
-      setError(t("chat.mediaModelMissing"));
+      openModuleModelSettings("voice_speech");
       return;
     }
 
@@ -2488,7 +2528,14 @@ export function ChatPage({
     } finally {
       setMediaLoading(false);
     }
-  }, [canSpeak, runtimeSettings?.ttsPlaybackRate, runtimeSettings?.ttsVoice, stopSpeechPlayback, t]);
+  }, [
+    canSpeak,
+    openModuleModelSettings,
+    runtimeSettings?.ttsPlaybackRate,
+    runtimeSettings?.ttsVoice,
+    stopSpeechPlayback,
+    t
+  ]);
 
   const speakLatestAssistantMessage = async () => {
     const latestAssistant = [...(activeChat?.messages ?? [])]
@@ -2527,7 +2574,7 @@ export function ChatPage({
 
   const openImageDialog = () => {
     if (!canGenerateImage) {
-      setError(t("chat.mediaModelMissing"));
+      openModuleModelSettings("image_generation");
       return;
     }
 
@@ -2690,21 +2737,28 @@ export function ChatPage({
       return;
     }
 
-    const messages = activeChat?.messages ?? [];
-    const targetIndex = messages.findIndex((m) => m.id === pendingDeleteMessage.id);
-    const isUser = pendingDeleteMessage.role === "user";
+    const message = pendingDeleteMessage;
 
-    if (isUser && targetIndex >= 0) {
-      const toDelete = messages.slice(targetIndex);
-      await Promise.all(toDelete.map((m) => api.messages.remove(m.id)));
-    } else {
-      await api.messages.remove(pendingDeleteMessage.id);
+    setMessageDeleteLoading(true);
+    setError(null);
+    try {
+      const result = await api.messages.removeTimeline(message.id);
+      setPendingDeleteMessage(null);
+      await loadChat(message.chatId);
+      setStatus(t("chat.messagesDeleted", { count: result.deletedCount }));
+      setIsNearBottom(true);
+      requestAnimationFrame(() => scrollToBottom());
+    } catch (caught) {
+      setPendingDeleteMessage(null);
+      await loadChat(message.chatId).catch(() => {});
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : t("chat.failedDeleteMessage")
+      );
+    } finally {
+      setMessageDeleteLoading(false);
     }
-
-    await loadChat(pendingDeleteMessage.chatId);
-    setPendingDeleteMessage(null);
-    setIsNearBottom(true);
-    requestAnimationFrame(() => scrollToBottom());
   };
 
   return (
@@ -3200,7 +3254,8 @@ export function ChatPage({
                                     onVariantNext={() => void switchVariant(message, 1)}
                                     onDebug={setDebugMessage}
                                     disableRegenerate={Boolean(activeRequestId)}
-                                    disableSpeech={mediaLoading || recording || !canSpeak}
+                                    disableSpeech={mediaLoading || recording}
+                                    speechAvailable={canSpeak}
                                     speechPlaying={speechPlaying && speechMessageId === message.id}
                                     canContinue={
                                       activeChat.messages[activeChat.messages.length - 1]?.id === message.id
@@ -3367,16 +3422,25 @@ export function ChatPage({
                             className={`grid h-9 w-9 place-items-center rounded-md transition-colors ${
                               recording
                                 ? "bg-rose-500/15 text-rose-300"
-                                : "text-slate-500 hover:bg-white/10 hover:text-slate-200"
+                                : canTranscribe
+                                  ? "text-slate-500 hover:bg-white/10 hover:text-slate-200"
+                                  : "text-amber-300/80 hover:bg-amber-500/10 hover:text-amber-200"
                             } disabled:opacity-40`}
                             data-chat-action="voice-record"
-                            disabled={mediaLoading || (!recording && !canTranscribe)}
+                            disabled={mediaLoading}
+                            aria-label={
+                              recording
+                                ? t("chat.voiceStop")
+                                : canTranscribe
+                                  ? t("chat.voiceRecord")
+                                  : t("chat.voiceRecordSetup")
+                            }
                             title={
                               recording
                                 ? t("chat.voiceStop")
                                 : canTranscribe
                                   ? t("chat.voiceRecord")
-                                  : t("chat.mediaModelMissing")
+                                  : t("chat.voiceRecordSetup")
                             }
                             type="button"
                             onClick={() => void toggleVoiceRecording()}
@@ -3387,16 +3451,25 @@ export function ChatPage({
                             className={`grid h-9 w-9 place-items-center rounded-md transition-colors disabled:opacity-40 ${
                               speechPlaying
                                 ? "bg-ember-500/15 text-ember-300 hover:bg-ember-500/20"
-                                : "text-slate-500 hover:bg-white/10 hover:text-slate-200"
+                                : canSpeak
+                                  ? "text-slate-500 hover:bg-white/10 hover:text-slate-200"
+                                  : "text-amber-300/80 hover:bg-amber-500/10 hover:text-amber-200"
                             }`}
                             data-chat-action="voice-speak"
-                            disabled={mediaLoading || recording || (!canSpeak && !speechPlaying)}
+                            disabled={mediaLoading || recording}
+                            aria-label={
+                              speechPlaying
+                                ? t("chat.voiceStopPlayback")
+                                : canSpeak
+                                  ? t("chat.voiceSpeak")
+                                  : t("chat.voiceSpeakSetup")
+                            }
                             title={
                               speechPlaying
                                 ? t("chat.voiceStopPlayback")
                                 : canSpeak
                                   ? t("chat.voiceSpeak")
-                                  : t("chat.mediaModelMissing")
+                                  : t("chat.voiceSpeakSetup")
                             }
                             type="button"
                             onClick={() => {
@@ -3410,10 +3483,23 @@ export function ChatPage({
                             {speechPlaying ? <VolumeX size={16} /> : <Volume2 size={16} />}
                           </button>
                           <button
-                            className="grid h-9 w-9 place-items-center rounded-md text-ink-500 transition-colors hover:bg-white/[0.06] hover:text-ink-200 disabled:opacity-40"
+                            className={`grid h-9 w-9 place-items-center rounded-md transition-colors disabled:opacity-40 ${
+                              canGenerateImage
+                                ? "text-ink-500 hover:bg-white/[0.06] hover:text-ink-200"
+                                : "text-amber-300/80 hover:bg-amber-500/10 hover:text-amber-200"
+                            }`}
                             data-chat-action="image-generate"
-                            disabled={mediaLoading || recording || !canGenerateImage}
-                            title={canGenerateImage ? t("chat.imageGenerate") : t("chat.mediaModelMissing")}
+                            disabled={mediaLoading || recording}
+                            aria-label={
+                              canGenerateImage
+                                ? t("chat.imageGenerate")
+                                : t("chat.imageGenerateSetup")
+                            }
+                            title={
+                              canGenerateImage
+                                ? t("chat.imageGenerate")
+                                : t("chat.imageGenerateSetup")
+                            }
                             type="button"
                             onClick={openImageDialog}
                           >
@@ -3742,12 +3828,49 @@ export function ChatPage({
       {pendingDeleteMessage ? (
         <ConfirmDialog
           cancelLabel={t("common.cancel")}
-          confirmLabel={t("common.delete")}
-          loading={loading}
-          message={t("chat.deleteMessageConfirm")}
+          confirmLabel={
+            (pendingDeleteImpact?.total ?? 1) > 1
+              ? t("chat.deleteMessagesConfirmLabel", {
+                  count: pendingDeleteImpact?.total ?? 1
+                })
+              : t("common.delete")
+          }
+          loading={messageDeleteLoading}
+          message={
+            <span className="block">
+              <span className="block" data-testid="delete-message-impact">
+                {pendingDeleteMessage.role === "user"
+                  ? pendingDeleteImpact?.following === 1
+                    ? t("chat.deleteUserMessageCascadeConfirmOne", {
+                        total: pendingDeleteImpact?.total ?? 1
+                      })
+                    : (pendingDeleteImpact?.following ?? 0) > 1
+                      ? t("chat.deleteUserMessageCascadeConfirmMany", {
+                          following: pendingDeleteImpact?.following ?? 0,
+                          total: pendingDeleteImpact?.total ?? 1
+                        })
+                      : t("chat.deleteUserMessageConfirm")
+                  : t("chat.deleteAssistantMessageConfirm")}
+              </span>
+              <span
+                className="mt-3 block rounded-md border border-white/[0.08] bg-ink-950/55 px-3 py-2.5"
+                data-testid="delete-message-preview"
+              >
+                <span className="block text-[11px] font-semibold uppercase text-ink-500">
+                  {pendingDeleteMessage.role === "user"
+                    ? t("chat.userMessageLabel")
+                    : t("chat.assistantMessageLabel")}
+                </span>
+                <span className="mt-1 block break-words text-sm leading-5 text-ink-200">
+                  {pendingDeleteImpact?.preview || t("chat.emptyMessagePreview")}
+                </span>
+              </span>
+            </span>
+          }
           title={t("chat.deleteMessageTitle")}
           onCancel={() => setPendingDeleteMessage(null)}
           onConfirm={() => void deleteMessage()}
+          variant="danger"
         />
       ) : null}
       {pendingDeleteMemory ? (

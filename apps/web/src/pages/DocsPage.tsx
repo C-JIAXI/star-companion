@@ -207,14 +207,14 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "语音与图片",
-              body: "输入框工具可录音转写、朗读最近回复和生成图片；每条助手回复也可单独朗读或停止。设置页可指定文字朗读的声音 ID、0.5–2 倍播放速度，并选择是否自动朗读当前聊天中新收到的助手回复。图片会先在预览中展示，确认后才插入输入框。"
+              body: "输入框工具可录音转写、朗读最近回复和生成图片；每条助手回复也可单独朗读或停止。尚未配置兼容模型时，这些入口会直接定位到设置页对应的模块模型下拉框。设置页可指定文字朗读的声音 ID、0.5–2 倍播放速度，并选择是否自动朗读当前聊天中新收到的助手回复。图片会先在预览中展示，确认后才插入输入框。"
             },
             {
               title: "快捷指令",
               body: "角色配置快捷回复后，会显示在输入区上方。点击指令会把预设内容填入输入框，适合常用动作或开场问题。"
             }
           ],
-          note: "删除消息前请确认影响；如果只是想修正文案，优先使用编辑或重发。"
+          note: "删除助手回复只影响当前一条；删除用户消息会同时删除其后的全部消息，确认框会显示总数与目标预览。如果只是想修正文案，优先使用编辑或重发。"
         },
         {
           id: "characters-guide",
@@ -485,14 +485,14 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Voice and images",
-            body: "Composer tools transcribe recordings, read the latest reply, and generate images; each assistant reply can also be narrated or stopped individually. Settings let you choose a speech voice ID, a 0.5–2x playback rate, and automatic playback for new assistant replies in the current chat. Images are previewed before you insert one into the composer."
+            body: "Composer tools transcribe recordings, read the latest reply, and generate images; each assistant reply can also be narrated or stopped individually. When no compatible model is configured, these controls jump directly to the matching module-model selector in Settings. Settings let you choose a speech voice ID, a 0.5–2x playback rate, and automatic playback for new assistant replies in the current chat. Images are previewed before you insert one into the composer."
           },
           {
             title: "Quick commands",
             body: "When a character defines quick replies, they appear above the composer and fill the input with reusable actions or prompts."
           }
         ],
-        note: "Confirm before deleting messages. If you only need to fix wording, use edit or resend first."
+        note: "Deleting an assistant reply removes only that message. Deleting a user message also removes every message after it; the confirmation shows the total and a target preview. Use edit or resend first when you only need to fix wording."
       },
       {
         id: "characters-guide",
