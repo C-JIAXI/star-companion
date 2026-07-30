@@ -788,6 +788,12 @@ export type GenerationServerMessage =
       summary: ChatMemoryUpdateSummaryDTO;
     }
   | {
+      type: "timeline_memory_invalidated";
+      requestId: string;
+      chatId: string;
+      disabledMemoryCount: number;
+    }
+  | {
       type: "generation_done";
       requestId: string;
     }

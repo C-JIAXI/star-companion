@@ -537,18 +537,22 @@ export function ConfirmDialog({
   message,
   confirmLabel,
   cancelLabel,
+  secondaryLabel,
   loading = false,
   variant = "danger",
   onCancel,
+  onSecondary,
   onConfirm
 }: {
   title: ReactNode;
   message: ReactNode;
   confirmLabel: ReactNode;
   cancelLabel: ReactNode;
+  secondaryLabel?: ReactNode;
   loading?: boolean;
   variant?: "primary" | "danger";
   onCancel: () => void;
+  onSecondary?: () => void;
   onConfirm: () => void;
 }) {
   const titleId = useId();
@@ -607,6 +611,11 @@ export function ConfirmDialog({
           >
             {cancelLabel}
           </Button>
+          {secondaryLabel && onSecondary ? (
+            <Button disabled={loading} variant="primary" onClick={onSecondary}>
+              {secondaryLabel}
+            </Button>
+          ) : null}
           <Button disabled={loading} variant={variant} onClick={onConfirm}>
             {confirmLabel}
           </Button>

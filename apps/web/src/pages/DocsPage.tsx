@@ -175,7 +175,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "消息操作",
-              body: "用户消息可复制、编辑、删除、重发；角色回复可复制、编辑、删除、重新生成，并在有候选版本时切换变体。"
+              body: "用户消息可复制、编辑、删除、重发；角色回复可复制、编辑、删除、重新生成，并在有候选版本时切换变体。重发历史用户消息会先提示将替换的后续消息；确认框可直接创建保留完整原剧情的分支，并在分支中重发。"
             },
             {
               title: "聊天设置",
@@ -214,7 +214,7 @@ const getDocsCopy = (language: string): DocsCopy => {
               body: "角色配置快捷回复后，会显示在输入区上方。点击指令会把预设内容填入输入框，适合常用动作或开场问题。"
             }
           ],
-          note: "删除助手回复只影响当前一条；删除用户消息会同时删除其后的全部消息，确认框会显示总数与目标预览。如果只是想修正文案，优先使用编辑或重发。"
+          note: "删除助手回复只影响当前一条；删除用户消息会同时删除其后的全部消息，确认框会显示总数与目标预览。重发历史用户消息会保留该条消息但替换其后的剧情；可在确认框中直接创建完整原剧情的分支并在分支中重发。两种操作都会停用来源于已移除剧情的长期记忆。"
         },
         {
           id: "characters-guide",
@@ -433,7 +433,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Message actions",
-            body: "User messages can be copied, edited, deleted, or resent. Character replies can be copied, edited, deleted, regenerated, continued when they are the latest reply, and switched between variants."
+            body: "User messages can be copied, edited, deleted, or resent. Character replies can be copied, edited, deleted, regenerated, continued when they are the latest reply, and switched between variants. Resending a historical user message first previews the following messages it will replace; the confirmation can create a branch that preserves the full original path, then resend in that branch."
           },
           {
             title: "Chat settings",
@@ -492,7 +492,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             body: "When a character defines quick replies, they appear above the composer and fill the input with reusable actions or prompts."
           }
         ],
-        note: "Deleting an assistant reply removes only that message. Deleting a user message also removes every message after it; the confirmation shows the total and a target preview. Use edit or resend first when you only need to fix wording."
+        note: "Deleting an assistant reply removes only that message. Deleting a user message also removes every message after it; the confirmation shows the total and a target preview. Resending a historical user message keeps it but replaces everything after it. The confirmation can create a branch with the complete original path and resend there instead. Both operations disable long-term memories sourced from the removed path."
       },
       {
         id: "characters-guide",

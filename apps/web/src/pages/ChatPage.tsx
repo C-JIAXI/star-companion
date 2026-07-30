@@ -357,6 +357,7 @@ export function ChatPage({
   const [personaPresetName, setPersonaPresetName] = useState("");
   const [editingProfileDraft, setEditingProfileDraft] = useState("");
   const [pendingDeleteMessage, setPendingDeleteMessage] = useState<MessageDTO | null>(null);
+  const [pendingResendMessage, setPendingResendMessage] = useState<MessageDTO | null>(null);
   const [messageDeleteLoading, setMessageDeleteLoading] = useState(false);
   const [pendingCheckpointMessage, setPendingCheckpointMessage] = useState<MessageDTO | null>(null);
   const [checkpointTitleDraft, setCheckpointTitleDraft] = useState("");
@@ -374,6 +375,7 @@ export function ChatPage({
   const queuedChatIdRef = useRef<string | null>(null);
   const queuedMessagesRef = useRef<QueuedChatMessage[]>([]);
   const interruptForQueueRef = useRef(false);
+  const resendRequestRef = useRef<{ requestId: string; messageId: string } | null>(null);
   const draftTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
   const backgroundFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -525,6 +527,20 @@ export function ChatPage({
       }
 
       if (msg.type === "generation_started") {
+        const resendRequest = resendRequestRef.current;
+        if (resendRequest?.requestId === msg.requestId) {
+          setActiveChat((current) => {
+            if (!current) {
+              return current;
+            }
+            const targetIndex = current.messages.findIndex(
+              (message) => message.id === resendRequest.messageId
+            );
+            return targetIndex >= 0
+              ? { ...current, messages: current.messages.slice(0, targetIndex) }
+              : current;
+          });
+        }
         setActiveRequestId(msg.requestId);
         setStreamingContent("");
         setStreamingCharacterId(null);
@@ -561,7 +577,21 @@ export function ChatPage({
         return;
       }
 
+      if (msg.type === "timeline_memory_invalidated") {
+        setActiveChat((current) =>
+          current && current.id === msg.chatId ? { ...current, memoryUpdatedAt: null } : current
+        );
+        setStatus(t("chat.timelineMemoriesDisabled", { count: msg.disabledMemoryCount }));
+        if (showMemoryDialog) {
+          void loadChatMemories();
+        }
+        return;
+      }
+
       if (msg.type === "generation_done" || msg.type === "generation_stopped") {
+        if (resendRequestRef.current?.requestId === msg.requestId) {
+          resendRequestRef.current = null;
+        }
         const shouldDispatchQueue =
           msg.type === "generation_done" || interruptForQueueRef.current;
         interruptForQueueRef.current = false;
@@ -584,6 +614,9 @@ export function ChatPage({
       }
 
       if (msg.type === "error") {
+        if (resendRequestRef.current?.requestId === msg.requestId) {
+          resendRequestRef.current = null;
+        }
         setError(msg.error);
         interruptForQueueRef.current = false;
         setActiveRequestId(null);
@@ -815,6 +848,15 @@ export function ChatPage({
   );
   const readinessIssueCount = readinessItems.filter((item) => !item.ready).length;
 
+  const ensureChatGenerationReady = () => {
+    if (hasConfiguredProvider && hasConfiguredModel) {
+      return true;
+    }
+
+    setShowReadinessDialog(true);
+    return false;
+  };
+
   const mergeCharacterCache = (nextCharacters: CharacterDTO[]) => {
     setCharacters((current) => {
       const byId = new Map(current.map((character) => [character.id, character]));
@@ -903,6 +945,19 @@ export function ChatPage({
       preview: getMessagePreview(pendingDeleteMessage.content)
     };
   }, [activeChat?.messages, pendingDeleteMessage]);
+
+  const pendingResendImpact = useMemo(() => {
+    if (!pendingResendMessage) {
+      return null;
+    }
+
+    const messages = activeChat?.messages ?? [];
+    const targetIndex = messages.findIndex((message) => message.id === pendingResendMessage.id);
+    return {
+      following: targetIndex >= 0 ? Math.max(0, messages.length - targetIndex - 1) : 0,
+      preview: getMessagePreview(pendingResendMessage.content)
+    };
+  }, [activeChat?.messages, pendingResendMessage]);
 
   const paginationCopy =
     language === "zh-CN"
@@ -2622,7 +2677,7 @@ export function ChatPage({
   };
 
   const resendMessage = async (message: MessageDTO) => {
-    if (!activeChat) {
+    if (!activeChat || !ensureChatGenerationReady()) {
       return;
     }
 
@@ -2634,23 +2689,13 @@ export function ChatPage({
         throw new Error(t("chat.websocketFailed"));
       }
 
-      const messages = activeChat.messages;
-      const targetIndex = messages.findIndex((m) => m.id === message.id);
-      if (targetIndex >= 0) {
-        const toDeleteIds = new Set(messages.slice(targetIndex).map((m) => m.id));
-        setActiveChat((current) =>
-          current && current.id === activeChat.id
-            ? { ...current, messages: current.messages.filter((m) => !toDeleteIds.has(m.id)) }
-            : current
-        );
-      }
-
       const requestId = generateId();
       const payload: GenerationClientMessage = {
         type: "resend",
         requestId,
         messageId: message.id
       };
+      resendRequestRef.current = { requestId, messageId: message.id };
       setActiveRequestId(requestId);
       setGenerationChatId(message.chatId);
       setStreamingContent("");
@@ -2661,6 +2706,7 @@ export function ChatPage({
       sendWs(payload);
       requestAnimationFrame(() => scrollToBottom());
     } catch (caught) {
+      resendRequestRef.current = null;
       setError(caught instanceof Error ? caught.message : t("chat.failedSend"));
       setLoading(false);
       setActiveRequestId(null);
@@ -2745,7 +2791,17 @@ export function ChatPage({
       const result = await api.messages.removeTimeline(message.id);
       setPendingDeleteMessage(null);
       await loadChat(message.chatId);
-      setStatus(t("chat.messagesDeleted", { count: result.deletedCount }));
+      setStatus(
+        result.disabledMemoryCount > 0
+          ? t("chat.messagesDeletedWithMemoriesDisabled", {
+              count: result.deletedCount,
+              memories: result.disabledMemoryCount
+            })
+          : t("chat.messagesDeleted", { count: result.deletedCount })
+      );
+      if (showMemoryDialog) {
+        void loadChatMemories();
+      }
       setIsNearBottom(true);
       requestAnimationFrame(() => scrollToBottom());
     } catch (caught) {
@@ -2758,6 +2814,70 @@ export function ChatPage({
       );
     } finally {
       setMessageDeleteLoading(false);
+    }
+  };
+
+  const requestResendMessage = (message: MessageDTO) => {
+    if (!activeChat || loading) {
+      return;
+    }
+
+    if (!ensureChatGenerationReady()) {
+      return;
+    }
+
+    const targetIndex = activeChat.messages.findIndex((item) => item.id === message.id);
+    if (targetIndex >= 0 && targetIndex < activeChat.messages.length - 1) {
+      setPendingResendMessage(message);
+      return;
+    }
+
+    void resendMessage(message);
+  };
+
+  const branchAndResendMessage = async (message: MessageDTO) => {
+    if (!activeChat || loading) {
+      return;
+    }
+
+    if (!ensureChatGenerationReady()) {
+      return;
+    }
+
+    const sourceChat = activeChat;
+    const targetIndex = sourceChat.messages.findIndex((item) => item.id === message.id);
+    const latestMessage = sourceChat.messages[sourceChat.messages.length - 1];
+    if (targetIndex < 0 || !latestMessage) {
+      setError(t("chat.resendBranchUnavailable"));
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const branch = await api.chats.branch(sourceChat.id, {
+        messageId: latestMessage.id,
+        title: `${sourceChat.title} - ${t("chat.branch")}`,
+        kind: "branch"
+      });
+      const branchTarget = branch.messages[targetIndex];
+      if (!branchTarget || branchTarget.role !== "user") {
+        throw new Error(t("chat.resendBranchUnavailable"));
+      }
+
+      setPendingResendMessage(null);
+      setActiveChat(branch);
+      setChatMemories(branch.memories ?? []);
+      hasMessagesRef.current = branch.messages.length > 0;
+      setMemoryDraft(String(branch.memoryTurns));
+      onChatsChanged();
+      onSelectChat(branch.id);
+      setIsNearBottom(true);
+      resendMessage(branchTarget);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.resendBranchFailed"));
+      setLoading(false);
     }
   };
 
@@ -3215,7 +3335,7 @@ export function ChatPage({
                                       onCheckpoint={() => void checkpointFromMessage(message)}
                                       onEdit={() => startEditingMessage(message)}
                                       onDelete={() => setPendingDeleteMessage(message)}
-                                      onResend={() => void resendMessage(message)}
+                                      onResend={() => requestResendMessage(message)}
                                     />
                                   </div>
                                 );
@@ -3870,6 +3990,45 @@ export function ChatPage({
           title={t("chat.deleteMessageTitle")}
           onCancel={() => setPendingDeleteMessage(null)}
           onConfirm={() => void deleteMessage()}
+          variant="danger"
+        />
+      ) : null}
+      {pendingResendMessage ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={t("chat.resendConfirmLabel")}
+          secondaryLabel={t("chat.resendCreateBranchLabel")}
+          loading={loading}
+          message={
+            <span className="block">
+              <span className="block" data-testid="resend-message-impact">
+                {pendingResendImpact?.following === 1
+                  ? t("chat.resendConfirmOne")
+                  : t("chat.resendConfirmMany", {
+                      count: pendingResendImpact?.following ?? 0
+                    })}
+              </span>
+              <span
+                className="mt-3 block rounded-md border border-white/[0.08] bg-ink-950/55 px-3 py-2.5"
+                data-testid="resend-message-preview"
+              >
+                <span className="block text-[11px] font-semibold uppercase text-ink-500">
+                  {t("chat.userMessageLabel")}
+                </span>
+                <span className="mt-1 block break-words text-sm leading-5 text-ink-200">
+                  {pendingResendImpact?.preview || t("chat.emptyMessagePreview")}
+                </span>
+              </span>
+            </span>
+          }
+          title={t("chat.resendConfirmTitle")}
+          onCancel={() => setPendingResendMessage(null)}
+          onSecondary={() => void branchAndResendMessage(pendingResendMessage)}
+          onConfirm={() => {
+            const message = pendingResendMessage;
+            setPendingResendMessage(null);
+            void resendMessage(message);
+          }}
           variant="danger"
         />
       ) : null}

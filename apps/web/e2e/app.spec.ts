@@ -17,6 +17,7 @@ type E2EChat = {
   id: string;
   title: string;
   characterId?: string;
+  parentChatId?: string | null;
   messageCount?: number;
   lastMessagePreview?: {
     role: "user" | "assistant";
@@ -78,7 +79,24 @@ type ApiDataResponse<T> = {
   data?: T;
 };
 
-const permanentlyDeleteChatViaApi = async (request: APIRequestContext, chatId: string) => {
+const permanentlyDeleteChatViaApi = async (
+  request: APIRequestContext,
+  chatId: string,
+  visited = new Set<string>()
+) => {
+  if (visited.has(chatId)) {
+    return;
+  }
+  visited.add(chatId);
+
+  const listResponse = await request.get("/api/chats");
+  if (listResponse.ok()) {
+    const chats = ((await listResponse.json()) as ApiDataResponse<E2EChat[]>).data ?? [];
+    for (const child of chats.filter((chat) => chat.parentChatId === chatId)) {
+      await permanentlyDeleteChatViaApi(request, child.id, visited);
+    }
+  }
+
   await request.delete(`/api/chats/${chatId}`);
   await request.delete(`/api/chats/${chatId}/permanent`);
 };
@@ -886,6 +904,7 @@ test("message deletion previews its exact timeline impact before changing data",
     chatId = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data?.id ?? null;
     expect(chatId).toBeTruthy();
 
+    let secondUserMessageId: string | null = null;
     for (const message of [
       { role: "user", content: firstUser, characterId: null },
       { role: "assistant", content: firstAssistant, characterId },
@@ -896,7 +915,22 @@ test("message deletion previews its exact timeline impact before changing data",
         data: { chatId, ...message }
       });
       expect(response.ok()).toBeTruthy();
+      if (message.content === secondUser) {
+        secondUserMessageId = ((await response.json()) as ApiDataResponse<{ id: string }>).data?.id ?? null;
+      }
     }
+    expect(secondUserMessageId).toBeTruthy();
+    const memoryResponse = await request.post(`/api/chats/${chatId}/memories`, {
+      data: {
+        title: `Retired path ${suffix}`,
+        content: "This memory should be disabled when its source path is deleted.",
+        sourceMessageIds: [secondUserMessageId]
+      }
+    });
+    expect(memoryResponse.ok()).toBeTruthy();
+    const retiredMemoryId =
+      ((await memoryResponse.json()) as ApiDataResponse<{ id: string }>).data?.id ?? null;
+    expect(retiredMemoryId).toBeTruthy();
 
     await page.goto("/");
     await openChatHistoryAndSelect(page, chatTitle);
@@ -970,6 +1004,11 @@ test("message deletion previews its exact timeline impact before changing data",
     await expect(messageViewport.getByText(secondAssistant, { exact: true })).toBeHidden();
     await expect(messageViewport.getByText(firstUser, { exact: true })).toBeVisible();
     await expect(messageViewport.getByText(firstAssistant, { exact: true })).toBeVisible();
+    await expect(page.getByText(/停用 1 条源于已移除剧情的长期记忆|disabled 1 long-term memory item/)).toBeVisible();
+
+    const memoriesResponse = await request.get(`/api/chats/${chatId}/memories`);
+    const memories = (await memoriesResponse.json()) as ApiDataResponse<Array<{ id: string; enabled: boolean }>>;
+    expect(memories.data?.find((memory) => memory.id === retiredMemoryId)?.enabled).toBe(false);
 
     const firstAssistantBubble = page
       .locator('[data-chat-message="assistant"]')
@@ -992,6 +1031,211 @@ test("message deletion previews its exact timeline impact before changing data",
     }>;
     expect(remaining.data?.messages.map((message) => message.content)).toEqual([
       firstUser
+    ]);
+  } finally {
+    if (chatId) await permanentlyDeleteChatViaApi(request, chatId);
+    if (characterId) await request.delete(`/api/characters/${characterId}`);
+  }
+});
+
+test("resending a historical user message confirms its impact and waits for server start", async ({
+  page,
+  request
+}, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const characterName = `Resend Safety Character ${suffix}`;
+  const chatTitle = `Resend Safety Chat ${suffix}`;
+  const firstUser = `The original setup ${suffix}`;
+  const firstAssistant = `The original answer ${suffix}`;
+  const targetUser = `Resend this direction ${suffix}`;
+  const followingAssistant = `Keep this visible until resend starts ${suffix}`;
+  let characterId: string | null = null;
+  let chatId: string | null = null;
+
+  try {
+    const characterResponse = await request.post("/api/characters", {
+      data: {
+        name: characterName,
+        avatar: null,
+        description: "",
+        tags: [],
+        prefix: "",
+        prompt: "",
+        suffix: "",
+        htmlCss: "",
+        openingHtml: "",
+        loreEntries: [],
+        quickReplies: []
+      }
+    });
+    characterId = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data?.id ?? null;
+    const chatResponse = await request.post("/api/chats", {
+      data: { title: chatTitle, characterId }
+    });
+    chatId = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data?.id ?? null;
+    expect(chatId).toBeTruthy();
+
+    for (const message of [
+      { role: "user", content: firstUser, characterId: null },
+      { role: "assistant", content: firstAssistant, characterId },
+      { role: "user", content: targetUser, characterId: null },
+      { role: "assistant", content: followingAssistant, characterId }
+    ]) {
+      const response = await request.post("/api/messages", {
+        data: { chatId, ...message }
+      });
+      expect(response.ok()).toBeTruthy();
+    }
+
+    await page.addInitScript(
+      ({ selectedChatId, targetContent }) => {
+        window.localStorage.setItem("star-companion:selected-chat", selectedChatId);
+        let socket: { onmessage: ((event: MessageEvent) => void) | null } | null = null;
+        let resendRequest: { requestId: string; messageId: string } | null = null;
+        const resendRequests: Array<{ requestId: string; messageId: string }> = [];
+        const emit = (message: Record<string, unknown>) => {
+          socket?.onmessage?.(new MessageEvent("message", { data: JSON.stringify(message) }));
+        };
+
+        class MockWebSocket {
+          static readonly CONNECTING = 0;
+          static readonly OPEN = 1;
+          static readonly CLOSING = 2;
+          static readonly CLOSED = 3;
+          readonly CONNECTING = 0;
+          readonly OPEN = 1;
+          readonly CLOSING = 2;
+          readonly CLOSED = 3;
+          readyState = MockWebSocket.CONNECTING;
+          onopen: ((event: Event) => void) | null = null;
+          onclose: ((event: CloseEvent) => void) | null = null;
+          onerror: ((event: Event) => void) | null = null;
+          onmessage: ((event: MessageEvent) => void) | null = null;
+
+          constructor(_url: string | URL) {
+            socket = this;
+            window.setTimeout(() => {
+              this.readyState = MockWebSocket.OPEN;
+              this.onopen?.(new Event("open"));
+            }, 0);
+          }
+
+          send(data: string) {
+            const request = JSON.parse(data) as { type: string; requestId: string; messageId: string };
+            if (request.type === "resend") {
+              resendRequest = request;
+              resendRequests.push(request);
+            }
+          }
+
+          close() {
+            this.readyState = MockWebSocket.CLOSED;
+            this.onclose?.(new CloseEvent("close"));
+          }
+        }
+
+        Object.assign(window, {
+          WebSocket: MockWebSocket,
+          __resendRequestReceived: () => Boolean(resendRequest),
+          __resendRequestCount: () => resendRequests.length,
+          __resendRequestStarted: () => {
+            if (!resendRequest) return false;
+            const now = new Date().toISOString();
+            emit({ type: "generation_started", requestId: resendRequest.requestId });
+            emit({
+              type: "user_message",
+              requestId: resendRequest.requestId,
+              message: {
+                id: `replacement-user-${Date.now()}`,
+                chatId: selectedChatId,
+                role: "user",
+                characterId: null,
+                content: targetContent,
+                contextIncluded: true,
+                isBookmarked: false,
+                variants: [],
+                activeVariantIndex: 0,
+                tokenUsage: null,
+                loreMatches: [],
+                memoryMatches: [],
+                createdAt: now,
+                updatedAt: now
+              }
+            });
+            emit({ type: "generation_done", requestId: resendRequest.requestId });
+            return true;
+          }
+        });
+      },
+      { selectedChatId: chatId, targetContent: targetUser }
+    );
+
+    await page.goto("/");
+    const messageViewport = page.getByTestId("chat-message-viewport");
+    const targetBubble = page.locator('[data-chat-message="user"]').filter({ hasText: targetUser });
+    await targetBubble.locator('[data-chat-action="resend"]').click();
+    const resendDialog = page.getByRole("dialog", { name: /从这里重发？|Resend from here\?/ });
+    await expect(resendDialog.getByTestId("resend-message-impact")).toContainText(
+      /其后的 1 条消息|next message/
+    );
+    await expect(resendDialog.getByTestId("resend-message-preview")).toContainText(targetUser);
+    await resendDialog.getByRole("button", { name: /取消|Cancel/ }).click();
+    await expect(messageViewport.getByText(followingAssistant, { exact: true })).toBeVisible();
+
+    await targetBubble.locator('[data-chat-action="resend"]').click();
+    await resendDialog.getByRole("button", { name: /重发并替换后续|Resend and replace/ }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __resendRequestReceived: () => boolean }).__resendRequestReceived()
+        )
+      )
+      .toBe(true);
+    await expect(messageViewport.getByText(followingAssistant, { exact: true })).toBeVisible();
+    await page.evaluate(() =>
+      (window as unknown as { __resendRequestStarted: () => boolean }).__resendRequestStarted()
+    );
+    await expect(messageViewport.getByText(followingAssistant, { exact: true })).toBeHidden();
+    await expect(messageViewport.getByText(targetUser, { exact: true })).toHaveCount(1);
+
+    await page.reload();
+    const sourceTargetBubble = page.locator('[data-chat-message="user"]').filter({ hasText: targetUser });
+    await sourceTargetBubble.locator('[data-chat-action="resend"]').click();
+    await resendDialog.getByRole("button", { name: /创建分支并重发|Create branch and resend/ }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __resendRequestCount: () => number }).__resendRequestCount()
+        )
+      )
+      .toBe(1);
+
+    const originalResponse = await request.get(`/api/chats/${chatId}`);
+    const original = (await originalResponse.json()) as ApiDataResponse<{
+      messages: Array<{ content: string }>;
+    }>;
+    expect(original.data?.messages.map((message) => message.content)).toEqual([
+      firstUser,
+      firstAssistant,
+      targetUser,
+      followingAssistant
+    ]);
+
+    const chatsResponse = await request.get("/api/chats");
+    const chats = (await chatsResponse.json()) as ApiDataResponse<E2EChat[]>;
+    const branch = chats.data?.find((chat) => chat.parentChatId === chatId);
+    expect(branch?.id).toBeTruthy();
+    const branchResponse = await request.get(`/api/chats/${branch?.id}`);
+    const branchDetails = (await branchResponse.json()) as ApiDataResponse<{
+      messages: Array<{ content: string }>;
+    }>;
+    expect(branchDetails.data?.messages.map((message) => message.content)).toEqual([
+      firstUser,
+      firstAssistant,
+      targetUser,
+      followingAssistant
     ]);
   } finally {
     if (chatId) await permanentlyDeleteChatViaApi(request, chatId);

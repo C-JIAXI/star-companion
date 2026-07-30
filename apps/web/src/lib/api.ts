@@ -284,7 +284,7 @@ export const api = {
     update: (id: string, input: Partial<MessageInput>) =>
       request<MessageDTO>(`/api/messages/${id}`, { method: "PUT", body: input }),
     removeTimeline: (id: string) =>
-      request<{ chatId: string; deletedCount: number }>(
+      request<{ chatId: string; deletedCount: number; disabledMemoryCount: number }>(
         `/api/messages/${id}/timeline`,
         { method: "DELETE" }
       ),

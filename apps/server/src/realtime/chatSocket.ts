@@ -11,6 +11,10 @@ import { serializeMessage } from "../serializers.js";
 import { getOrCreateSettings } from "../routes/settings.js";
 import { estimateTokenUsage, streamChatCompletion, type TokenUsage } from "../services/completions.js";
 import { updateChatMemoriesFromTurn, type MatchedMemoryEntry } from "../services/chatMemories.js";
+import {
+  getUserMessageResendTarget,
+  prepareUserMessageResend
+} from "../services/messageTimeline.js";
 import { resolveModuleSettings } from "../services/moduleModels.js";
 import { appendVariant, buildPromptContext, type MatchedLoreEntry } from "../services/promptBuilder.js";
 import { updateUserProfileFromChat } from "../services/userProfileMemory.js";
@@ -66,7 +70,9 @@ const streamAssistantReply = async ({
   before,
   targetMessageId,
   excludeMessageIds,
-  continuationTargetMessageId
+  continuationTargetMessageId,
+  onFirstToken,
+  persistEmptyResponseError = true
 }: {
   socket: WebSocket;
   requestId: string;
@@ -79,6 +85,8 @@ const streamAssistantReply = async ({
   targetMessageId?: string;
   excludeMessageIds?: string[];
   continuationTargetMessageId?: string;
+  onFirstToken?: () => Promise<void>;
+  persistEmptyResponseError?: boolean;
 }) => {
   sendJson(socket, {
     type: "generation_character_started",
@@ -133,6 +141,9 @@ const streamAssistantReply = async ({
         continue;
       }
 
+      if (event.content && !assistantContent) {
+        await onFirstToken?.();
+      }
       assistantContent += event.content;
       sendJson(socket, { type: "token", requestId, content: event.content });
     }
@@ -192,8 +203,10 @@ const streamAssistantReply = async ({
 
   if (!assistantContent.trim()) {
     const errorText = "Model returned an empty response. If max tokens is very low, try increasing it.";
-    const errorMessage = await createErrorMessage(chatId, errorText);
-    sendJson(socket, { type: "user_message", requestId, message: errorMessage });
+    if (persistEmptyResponseError) {
+      const errorMessage = await createErrorMessage(chatId, errorText);
+      sendJson(socket, { type: "user_message", requestId, message: errorMessage });
+    }
     throw new Error(errorText);
   }
 
@@ -545,75 +558,55 @@ const handleResend = async (socket: WebSocket, rawMessage: unknown) => {
   controllers.set(request.requestId, abortController);
 
   try {
-    const targetMessage = await prisma.message.findFirst({
-      where: { id: request.messageId, chat: { deletedAt: null } }
-    });
-    if (!targetMessage || targetMessage.role !== "user") {
-      throw new Error("User message not found");
-    }
-
-    const subsequentMessages = await prisma.message.findMany({
-      where: {
-        chatId: targetMessage.chatId,
-        createdAt: { gte: targetMessage.createdAt }
-      },
-      orderBy: { createdAt: "asc" }
-    });
-
-    await prisma.message.deleteMany({
-      where: { id: { in: subsequentMessages.map((m) => m.id) } }
-    });
-
-    const chat = await prisma.chat.findFirst({
-      where: { id: targetMessage.chatId, deletedAt: null }
-    });
-    if (!chat) {
-      throw new Error("Chat not found");
-    }
-
-    const userMessage = await prisma.message.create({
-      data: {
-        chatId: targetMessage.chatId,
-        role: "user",
-        content: targetMessage.content,
-        variants: [],
-        activeVariantIndex: 0
-      }
-    });
-
-    await prisma.chat.update({
-      where: { id: targetMessage.chatId },
-      data: { updatedAt: new Date() }
-    });
-
-    sendJson(socket, { type: "generation_started", requestId: request.requestId });
-    sendJson(socket, {
-      type: "user_message",
-      requestId: request.requestId,
-      message: serializeMessage(userMessage)
-    });
+    // Validate the selected chat model before the resend transaction removes the old timeline.
+    resolveModuleSettings(await getOrCreateSettings(), "chat");
+    const { chat, excludedMessageIds } = await getUserMessageResendTarget(request.messageId);
+    let timelinePrepared = false;
 
     const characterId = chat.characterId;
 
     const stopped = await streamAssistantReply({
       socket,
       requestId: request.requestId,
-      chatId: targetMessage.chatId,
+      chatId: chat.id,
       characterId,
       abortController,
       index: 0,
-      total: 1
+      total: 1,
+      excludeMessageIds: excludedMessageIds,
+      persistEmptyResponseError: false,
+      onFirstToken: async () => {
+        if (timelinePrepared) {
+          return;
+        }
+        const { userMessage, disabledMemoryCount } = await prepareUserMessageResend(request.messageId);
+        timelinePrepared = true;
+        if (disabledMemoryCount > 0) {
+          sendJson(socket, {
+            type: "timeline_memory_invalidated",
+            requestId: request.requestId,
+            chatId: chat.id,
+            disabledMemoryCount
+          });
+        }
+        sendJson(socket, { type: "generation_started", requestId: request.requestId });
+        sendJson(socket, {
+          type: "user_message",
+          requestId: request.requestId,
+          message: serializeMessage(userMessage)
+        });
+      }
     });
 
     if (!stopped) {
       try {
         const settings = resolveModuleSettings(await getOrCreateSettings(), "chat");
         const updatedChat = await updateUserProfileFromChat({
-          chatId: targetMessage.chatId,
+          chatId: chat.id,
           settings
         });
         const memorySummary = await updateChatMemoriesFromTurn({
-          chatId: targetMessage.chatId,
+          chatId: chat.id,
           settings
         });
         if (updatedChat) {

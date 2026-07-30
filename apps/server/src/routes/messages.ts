@@ -10,6 +10,7 @@ import {
 } from "../lib/http.js";
 import { messageCreateSchema, messageListQuerySchema, messageUpdateSchema } from "../schemas.js";
 import { serializeMessage } from "../serializers.js";
+import { deleteMessageTimeline } from "../services/messageTimeline.js";
 
 export const messagesRouter = Router();
 
@@ -125,42 +126,7 @@ messagesRouter.delete(
   "/:id/timeline",
   asyncHandler(async (request, response) => {
     const id = requireParam(request, "id");
-    const result = await prisma.$transaction(async (transaction) => {
-      const existing = await transaction.message.findFirst({
-        where: { id, chat: { deletedAt: null } },
-        select: { id: true, chatId: true, role: true }
-      });
-      if (!existing) {
-        throw new HttpError(404, "Message not found");
-      }
-
-      let messageIds = [existing.id];
-      if (existing.role === "user") {
-        const timeline = await transaction.message.findMany({
-          where: { chatId: existing.chatId },
-          orderBy: { createdAt: "asc" },
-          select: { id: true }
-        });
-        const targetIndex = timeline.findIndex((message) => message.id === existing.id);
-        if (targetIndex < 0) {
-          throw new HttpError(404, "Message not found");
-        }
-        messageIds = timeline.slice(targetIndex).map((message) => message.id);
-      }
-
-      const deleted = await transaction.message.deleteMany({
-        where: { id: { in: messageIds } }
-      });
-      await transaction.chat.update({
-        where: { id: existing.chatId },
-        data: { updatedAt: new Date() }
-      });
-
-      return {
-        chatId: existing.chatId,
-        deletedCount: deleted.count
-      };
-    });
+    const result = await deleteMessageTimeline(id);
 
     response.json({ ok: true, data: result });
   })

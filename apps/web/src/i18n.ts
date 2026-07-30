@@ -147,10 +147,22 @@ const zhCN = {
     "永久删除这条助手回复？只会删除当前这一条消息，此操作不可撤销。",
   "chat.deleteMessagesConfirmLabel": "删除 {{count}} 条消息",
   "chat.deleteMessageTitle": "删除消息",
+  "chat.resendConfirmTitle": "从这里重发？",
+  "chat.resendConfirmOne":
+    "将保留这条用户消息，永久替换其后的 1 条消息，然后重新生成回复。如需保留当前剧情，请选择“创建分支并重发”。",
+  "chat.resendConfirmMany":
+    "将保留这条用户消息，永久替换其后的 {{count}} 条消息，然后重新生成回复。如需保留当前剧情，请选择“创建分支并重发”。",
+  "chat.resendConfirmLabel": "重发并替换后续",
+  "chat.resendCreateBranchLabel": "创建分支并重发",
+  "chat.resendBranchUnavailable": "无法在当前聊天中找到可重发的分支消息。",
+  "chat.resendBranchFailed": "创建分支并重发失败。",
   "chat.userMessageLabel": "用户消息",
   "chat.assistantMessageLabel": "助手回复",
   "chat.emptyMessagePreview": "空消息",
   "chat.messagesDeleted": "已删除 {{count}} 条消息。",
+  "chat.messagesDeletedWithMemoriesDisabled":
+    "已删除 {{count}} 条消息，并停用 {{memories}} 条源于已移除剧情的长期记忆。",
+  "chat.timelineMemoriesDisabled": "已停用 {{count}} 条源于已替换剧情的长期记忆。",
   "chat.editMessageHelp": "在这里调整消息内容，保存后会立即更新当前聊天记录。",
   "chat.editMessagePrompt": "编辑消息",
   "chat.editMessagePlaceholder": "输入新的消息内容",
@@ -390,6 +402,7 @@ const zhCN = {
   "chat.noTrashedChats": "回收站为空。",
   "chat.saveCheckpoint": "保存检查点",
   "chat.checkpointCreated": "检查点已保存，可在历史记录中打开。",
+  "chat.branch": "分支",
   "chat.resend": "重发送",
   "chat.stop": "停止",
   "chat.streaming": "正在生成",
@@ -799,10 +812,23 @@ const en: Record<keyof typeof zhCN, string> = {
     "Permanently delete this assistant reply? Only this message will be removed. This cannot be undone.",
   "chat.deleteMessagesConfirmLabel": "Delete {{count}} messages",
   "chat.deleteMessageTitle": "Delete Message",
+  "chat.resendConfirmTitle": "Resend from here?",
+  "chat.resendConfirmOne":
+    "This user message stays. The next message will be permanently replaced before a new reply is generated. Choose Create branch and resend to preserve the current path.",
+  "chat.resendConfirmMany":
+    "This user message stays. The next {{count}} messages will be permanently replaced before a new reply is generated. Choose Create branch and resend to preserve the current path.",
+  "chat.resendConfirmLabel": "Resend and replace",
+  "chat.resendCreateBranchLabel": "Create branch and resend",
+  "chat.resendBranchUnavailable": "Could not find this message in a new branch.",
+  "chat.resendBranchFailed": "Failed to create a branch and resend.",
   "chat.userMessageLabel": "User message",
   "chat.assistantMessageLabel": "Assistant reply",
   "chat.emptyMessagePreview": "Empty message",
   "chat.messagesDeleted": "Deleted {{count}} message(s).",
+  "chat.messagesDeletedWithMemoriesDisabled":
+    "Deleted {{count}} message(s) and disabled {{memories}} long-term memory item(s) sourced from the removed path.",
+  "chat.timelineMemoriesDisabled":
+    "Disabled {{count}} long-term memory item(s) sourced from the replaced path.",
   "chat.editMessageHelp":
     "Adjust the message content here. Saving updates the current chat immediately.",
   "chat.editMessagePrompt": "Edit Message",
@@ -1058,6 +1084,7 @@ const en: Record<keyof typeof zhCN, string> = {
   "chat.noTrashedChats": "Trash is empty.",
   "chat.saveCheckpoint": "Save checkpoint",
   "chat.checkpointCreated": "Checkpoint saved. Open it from History when you are ready.",
+  "chat.branch": "Branch",
   "chat.resend": "Resend",
   "chat.stop": "Stop",
   "chat.streaming": "Generating",

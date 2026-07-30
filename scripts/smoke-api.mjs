@@ -1421,6 +1421,7 @@ const main = async () => {
     );
     assert.equal(timelineDeletion.chatId, createdChat.id);
     assert.equal(timelineDeletion.deletedCount, 2);
+    assert.equal(timelineDeletion.disabledMemoryCount, 0);
     const messagesAfterTimelineDeletion = await requestData(
       baseUrl,
       `/api/messages?${new URLSearchParams({ chatId: createdChat.id }).toString()}`
