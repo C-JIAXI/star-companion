@@ -117,7 +117,7 @@ const sectionFromLocation = () => {
 
 export function App() {
   const { activeSection, setActiveSection, setLanguage, setShowMessageAvatars } = useAppStore();
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const appName = t("app.name");
   const active = sectionMeta[activeSection];
   const [showMobileNav, setShowMobileNav] = useState(false);
@@ -127,6 +127,7 @@ export function App() {
   const [charactersDirty, setCharactersDirty] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<AppSection | null>(null);
   const [globalSearchRequest, setGlobalSearchRequest] = useState(0);
+  const [upgradeNotice, setUpgradeNotice] = useState<{ previous: string | null; count: number } | null>(null);
 
   useMobileViewport();
 
@@ -164,6 +165,14 @@ export function App() {
         document.documentElement.lang = useAppStore.getState().language;
       });
   }, [setLanguage, setShowMessageAvatars]);
+
+  useEffect(() => {
+    void api.app.info().then((info) => {
+      if (info.migration.status === "upgraded") {
+        setUpgradeNotice({ previous: info.migration.previousAppVersion, count: info.migration.appliedCount });
+      }
+    }).catch(() => undefined);
+  }, []);
 
   const openGlobalSearch = useCallback(() => {
     setGlobalSearchRequest((current) => current + 1);
@@ -282,6 +291,12 @@ export function App() {
   return (
     <div className="h-dvh bg-ink-950 text-ink-50 selection:bg-ember-400/25 safe-area-top safe-area-bottom transition-[height] duration-200">
       <ErrorNotice message={chatCreationError} />
+      {upgradeNotice ? (
+        <div className="fixed left-1/2 top-4 z-[80] flex w-[min(92vw,42rem)] -translate-x-1/2 items-start justify-between gap-3 rounded-lg border border-emerald-400/25 bg-ink-900 px-4 py-3 text-sm text-emerald-100 shadow-2xl" data-testid="upgrade-launch-notice" role="status">
+          <span>{language === "zh-CN" ? `版本升级与数据迁移已安全完成${upgradeNotice.previous ? `（来自 ${upgradeNotice.previous}）` : ""}，共应用 ${upgradeNotice.count} 项迁移。` : `Version upgrade and data migration completed safely${upgradeNotice.previous ? ` from ${upgradeNotice.previous}` : ""}; ${upgradeNotice.count} migration(s) applied.`}</span>
+          <button className="shrink-0 text-emerald-300 hover:text-white" type="button" onClick={() => setUpgradeNotice(null)}>×</button>
+        </div>
+      ) : null}
       <Drawer
         open={showMobileNav}
         onClose={() => setShowMobileNav(false)}

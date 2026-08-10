@@ -33,6 +33,28 @@ export type MatchedLoreEntry = {
   enabled: boolean;
 };
 
+export type PromptBreakdownSectionId =
+  | "character"
+  | "user_persona"
+  | "user_profile"
+  | "lore"
+  | "memory"
+  | "history"
+  | "generation_instruction"
+  | "formatting";
+
+export type PromptBreakdown = {
+  promptTokens: number;
+  promptTokensEstimated: boolean;
+  includedMessageCount: number;
+  sections: Array<{
+    id: PromptBreakdownSectionId;
+    tokenEstimate: number;
+    characterCount: number;
+    itemCount: number;
+  }>;
+};
+
 const toStringArray = (value: Prisma.JsonValue): string[] => {
   if (!Array.isArray(value)) {
     return [];
@@ -43,6 +65,28 @@ const toStringArray = (value: Prisma.JsonValue): string[] => {
 
 const toContextMessageLimit = (memoryTurns: number) =>
   Math.max(1, Math.min(memoryTurns, 50)) * 2 + 1;
+
+const estimatePromptTokens = (content: string) => {
+  const compact = content.trim();
+  return compact ? Math.max(1, Math.ceil(compact.length / 2)) : 0;
+};
+
+const createPromptBreakdownSection = (
+  id: PromptBreakdownSectionId,
+  contents: string[],
+  itemCount = contents.filter((content) => content.trim()).length
+) => {
+  const nonEmptyContents = contents.filter((content) => content.trim());
+  return {
+    id,
+    tokenEstimate: nonEmptyContents.reduce(
+      (total, content) => total + estimatePromptTokens(content),
+      0
+    ),
+    characterCount: nonEmptyContents.reduce((total, content) => total + content.trim().length, 0),
+    itemCount
+  };
+};
 
 const normalizeLoreTriggerMode = (value: string | null | undefined): LoreTriggerMode => {
   if (value === "user" || value === "assistant") {
@@ -189,6 +233,112 @@ const findMatchedLoreEntries = (
     }));
 };
 
+const buildPromptBreakdown = ({
+  messages,
+  characterPrompt,
+  userConfigSegments,
+  userProfileSummary,
+  matchedLoreEntries,
+  memoryPrompt,
+  memoryEntryCount,
+  historyMessages
+}: {
+  messages: ChatCompletionMessage[];
+  characterPrompt: string;
+  userConfigSegments: string[];
+  userProfileSummary: string;
+  matchedLoreEntries: MatchedLoreEntry[];
+  memoryPrompt: string;
+  memoryEntryCount: number;
+  historyMessages: ChatCompletionMessage[];
+}): PromptBreakdown => {
+  const sections = [
+    createPromptBreakdownSection("character", [characterPrompt]),
+    createPromptBreakdownSection(
+      "lore",
+      matchedLoreEntries.map((entry) => entry.content),
+      matchedLoreEntries.length
+    ),
+    createPromptBreakdownSection("user_persona", userConfigSegments),
+    createPromptBreakdownSection("user_profile", [userProfileSummary]),
+    createPromptBreakdownSection("memory", [memoryPrompt], memoryEntryCount),
+    createPromptBreakdownSection(
+      "history",
+      historyMessages.map((message) => message.content),
+      historyMessages.length
+    )
+  ].filter((section) => section.tokenEstimate > 0 || section.itemCount > 0);
+  const promptTokens = messages.reduce(
+    (total, message) => total + estimatePromptTokens(message.content),
+    0
+  );
+  const allocatedTokens = sections.reduce((total, section) => total + section.tokenEstimate, 0);
+  if (promptTokens > allocatedTokens) {
+    sections.push({
+      id: "formatting",
+      tokenEstimate: promptTokens - allocatedTokens,
+      characterCount: 0,
+      itemCount: 0
+    });
+  }
+
+  return {
+    promptTokens,
+    promptTokensEstimated: true,
+    includedMessageCount: historyMessages.length,
+    sections
+  };
+};
+
+export const appendPromptBreakdownInstruction = (
+  breakdown: PromptBreakdown,
+  content: string
+): PromptBreakdown => {
+  const section = createPromptBreakdownSection("generation_instruction", [content]);
+  if (!section.tokenEstimate) return breakdown;
+  return {
+    ...breakdown,
+    promptTokens: breakdown.promptTokens + section.tokenEstimate,
+    sections: [...breakdown.sections, section]
+  };
+};
+
+export const finalizePromptBreakdown = (
+  breakdown: PromptBreakdown,
+  promptTokens: number,
+  promptTokensEstimated: boolean
+): PromptBreakdown => {
+  const normalizedTotal = Math.max(0, Math.round(promptTokens));
+  const weightTotal = breakdown.sections.reduce(
+    (total, section) => total + section.tokenEstimate,
+    0
+  );
+  if (!breakdown.sections.length || weightTotal <= 0) {
+    return { ...breakdown, promptTokens: normalizedTotal, promptTokensEstimated };
+  }
+
+  const allocations = breakdown.sections.map((section, index) => {
+    const exact = (section.tokenEstimate / weightTotal) * normalizedTotal;
+    return { index, floor: Math.floor(exact), fraction: exact - Math.floor(exact) };
+  });
+  let remaining = normalizedTotal - allocations.reduce((total, item) => total + item.floor, 0);
+  const byFraction = [...allocations].sort((left, right) => right.fraction - left.fraction);
+  for (let index = 0; remaining > 0; index += 1, remaining -= 1) {
+    byFraction[index % byFraction.length].floor += 1;
+  }
+  const allocatedByIndex = new Map(allocations.map((item) => [item.index, item.floor]));
+
+  return {
+    ...breakdown,
+    promptTokens: normalizedTotal,
+    promptTokensEstimated,
+    sections: breakdown.sections.map((section, index) => ({
+      ...section,
+      tokenEstimate: allocatedByIndex.get(index) ?? 0
+    }))
+  };
+};
+
 export const resolveChatCharacterId = async (
   chatId: string,
   requestedCharacterId?: string | null
@@ -217,6 +367,7 @@ export const buildPromptContext = async ({
   messages: ChatCompletionMessage[];
   matchedLoreEntries: MatchedLoreEntry[];
   matchedMemoryEntries: MatchedMemoryEntry[];
+  promptBreakdown: PromptBreakdown;
 }> => {
   const chat = await prisma.chat.findFirst({ where: { id: chatId, deletedAt: null } });
   const resolvedCharacterId = resolvePromptCharacterId(chat, characterId);
@@ -267,12 +418,16 @@ export const buildPromptContext = async ({
     settings: resolvedSettings
   });
   const userCustomConfigSegments = getUserCustomConfigSegments(chat?.userPersona);
+  const characterPrompt = buildCharacterSystemPrompt(character, []);
+  const characterPromptWithLore = buildCharacterSystemPrompt(character, matchedLoreEntries);
+  const userProfileSummary = chat?.userProfileSummary.trim() ?? "";
+  const memoryPrompt = formatMemorySystemPrompt(matchedMemoryEntries);
 
   const systemMessages: ChatCompletionMessage[] = [
-    buildCharacterSystemPrompt(character, matchedLoreEntries),
+    characterPromptWithLore,
     ...userCustomConfigSegments,
-    chat?.userProfileSummary.trim() ?? "",
-    formatMemorySystemPrompt(matchedMemoryEntries)
+    userProfileSummary,
+    memoryPrompt
   ]
     .filter(Boolean)
     .map((content) => ({
@@ -284,11 +439,22 @@ export const buildPromptContext = async ({
     role: message.role === "assistant" || message.role === "system" ? message.role : "user",
     content: formatMessageContent(message, characterNames)
   }));
+  const messages = [...systemMessages, ...historyMessages];
 
   return {
-    messages: [...systemMessages, ...historyMessages],
+    messages,
     matchedLoreEntries,
-    matchedMemoryEntries
+    matchedMemoryEntries,
+    promptBreakdown: buildPromptBreakdown({
+      messages,
+      characterPrompt,
+      userConfigSegments: userCustomConfigSegments,
+      userProfileSummary,
+      matchedLoreEntries,
+      memoryPrompt,
+      memoryEntryCount: matchedMemoryEntries.length,
+      historyMessages
+    })
   };
 };
 

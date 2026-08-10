@@ -177,6 +177,8 @@ export function ChatHistoryList({
   const [folderEditingChat, setFolderEditingChat] = useState<ChatDTO | null>(null);
   const [folderEditingIds, setFolderEditingIds] = useState<string[] | null>(null);
   const [folderDraft, setFolderDraft] = useState("");
+  const [folderRenameFrom, setFolderRenameFrom] = useState<string | null>(null);
+  const [folderRenameDraft, setFolderRenameDraft] = useState("");
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
   const historyTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -686,6 +688,37 @@ export function ChatHistoryList({
     }
   };
 
+  const startFolderRename = (folder: string) => {
+    setFolderRenameFrom(folder);
+    setFolderRenameDraft(folder);
+  };
+
+  const saveFolderRename = async () => {
+    if (!folderRenameFrom) {
+      return;
+    }
+
+    const destination = folderRenameDraft.trim();
+    if (destination === folderRenameFrom) {
+      setFolderRenameFrom(null);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      await api.chats.renameFolder({ from: folderRenameFrom, to: destination });
+      setFolderRenameFrom(null);
+      setFolderRenameDraft("");
+      setFolderFilter(destination || "unfiled");
+      await loadChats();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdate"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const exportChatTranscript = async (chat: ChatDTO) => {
     try {
       const data = await api.chats.get(chat.id);
@@ -906,30 +939,44 @@ export function ChatHistoryList({
                       </button>
                     ))}
                     </div>
-                    <label className="flex min-h-9 items-center gap-2 rounded-md border border-white/[0.08] bg-ink-950/35 px-2.5 text-xs text-slate-400">
-                    <Folder size={13} className="shrink-0 text-slate-500" />
-                    <span className="shrink-0">{language === "zh-CN" ? "文件夹" : "Folder"}</span>
-                    <select
-                      aria-label={language === "zh-CN" ? "筛选聊天文件夹" : "Filter chat folders"}
-                      className="min-w-0 flex-1 bg-transparent text-xs text-slate-200 outline-none"
-                      data-testid="chat-history-folder-filter"
-                      value={folderFilter}
-                      onChange={(event) => {
-                        setFolderFilter(event.target.value);
-                        setManageMode(false);
-                        setSelectedIds(new Set());
-                        setActionMenuChatId(null);
-                      }}
-                    >
-                      <option value="all">{language === "zh-CN" ? "全部文件夹" : "All folders"}</option>
-                      <option value="unfiled">{language === "zh-CN" ? "未分类" : "Unfiled"}</option>
-                      {folderOptions.map((folder) => (
-                        <option key={folder} value={folder}>
-                          {folder}
-                        </option>
-                      ))}
-                    </select>
-                    </label>
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <label className="flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-md border border-white/[0.08] bg-ink-950/35 px-2.5 text-xs text-slate-400">
+                        <Folder size={13} className="shrink-0 text-slate-500" />
+                        <span className="shrink-0">{language === "zh-CN" ? "文件夹" : "Folder"}</span>
+                        <select
+                          aria-label={language === "zh-CN" ? "筛选聊天文件夹" : "Filter chat folders"}
+                          className="min-w-0 flex-1 bg-transparent text-xs text-slate-200 outline-none"
+                          data-testid="chat-history-folder-filter"
+                          value={folderFilter}
+                          onChange={(event) => {
+                            setFolderFilter(event.target.value);
+                            setManageMode(false);
+                            setSelectedIds(new Set());
+                            setActionMenuChatId(null);
+                          }}
+                        >
+                          <option value="all">{language === "zh-CN" ? "全部文件夹" : "All folders"}</option>
+                          <option value="unfiled">{language === "zh-CN" ? "未分类" : "Unfiled"}</option>
+                          {folderOptions.map((folder) => (
+                            <option key={folder} value={folder}>
+                              {folder}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {folderFilter !== "all" && folderFilter !== "unfiled" ? (
+                        <button
+                          aria-label={language === "zh-CN" ? "管理当前文件夹" : "Manage current folder"}
+                          className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-white/[0.08] bg-ink-950/35 text-slate-400 transition-colors hover:border-ember-400/35 hover:text-ember-200"
+                          data-testid="chat-history-rename-folder"
+                          title={language === "zh-CN" ? "管理当前文件夹" : "Manage current folder"}
+                          type="button"
+                          onClick={() => startFolderRename(folderFilter)}
+                        >
+                          <Pencil aria-hidden="true" size={14} />
+                        </button>
+                      ) : null}
+                    </div>
                   </>
                 ) : null}
                 <div className="relative">
@@ -1617,6 +1664,54 @@ export function ChatHistoryList({
                     disabled={loading}
                     type="button"
                     onClick={() => void saveBatchFolder()}
+                  >
+                    {t("common.save")}
+                  </button>
+                </div>
+              </div>
+            </Modal>,
+            document.body
+          )
+        : null}
+
+      {folderRenameFrom
+        ? createPortal(
+            <Modal
+              title={language === "zh-CN" ? "重命名聊天文件夹" : "Rename Chat Folder"}
+              onClose={() => setFolderRenameFrom(null)}
+            >
+              <div className="space-y-4">
+                <p className="text-sm leading-6 text-slate-400">
+                  {language === "zh-CN"
+                    ? `将“${folderRenameFrom}”中的所有对话（含归档和回收站）移动到新名称；留空即可全部移回未分类。`
+                    : `Move every chat in “${folderRenameFrom}”, including archived and trashed chats, to the new name. Leave it empty to move them all to Unfiled.`}
+                </p>
+                <TextInput
+                  aria-label={language === "zh-CN" ? "新的聊天文件夹名称" : "New chat folder name"}
+                  autoFocus
+                  maxLength={80}
+                  value={folderRenameDraft}
+                  onChange={(event) => setFolderRenameDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void saveFolderRename();
+                    }
+                  }}
+                />
+                <div className="flex justify-end gap-2">
+                  <button
+                    className="min-h-9 rounded-md px-3 text-sm font-medium text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-100"
+                    type="button"
+                    onClick={() => setFolderRenameFrom(null)}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                  <button
+                    className="min-h-9 rounded-md bg-ember-500 px-3 text-sm font-semibold text-ink-950 transition-colors hover:bg-ember-400 disabled:opacity-50"
+                    disabled={loading}
+                    type="button"
+                    onClick={() => void saveFolderRename()}
                   >
                     {t("common.save")}
                   </button>

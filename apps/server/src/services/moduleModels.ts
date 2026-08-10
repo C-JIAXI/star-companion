@@ -14,6 +14,7 @@ type ProviderModel = {
   id: string;
   label: string;
   model: string;
+  contextWindow?: number;
   capabilities?: AiModelCapability[];
 };
 
@@ -75,6 +76,10 @@ const toProviderProfiles = (value: Prisma.JsonValue): ProviderProfile[] => {
             id: String(model.id ?? ""),
             label: String(model.label ?? ""),
             model: String(model.model ?? ""),
+            contextWindow:
+              typeof model.contextWindow === "number" && Number.isInteger(model.contextWindow)
+                ? model.contextWindow
+                : undefined,
             capabilities: Array.isArray(model.capabilities)
               ? model.capabilities.filter(
                   (capability): capability is AiModelCapability =>

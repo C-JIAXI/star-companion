@@ -13,6 +13,8 @@ export interface ProviderModel {
   id: string;
   label: string;
   model: string;
+  /** Optional provider/model context limit used for local budget estimates. */
+  contextWindow?: number;
   /** Explicit model capabilities. When omitted, clients use a conservative ID-based classification. */
   capabilities?: AiModelCapability[];
 }
@@ -281,6 +283,7 @@ export type ModuleModelPreferencesDTO = Partial<Record<AiModuleId, ModuleModelPr
 export interface UserPersonaPresetDTO {
   id: string;
   name: string;
+  avatar: string;
   config: UserCustomConfigDTO;
   createdAt: string;
   updatedAt: string;
@@ -323,17 +326,29 @@ export interface PaginatedCharactersDTO {
 }
 
 export interface UserCustomConfigDTO {
+  displayName: string;
   prefix: string;
   prompt: string;
   suffix: string;
 }
 
-type UserCustomConfigEnvelope = UserCustomConfigDTO & {
+type LegacyUserCustomConfigEnvelope = Omit<UserCustomConfigDTO, "displayName"> & {
   type: "user-custom-config";
   version: 1;
 };
 
-const isUserCustomConfigEnvelope = (value: unknown): value is UserCustomConfigEnvelope => {
+type UserCustomConfigEnvelope = UserCustomConfigDTO & {
+  type: "user-custom-config";
+  version: 2;
+};
+
+type SerializedUserCustomConfigEnvelope =
+  | LegacyUserCustomConfigEnvelope
+  | UserCustomConfigEnvelope;
+
+const isUserCustomConfigEnvelope = (
+  value: unknown
+): value is SerializedUserCustomConfigEnvelope => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
@@ -341,14 +356,16 @@ const isUserCustomConfigEnvelope = (value: unknown): value is UserCustomConfigEn
   const envelope = value as Record<string, unknown>;
   return (
     envelope.type === "user-custom-config" &&
-    envelope.version === 1 &&
+    (envelope.version === 1 || envelope.version === 2) &&
     typeof envelope.prefix === "string" &&
     typeof envelope.prompt === "string" &&
-    typeof envelope.suffix === "string"
+    typeof envelope.suffix === "string" &&
+    (envelope.version === 1 || typeof envelope.displayName === "string")
   );
 };
 
 export const emptyUserCustomConfig = (): UserCustomConfigDTO => ({
+  displayName: "",
   prefix: "",
   prompt: "",
   suffix: ""
@@ -357,6 +374,7 @@ export const emptyUserCustomConfig = (): UserCustomConfigDTO => ({
 export const normalizeUserCustomConfig = (
   value?: Partial<UserCustomConfigDTO> | null
 ): UserCustomConfigDTO => ({
+  displayName: value?.displayName ?? "",
   prefix: value?.prefix ?? "",
   prompt: value?.prompt ?? "",
   suffix: value?.suffix ?? ""
@@ -381,7 +399,12 @@ export const parseUserCustomConfig = (value?: string | null): UserCustomConfigDT
 
 export const hasUserCustomConfigContent = (value?: Partial<UserCustomConfigDTO> | null) => {
   const normalized = normalizeUserCustomConfig(value);
-  return Boolean(normalized.prefix.trim() || normalized.prompt.trim() || normalized.suffix.trim());
+  return Boolean(
+    normalized.displayName.trim() ||
+      normalized.prefix.trim() ||
+      normalized.prompt.trim() ||
+      normalized.suffix.trim()
+  );
 };
 
 export const serializeUserCustomConfig = (value?: Partial<UserCustomConfigDTO> | null) => {
@@ -393,7 +416,7 @@ export const serializeUserCustomConfig = (value?: Partial<UserCustomConfigDTO> |
 
   return JSON.stringify({
     type: "user-custom-config",
-    version: 1,
+    version: 2,
     ...normalized
   } satisfies UserCustomConfigEnvelope);
 };
@@ -427,6 +450,7 @@ export interface ChatDTO {
   autoMemoryEnabled: boolean;
   memoryUpdatedAt: string | null;
   userPersona: string;
+  userAvatar?: string;
   userProfileSummary: string;
   userProfileUpdatedAt: string | null;
   createdAt: string;
@@ -448,6 +472,15 @@ export interface ChatBatchFolderRequestDTO {
 }
 
 export interface ChatBatchFolderResultDTO {
+  updated: number;
+}
+
+export interface ChatRenameFolderRequestDTO {
+  from: string;
+  to: string;
+}
+
+export interface ChatRenameFolderResultDTO {
   updated: number;
 }
 
@@ -503,6 +536,30 @@ export interface GlobalChatMessageSearchDTO {
   results: GlobalChatMessageSearchResultDTO[];
 }
 
+export type PromptBreakdownSectionId =
+  | "character"
+  | "user_persona"
+  | "user_profile"
+  | "lore"
+  | "memory"
+  | "history"
+  | "generation_instruction"
+  | "formatting";
+
+export interface PromptBreakdownSectionDTO {
+  id: PromptBreakdownSectionId;
+  tokenEstimate: number;
+  characterCount: number;
+  itemCount: number;
+}
+
+export interface PromptBreakdownDTO {
+  promptTokens: number;
+  promptTokensEstimated: boolean;
+  includedMessageCount: number;
+  sections: PromptBreakdownSectionDTO[];
+}
+
 export interface MessageDTO {
   id: string;
   chatId: string;
@@ -514,6 +571,7 @@ export interface MessageDTO {
   variants: string[];
   activeVariantIndex: number;
   tokenUsage: TokenUsageDTO | null;
+  promptBreakdown: PromptBreakdownDTO | null;
   loreMatches: MatchedLoreEntryDTO[];
   memoryMatches: MatchedMemoryDTO[];
   createdAt: string;
@@ -555,6 +613,9 @@ export interface ChatMemoryDTO {
   enabled: boolean;
   sourceMessageIds: string[];
   embeddingModel?: string | null;
+  embeddingSource?: string | null;
+  embeddingDimensions?: number | null;
+  embeddingStatus?: "ready" | "stale" | "failed" | "unavailable";
   embeddingUpdatedAt?: string | null;
   lastMatchedAt: string | null;
   createdAt: string;
@@ -580,6 +641,9 @@ export interface MatchedMemoryDTO {
   enabled: boolean;
   score?: number;
   embeddingModel?: string | null;
+  embeddingSource?: string | null;
+  embeddingDimensions?: number | null;
+  embeddingStatus?: "ready" | "stale" | "failed" | "unavailable";
   embeddingUpdatedAt?: string | null;
   lastMatchedAt?: string | null;
   createdAt?: string;
@@ -598,7 +662,19 @@ export type ChatAgentMode =
   | "scene_summary"
   | "next_steps"
   | "reply_drafts"
-  | "memory_lore_candidates";
+  | "memory_lore_candidates"
+  | "continuity_check"
+  | "character_consistency";
+
+export type ChatAgentActionKind = "reply_draft" | "memory_candidate" | "lore_candidate";
+
+export interface ChatAgentActionDTO {
+  id: string;
+  kind: ChatAgentActionKind;
+  title: string;
+  content: string;
+  keywords?: string[];
+}
 
 export interface ChatAgentDraftRequestDTO {
   mode: ChatAgentMode;
@@ -610,6 +686,7 @@ export interface ChatAgentDraftDTO {
   title: string;
   content: string;
   createdAt: string;
+  actions: ChatAgentActionDTO[];
   matchedLoreEntries: MatchedLoreEntryDTO[];
   matchedMemoryEntries: MatchedMemoryDTO[];
 }
@@ -676,6 +753,101 @@ export interface BackupImportSummaryDTO {
   messages: number;
   memories: number;
   settingsImported: boolean;
+  added: number;
+  updated: number;
+  skipped: number;
+  conflictsResolved: number;
+  recoveryPointId: string | null;
+  completedAt: string;
+}
+
+export type BackupEntityType = "settings" | "characters" | "chats" | "messages" | "memories";
+export type BackupConflictAction = "keep_existing" | "use_incoming" | "skip";
+
+export interface BackupImpactCountsDTO {
+  added: number;
+  updated: number;
+  skipped: number;
+  conflicts: number;
+  invalid: number;
+  deleted: number;
+}
+
+export interface BackupConflictDTO {
+  key: string;
+  entity: BackupEntityType;
+  id: string;
+}
+
+export interface BackupValidationIssueDTO {
+  entity: BackupEntityType | "backup";
+  index: number | null;
+  code: "schema_version" | "invalid_record" | "duplicate_id" | "missing_reference";
+  message: string;
+}
+
+export interface BackupPreviewDTO {
+  previewId: string;
+  schemaVersion: 1 | null;
+  mode: "merge" | "replace";
+  sourceExportedAt: string | null;
+  counts: BackupImpactCountsDTO;
+  byEntity: Record<BackupEntityType, BackupImpactCountsDTO>;
+  conflicts: BackupConflictDTO[];
+  issues: BackupValidationIssueDTO[];
+  canExecute: boolean;
+  requiresRecoveryPoint: boolean;
+}
+
+export interface BackupConflictResolutionDTO {
+  key: string;
+  action: BackupConflictAction;
+}
+
+export interface RecoveryPointSummaryDTO {
+  settings: number;
+  characters: number;
+  chats: number;
+  messages: number;
+  memories: number;
+}
+
+export interface RecoveryPointDTO {
+  id: string;
+  reason: "before_import" | "before_restore";
+  createdAt: string;
+  summary: RecoveryPointSummaryDTO;
+}
+
+export interface RecoveryPointRestoreResultDTO {
+  recoveryPointId: string;
+  safetyRecoveryPointId: string;
+  completedAt: string;
+  summary: BackupImportSummaryDTO;
+}
+
+export type AppPlatform = "web" | "windows" | "android" | "server";
+export type AppBuildType = "development" | "preview" | "release";
+export type DatabaseMigrationStatus = "ready" | "upgraded" | "failed" | "too_new" | "unknown";
+
+export interface AppInfoDTO {
+  appVersion: string;
+  schemaVersion: string;
+  schemaChecksum: string;
+  platform: AppPlatform;
+  buildType: AppBuildType;
+  buildCommit: string | null;
+  migration: {
+    status: DatabaseMigrationStatus;
+    previousAppVersion: string | null;
+    previousSchemaVersion: string | null;
+    appliedCount: number;
+    recoveryCreated: boolean;
+  };
+  update: {
+    capability: "desktop" | "external_store" | "disabled";
+    externalUrl: string | null;
+  };
 }
 
 export interface ChatArchiveDTO {
@@ -697,6 +869,9 @@ export type LanSyncDirection = "pull" | "push";
 export interface LanSyncRequestDTO {
   peerBaseUrl: string;
   mode: "merge" | "replace";
+  phase: "preview" | "execute";
+  previewId?: string;
+  conflictResolutions?: BackupConflictResolutionDTO[];
 }
 
 export interface LanSyncSummaryDTO {
@@ -704,8 +879,10 @@ export interface LanSyncSummaryDTO {
   mode: "merge" | "replace";
   peerBaseUrl: string;
   peerExportedAt: string | null;
-  completedAt: string;
-  summary: BackupImportSummaryDTO;
+  phase: "preview" | "execute";
+  completedAt: string | null;
+  preview: BackupPreviewDTO;
+  summary: BackupImportSummaryDTO | null;
 }
 
 export interface LanSyncInfoDTO {
@@ -729,6 +906,7 @@ export type GenerationClientMessage =
       type: "regenerate";
       requestId: string;
       messageId: string;
+      guidance?: string;
     }
   | {
       type: "continue";

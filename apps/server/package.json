@@ -19,8 +19,8 @@
     "@prisma/client": "^6.19.3",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
-    "express": "^5.1.0",
-    "ws": "^8.18.3",
+    "express": "^5.2.1",
+    "ws": "^8.21.3",
     "zod": "^4.1.12"
   },
   "devDependencies": {
@@ -31,5 +31,8 @@
     "prisma": "^6.19.3",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "body-parser": "2.3.0"
   }
 }

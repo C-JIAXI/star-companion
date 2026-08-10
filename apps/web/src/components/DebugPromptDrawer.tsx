@@ -3,7 +3,14 @@ import { createPortal } from "react-dom";
 import { useEffect, useState } from "react";
 import { parseUserCustomConfig } from "@local-roleplay/shared";
 import { useI18n } from "../i18n";
-import type { CharacterDTO, ChatWithMessagesDTO, CharacterLoreEntryDTO, MessageDTO } from "../types";
+import type {
+  CharacterDTO,
+  ChatWithMessagesDTO,
+  CharacterLoreEntryDTO,
+  MessageDTO,
+  PromptBreakdownDTO,
+  PromptBreakdownSectionId
+} from "../types";
 
 function EmptyHint({ text }: { text: string }) {
   return <span className="italic text-slate-500">{text}</span>;
@@ -80,6 +87,71 @@ function LoreEntryList({ entries, triggeredIds }: { entries: CharacterLoreEntryD
         </div>
       ))}
     </div>
+  );
+}
+
+function PromptBreakdownPanel({ breakdown }: { breakdown: PromptBreakdownDTO }) {
+  const { t } = useI18n();
+  const sectionLabel = (id: PromptBreakdownSectionId) => {
+    const labels: Record<PromptBreakdownSectionId, string> = {
+      character: t("debug.breakdownCharacter"),
+      user_persona: t("debug.breakdownPersona"),
+      user_profile: t("debug.breakdownProfile"),
+      lore: t("debug.breakdownLore"),
+      memory: t("debug.breakdownMemory"),
+      history: t("debug.breakdownHistory"),
+      generation_instruction: t("debug.breakdownInstruction"),
+      formatting: t("debug.breakdownFormatting")
+    };
+    return labels[id];
+  };
+  const maxTokens = Math.max(1, ...breakdown.sections.map((section) => section.tokenEstimate));
+
+  return (
+    <section className="border-b border-white/[0.06] pb-4" data-testid="prompt-breakdown">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <p className="text-xs font-semibold text-slate-400">{t("debug.breakdownTitle")}</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums text-slate-100" data-testid="prompt-breakdown-total">
+            {breakdown.promptTokens.toLocaleString()}
+            <span className="ml-1 text-xs font-medium text-slate-500">tokens</span>
+          </p>
+        </div>
+        <p className="text-xs tabular-nums text-slate-500">
+          {t("debug.breakdownMessages", { count: breakdown.includedMessageCount })}
+        </p>
+      </div>
+
+      <div className="mt-4 space-y-3">
+        {breakdown.sections.map((section) => (
+          <div data-prompt-breakdown-section={section.id} key={section.id}>
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span className="min-w-0 truncate font-medium text-slate-300">
+                {sectionLabel(section.id)}
+              </span>
+              <span className="shrink-0 tabular-nums text-slate-500">
+                {t("debug.breakdownSectionMeta", {
+                  tokens: section.tokenEstimate.toLocaleString(),
+                  count: section.itemCount
+                })}
+              </span>
+            </div>
+            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+              <div
+                className="h-full rounded-full bg-ember-400/80"
+                style={{ width: `${Math.max(2, (section.tokenEstimate / maxTokens) * 100)}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <p className="mt-4 text-xs leading-5 text-slate-500">
+        {breakdown.promptTokensEstimated
+          ? t("debug.breakdownEstimatedNote")
+          : t("debug.breakdownProviderNote")}
+      </p>
+    </section>
   );
 }
 
@@ -179,6 +251,9 @@ export function DebugPromptDrawer({
           <p className="text-xs leading-5 text-slate-500">
             {t("debug.intro")}
           </p>
+          {debugMessage?.promptBreakdown ? (
+            <PromptBreakdownPanel breakdown={debugMessage.promptBreakdown} />
+          ) : null}
           <CollapsibleSection
             id="character"
             title={t("debug.characterPrompt")}

@@ -5,6 +5,7 @@ interface ProviderModel {
   id: string;
   label: string;
   model: string;
+  contextWindow?: number;
   capabilities?: AiModelCapability[];
 }
 
@@ -36,10 +37,23 @@ type AiModuleId =
 
 type ModuleModelPreferences = Partial<Record<AiModuleId, { providerId: string; modelId: string }>>;
 
+const promptBreakdownSectionIds = new Set([
+  "character",
+  "user_persona",
+  "user_profile",
+  "lore",
+  "memory",
+  "history",
+  "generation_instruction",
+  "formatting"
+]);
+
 interface UserPersonaPreset {
   id: string;
   name: string;
+  avatar: string;
   config: {
+    displayName: string;
     prefix: string;
     prompt: string;
     suffix: string;
@@ -87,6 +101,10 @@ const toProviderModels = (value: unknown): ProviderModel[] => {
       id: String(item.id ?? ""),
       label: String(item.label ?? ""),
       model: String(item.model ?? ""),
+      contextWindow:
+        typeof item.contextWindow === "number" && Number.isInteger(item.contextWindow)
+          ? item.contextWindow
+          : undefined,
       capabilities: Array.isArray(item.capabilities)
         ? item.capabilities.filter(
             (capability): capability is AiModelCapability =>
@@ -184,7 +202,10 @@ const toUserPersonaPresets = (value: Prisma.JsonValue): UserPersonaPreset[] => {
       return {
         id: raw.id,
         name: raw.name,
+        avatar: typeof raw.avatar === "string" ? raw.avatar : "",
         config: {
+          displayName:
+            typeof typedConfig.displayName === "string" ? typedConfig.displayName : "",
           prefix: typeof typedConfig.prefix === "string" ? typedConfig.prefix : "",
           prompt: typeof typedConfig.prompt === "string" ? typedConfig.prompt : "",
           suffix: typeof typedConfig.suffix === "string" ? typedConfig.suffix : ""
@@ -219,6 +240,51 @@ const toTokenUsage = (value: Prisma.JsonValue | null) => {
     completionTokens,
     totalTokens,
     estimated: usage.estimated === true
+  };
+};
+
+const toPromptBreakdown = (value: Prisma.JsonValue | null) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (
+    typeof raw.promptTokens !== "number" ||
+    typeof raw.promptTokensEstimated !== "boolean" ||
+    typeof raw.includedMessageCount !== "number" ||
+    !Array.isArray(raw.sections)
+  ) {
+    return null;
+  }
+
+  const sections = raw.sections
+    .map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+      const section = entry as Record<string, unknown>;
+      if (
+        typeof section.id !== "string" ||
+        !promptBreakdownSectionIds.has(section.id) ||
+        typeof section.tokenEstimate !== "number" ||
+        typeof section.characterCount !== "number" ||
+        typeof section.itemCount !== "number"
+      ) {
+        return null;
+      }
+      return {
+        id: section.id,
+        tokenEstimate: section.tokenEstimate,
+        characterCount: section.characterCount,
+        itemCount: section.itemCount
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+
+  return {
+    promptTokens: raw.promptTokens,
+    promptTokensEstimated: raw.promptTokensEstimated,
+    includedMessageCount: raw.includedMessageCount,
+    sections
   };
 };
 
@@ -391,7 +457,11 @@ export const serializeCharacter = (character: Character, password?: string) => {
   };
 };
 
-export const serializeChat = (chat: Chat, messageCount?: number) => ({
+export const serializeChat = (
+  chat: Chat,
+  messageCount?: number,
+  includeUserAvatar = true
+) => ({
   id: chat.id,
   title: chat.title,
   characterId: chat.characterId,
@@ -408,6 +478,7 @@ export const serializeChat = (chat: Chat, messageCount?: number) => ({
   autoMemoryEnabled: chat.autoMemoryEnabled,
   memoryUpdatedAt: chat.memoryUpdatedAt?.toISOString() ?? null,
   userPersona: chat.userPersona,
+  ...(includeUserAvatar ? { userAvatar: chat.userAvatar } : {}),
   userProfileSummary: chat.userProfileSummary,
   userProfileUpdatedAt: chat.userProfileUpdatedAt?.toISOString() ?? null,
   createdAt: toIso(chat.createdAt),
@@ -424,6 +495,9 @@ export const serializeChatMemory = (memory: ChatMemory) => ({
   enabled: memory.enabled,
   sourceMessageIds: toStringArray(memory.sourceMessageIds),
   embeddingModel: memory.embeddingModel,
+  embeddingSource: memory.embeddingSource,
+  embeddingDimensions: memory.embeddingDimensions,
+  embeddingStatus: memory.embeddingStatus,
   embeddingUpdatedAt: memory.embeddingUpdatedAt?.toISOString() ?? null,
   lastMatchedAt: memory.lastMatchedAt?.toISOString() ?? null,
   createdAt: toIso(memory.createdAt),
@@ -441,6 +515,7 @@ export const serializeMessage = (message: Message) => ({
   variants: toStringArray(message.variants),
   activeVariantIndex: message.activeVariantIndex,
   tokenUsage: toTokenUsage(message.tokenUsage),
+  promptBreakdown: toPromptBreakdown(message.promptBreakdown),
   loreMatches: toLoreMatches(message.loreMatches),
   memoryMatches: toMemoryMatches(message.memoryMatches),
   createdAt: toIso(message.createdAt),

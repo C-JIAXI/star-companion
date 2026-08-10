@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 import { mkdir, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
@@ -8,7 +9,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import {
-  backupImportSchema,
+  backupExecuteSchema,
+  backupPreviewRequestSchema,
   characterBatchDeleteSchema,
   characterBatchFetchSchema,
   characterBatchTagsSchema,
@@ -22,6 +24,8 @@ import {
   chatAgentDraftSchema,
   chatArchiveImportSchema,
   chatBatchArchiveSchema,
+  chatBatchFolderSchema,
+  chatRenameFolderSchema,
   chatBatchPermanentDeleteSchema,
   chatBatchTrashSchema,
   chatBranchSchema,
@@ -60,6 +64,10 @@ import {
   testModelConnection
 } from "../server-dist/services/completions.js";
 import { generateEmbeddings } from "../server-dist/services/embeddings.js";
+import { buildRegenerationGuidanceMessage } from "../server-dist/services/regeneration.js";
+import { getAppInfo } from "../server-dist/services/appInfo.js";
+import { generatedBuildInfo } from "../server-dist/generated/buildInfo.js";
+import { getUserCustomConfigSegments } from "../server-dist/services/userCustomConfig.js";
 import {
   assertCharacterUnlockPassword,
   buildCharacterUpdateData,
@@ -74,6 +82,7 @@ import {
   toQuickReplies
 } from "./privateCharacters.mjs";
 import { MobileStore } from "./store.mjs";
+import { mobileBuildType, mobileExternalUpdateUrl } from "./build-info.mjs";
 
 const APP_NAME = "Star Companion Mobile Backend";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -317,6 +326,112 @@ const buildCharacterSystemPrompt = (promptFields, loreEntries = []) => {
     .join("\n\n");
 };
 
+const estimatePromptTokens = (content) => {
+  const compact = String(content ?? "").trim();
+  return compact ? Math.max(1, Math.ceil(compact.length / 2)) : 0;
+};
+
+const createPromptBreakdownSection = (id, contents, itemCount) => {
+  const nonEmptyContents = contents.map((content) => String(content ?? "")).filter((content) => content.trim());
+  return {
+    id,
+    tokenEstimate: nonEmptyContents.reduce(
+      (total, content) => total + estimatePromptTokens(content),
+      0
+    ),
+    characterCount: nonEmptyContents.reduce((total, content) => total + content.trim().length, 0),
+    itemCount: itemCount ?? nonEmptyContents.length
+  };
+};
+
+const buildPromptBreakdown = ({
+  messages,
+  characterPrompt,
+  userConfigSegments,
+  userProfileSummary,
+  matchedLoreEntries,
+  memoryPrompt,
+  memoryEntryCount,
+  historyMessages
+}) => {
+  const sections = [
+    createPromptBreakdownSection("character", [characterPrompt]),
+    createPromptBreakdownSection(
+      "lore",
+      matchedLoreEntries.map((entry) => entry.content),
+      matchedLoreEntries.length
+    ),
+    createPromptBreakdownSection("user_persona", userConfigSegments),
+    createPromptBreakdownSection("user_profile", [userProfileSummary]),
+    createPromptBreakdownSection("memory", [memoryPrompt], memoryEntryCount),
+    createPromptBreakdownSection(
+      "history",
+      historyMessages.map((message) => message.content),
+      historyMessages.length
+    )
+  ].filter((section) => section.tokenEstimate > 0 || section.itemCount > 0);
+  const promptTokens = messages.reduce(
+    (total, message) => total + estimatePromptTokens(message.content),
+    0
+  );
+  const allocatedTokens = sections.reduce((total, section) => total + section.tokenEstimate, 0);
+  if (promptTokens > allocatedTokens) {
+    sections.push({
+      id: "formatting",
+      tokenEstimate: promptTokens - allocatedTokens,
+      characterCount: 0,
+      itemCount: 0
+    });
+  }
+  return {
+    promptTokens,
+    promptTokensEstimated: true,
+    includedMessageCount: historyMessages.length,
+    sections
+  };
+};
+
+const appendPromptBreakdownInstruction = (breakdown, content) => {
+  const section = createPromptBreakdownSection("generation_instruction", [content]);
+  if (!section.tokenEstimate) return breakdown;
+  return {
+    ...breakdown,
+    promptTokens: breakdown.promptTokens + section.tokenEstimate,
+    sections: [...breakdown.sections, section]
+  };
+};
+
+const finalizePromptBreakdown = (breakdown, promptTokens, promptTokensEstimated) => {
+  const normalizedTotal = Math.max(0, Math.round(promptTokens));
+  const weightTotal = breakdown.sections.reduce(
+    (total, section) => total + section.tokenEstimate,
+    0
+  );
+  if (!breakdown.sections.length || weightTotal <= 0) {
+    return { ...breakdown, promptTokens: normalizedTotal, promptTokensEstimated };
+  }
+
+  const allocations = breakdown.sections.map((section, index) => {
+    const exact = (section.tokenEstimate / weightTotal) * normalizedTotal;
+    return { index, floor: Math.floor(exact), fraction: exact - Math.floor(exact) };
+  });
+  let remaining = normalizedTotal - allocations.reduce((total, item) => total + item.floor, 0);
+  const byFraction = [...allocations].sort((left, right) => right.fraction - left.fraction);
+  for (let index = 0; remaining > 0; index += 1, remaining -= 1) {
+    byFraction[index % byFraction.length].floor += 1;
+  }
+  const allocatedByIndex = new Map(allocations.map((item) => [item.index, item.floor]));
+  return {
+    ...breakdown,
+    promptTokens: normalizedTotal,
+    promptTokensEstimated,
+    sections: breakdown.sections.map((section, index) => ({
+      ...section,
+      tokenEstimate: allocatedByIndex.get(index) ?? 0
+    }))
+  };
+};
+
 const scoreMemory = (memory, queryText, queryTokens) => {
   const lowerQuery = queryText.toLowerCase();
   const keywords = toStringArray(memory.keywords).map((keyword) => keyword.toLowerCase());
@@ -376,7 +491,14 @@ const cosineSimilarity = (left, right) => {
 };
 
 const toEmbeddingIdentity = (settings) =>
-  `${String(settings.activeProvider ?? "").trim().toLowerCase()}:${String(settings.model ?? "").trim()}`;
+  [
+    String(settings.activeProvider ?? "").trim().toLowerCase(),
+    String(settings.apiBaseUrl ?? "").trim().replace(/\/+$/, "").toLowerCase(),
+    String(settings.model ?? "").trim()
+  ].join(":");
+
+const getConfiguredEmbeddingSource = (settings) =>
+  toEmbeddingIdentity(resolveModuleSettings(settings, "memory_embedding"));
 
 const ensureMemoryEmbeddings = async (memories, settings, force = false) => {
   let embeddingSettings;
@@ -386,16 +508,24 @@ const ensureMemoryEmbeddings = async (memories, settings, force = false) => {
     return null;
   }
 
-  const embeddingModel = toEmbeddingIdentity(embeddingSettings);
+  const embeddingSource = toEmbeddingIdentity(embeddingSettings);
+  const embeddingModel = `${String(embeddingSettings.activeProvider ?? "").trim().toLowerCase()}:${String(embeddingSettings.model ?? "").trim()}`;
   const vectors = new Map();
   const stale = memories.filter((memory) => {
     const vector = toNumberArray(memory.embedding);
-    if (!force && memory.embeddingModel === embeddingModel && vector) {
+    if (
+      !force &&
+      memory.embeddingStatus === "ready" &&
+      memory.embeddingSource === embeddingSource &&
+      memory.embeddingDimensions === vector?.length &&
+      vector
+    ) {
       vectors.set(memory.id, vector);
       return false;
     }
     return true;
   });
+  const pendingIds = new Set(stale.map((memory) => memory.id));
 
   try {
     for (let start = 0; start < stale.length; start += EMBEDDING_BATCH_SIZE) {
@@ -413,12 +543,25 @@ const ensureMemoryEmbeddings = async (memories, settings, force = false) => {
         await store.updateMemory(memory.chatId, memory.id, {
           embedding: vector,
           embeddingModel,
+          embeddingSource,
+          embeddingDimensions: vector.length,
+          embeddingStatus: "ready",
           embeddingUpdatedAt
         });
+        pendingIds.delete(memory.id);
       }
     }
-    return { settings: embeddingSettings, vectors };
+    const dimensions = vectors.values().next().value?.length;
+    if (!dimensions || [...vectors.values()].some((vector) => vector.length !== dimensions)) return null;
+    return { settings: embeddingSettings, source: embeddingSource, dimensions, vectors };
   } catch {
+    await Promise.all(
+      stale
+        .filter((memory) => pendingIds.has(memory.id))
+        .map((memory) =>
+          store.updateMemory(memory.chatId, memory.id, { embeddingStatus: "failed" })
+        )
+    );
     return null;
   }
 };
@@ -496,16 +639,39 @@ const recallChatMemories = async ({ chatId, query, recentMessages, settings }) =
 
   const queryTokens = new Set(tokenize(queryText));
   const memories = store.listMemories(chatId).filter((memory) => memory.enabled !== false);
-  const embeddingIndex = await ensureMemoryEmbeddings(memories, settings);
+  let embeddingIndex = null;
+  try {
+    const embeddingSettings = resolveModuleSettings(settings, "memory_embedding");
+    const source = toEmbeddingIdentity(embeddingSettings);
+    const readyVectors = memories
+      .map((memory) => ({ memory, vector: toNumberArray(memory.embedding) }))
+      .filter(({ memory, vector }) =>
+        memory.embeddingStatus === "ready" &&
+        memory.embeddingSource === source &&
+        memory.embeddingDimensions === vector?.length &&
+        Boolean(vector)
+      );
+    const dimensions = readyVectors[0]?.vector?.length;
+    if (dimensions && readyVectors.every(({ vector }) => vector?.length === dimensions)) {
+      embeddingIndex = {
+        settings: embeddingSettings,
+        source,
+        dimensions,
+        vectors: new Map(readyVectors.map(({ memory, vector }) => [memory.id, vector]))
+      };
+    }
+  } catch {
+    embeddingIndex = null;
+  }
   let queryVector = null;
   if (embeddingIndex) {
     try {
       const result = await generateEmbeddings({
         settings: embeddingIndex.settings,
-        inputs: [(query.trim() || queryText).slice(0, 6000)],
+        inputs: [queryText.slice(0, 6000)],
         task: "query"
       });
-      queryVector = result.vectors[0] ?? null;
+      queryVector = result.vectors[0]?.length === embeddingIndex.dimensions ? result.vectors[0] : null;
     } catch {
       queryVector = null;
     }
@@ -756,7 +922,9 @@ const updateChatMemoriesFromTurn = async ({ chatId, settings, force = false }) =
         ...(action.title || action.content || action.keywords
           ? {
               embedding: null,
-              embeddingModel: null,
+              embeddingSource: null,
+              embeddingDimensions: null,
+              embeddingStatus: "stale",
               embeddingUpdatedAt: null
             }
           : {})
@@ -884,7 +1052,11 @@ const sortCharactersForPage = (characters, chats, sort) => {
   });
 };
 
-const serializeChat = (chat, messageCount = chat.messageCount ?? 0) => ({
+const serializeChat = (
+  chat,
+  messageCount = chat.messageCount ?? 0,
+  includeUserAvatar = true
+) => ({
   id: chat.id,
   title: chat.title,
   characterId: chat.characterId ?? null,
@@ -893,6 +1065,7 @@ const serializeChat = (chat, messageCount = chat.messageCount ?? 0) => ({
   isCheckpoint: chat.isCheckpoint === true,
   isPinned: chat.isPinned === true,
   isArchived: chat.isArchived === true,
+  folder: chat.folder ?? "",
   deletedAt: chat.deletedAt ?? null,
   backgroundUrl: chat.backgroundUrl ?? "",
   messageCount,
@@ -900,6 +1073,7 @@ const serializeChat = (chat, messageCount = chat.messageCount ?? 0) => ({
   autoMemoryEnabled: chat.autoMemoryEnabled !== false,
   memoryUpdatedAt: chat.memoryUpdatedAt ?? null,
   userPersona: chat.userPersona ?? "",
+  ...(includeUserAvatar ? { userAvatar: chat.userAvatar ?? "" } : {}),
   userProfileSummary: chat.userProfileSummary ?? "",
   userProfileUpdatedAt: chat.userProfileUpdatedAt ?? null,
   createdAt: chat.createdAt,
@@ -916,6 +1090,9 @@ const serializeMemory = (memory) => ({
   enabled: memory.enabled !== false,
   sourceMessageIds: toStringArray(memory.sourceMessageIds),
   embeddingModel: memory.embeddingModel ?? null,
+  embeddingSource: memory.embeddingSource ?? null,
+  embeddingDimensions: memory.embeddingDimensions ?? null,
+  embeddingStatus: memory.embeddingStatus ?? "stale",
   embeddingUpdatedAt: memory.embeddingUpdatedAt ?? null,
   lastMatchedAt: memory.lastMatchedAt ?? null,
   createdAt: memory.createdAt,
@@ -933,6 +1110,7 @@ const serializeMessage = (message) => ({
   variants: toStringArray(message.variants),
   activeVariantIndex: message.activeVariantIndex ?? 0,
   tokenUsage: message.tokenUsage ?? null,
+  promptBreakdown: message.promptBreakdown ?? null,
   loreMatches: Array.isArray(message.loreMatches) ? message.loreMatches : [],
   memoryMatches: Array.isArray(message.memoryMatches) ? message.memoryMatches : [],
   createdAt: message.createdAt,
@@ -1275,30 +1453,54 @@ const getPromptContext = async ({ chatId, before, excludeMessageIds = [] }) => {
     recentMessages,
     settings: resolveModuleSettings(store.getSettings(), "memory")
   });
-  const characterPrompt = buildCharacterSystemPrompt(characterPromptFields, matchedLoreEntries);
-
-  if (characterPrompt) {
-    messages.push({ role: "system", content: characterPrompt });
-  }
-  if (chat.userPersona?.trim()) {
-    messages.push({ role: "system", content: chat.userPersona.trim() });
-  }
-  if (chat.userProfileSummary?.trim()) {
-    messages.push({ role: "system", content: `User profile:\n${chat.userProfileSummary.trim()}` });
-  }
+  const characterPrompt = buildCharacterSystemPrompt(characterPromptFields);
+  const characterPromptWithLore = buildCharacterSystemPrompt(
+    characterPromptFields,
+    matchedLoreEntries
+  );
+  const userConfigSegments = getUserCustomConfigSegments(chat.userPersona);
+  const userProfileSummary = chat.userProfileSummary?.trim() ?? "";
   const memoryPrompt = formatMemorySystemPrompt(matchedMemoryEntries);
+
+  if (characterPromptWithLore) {
+    messages.push({ role: "system", content: characterPromptWithLore });
+  }
+  for (const segment of userConfigSegments) {
+    messages.push({ role: "system", content: segment });
+  }
+  if (userProfileSummary) {
+    messages.push({ role: "system", content: `User profile:\n${userProfileSummary}` });
+  }
   if (memoryPrompt) {
     messages.push({ role: "system", content: memoryPrompt });
   }
+  const historyMessages = [];
   for (const message of recentMessages) {
     if (message.role === "system") continue;
-    messages.push({
+    const historyMessage = {
       role: message.role === "assistant" ? "assistant" : "user",
       content: message.content
-    });
+    };
+    historyMessages.push(historyMessage);
+    messages.push(historyMessage);
   }
 
-  return { chat, messages, matchedLoreEntries, matchedMemoryEntries };
+  return {
+    chat,
+    messages,
+    matchedLoreEntries,
+    matchedMemoryEntries,
+    promptBreakdown: buildPromptBreakdown({
+      messages,
+      characterPrompt,
+      userConfigSegments,
+      userProfileSummary,
+      matchedLoreEntries,
+      memoryPrompt,
+      memoryEntryCount: matchedMemoryEntries.length,
+      historyMessages
+    })
+  };
 };
 
 const agentModeConfig = {
@@ -1323,7 +1525,8 @@ const agentModeConfig = {
     instruction: [
       "Write 2 to 3 alternative user reply drafts for the current single-character chat.",
       "Make each draft ready to paste into the user's message box.",
-      "Keep the drafts distinct in tone or strategy."
+      "Keep the drafts distinct in tone or strategy.",
+      "Wrap every sendable draft exactly in [DRAFT] and [/DRAFT] markers."
     ].join("\n")
   },
   memory_lore_candidates: {
@@ -1331,9 +1534,43 @@ const agentModeConfig = {
     instruction: [
       "Identify candidate notes that the user may later save manually.",
       "Separate durable chat memory candidates from character embedded lore candidates.",
-      "Do not claim anything was saved. Do not propose standalone lorebook or worldbook structures."
+      "Do not claim anything was saved. Do not propose standalone lorebook or worldbook structures.",
+      "For a memory candidate, use [MEMORY title | content | comma-separated keywords].",
+      "For a character lore candidate, use [LORE comma-separated keys | content]."
     ].join("\n")
+  },
+  continuity_check: {
+    title: "Continuity Check",
+    instruction: "Check the current single-character scene for contradictions, unresolved facts, timeline ambiguity, and missing context. Separate confirmed facts from possible inconsistencies."
+  },
+  character_consistency: {
+    title: "Character Consistency",
+    instruction: "Assess whether the recent character replies remain consistent with the provided character card, relationship state, and matched lore. Identify only concrete risks and offer a concise repair direction."
   }
+};
+
+const splitAgentKeywords = (value) => value.split(",").map((item) => item.trim()).filter(Boolean).slice(0, 12);
+
+const extractAgentActions = (mode, content) => {
+  if (mode === "reply_drafts") {
+    return [...content.matchAll(/\[DRAFT\]([\s\S]*?)\[\/DRAFT\]/gi)]
+      .map((match) => match[1].trim())
+      .filter(Boolean)
+      .slice(0, 3)
+      .map((item, index) => ({ id: randomUUID(), kind: "reply_draft", title: `Draft ${index + 1}`, content: item }));
+  }
+  if (mode !== "memory_lore_candidates") return [];
+  const actions = [];
+  for (const match of content.matchAll(/\[(MEMORY|LORE)\s+([^\]]+)\]/gi)) {
+    const fields = match[2].split("|").map((item) => item.trim());
+    if (match[1].toUpperCase() === "MEMORY" && fields.length >= 2) {
+      actions.push({ id: randomUUID(), kind: "memory_candidate", title: fields[0] || "Memory", content: fields[1], keywords: splitAgentKeywords(fields[2] ?? "") });
+    }
+    if (match[1].toUpperCase() === "LORE" && fields.length >= 2) {
+      actions.push({ id: randomUUID(), kind: "lore_candidate", title: fields[0] || "Lore", content: fields[1], keywords: splitAgentKeywords(fields[0]) });
+    }
+  }
+  return actions.slice(0, 8);
 };
 
 const buildAgentDraftMessages = (baseMessages, mode, focus) => [
@@ -1383,6 +1620,7 @@ const createAgentDraft = async ({ chatId, mode, focus }) => {
     title: agentModeConfig[mode].title,
     content,
     createdAt: new Date().toISOString(),
+    actions: extractAgentActions(mode, content),
     matchedLoreEntries: context.matchedLoreEntries,
     matchedMemoryEntries: context.matchedMemoryEntries
   };
@@ -1446,6 +1684,17 @@ const createTitleSuggestion = async (chatId) => {
   return { title, createdAt: new Date().toISOString() };
 };
 
+const createAutoTitle = async (chatId) => {
+  const current = getActiveChat(chatId);
+  if (!current) throw notFound("Chat not found");
+  if (current.title !== "New Chat") return null;
+
+  const suggestion = await createTitleSuggestion(chatId);
+  const latest = store.getChat(chatId);
+  if (!latest || latest.deletedAt || latest.title !== "New Chat") return null;
+  return store.updateChat(chatId, { title: suggestion.title });
+};
+
 const openingInstruction = {
   role: "user",
   content: [
@@ -1485,6 +1734,13 @@ const createOpeningMessage = async (chatId) => {
     throw new Error("Model returned an empty opening message");
   }
 
+  const tokenUsage = estimateTokenUsage(messages, content);
+  const promptBreakdown = finalizePromptBreakdown(
+    appendPromptBreakdownInstruction(context.promptBreakdown, openingInstruction.content),
+    tokenUsage.promptTokens,
+    tokenUsage.estimated
+  );
+
   const message = await store.createMessage({
     chatId,
     role: "assistant",
@@ -1492,7 +1748,8 @@ const createOpeningMessage = async (chatId) => {
     content,
     variants: [content],
     activeVariantIndex: 0,
-    tokenUsage: estimateTokenUsage(messages, content),
+    tokenUsage,
+    promptBreakdown,
     loreMatches: context.matchedLoreEntries,
     memoryMatches: context.matchedMemoryEntries
   });
@@ -1528,10 +1785,12 @@ const importChatArchive = async ({ archive, title }) => {
     title: title ?? archive.chat.title,
     characterId,
     isCheckpoint: archive.chat.isCheckpoint === true,
+    folder: archive.chat.folder,
     backgroundUrl: archive.chat.backgroundUrl,
     memoryTurns: archive.chat.memoryTurns,
     autoMemoryEnabled: archive.chat.autoMemoryEnabled,
     userPersona: archive.chat.userPersona,
+    userAvatar: archive.chat.userAvatar ?? "",
     userProfileSummary: archive.chat.userProfileSummary
   });
   const messageIds = new Map();
@@ -1570,6 +1829,17 @@ app.get("/api/health", (_request, response) => {
     database: "sqlite",
     timestamp: new Date().toISOString()
   });
+});
+
+const getMobileAppInfo = () => {
+  const info = getAppInfo();
+  if (store.migrationReport?.schemaVersion) info.schemaVersion = store.migrationReport.schemaVersion;
+  if (store.migrationReport?.schemaChecksum) info.schemaChecksum = store.migrationReport.schemaChecksum;
+  return info;
+};
+
+app.get("/api/app/info", (_request, response) => {
+  response.json({ ok: true, data: getMobileAppInfo() });
 });
 
 app.get("/api/characters", (_request, response) => {
@@ -1774,7 +2044,10 @@ app.post("/api/characters/batch-fetch", (request, response) => {
 });
 
 app.get("/api/chats", (_request, response) => {
-  response.json({ ok: true, data: store.listChats().map((chat) => serializeChat(chat, chat.messageCount)) });
+  response.json({
+    ok: true,
+    data: store.listChats().map((chat) => serializeChat(chat, chat.messageCount, false))
+  });
 });
 
 app.post(
@@ -1811,6 +2084,14 @@ app.post(
   "/api/chats/:id/title-suggestion",
   asyncHandler(async (request, response) => {
     response.json({ ok: true, data: await createTitleSuggestion(requireParam(request, "id")) });
+  })
+);
+
+app.post(
+  "/api/chats/:id/auto-title",
+  asyncHandler(async (request, response) => {
+    const chat = await createAutoTitle(requireParam(request, "id"));
+    response.json({ ok: true, data: chat ? serializeChat(chat) : null });
   })
 );
 
@@ -1858,7 +2139,9 @@ app.put(
         ...(embeddingSourceChanged
           ? {
               embedding: null,
-              embeddingModel: null,
+              embeddingSource: null,
+              embeddingDimensions: null,
+              embeddingStatus: "stale",
               embeddingUpdatedAt: null
             }
           : {})
@@ -1896,10 +2179,39 @@ app.post(
       settings: store.getSettings(),
       force: true
     });
-    await ensureMemoryEmbeddings(
-      store.listMemories(chatId).filter((memory) => memory.enabled !== false),
-      store.getSettings()
-    );
+    response.json({ ok: true, data: store.listMemories(chatId).map(serializeMemory) });
+  })
+);
+
+app.post(
+  "/api/chats/:id/memories/reindex",
+  asyncHandler(async (request, response) => {
+    const chatId = requireParam(request, "id");
+    if (!getActiveChat(chatId)) throw notFound("Chat not found");
+    const enabledMemories = store
+      .listMemories(chatId)
+      .filter((memory) => memory.enabled !== false);
+    if (enabledMemories.length === 0) {
+      response.json({ ok: true, data: store.listMemories(chatId).map(serializeMemory) });
+      return;
+    }
+
+    const settings = store.getSettings();
+    try {
+      resolveModuleSettings(settings, "memory_embedding");
+    } catch {
+      throw httpError(
+        400,
+        "Configure a compatible memory embedding model before rebuilding the index."
+      );
+    }
+    const index = await ensureMemoryEmbeddings(enabledMemories, settings, true);
+    if (!index) {
+      throw httpError(
+        502,
+        "Memory embedding index rebuild failed. Keyword retrieval remains available."
+      );
+    }
     response.json({ ok: true, data: store.listMemories(chatId).map(serializeMemory) });
   })
 );
@@ -1923,10 +2235,12 @@ app.post(
       parentChatId: chat.id,
       branchSourceMessageId: messages[targetIndex]?.id ?? null,
       isCheckpoint,
+      folder: chat.folder,
       backgroundUrl: chat.backgroundUrl,
       memoryTurns: chat.memoryTurns,
       autoMemoryEnabled: chat.autoMemoryEnabled,
       userPersona: chat.userPersona,
+      userAvatar: chat.userAvatar ?? "",
       userProfileSummary: chat.userProfileSummary,
       userProfileUpdatedAt: chat.userProfileUpdatedAt
     });
@@ -1942,6 +2256,7 @@ app.post(
         variants: message.variants,
         activeVariantIndex: message.activeVariantIndex,
         tokenUsage: message.tokenUsage,
+        promptBreakdown: message.promptBreakdown,
         loreMatches: message.loreMatches,
         memoryMatches: message.memoryMatches,
         createdAt: message.createdAt,
@@ -2046,6 +2361,28 @@ app.post(
       throw notFound("One or more chats were not found");
     }
     const updated = await store.updateChats(body.ids, { isArchived: body.isArchived });
+    response.json({ ok: true, data: { updated } });
+  })
+);
+
+app.post(
+  "/api/chats/batch-folder",
+  asyncHandler(async (request, response) => {
+    const body = parseBody(chatBatchFolderSchema, request.body);
+    if (!body.ids.every((id) => store.getChat(id))) {
+      throw notFound("One or more chats were not found");
+    }
+    const updated = await store.updateChats(body.ids, { folder: body.folder });
+    response.json({ ok: true, data: { updated } });
+  })
+);
+
+app.post(
+  "/api/chats/rename-folder",
+  asyncHandler(async (request, response) => {
+    const body = parseBody(chatRenameFolderSchema, request.body);
+    const ids = store.listChats().filter((chat) => chat.folder === body.from).map((chat) => chat.id);
+    const updated = ids.length ? await store.updateChats(ids, { folder: body.to }) : 0;
     response.json({ ok: true, data: { updated } });
   })
 );
@@ -2220,6 +2557,16 @@ app.put(
         typeof body.userProfileSummary === "string" ? new Date().toISOString() : undefined,
       ...(resolvedApiKey !== undefined ? { apiKey: resolvedApiKey } : {})
     });
+    let memoryEmbeddingSourceChanged = true;
+    try {
+      memoryEmbeddingSourceChanged =
+        getConfiguredEmbeddingSource(existingSettings) !== getConfiguredEmbeddingSource(settings);
+    } catch {
+      memoryEmbeddingSourceChanged = true;
+    }
+    if (memoryEmbeddingSourceChanged) {
+      await store.markMemoryEmbeddingsStale();
+    }
     response.json({ ok: true, data: publicSettings(settings) });
   })
 );
@@ -2302,10 +2649,41 @@ app.get("/api/backups/export", (_request, response) => {
 });
 
 app.post(
+  "/api/backups/preview",
+  asyncHandler(async (request, response) => {
+    const backup = parseBody(backupPreviewRequestSchema, request.body);
+    response.json({
+      ok: true,
+      data: store.previewBackup(backup, serializeSettings(store.getSettings()))
+    });
+  })
+);
+
+app.post(
   "/api/backups/import",
   asyncHandler(async (request, response) => {
-    const backup = parseBody(backupImportSchema, request.body);
-    response.json({ ok: true, data: await store.importBackup(backup) });
+    const backup = parseBody(backupExecuteSchema, request.body);
+    response.json({
+      ok: true,
+      data: await store.importBackup(backup, serializeSettings(store.getSettings()))
+    });
+  })
+);
+
+app.get("/api/backups/recovery-points", (_request, response) => {
+  response.json({ ok: true, data: store.listRecoveryPoints() });
+});
+
+app.post(
+  "/api/backups/recovery-points/:id/restore",
+  asyncHandler(async (request, response) => {
+    response.json({
+      ok: true,
+      data: await store.restoreRecoveryPoint(
+        request.params.id,
+        serializeSettings(store.getSettings())
+      )
+    });
   })
 );
 
@@ -2361,17 +2739,29 @@ app.post(
     const input = parseBody(lanSyncRequestSchema, request.body);
     const peerBaseUrl = normalizePeerBaseUrl(input.peerBaseUrl);
     const peerBackup = await requestPeer(peerBaseUrl, "/api/backups/export");
-    const backup = parseBody(backupImportSchema, { ...peerBackup, mode: input.mode });
-    const summary = await store.importBackup(backup);
+    const backup = parseBody(backupPreviewRequestSchema, { ...peerBackup, mode: input.mode });
+    const preview = store.previewBackup(backup, serializeSettings(store.getSettings()));
+    const summary = input.phase === "execute"
+      ? await store.importBackup(
+          parseBody(backupExecuteSchema, {
+            ...backup,
+            previewId: input.previewId,
+            conflictResolutions: input.conflictResolutions
+          }),
+          serializeSettings(store.getSettings())
+        )
+      : null;
 
     response.json({
       ok: true,
       data: {
         direction: "pull",
+        phase: input.phase,
         mode: input.mode,
         peerBaseUrl,
         peerExportedAt: peerBackup.exportedAt ?? null,
-        completedAt: new Date().toISOString(),
+        completedAt: summary?.completedAt ?? null,
+        preview,
         summary
       }
     });
@@ -2384,19 +2774,32 @@ app.post(
     const input = parseBody(lanSyncRequestSchema, request.body);
     const peerBaseUrl = normalizePeerBaseUrl(input.peerBaseUrl);
     const localBackup = store.exportBackup(serializeSettings(store.getSettings()));
-    const summary = await requestPeer(peerBaseUrl, "/api/backups/import", {
+    const preview = await requestPeer(peerBaseUrl, "/api/backups/preview", {
       method: "POST",
       body: JSON.stringify({ ...localBackup, mode: input.mode })
     });
+    const summary = input.phase === "execute"
+      ? await requestPeer(peerBaseUrl, "/api/backups/import", {
+          method: "POST",
+          body: JSON.stringify({
+            ...localBackup,
+            mode: input.mode,
+            previewId: input.previewId,
+            conflictResolutions: input.conflictResolutions
+          })
+        })
+      : null;
 
     response.json({
       ok: true,
       data: {
         direction: "push",
+        phase: input.phase,
         mode: input.mode,
         peerBaseUrl,
         peerExportedAt: null,
-        completedAt: new Date().toISOString(),
+        completedAt: summary?.completedAt ?? null,
+        preview,
         summary
       }
     });
@@ -2437,6 +2840,7 @@ const appendAssistantContinuation = async ({
   targetMessage,
   continuation,
   tokenUsage,
+  promptBreakdown,
   loreMatches,
   memoryMatches
 }) => {
@@ -2454,6 +2858,7 @@ const appendAssistantContinuation = async ({
     variants,
     activeVariantIndex,
     tokenUsage,
+    promptBreakdown,
     loreMatches,
     memoryMatches
   });
@@ -2466,6 +2871,8 @@ const createAssistantReply = async ({
   targetMessageId,
   excludeMessageIds = [],
   continuationTargetMessageId,
+  regenerationGuidance,
+  regenerationTargetContent,
   abortController
 }) => {
   const targetMessageIdForLookup = continuationTargetMessageId ?? targetMessageId;
@@ -2488,16 +2895,24 @@ const createAssistantReply = async ({
   sendJson(socket, { type: "lore_matches", requestId, entries: context.matchedLoreEntries });
   sendJson(socket, { type: "memory_matches", requestId, entries: context.matchedMemoryEntries });
 
-  const completionMessages = continuationTargetMessageId
-    ? [
-        ...context.messages,
-        {
-          role: "user",
-          content:
-            "Continue the immediately preceding assistant reply from its exact ending. Return only the continuation, without repeating or summarizing any existing text."
-        }
-      ]
+  const generationInstruction = continuationTargetMessageId
+    ? {
+        role: "user",
+        content:
+          "Continue the immediately preceding assistant reply from its exact ending. Return only the continuation, without repeating or summarizing any existing text."
+      }
+    : regenerationGuidance && regenerationTargetContent
+      ? buildRegenerationGuidanceMessage({
+          originalResponse: regenerationTargetContent,
+          guidance: regenerationGuidance
+        })
+      : null;
+  const completionMessages = generationInstruction
+    ? [...context.messages, generationInstruction]
     : context.messages;
+  const completionPromptBreakdown = generationInstruction
+    ? appendPromptBreakdownInstruction(context.promptBreakdown, generationInstruction.content)
+    : context.promptBreakdown;
   let content = "";
   let tokenUsage = null;
   let stopped = false;
@@ -2526,11 +2941,17 @@ const createAssistantReply = async ({
   }
 
   tokenUsage ??= estimateTokenUsage(completionMessages, trimmed);
+  const promptBreakdown = finalizePromptBreakdown(
+    completionPromptBreakdown,
+    tokenUsage.promptTokens,
+    tokenUsage.estimated
+  );
   const message = continuationTargetMessageId
     ? await appendAssistantContinuation({
         targetMessage,
         continuation: trimmed,
         tokenUsage,
+        promptBreakdown,
         loreMatches: context.matchedLoreEntries,
         memoryMatches: context.matchedMemoryEntries
       })
@@ -2540,6 +2961,7 @@ const createAssistantReply = async ({
         variants: appendVariant(targetMessage.variants, trimmed),
         activeVariantIndex: appendVariant(targetMessage.variants, trimmed).length - 1,
         tokenUsage,
+        promptBreakdown,
         loreMatches: context.matchedLoreEntries,
         memoryMatches: context.matchedMemoryEntries
       })
@@ -2551,6 +2973,7 @@ const createAssistantReply = async ({
         variants: [trimmed],
         activeVariantIndex: 0,
         tokenUsage,
+        promptBreakdown,
         loreMatches: context.matchedLoreEntries,
         memoryMatches: context.matchedMemoryEntries
       });
@@ -2653,6 +3076,8 @@ const handleRegenerate = async (socket, raw) => {
       chatId: target.chatId,
       targetMessageId: target.id,
       excludeMessageIds: [target.id],
+      regenerationGuidance: request.guidance,
+      regenerationTargetContent: target.content,
       abortController
     });
     sendJson(socket, { type: result.stopped ? "generation_stopped" : "generation_done", requestId: request.requestId });
@@ -2786,6 +3211,11 @@ const handleStop = (socket, raw) => {
 
 const startServer = async () => {
   await store.load();
+  process.env.STAR_COMPANION_APP_VERSION = generatedBuildInfo.appVersion;
+  process.env.STAR_COMPANION_PLATFORM = "android";
+  process.env.STAR_COMPANION_BUILD_TYPE = mobileBuildType;
+  if (mobileExternalUpdateUrl) process.env.STAR_COMPANION_ANDROID_STORE_URL = mobileExternalUpdateUrl;
+  process.env.STAR_COMPANION_MIGRATION_REPORT = JSON.stringify(store.migrationReport);
   await encryptLegacyProviderKeys();
   const httpServer = createServer(app);
   const wsServer = new WebSocketServer({ server: httpServer, path: "/ws" });
@@ -2808,7 +3238,7 @@ const startServer = async () => {
   });
 
   httpServer.on("error", (error) => {
-    console.error(`${APP_NAME} server error`, error);
+    console.error(`${APP_NAME} server error`, typeof error?.code === "string" ? error.code : "SERVER_ERROR");
   });
 
   httpServer.listen(port, host, () => {
@@ -2817,5 +3247,21 @@ const startServer = async () => {
 };
 
 startServer().catch((error) => {
-  console.error(`${APP_NAME} failed to start`, error);
+  const code = typeof error?.code === "string" ? error.code : error?.name || "STARTUP_FAILED";
+  console.error(`${APP_NAME} failed to start`, code);
+  process.env.STAR_COMPANION_APP_VERSION = generatedBuildInfo.appVersion;
+  process.env.STAR_COMPANION_PLATFORM = "android";
+  process.env.STAR_COMPANION_MIGRATION_REPORT = JSON.stringify({
+    status: code === "SCHEMA_TOO_NEW" || code === "APP_TOO_OLD" ? "too_new" : "failed",
+    previousAppVersion: null,
+    previousSchemaVersion: null,
+    appliedMigrations: [],
+    recoveryCreated: code === "MIGRATION_FAILED"
+  });
+  const recoveryApp = express();
+  recoveryApp.use(cors({ origin: true, credentials: true }));
+  recoveryApp.get("/api/health", (_request, response) => response.status(503).json({ ok: false, app: APP_NAME, database: "upgrade_failed", code }));
+  recoveryApp.get("/api/app/info", (_request, response) => response.json({ ok: true, data: getAppInfo() }));
+  recoveryApp.use("/api", (_request, response) => response.status(503).json({ ok: false, error: "The local database could not be opened safely. Update the app or restore the app-private upgrade-recovery copy." }));
+  recoveryApp.listen(port, host, () => console.log(`${APP_NAME} recovery status available on port ${port}`));
 });

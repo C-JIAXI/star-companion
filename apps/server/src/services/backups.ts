@@ -1,4 +1,9 @@
+import { Prisma, type UserSettings } from "@prisma/client";
+import type { z } from "zod";
 import { prisma } from "../db.js";
+import { HttpError } from "../lib/http.js";
+import type { backupExecuteSchema, backupPreviewRequestSchema } from "../schemas.js";
+import { backupImportSchema } from "../schemas.js";
 import {
   serializeCharacterForBackup,
   serializeChat,
@@ -6,11 +11,17 @@ import {
   serializeMessage,
   serializeSettings
 } from "../serializers.js";
-import { getOrCreateSettings } from "../routes/settings.js";
-import type { z } from "zod";
-import type { backupImportSchema } from "../schemas.js";
+import {
+  analyzeBackupCandidate,
+  type BackupAnalysis,
+  type BackupConflictAction,
+  type BackupMode,
+  type ParsedBackup
+} from "./backupContract.js";
 
-type BackupImportData = z.infer<typeof backupImportSchema>;
+type BackupPreviewInput = z.infer<typeof backupPreviewRequestSchema>;
+type BackupExecuteInput = z.infer<typeof backupExecuteSchema>;
+type DbClient = Prisma.TransactionClient | typeof prisma;
 type ExportedBackup = {
   schemaVersion: 1;
   exportedAt: string;
@@ -21,209 +32,381 @@ type ExportedBackup = {
   memories: unknown[];
 };
 
+const RECOVERY_POINT_LIMIT = 10;
+const RECOVERY_POINT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
 const importedDates = (value: { createdAt?: string; updatedAt?: string }) => ({
   ...(value.createdAt ? { createdAt: new Date(value.createdAt) } : {}),
   ...(value.updatedAt ? { updatedAt: new Date(value.updatedAt) } : {})
 });
 
-export const exportBackup = async (): Promise<ExportedBackup> => {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const getProviderKeys = (settings: UserSettings | null) => {
+  const keys = new Map<string, unknown>();
+  if (!settings || !Array.isArray(settings.providers)) return keys;
+  for (const provider of settings.providers) {
+    if (isRecord(provider) && typeof provider.id === "string" && typeof provider.key === "string") {
+      keys.set(provider.id, provider.key);
+    }
+  }
+  return keys;
+};
+
+const preserveProviderKeys = (incoming: unknown, existing: UserSettings | null) => {
+  if (!Array.isArray(incoming)) return incoming;
+  const keys = getProviderKeys(existing);
+  return incoming.map((provider) => {
+    if (!isRecord(provider) || typeof provider.id !== "string") return provider;
+    const key = keys.get(provider.id);
+    return key ? { ...provider, key } : provider;
+  });
+};
+
+const readExportedBackup = async (client: DbClient): Promise<ExportedBackup> => {
   const [settings, characters, chats, messages, memories] = await Promise.all([
-    getOrCreateSettings(),
-    prisma.character.findMany({ orderBy: { updatedAt: "desc" } }),
-    prisma.chat.findMany({ orderBy: { updatedAt: "desc" } }),
-    prisma.message.findMany({ orderBy: { createdAt: "asc" } }),
-    prisma.chatMemory.findMany({ orderBy: { updatedAt: "desc" } })
+    client.userSettings.findFirst({ orderBy: { createdAt: "asc" } }),
+    client.character.findMany({ orderBy: { updatedAt: "desc" } }),
+    client.chat.findMany({ orderBy: { updatedAt: "desc" } }),
+    client.message.findMany({ orderBy: { createdAt: "asc" } }),
+    client.chatMemory.findMany({ orderBy: { updatedAt: "desc" } })
   ]);
 
   return {
     schemaVersion: 1,
     exportedAt: new Date().toISOString(),
-    settings: serializeSettings(settings),
-    characters: characters.map((character) => serializeCharacterForBackup(character)),
-    chats: chats.map(serializeChat),
+    settings: settings ? serializeSettings(settings) : null,
+    characters: characters.map(serializeCharacterForBackup),
+    chats: chats.map((chat) => serializeChat(chat)),
     messages: messages.map(serializeMessage),
     memories: memories.map(serializeChatMemory)
+  } as const;
+};
+
+const readBackup = async (client: DbClient): Promise<ParsedBackup> =>
+  backupImportSchema.parse({ ...(await readExportedBackup(client)), mode: "merge" });
+
+export const exportBackup = async (): Promise<ExportedBackup> => readExportedBackup(prisma);
+
+const recoverySummary = (backup: ParsedBackup) => ({
+  settings: backup.settings ? 1 : 0,
+  characters: backup.characters.length,
+  chats: backup.chats.length,
+  messages: backup.messages.length,
+  memories: backup.memories.length
+});
+
+const pruneRecoveryPoints = async (tx: Prisma.TransactionClient) => {
+  const points = await tx.recoveryPoint.findMany({
+    select: { id: true, createdAt: true },
+    orderBy: { createdAt: "desc" }
+  });
+  const cutoff = Date.now() - RECOVERY_POINT_MAX_AGE_MS;
+  const ids = points
+    .filter((point, index) => index >= RECOVERY_POINT_LIMIT || point.createdAt.getTime() < cutoff)
+    .map((point) => point.id);
+  if (ids.length) {
+    await tx.recoveryPoint.deleteMany({ where: { id: { in: ids } } });
+  }
+};
+
+const createRecoveryPoint = async (
+  tx: Prisma.TransactionClient,
+  reason: "before_import" | "before_restore"
+) => {
+  const snapshot = await readBackup(tx);
+  const point = await tx.recoveryPoint.create({
+    data: {
+      reason,
+      summary: recoverySummary(snapshot) as Prisma.InputJsonValue,
+      snapshot: snapshot as Prisma.InputJsonValue
+    }
+  });
+  await pruneRecoveryPoints(tx);
+  return point;
+};
+
+export const listRecoveryPoints = async () => {
+  const points = await prisma.recoveryPoint.findMany({
+    select: { id: true, reason: true, summary: true, createdAt: true },
+    orderBy: { createdAt: "desc" }
+  });
+  return points.map((point) => ({
+    id: point.id,
+    reason: point.reason === "before_restore" ? "before_restore" : "before_import",
+    createdAt: point.createdAt.toISOString(),
+    summary: point.summary
+  }));
+};
+
+export const previewBackup = async (input: BackupPreviewInput) => {
+  const current = await readBackup(prisma);
+  return analyzeBackupCandidate(input as BackupPreviewInput & { mode: BackupMode }, current).preview;
+};
+
+const resolutionMap = (input: BackupExecuteInput) =>
+  new Map<string, BackupConflictAction>(
+    input.conflictResolutions.map((resolution) => [resolution.key, resolution.action])
+  );
+
+const shouldApplyRecord = (
+  record: { status: string; key: string | null },
+  mode: BackupMode,
+  resolutions: Map<string, BackupConflictAction>
+) => {
+  if (record.status === "invalid") return false;
+  if (mode === "replace") return true;
+  if (record.status === "skipped") return false;
+  if (record.status === "added") return true;
+  return Boolean(record.key && resolutions.get(record.key) === "use_incoming");
+};
+
+const assertExecutable = (
+  analysis: BackupAnalysis,
+  input: BackupExecuteInput,
+  resolutions: Map<string, BackupConflictAction>
+) => {
+  if (analysis.preview.previewId !== input.previewId) {
+    throw new HttpError(409, "Data changed after the preview. Run the preview again before importing.");
+  }
+  if (!analysis.preview.canExecute) {
+    throw new HttpError(400, "The backup cannot be imported until its validation issues are fixed.", {
+      issues: analysis.preview.issues
+    });
+  }
+  if (analysis.preview.mode === "merge") {
+    const unresolved = analysis.preview.conflicts.filter((conflict) => !resolutions.has(conflict.key));
+    if (unresolved.length) {
+      throw new HttpError(409, "Choose an action for every conflict before importing.", {
+        conflicts: unresolved
+      });
+    }
+  }
+};
+
+const applyBackup = async (
+  tx: Prisma.TransactionClient,
+  analysis: BackupAnalysis,
+  resolutions: Map<string, BackupConflictAction>
+) => {
+  const { backup, records } = analysis;
+  if (backup.mode === "replace") {
+    await tx.chatMemory.deleteMany();
+    await tx.message.deleteMany();
+    await tx.chat.deleteMany();
+    await tx.character.deleteMany();
+  }
+
+  const existingSettings = await tx.userSettings.findFirst({ orderBy: { createdAt: "asc" } });
+  let settingsImported = false;
+  if (records.settings && shouldApplyRecord(records.settings, backup.mode, resolutions)) {
+    const settingsData = {
+      ...records.settings.value,
+      ...(records.settings.value.providers
+        ? { providers: preserveProviderKeys(records.settings.value.providers, existingSettings) }
+        : {})
+    };
+    if (existingSettings) {
+      await tx.userSettings.update({
+        where: { id: existingSettings.id },
+        data: settingsData as Prisma.UserSettingsUpdateInput
+      });
+    } else {
+      await tx.userSettings.create({ data: settingsData as Prisma.UserSettingsCreateInput });
+    }
+    settingsImported = true;
+  }
+
+  for (const record of records.characters) {
+    if (!shouldApplyRecord(record, backup.mode, resolutions)) continue;
+    const character = record.value;
+    const data = {
+      cardId: character.cardId,
+      name: character.name,
+      avatar: character.avatar ?? null,
+      description: character.description,
+      tags: character.tags,
+      prefix: character.prefix,
+      prompt: character.prompt,
+      suffix: character.suffix,
+      htmlCss: character.htmlCss ?? "",
+      openingHtml: character.openingHtml ?? "",
+      loreEntries: character.loreEntries ?? [],
+      quickReplies: character.quickReplies ?? [],
+      isFavorite: character.isFavorite,
+      ...importedDates(character)
+    };
+    if (character.id) {
+      await tx.character.upsert({ where: { id: character.id }, update: data, create: { id: character.id, ...data } });
+    } else {
+      await tx.character.create({ data });
+    }
+  }
+
+  for (const record of records.chats) {
+    if (!shouldApplyRecord(record, backup.mode, resolutions)) continue;
+    const chat = record.value;
+    const data = {
+      title: chat.title,
+      characterId: chat.characterId ?? null,
+      parentChatId: chat.parentChatId ?? null,
+      branchSourceMessageId: chat.branchSourceMessageId ?? null,
+      isCheckpoint: chat.isCheckpoint,
+      isPinned: chat.isPinned,
+      isArchived: chat.isArchived,
+      folder: chat.folder,
+      deletedAt: chat.deletedAt ? new Date(chat.deletedAt) : null,
+      backgroundUrl: chat.backgroundUrl,
+      memoryTurns: chat.memoryTurns,
+      autoMemoryEnabled: chat.autoMemoryEnabled,
+      memoryUpdatedAt: chat.memoryUpdatedAt ? new Date(chat.memoryUpdatedAt) : null,
+      userPersona: chat.userPersona,
+      userAvatar: chat.userAvatar,
+      userProfileSummary: chat.userProfileSummary,
+      userProfileUpdatedAt: chat.userProfileUpdatedAt ? new Date(chat.userProfileUpdatedAt) : null,
+      ...importedDates(chat)
+    };
+    if (chat.id) {
+      await tx.chat.upsert({ where: { id: chat.id }, update: data, create: { id: chat.id, ...data } });
+    } else {
+      await tx.chat.create({ data });
+    }
+  }
+
+  for (const record of records.messages) {
+    if (!shouldApplyRecord(record, backup.mode, resolutions)) continue;
+    const message = record.value;
+    const data = {
+      chatId: message.chatId,
+      role: message.role,
+      characterId: message.characterId ?? null,
+      content: message.content,
+      contextIncluded: message.contextIncluded,
+      isBookmarked: message.isBookmarked,
+      variants: message.variants,
+      activeVariantIndex: message.activeVariantIndex,
+      tokenUsage: message.tokenUsage ?? undefined,
+      promptBreakdown: message.promptBreakdown ?? undefined,
+      loreMatches: message.loreMatches ?? undefined,
+      memoryMatches: message.memoryMatches ?? undefined,
+      ...importedDates(message)
+    };
+    if (message.id) {
+      await tx.message.upsert({ where: { id: message.id }, update: data, create: { id: message.id, ...data } });
+    } else {
+      await tx.message.create({ data });
+    }
+  }
+
+  for (const record of records.memories) {
+    if (!shouldApplyRecord(record, backup.mode, resolutions)) continue;
+    const memory = record.value;
+    const data = {
+      chatId: memory.chatId,
+      title: memory.title,
+      content: memory.content,
+      keywords: memory.keywords,
+      importance: memory.importance,
+      enabled: memory.enabled,
+      sourceMessageIds: memory.sourceMessageIds,
+      embedding: Prisma.DbNull,
+      embeddingModel: null,
+      embeddingSource: null,
+      embeddingDimensions: null,
+      embeddingStatus: "stale",
+      embeddingUpdatedAt: null,
+      lastMatchedAt: memory.lastMatchedAt ? new Date(memory.lastMatchedAt) : null,
+      ...importedDates(memory)
+    };
+    if (memory.id) {
+      await tx.chatMemory.upsert({ where: { id: memory.id }, update: data, create: { id: memory.id, ...data } });
+    } else {
+      await tx.chatMemory.create({ data });
+    }
+  }
+
+  let added = 0;
+  let updated = 0;
+  let skipped = 0;
+  let conflictsResolved = 0;
+  for (const record of [
+    ...(records.settings ? [records.settings] : []),
+    ...records.characters,
+    ...records.chats,
+    ...records.messages,
+    ...records.memories
+  ]) {
+    if (record.status === "added") added += 1;
+    else if (record.status === "skipped") skipped += 1;
+    else if (record.status === "conflict") {
+      const action = backup.mode === "replace" ? "use_incoming" : record.key ? resolutions.get(record.key) : undefined;
+      if (action === "use_incoming") {
+        updated += 1;
+        conflictsResolved += 1;
+      } else {
+        skipped += 1;
+      }
+    }
+  }
+
+  return {
+    mode: backup.mode,
+    characters: records.characters.filter((record) => shouldApplyRecord(record, backup.mode, resolutions)).length,
+    chats: records.chats.filter((record) => shouldApplyRecord(record, backup.mode, resolutions)).length,
+    messages: records.messages.filter((record) => shouldApplyRecord(record, backup.mode, resolutions)).length,
+    memories: records.memories.filter((record) => shouldApplyRecord(record, backup.mode, resolutions)).length,
+    settingsImported,
+    added,
+    updated,
+    skipped,
+    conflictsResolved
   };
 };
 
-export const importBackup = async (backup: BackupImportData) =>
+export const importBackup = async (input: BackupExecuteInput) =>
   prisma.$transaction(async (tx) => {
-    if (backup.mode === "replace") {
-      await tx.chatMemory.deleteMany();
-      await tx.message.deleteMany();
-      await tx.chat.deleteMany();
-      await tx.character.deleteMany();
-    }
+    const current = await readBackup(tx);
+    const analysis = analyzeBackupCandidate(input as BackupExecuteInput & { mode: BackupMode }, current);
+    const resolutions = resolutionMap(input);
+    assertExecutable(analysis, input, resolutions);
 
-    const existingSettings = await tx.userSettings.findFirst({
-      orderBy: { createdAt: "asc" }
-    });
-
-    let settingsImported = false;
-    if (backup.settings) {
-      if (existingSettings) {
-        await tx.userSettings.update({
-          where: { id: existingSettings.id },
-          data: backup.settings
-        });
-      } else {
-        await tx.userSettings.create({ data: backup.settings });
-      }
-      settingsImported = true;
-    }
-
-    for (const character of backup.characters) {
-      const data = {
-        cardId: character.cardId,
-        name: character.name,
-        avatar: character.avatar ?? null,
-        description: character.description,
-        tags: character.tags,
-        prefix: character.prefix,
-        prompt: character.prompt,
-        suffix: character.suffix,
-        htmlCss: character.htmlCss ?? "",
-        openingHtml: character.openingHtml ?? "",
-        loreEntries: character.loreEntries ?? [],
-        quickReplies: character.quickReplies ?? [],
-        isFavorite: character.isFavorite,
-        ...importedDates(character)
-      };
-
-      if (character.id) {
-        await tx.character.upsert({
-          where: { id: character.id },
-          update: data,
-          create: { id: character.id, ...data }
-        });
-      } else {
-        await tx.character.create({ data });
-      }
-    }
-
-    for (const chat of backup.chats) {
-      const characterExists = chat.characterId
-        ? await tx.character.findUnique({
-            where: { id: chat.characterId },
-            select: { id: true }
-          })
-        : null;
-
-      const data = {
-        title: chat.title,
-        characterId: characterExists?.id ?? null,
-        parentChatId: chat.parentChatId ?? null,
-        branchSourceMessageId: chat.branchSourceMessageId ?? null,
-        isCheckpoint: chat.isCheckpoint,
-        isPinned: chat.isPinned,
-        isArchived: chat.isArchived,
-        folder: chat.folder,
-        deletedAt: chat.deletedAt ? new Date(chat.deletedAt) : null,
-        backgroundUrl: chat.backgroundUrl,
-        memoryTurns: chat.memoryTurns,
-        autoMemoryEnabled: chat.autoMemoryEnabled,
-        userPersona: chat.userPersona,
-        userProfileSummary: chat.userProfileSummary,
-        ...importedDates(chat)
-      };
-
-      if (chat.id) {
-        await tx.chat.upsert({
-          where: { id: chat.id },
-          update: data,
-          create: { id: chat.id, ...data }
-        });
-      } else {
-        await tx.chat.create({ data });
-      }
-    }
-
-    let importedMemories = 0;
-    for (const memory of backup.memories) {
-      const chatExists = await tx.chat.findUnique({
-        where: { id: memory.chatId },
-        select: { id: true }
-      });
-
-      if (!chatExists) {
-        continue;
-      }
-
-      const data = {
-        chatId: memory.chatId,
-        title: memory.title,
-        content: memory.content,
-        keywords: memory.keywords,
-        importance: memory.importance,
-        enabled: memory.enabled,
-        sourceMessageIds: memory.sourceMessageIds,
-        lastMatchedAt: memory.lastMatchedAt ? new Date(memory.lastMatchedAt) : null,
-        ...importedDates(memory)
-      };
-
-      if (memory.id) {
-        await tx.chatMemory.upsert({
-          where: { id: memory.id },
-          update: data,
-          create: { id: memory.id, ...data }
-        });
-      } else {
-        await tx.chatMemory.create({ data });
-      }
-      importedMemories += 1;
-    }
-
-    let importedMessages = 0;
-    for (const message of backup.messages) {
-      const chatExists = await tx.chat.findUnique({
-        where: { id: message.chatId },
-        select: { id: true }
-      });
-
-      if (!chatExists) {
-        continue;
-      }
-
-      const characterExists = message.characterId
-        ? await tx.character.findUnique({
-            where: { id: message.characterId },
-            select: { id: true }
-          })
-        : null;
-
-      const data = {
-        chatId: message.chatId,
-        role: message.role,
-        characterId: characterExists?.id ?? null,
-        content: message.content,
-        contextIncluded: message.contextIncluded,
-        isBookmarked: message.isBookmarked,
-        variants: message.variants,
-        activeVariantIndex: message.activeVariantIndex,
-        tokenUsage: message.tokenUsage ?? undefined,
-        loreMatches: message.loreMatches ?? undefined,
-        memoryMatches: message.memoryMatches ?? undefined,
-        ...importedDates(message)
-      };
-
-      if (message.id) {
-        await tx.message.upsert({
-          where: { id: message.id },
-          update: data,
-          create: { id: message.id, ...data }
-        });
-      } else {
-        await tx.message.create({ data });
-      }
-      importedMessages += 1;
-    }
-
+    const recoveryPoint = analysis.preview.requiresRecoveryPoint
+      ? await createRecoveryPoint(tx, "before_import")
+      : null;
+    const applied = await applyBackup(tx, analysis, resolutions);
     return {
-      mode: backup.mode,
-      characters: backup.characters.length,
-      chats: backup.chats.length,
-      messages: importedMessages,
-      memories: importedMemories,
-      settingsImported
+      ...applied,
+      recoveryPointId: recoveryPoint?.id ?? null,
+      completedAt: new Date().toISOString()
+    };
+  });
+
+export const restoreRecoveryPoint = async (id: string) =>
+  prisma.$transaction(async (tx) => {
+    const point = await tx.recoveryPoint.findUnique({ where: { id } });
+    if (!point) throw new HttpError(404, "Recovery point not found.");
+
+    const snapshot = backupImportSchema.safeParse({ ...(point.snapshot as object), mode: "replace" });
+    if (!snapshot.success) {
+      throw new HttpError(400, "This recovery point is damaged and cannot be restored.");
+    }
+
+    const current = await readBackup(tx);
+    const safetyPoint = await createRecoveryPoint(tx, "before_restore");
+    const analysis = analyzeBackupCandidate(snapshot.data, current);
+    if (!analysis.preview.canExecute) {
+      throw new HttpError(400, "This recovery point failed integrity validation and was not restored.");
+    }
+    const applied = await applyBackup(tx, analysis, new Map());
+    return {
+      recoveryPointId: id,
+      safetyRecoveryPointId: safetyPoint.id,
+      completedAt: new Date().toISOString(),
+      summary: {
+        ...applied,
+        recoveryPointId: safetyPoint.id,
+        completedAt: new Date().toISOString()
+      }
     };
   });

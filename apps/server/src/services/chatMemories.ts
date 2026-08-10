@@ -11,6 +11,14 @@ const RECENT_MESSAGE_LIMIT = 6;
 const EXISTING_MEMORY_LIMIT = 30;
 const EMBEDDING_BATCH_SIZE = 64;
 const SEMANTIC_SIMILARITY_THRESHOLD = 0.25;
+const embeddingRefreshes = new Map<string, Promise<EmbeddingIndex | null>>();
+
+type EmbeddingIndex = {
+  settings: UserSettings;
+  source: string;
+  dimensions: number;
+  vectors: Map<string, number[]>;
+};
 
 export type MatchedMemoryEntry = {
   id: string;
@@ -22,6 +30,9 @@ export type MatchedMemoryEntry = {
   enabled: boolean;
   score: number;
   embeddingModel: string | null;
+  embeddingSource: string | null;
+  embeddingDimensions: number | null;
+  embeddingStatus: "ready" | "stale" | "failed" | "unavailable";
   embeddingUpdatedAt: string | null;
   lastMatchedAt: string | null;
   createdAt: string;
@@ -151,8 +162,15 @@ export const cosineSimilarity = (left: number[], right: number[]) => {
   return dot / (Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude));
 };
 
-const toEmbeddingIdentity = (settings: UserSettings) =>
-  `${settings.activeProvider.trim().toLowerCase()}:${settings.model.trim()}`;
+export const getMemoryEmbeddingSource = (settings: UserSettings) =>
+  [
+    settings.activeProvider.trim().toLowerCase(),
+    settings.apiBaseUrl.trim().replace(/\/+$/, "").toLowerCase(),
+    settings.model.trim()
+  ].join(":");
+
+export const getConfiguredMemoryEmbeddingSource = (settings: UserSettings) =>
+  getMemoryEmbeddingSource(resolveModuleSettings(settings, "memory_embedding"));
 
 const ensureMemoryEmbeddings = async (
   memories: ChatMemory[],
@@ -166,16 +184,24 @@ const ensureMemoryEmbeddings = async (
     return null;
   }
 
-  const embeddingModel = toEmbeddingIdentity(embeddingSettings);
+  const embeddingSource = getMemoryEmbeddingSource(embeddingSettings);
+  const embeddingModel = `${embeddingSettings.activeProvider.trim().toLowerCase()}:${embeddingSettings.model.trim()}`;
   const vectors = new Map<string, number[]>();
   const stale = memories.filter((memory) => {
     const vector = toNumberArray(memory.embedding);
-    if (!force && memory.embeddingModel === embeddingModel && vector) {
+    if (
+      !force &&
+      memory.embeddingStatus === "ready" &&
+      memory.embeddingSource === embeddingSource &&
+      memory.embeddingDimensions === vector?.length &&
+      vector
+    ) {
       vectors.set(memory.id, vector);
       return false;
     }
     return true;
   });
+  const pendingIds = new Set(stale.map((memory) => memory.id));
 
   try {
     for (let start = 0; start < stale.length; start += EMBEDDING_BATCH_SIZE) {
@@ -196,14 +222,28 @@ const ensureMemoryEmbeddings = async (
           data: {
             embedding: vector as Prisma.InputJsonValue,
             embeddingModel,
+            embeddingSource,
+            embeddingDimensions: vector.length,
+            embeddingStatus: "ready",
             embeddingUpdatedAt: updatedAt
           }
         });
+        pendingIds.delete(memory.id);
       }
     }
 
-    return { settings: embeddingSettings, model: embeddingModel, vectors };
+    const dimensions = vectors.values().next().value?.length;
+    if (!dimensions || [...vectors.values()].some((vector) => vector.length !== dimensions)) {
+      return null;
+    }
+    return { settings: embeddingSettings, source: embeddingSource, dimensions, vectors };
   } catch {
+    if (pendingIds.size) {
+      await prisma.chatMemory.updateMany({
+        where: { id: { in: [...pendingIds] } },
+        data: { embeddingStatus: "failed" }
+      });
+    }
     return null;
   }
 };
@@ -217,11 +257,20 @@ export const refreshChatMemoryEmbeddings = async ({
   settings: UserSettings;
   force?: boolean;
 }) => {
-  const memories = await prisma.chatMemory.findMany({
-    where: { chatId, enabled: true },
-    orderBy: { updatedAt: "desc" }
-  });
-  return ensureMemoryEmbeddings(memories, settings, force);
+  const existing = embeddingRefreshes.get(chatId);
+  if (existing) {
+    if (!force) return existing;
+    await existing;
+  }
+  const refresh = (async () => {
+    const memories = await prisma.chatMemory.findMany({
+      where: { chatId, enabled: true },
+      orderBy: { updatedAt: "desc" }
+    });
+    return ensureMemoryEmbeddings(memories, settings, force);
+  })().finally(() => embeddingRefreshes.delete(chatId));
+  embeddingRefreshes.set(chatId, refresh);
+  return refresh;
 };
 
 const toMatchedMemoryEntry = (memory: ChatMemory, score: number): MatchedMemoryEntry => ({
@@ -234,6 +283,9 @@ const toMatchedMemoryEntry = (memory: ChatMemory, score: number): MatchedMemoryE
   enabled: memory.enabled,
   score,
   embeddingModel: memory.embeddingModel,
+  embeddingSource: memory.embeddingSource,
+  embeddingDimensions: memory.embeddingDimensions,
+  embeddingStatus: (memory.embeddingStatus as MatchedMemoryEntry["embeddingStatus"]) ?? "stale",
   embeddingUpdatedAt: memory.embeddingUpdatedAt?.toISOString() ?? null,
   lastMatchedAt: memory.lastMatchedAt?.toISOString() ?? null,
   createdAt: memory.createdAt.toISOString(),
@@ -373,16 +425,39 @@ export const recallChatMemories = async ({
     orderBy: [{ importance: "desc" }, { updatedAt: "desc" }]
   });
   const queryTokens = new Set(tokenize(queryText));
-  const embeddingIndex = await ensureMemoryEmbeddings(memories, settings);
+  let embeddingIndex: EmbeddingIndex | null = null;
+  try {
+    const embeddingSettings = resolveModuleSettings(settings, "memory_embedding");
+    const source = getMemoryEmbeddingSource(embeddingSettings);
+    const readyVectors = memories
+      .map((memory) => ({ memory, vector: toNumberArray(memory.embedding) }))
+      .filter(({ memory, vector }) =>
+        memory.embeddingStatus === "ready" &&
+        memory.embeddingSource === source &&
+        memory.embeddingDimensions === vector?.length &&
+        Boolean(vector)
+      );
+    const dimensions = readyVectors[0]?.vector?.length;
+    if (dimensions && readyVectors.every(({ vector }) => vector?.length === dimensions)) {
+      embeddingIndex = {
+        settings: embeddingSettings,
+        source,
+        dimensions,
+        vectors: new Map(readyVectors.map(({ memory, vector }) => [memory.id, vector!]))
+      };
+    }
+  } catch {
+    embeddingIndex = null;
+  }
   let queryVector: number[] | null = null;
   if (embeddingIndex) {
     try {
       const result = await generateEmbeddings({
         settings: embeddingIndex.settings,
-        inputs: [(query.trim() || queryText).slice(0, 6000)],
+        inputs: [queryText.slice(0, 6000)],
         task: "query"
       });
-      queryVector = result.vectors[0] ?? null;
+      queryVector = result.vectors[0]?.length === embeddingIndex.dimensions ? result.vectors[0] : null;
     } catch {
       queryVector = null;
     }
@@ -657,7 +732,9 @@ export const updateChatMemoriesFromTurn = async ({
         ...(action.title || action.content || action.keywords
           ? {
               embedding: Prisma.JsonNull,
-              embeddingModel: null,
+              embeddingSource: null,
+              embeddingDimensions: null,
+              embeddingStatus: "stale",
               embeddingUpdatedAt: null
             }
           : {})
@@ -676,10 +753,7 @@ export const updateChatMemoriesFromTurn = async ({
   });
 
   if (changedMemoryIds.length > 0) {
-    const changedMemories = await prisma.chatMemory.findMany({
-      where: { id: { in: changedMemoryIds }, enabled: true }
-    });
-    await ensureMemoryEmbeddings(changedMemories, settings);
+    await refreshChatMemoryEmbeddings({ chatId, settings });
   }
 
   return {

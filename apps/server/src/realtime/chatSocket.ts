@@ -11,12 +11,21 @@ import { serializeMessage } from "../serializers.js";
 import { getOrCreateSettings } from "../routes/settings.js";
 import { estimateTokenUsage, streamChatCompletion, type TokenUsage } from "../services/completions.js";
 import { updateChatMemoriesFromTurn, type MatchedMemoryEntry } from "../services/chatMemories.js";
+import { GenerationControllerRegistry } from "../services/generationControllers.js";
+import { buildRegenerationGuidanceMessage } from "../services/regeneration.js";
 import {
   getUserMessageResendTarget,
   prepareUserMessageResend
 } from "../services/messageTimeline.js";
 import { resolveModuleSettings } from "../services/moduleModels.js";
-import { appendVariant, buildPromptContext, type MatchedLoreEntry } from "../services/promptBuilder.js";
+import {
+  appendPromptBreakdownInstruction,
+  appendVariant,
+  buildPromptContext,
+  finalizePromptBreakdown,
+  type MatchedLoreEntry,
+  type PromptBreakdown
+} from "../services/promptBuilder.js";
 import { updateUserProfileFromChat } from "../services/userProfileMemory.js";
 
 export const GENERATION_ERROR_PREFIX = "[GENERATION_FAILED] ";
@@ -34,7 +43,7 @@ const createErrorMessage = async (chatId: string, errorText: string) => {
   return serializeMessage(message);
 };
 
-const controllers = new Map<string, AbortController>();
+const controllers = new GenerationControllerRegistry<WebSocket>();
 
 const sendJson = (socket: WebSocket, value: unknown) => {
   if (socket.readyState === socket.OPEN) {
@@ -71,6 +80,8 @@ const streamAssistantReply = async ({
   targetMessageId,
   excludeMessageIds,
   continuationTargetMessageId,
+  regenerationGuidance,
+  regenerationTargetContent,
   onFirstToken,
   persistEmptyResponseError = true
 }: {
@@ -85,6 +96,8 @@ const streamAssistantReply = async ({
   targetMessageId?: string;
   excludeMessageIds?: string[];
   continuationTargetMessageId?: string;
+  regenerationGuidance?: string;
+  regenerationTargetContent?: string;
   onFirstToken?: () => Promise<void>;
   persistEmptyResponseError?: boolean;
 }) => {
@@ -115,16 +128,24 @@ const streamAssistantReply = async ({
     entries: context.matchedMemoryEntries
   });
 
-  const completionMessages = continuationTargetMessageId
-    ? [
-        ...context.messages,
-        {
-          role: "user" as const,
-          content:
-            "Continue the immediately preceding assistant reply from its exact ending. Return only the continuation, without repeating or summarizing any existing text."
-        }
-      ]
+  const generationInstruction = continuationTargetMessageId
+    ? {
+        role: "user" as const,
+        content:
+          "Continue the immediately preceding assistant reply from its exact ending. Return only the continuation, without repeating or summarizing any existing text."
+      }
+    : regenerationGuidance && regenerationTargetContent
+      ? buildRegenerationGuidanceMessage({
+          originalResponse: regenerationTargetContent,
+          guidance: regenerationGuidance
+        })
+      : null;
+  const completionMessages = generationInstruction
+    ? [...context.messages, generationInstruction]
     : context.messages;
+  const completionPromptBreakdown = generationInstruction
+    ? appendPromptBreakdownInstruction(context.promptBreakdown, generationInstruction.content)
+    : context.promptBreakdown;
 
   let assistantContent = "";
   let stopped = false;
@@ -159,11 +180,17 @@ const streamAssistantReply = async ({
     if (assistantContent.trim()) {
       assistantContent = stripThinkingTags(assistantContent);
       tokenUsage ??= estimateTokenUsage(completionMessages, assistantContent);
+      const promptBreakdown = finalizePromptBreakdown(
+        completionPromptBreakdown,
+        tokenUsage.promptTokens,
+        tokenUsage.estimated
+      );
       const message = continuationTargetMessageId
         ? await appendAssistantContinuation(
             continuationTargetMessageId,
             assistantContent,
             tokenUsage,
+            promptBreakdown,
             context.matchedLoreEntries,
             context.matchedMemoryEntries
           )
@@ -172,6 +199,7 @@ const streamAssistantReply = async ({
             targetMessageId,
             assistantContent,
             tokenUsage,
+            promptBreakdown,
             context.matchedLoreEntries,
             context.matchedMemoryEntries
           )
@@ -180,6 +208,7 @@ const streamAssistantReply = async ({
             characterId,
             assistantContent,
             tokenUsage,
+            promptBreakdown,
             context.matchedLoreEntries,
             context.matchedMemoryEntries
           );
@@ -211,11 +240,17 @@ const streamAssistantReply = async ({
   }
 
   tokenUsage ??= estimateTokenUsage(completionMessages, assistantContent);
+  const promptBreakdown = finalizePromptBreakdown(
+    completionPromptBreakdown,
+    tokenUsage.promptTokens,
+    tokenUsage.estimated
+  );
   const message = continuationTargetMessageId
     ? await appendAssistantContinuation(
         continuationTargetMessageId,
         assistantContent,
         tokenUsage,
+        promptBreakdown,
         context.matchedLoreEntries,
         context.matchedMemoryEntries
       )
@@ -224,6 +259,7 @@ const streamAssistantReply = async ({
         targetMessageId,
         assistantContent,
         tokenUsage,
+        promptBreakdown,
         context.matchedLoreEntries,
         context.matchedMemoryEntries
       )
@@ -232,6 +268,7 @@ const streamAssistantReply = async ({
         characterId,
         assistantContent,
         tokenUsage,
+        promptBreakdown,
         context.matchedLoreEntries,
         context.matchedMemoryEntries
       );
@@ -255,6 +292,7 @@ const createAssistantMessage = (
   characterId: string | null,
   content: string,
   tokenUsage: TokenUsage,
+  promptBreakdown: PromptBreakdown,
   loreMatches: MatchedLoreEntry[],
   memoryMatches: MatchedMemoryEntry[]
 ) =>
@@ -267,6 +305,7 @@ const createAssistantMessage = (
       variants: [content],
       activeVariantIndex: 0,
       tokenUsage,
+      promptBreakdown,
       loreMatches,
       memoryMatches
     }
@@ -285,6 +324,7 @@ const updateAssistantVariant = async (
   messageId: string,
   content: string,
   tokenUsage: TokenUsage,
+  promptBreakdown: PromptBreakdown,
   loreMatches: MatchedLoreEntry[],
   memoryMatches: MatchedMemoryEntry[]
 ) => {
@@ -303,6 +343,7 @@ const updateAssistantVariant = async (
       variants,
       activeVariantIndex: variants.length - 1,
       tokenUsage,
+      promptBreakdown,
       loreMatches,
       memoryMatches
     }
@@ -313,6 +354,7 @@ const appendAssistantContinuation = async (
   messageId: string,
   continuation: string,
   tokenUsage: TokenUsage,
+  promptBreakdown: PromptBreakdown,
   loreMatches: MatchedLoreEntry[],
   memoryMatches: MatchedMemoryEntry[]
 ) => {
@@ -345,6 +387,7 @@ const appendAssistantContinuation = async (
       variants,
       activeVariantIndex,
       tokenUsage,
+      promptBreakdown,
       loreMatches,
       memoryMatches
     }
@@ -360,7 +403,7 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
 
   const request = parsed.data;
   const abortController = new AbortController();
-  controllers.set(request.requestId, abortController);
+  controllers.register(request.requestId, socket, abortController);
 
   try {
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
@@ -445,7 +488,7 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
     const message = error instanceof Error ? error.message : "Generation failed";
     sendJson(socket, { type: "error", requestId: request.requestId, error: message });
   } finally {
-    controllers.delete(request.requestId);
+    controllers.release(request.requestId, abortController);
   }
 };
 
@@ -458,7 +501,7 @@ const handleRegenerate = async (socket: WebSocket, rawMessage: unknown) => {
 
   const request = parsed.data;
   const abortController = new AbortController();
-  controllers.set(request.requestId, abortController);
+  controllers.register(request.requestId, socket, abortController);
 
   try {
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
@@ -479,7 +522,9 @@ const handleRegenerate = async (socket: WebSocket, rawMessage: unknown) => {
       index: 0,
       total: 1,
       excludeMessageIds: [targetMessage.id],
-      targetMessageId: targetMessage.id
+      targetMessageId: targetMessage.id,
+      regenerationGuidance: request.guidance,
+      regenerationTargetContent: request.guidance ? targetMessage.content : undefined
     });
 
     sendJson(socket, {
@@ -490,7 +535,7 @@ const handleRegenerate = async (socket: WebSocket, rawMessage: unknown) => {
     const message = error instanceof Error ? error.message : "Regeneration failed";
     sendJson(socket, { type: "error", requestId: request.requestId, error: message });
   } finally {
-    controllers.delete(request.requestId);
+    controllers.release(request.requestId, abortController);
   }
 };
 
@@ -503,7 +548,7 @@ const handleContinue = async (socket: WebSocket, rawMessage: unknown) => {
 
   const request = parsed.data;
   const abortController = new AbortController();
-  controllers.set(request.requestId, abortController);
+  controllers.register(request.requestId, socket, abortController);
 
   try {
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
@@ -542,7 +587,7 @@ const handleContinue = async (socket: WebSocket, rawMessage: unknown) => {
     const message = error instanceof Error ? error.message : "Continue failed";
     sendJson(socket, { type: "error", requestId: request.requestId, error: message });
   } finally {
-    controllers.delete(request.requestId);
+    controllers.release(request.requestId, abortController);
   }
 };
 
@@ -555,7 +600,7 @@ const handleResend = async (socket: WebSocket, rawMessage: unknown) => {
 
   const request = parsed.data;
   const abortController = new AbortController();
-  controllers.set(request.requestId, abortController);
+  controllers.register(request.requestId, socket, abortController);
 
   try {
     // Validate the selected chat model before the resend transaction removes the old timeline.
@@ -640,7 +685,7 @@ const handleResend = async (socket: WebSocket, rawMessage: unknown) => {
     const message = error instanceof Error ? error.message : "Resend failed";
     sendJson(socket, { type: "error", requestId: request.requestId, error: message });
   } finally {
-    controllers.delete(request.requestId);
+    controllers.release(request.requestId, abortController);
   }
 };
 
@@ -651,7 +696,7 @@ const handleStop = (socket: WebSocket, rawMessage: unknown) => {
     return;
   }
 
-  controllers.get(parsed.data.requestId)?.abort();
+  controllers.abortRequest(parsed.data.requestId);
 };
 
 const parseRawMessage = (message: RawData) => {
@@ -705,9 +750,7 @@ export const attachChatSocket = (wsServer: WebSocketServer, appName: string) => 
     });
 
     socket.on("close", () => {
-      for (const controller of controllers.values()) {
-        controller.abort();
-      }
+      controllers.abortSocket(socket);
     });
   });
 };

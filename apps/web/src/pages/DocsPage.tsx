@@ -8,6 +8,7 @@ import {
   Copy,
   Database,
   MessageSquareText,
+  RefreshCw,
   ShieldCheck,
   type LucideIcon
 } from "lucide-react";
@@ -65,6 +66,7 @@ const sectionIcons: Record<string, LucideIcon> = {
   "characters-guide": Bot,
   "settings-security": ShieldCheck,
   backup: Database,
+  updates: RefreshCw,
   appearance: Brush
 };
 
@@ -171,15 +173,15 @@ const getDocsCopy = (language: string): DocsCopy => {
           items: [
             {
               title: "发送与停止",
-              body: "输入消息后发送。生成期间可继续输入并加入待发送队列；队列可编辑、删除或立即发送，当前回复结束后会合并为下一条消息自动发送。队列只在当前应用会话中保留。停止后仍保留已经流式返回的内容。"
+              body: "输入消息后发送。生成期间可继续输入并加入待发送队列；队列可编辑、删除或立即发送，当前回复结束后会合并为下一条消息自动发送。队列只在当前应用会话中保留。停止后仍保留已经流式返回的内容。连接中断时输入区会显示重连状态；未被服务端确认的草稿会自动恢复，重连后刷新当前会话。"
             },
             {
               title: "消息操作",
-              body: "用户消息可复制、编辑、删除、重发；角色回复可复制、编辑、删除、重新生成，并在有候选版本时切换变体。重发历史用户消息会先提示将替换的后续消息；确认框可直接创建保留完整原剧情的分支，并在分支中重发。"
+              body: "用户消息可复制、编辑、删除、重发；角色回复可复制、编辑、删除、重新生成，并在有候选版本时切换变体。每条新生成的角色回复都可打开提示词调试，查看角色设定、用户设定、lore、长期记忆、聊天历史和本轮指令分别占用的 Prompt token。长聊天会在时间线标出下一轮普通回复的滚动上下文边界；手动排除的消息有独立标记，不会与仅因窗口长度而未发送的旧消息混淆。重发历史用户消息会先提示将替换的后续消息；确认框可直接创建保留完整原剧情的分支，并在分支中重发。"
             },
             {
               title: "聊天设置",
-              body: "右上角设置菜单可调整记忆轮数、长期记忆、聊天背景、用户设定、用户画像摘要和当前模型。长期记忆可在设置页单独指定记忆向量模型，使用语义与关键词混合召回；未配置或接口失败时会自动退回关键词。"
+              body: "右上角设置菜单可查看上下文预算，并调整记忆轮数、长期记忆、聊天背景、用户设定、用户画像摘要和当前模型。Persona 预设可同时保存聊天内显示名、可选本地头像与三段用户配置；未上传头像时会生成稳定占位图，但只有前置词、提示词和后置词会进入模型上下文。每个模型可在供应商设置中填写上下文窗口；预算面板会估算下一轮输入与预留回复空间并提示风险，但不会自动裁剪剧情。长期记忆可单独指定向量模型，使用语义与关键词混合召回；面板会汇总就绪、待刷新和失败状态。“整理记忆”调用文本模型更新内容，“重建索引”只重算向量；未配置或接口失败时会自动退回关键词。"
             },
             {
               title: "剧情路径",
@@ -195,7 +197,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "聊天归档",
-              body: "桌面侧栏和移动抽屉会直接显示最多六段置顶或最近活跃聊天，可一步切换。移动端顶部搜索入口与完整历史可在聊天标题和全部消息之间切换，并直接跳到命中消息；也可按轻量文件夹筛选和整理剧情线，或归档已完成的聊天而不删除消息或长期记忆，管理模式支持批量归档与恢复。"
+              body: "桌面侧栏和移动抽屉会直接显示最多六段置顶或最近活跃聊天，可一步切换。移动端顶部搜索入口与完整历史可在聊天标题和全部消息之间切换，并直接跳到命中消息；也可按轻量文件夹筛选和整理剧情线，并从当前文件夹筛选直接全局重命名或清空。归档已完成的聊天不会删除消息或长期记忆，管理模式支持批量归档与恢复。"
             },
             {
               title: "聊天回收站",
@@ -286,18 +288,36 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "合并导入",
-              body: "合并导入会保留现有数据，更新本地已有且备份中也包含的内容，并添加新的内容，适合补充导入。"
+              body: "合并导入先只读预检。新增内容可以直接加入；同一 ID 但内容不同会列为冲突，必须逐项选择保留本机、采用备份或跳过，不会静默覆盖。"
             },
             {
               title: "替换导入",
-              body: "替换导入会清空现有角色、聊天和消息后再导入，但不会清除本地 API Key。"
+              body: "替换导入会显示预计删除数量并要求独立危险确认。写入前自动创建本地恢复点，API Key 始终留在当前设备。"
             },
             {
-              title: "导入前检查",
-              body: "导入前确认备份来源可信，并理解当前模式会怎样影响本地内容。"
+              title: "预检与恢复点",
+              body: "流程为选择来源、预检、查看新增/更新/跳过/冲突/无效/删除影响、确认执行、查看结果。预检不写数据库；恢复点列表显示创建时间和数据规模，可事务性恢复。"
+            },
+            {
+              title: "局域网同步",
+              body: "拉取和推送都先生成差异预览。合并冲突必须明确选择本机、对端或跳过；替换仍需危险确认。桌面和移动后端使用同一契约，载荷永不包含 API Key。"
             }
           ],
-          note: "导入前建议先导出现有备份，方便需要时恢复。"
+          note: "恢复点最多保留 10 个，并清理超过 30 天的旧记录；恢复失败时当前数据保持不变。"
+        },
+        {
+          id: "updates",
+          title: "版本、更新与安全升级",
+          description: "在设置页的“关于与更新”中查看当前构建和数据迁移状态。",
+          kind: "guide",
+          items: [
+            { title: "版本信息", body: "应用会显示应用版本、数据 migration 版本与校验值、平台、构建类型和可选提交标识；这些信息来自统一版本源。" },
+            { title: "Windows 更新", body: "正式 Windows 安装包支持手动检查、查看发布说明、下载进度、推迟，以及下载完成后确认重启安装。开发构建不会连接真实更新源，也不会自动下载或静默安装。" },
+            { title: "Android 更新", body: "Android 只提供安全的应用商店或发布页跳转边界，不会绕过系统或商店机制静默替换 APK。" },
+            { title: "数据库保护", body: "新版本首次启动如需迁移，会先检查数据库完整性、校验迁移历史，并为已有数据库创建升级前安全副本。失败时停止启动并保留原数据库和恢复目录。" },
+            { title: "脱敏诊断", body: "可复制版本、平台、构建、迁移和更新状态；诊断不包含 API Key、聊天正文、用户画像、persona 或私密角色提示词。" }
+          ],
+          note: "校验或签名验证失败时不要继续安装。保留诊断代码，并从可信发布来源重新获取更新。"
         },
         {
           id: "appearance",
@@ -338,7 +358,7 @@ const getDocsCopy = (language: string): DocsCopy => {
                 { selector: "[data-chat-actions]", detail: "消息操作区" },
                 {
                   selector:
-                    '[data-chat-action="copy|edit|delete|resend|regenerate|debug|variant-prev|variant-next|retry|dismiss|send|stop"]',
+                    '[data-chat-action="copy|edit|delete|resend|regenerate|guided-regenerate|debug|variant-prev|variant-next|retry|dismiss|send|stop|reconnect"]',
                   detail: "具体操作按钮"
                 },
                 { selector: "[data-chat-token-info]", detail: "token 统计信息" },
@@ -429,15 +449,15 @@ const getDocsCopy = (language: string): DocsCopy => {
         items: [
           {
             title: "Send and stop",
-            body: "Send from the composer. While generation streams, new messages can be queued, edited, deleted, or sent immediately. The queue is combined into the next message after the current reply and lasts only for the current app session. Stopping keeps content already received."
+            body: "Send from the composer. While generation streams, new messages can be queued, edited, deleted, or sent immediately. The queue is combined into the next message after the current reply and lasts only for the current app session. Stopping keeps content already received. If the connection drops, the composer reports reconnection progress, restores drafts that the server did not acknowledge, and refreshes the conversation after recovery."
           },
           {
             title: "Message actions",
-            body: "User messages can be copied, edited, deleted, or resent. Character replies can be copied, edited, deleted, regenerated, continued when they are the latest reply, and switched between variants. Resending a historical user message first previews the following messages it will replace; the confirmation can create a branch that preserves the full original path, then resend in that branch."
+            body: "User messages can be copied, edited, deleted, or resent. Character replies can be copied, edited, deleted, regenerated directly, regenerated with one-time revision guidance, continued when they are the latest reply, and switched between variants. Each newly generated reply exposes Prompt composition for character instructions, user configuration, lore, recalled memory, chat history, and turn-specific instructions. Long timelines mark the rolling-context boundary for the next normal reply, while manually excluded messages are labeled separately from older messages outside the window. Guided regeneration preserves the current reply as a variant and never stores its guidance as story context. Resending a historical user message first previews the following messages it will replace; the confirmation can create a branch that preserves the full original path, then resend in that branch."
           },
           {
             title: "Chat settings",
-            body: "The top-right menu controls memory turns, long-term memory, chat background, user notes, profile summary, and the active model. Settings can assign a separate memory embedding model for hybrid semantic and keyword retrieval, with automatic keyword fallback."
+            body: "The top-right menu shows the context budget and controls memory turns, long-term memory, chat background, user notes, profile summary, and the active model. Persona presets can retain a chat display name, an optional local avatar, and the three prompt sections; a stable placeholder is generated when no avatar is uploaded, while only prefix, prompt, and suffix enter model context. Each model can store a context-window limit; the budget estimates the next prompt and reserved response space without silently trimming story history. Settings can also assign a separate memory embedding model for hybrid semantic and keyword retrieval. The memory panel summarizes ready, stale, and failed vectors; organizing memory updates content with the text model, while rebuilding the index only recalculates embeddings."
           },
           {
             title: "AI title draft",
@@ -473,7 +493,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Organize story folders",
-            body: "Use the folder action in any History row to group long-running story lines, or leave it empty to return a chat to Unfiled. The folder filter works in active, archived, and Trash scopes, and folder names stay with branches, full backups, LAN sync, and JSON chat archives."
+            body: "Use the folder action in any History row to group long-running story lines, or leave it empty to return a chat to Unfiled. Select a named folder and use its manage button to rename or clear every chat in that folder, including archived and trashed chats. Folder names stay with branches, full backups, LAN sync, and JSON chat archives."
           },
           {
             title: "Story checkpoints",
@@ -570,18 +590,36 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Merge import",
-            body: "Merge import keeps existing data, updates local content that also appears in the backup, and adds new content. Use it when you want to add to what you already have."
+            body: "Merge starts with a read-only preflight. New records can be added directly. A different record with the same ID is an explicit conflict and must be resolved by keeping this device, using the backup, or skipping it; nothing is silently overwritten."
           },
           {
             title: "Replace import",
-            body: "Replace import clears existing characters, chats, and messages before importing, but it does not clear the local API key."
+            body: "Replace shows expected deletions and requires a separate danger confirmation. A local recovery point is created before writing, while API keys always stay on the current device."
           },
           {
-            title: "Check before importing",
-            body: "Confirm the backup source is trusted and understand how the selected mode will affect your local content."
+            title: "Preflight and recovery points",
+            body: "The flow is choose source, preflight, review add/update/skip/conflict/invalid/delete impact, confirm, then review the result. Preflight never writes the database. Recovery points show creation time and data size and restore transactionally."
+          },
+          {
+            title: "LAN sync",
+            body: "Pull and push both generate a difference preview first. Merge conflicts require an explicit local, peer, or skip choice; replace keeps a separate danger confirmation. Desktop and mobile use the same contract, and API keys never enter the payload."
           }
         ],
-        note: "Export a backup before importing so you can restore the previous state if needed."
+        note: "At most 10 recovery points are retained, and points older than 30 days are cleaned up. A failed restore leaves current data unchanged."
+      },
+      {
+        id: "updates",
+        title: "Versions, Updates, and Safe Upgrades",
+        description: "Use About & Updates in Settings to review the current build and data migration state.",
+        kind: "guide",
+        items: [
+          { title: "Version information", body: "The app reports its application version, migration version and checksum, platform, build type, and optional commit from one version source." },
+          { title: "Windows updates", body: "Packaged Windows installations support manual checks, release notes, download progress, deferral, and confirmation before restart/install. Development builds never contact the real update source, and updates are never downloaded or installed silently." },
+          { title: "Android updates", body: "Android only offers a safe link to a configured store or release listing. It never bypasses Android or store protections to replace an APK silently." },
+          { title: "Database protection", body: "When first launch needs a migration, the app checks integrity and migration history and creates a pre-upgrade database copy for existing data. Failure stops startup and preserves the original database and recovery folder." },
+          { title: "Privacy-safe diagnostics", body: "Copied diagnostics include version, platform, build, migration, and update state, but exclude API keys, chat text, profile summaries, personas, and private character prompts." }
+        ],
+        note: "Do not continue after checksum or signature verification failure. Keep the diagnostic code and obtain the update again from a trusted release source."
       },
       {
         id: "appearance",
@@ -622,7 +660,7 @@ const getDocsCopy = (language: string): DocsCopy => {
               { selector: "[data-chat-actions]", detail: "Message action row" },
               {
                 selector:
-                  '[data-chat-action="copy|edit|delete|resend|regenerate|debug|variant-prev|variant-next|retry|dismiss|send|stop"]',
+                  '[data-chat-action="copy|edit|delete|resend|regenerate|guided-regenerate|debug|variant-prev|variant-next|retry|dismiss|send|stop|reconnect"]',
                 detail: "Specific action button"
               },
               { selector: "[data-chat-token-info]", detail: "Token usage display" },

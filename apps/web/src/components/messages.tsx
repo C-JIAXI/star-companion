@@ -16,7 +16,8 @@ import {
   Save,
   Trash2,
   Volume2,
-  VolumeX
+  VolumeX,
+  WandSparkles
 } from "lucide-react";
 import { Marked } from "marked";
 import { memo, useCallback, useMemo } from "react";
@@ -187,17 +188,25 @@ function TokenInfo({
 function ContextInfo({
   loreCount,
   memoryCount,
+  promptTokens,
   onClick
 }: {
   loreCount: number;
   memoryCount: number;
+  promptTokens?: number;
   onClick: () => void;
 }) {
   const { t } = useI18n();
   const hasContext = loreCount > 0 || memoryCount > 0;
-  const label = hasContext
-    ? t("chat.contextUsed", { lore: loreCount, memory: memoryCount })
-    : t("chat.contextEmpty");
+  const label = promptTokens
+    ? t("chat.contextUsedWithPrompt", {
+        tokens: promptTokens.toLocaleString(),
+        lore: loreCount,
+        memory: memoryCount
+      })
+    : hasContext
+      ? t("chat.contextUsed", { lore: loreCount, memory: memoryCount })
+      : t("chat.contextEmpty");
 
   return (
     <button
@@ -258,6 +267,8 @@ export function SystemNotification({ content }: { content: string }) {
 
 export function UserMessageBubble({
   message,
+  userName,
+  userAvatar,
   showAvatar,
   showTimestamp,
   onCopy,
@@ -270,6 +281,8 @@ export function UserMessageBubble({
   onResend
 }: {
   message: MessageDTO;
+  userName?: string;
+  userAvatar?: string;
   showAvatar: boolean;
   showTimestamp: boolean;
   onCopy: () => void;
@@ -293,12 +306,31 @@ export function UserMessageBubble({
       data-context-included={message.contextIncluded !== false ? "true" : "false"}
       data-chat-message="user"
     >
-      <AvatarSlot align="left" name="You" showAvatar={showAvatar} />
+      <AvatarSlot
+        align="left"
+        avatar={userAvatar}
+        name={userName || "You"}
+        showAvatar={showAvatar}
+      />
       <article
         className={`order-1 relative ${bubbleWidthClassName} rounded-lg rounded-bl-sm border border-ember-300/20 bg-ember-500 p-3 text-sm text-ink-950 sm:p-4`}
         data-chat-bubble=""
       >
+        {userName ? (
+          <p className="mb-1.5 text-xs font-semibold text-ink-950/65" data-chat-user-name="">
+            {userName}
+          </p>
+        ) : null}
         <MessageBody align="left" content={message.content} renderHtml={false} />
+        {message.contextIncluded === false ? (
+          <div
+            className="mt-3 inline-flex items-center gap-1.5 rounded border border-ink-950/15 px-2 py-1 text-xs font-medium text-ink-950/75"
+            data-testid="message-context-excluded"
+          >
+            <EyeOff size={12} />
+            {t("chat.contextExcludedBadge")}
+          </div>
+        ) : null}
         <div className="mt-3 flex flex-wrap items-center justify-start gap-0.5 text-xs" data-chat-actions="">
           <button
             className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
@@ -398,6 +430,7 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
   onToggleContext,
   onContinue,
   onRegenerate,
+  onRegenerateWithGuidance,
   onEdit,
   onDelete,
   onVariantPrev,
@@ -424,6 +457,7 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
   onToggleContext: () => void;
   onContinue: () => void;
   onRegenerate: () => void;
+  onRegenerateWithGuidance: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onVariantPrev: () => void;
@@ -462,10 +496,20 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <TokenInfo usage={message.tokenUsage} formatter={tokenUsageFormatter} />
                 {showTimestamp ? <MessageTimestamp createdAt={message.createdAt} language={language} /> : null}
+                {message.contextIncluded === false ? (
+                  <span
+                    className="inline-flex items-center gap-1 text-amber-300/90"
+                    data-testid="message-context-excluded"
+                  >
+                    <EyeOff size={12} />
+                    {t("chat.contextExcludedBadge")}
+                  </span>
+                ) : null}
               </div>
               <ContextInfo
                 loreCount={loreCount}
                 memoryCount={memoryCount}
+                promptTokens={message.promptBreakdown?.promptTokens}
                 onClick={handleDebug}
               />
             </div>
@@ -569,6 +613,17 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
                 title={t("chat.regenerate")}
               >
                 <RotateCcw size={14} />
+              </button>
+              <button
+                aria-label={t("chat.guidedRegenerate")}
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-slate-400 hover:text-slate-200 disabled:opacity-40 active:text-slate-100"
+                data-chat-action="guided-regenerate"
+                type="button"
+                disabled={disableRegenerate}
+                onClick={onRegenerateWithGuidance}
+                title={t("chat.guidedRegenerate")}
+              >
+                <WandSparkles size={14} />
               </button>
               {canContinue ? (
                 <button

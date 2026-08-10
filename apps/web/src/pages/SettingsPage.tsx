@@ -20,6 +20,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { getAiModelCapabilities, modelSupportsAiModule } from "@local-roleplay/shared";
+import { AboutUpdatesPanel } from "../components/AboutUpdatesPanel";
 import { languageOptions, useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { readFileText, saveJsonFile } from "../lib/files";
@@ -29,13 +30,17 @@ import type {
   AppLanguage,
   AiModelCapability,
   AiModuleId,
+  BackupConflictAction,
+  BackupConflictResolutionDTO,
   BackupImportSummaryDTO,
+  BackupPreviewDTO,
   LanSyncDirection,
   LanSyncInfoDTO,
   LanSyncSummaryDTO,
   ProviderModel,
   ProviderProfile,
   PublicUserSettingsDTO,
+  RecoveryPointDTO,
   SettingsInput
 } from "../types";
 import {
@@ -83,6 +88,7 @@ const settingsSurfaceClassName =
 
 const settingsDividerClassName = "border-white/[0.08]";
 const syncRecordStorageKey = "star-companion:lan-sync-records";
+const lastBackupStorageKey = "star-companion:last-successful-backup";
 
 const serializeForm = (form: SettingsInput) => JSON.stringify(form);
 
@@ -140,12 +146,14 @@ const toSyncRecord = (result: LanSyncSummaryDTO): SyncRecord => ({
   mode: result.mode,
   peerBaseUrl: result.peerBaseUrl,
   peerExportedAt: result.peerExportedAt,
-  completedAt: result.completedAt,
-  summary: result.summary
+  completedAt: result.completedAt!,
+  summary: result.summary!
 });
 
 const describeSummaryCounts = (summary: BackupImportSummaryDTO) =>
   `${summary.characters} / ${summary.chats} / ${summary.messages} / ${summary.memories}`;
+
+const previewCountFields = ["added", "updated", "skipped", "conflicts", "invalid", "deleted"] as const;
 
 const moduleModelRows = [
   { id: "chat", zh: "聊天回复", en: "Chat replies" },
@@ -362,8 +370,33 @@ const getPageCopy = (language: AppLanguage) =>
         validationProvider:
           "请先补全每个供应商的名称、类型、API Base URL 和至少一个模型，且 API Base URL 必须是有效地址。",
         backupTitle: "备份与迁移",
+        aboutTitle: "关于与更新",
         backupHelp:
           "完整备份会导出角色、聊天、消息和记忆；设置仅导出模型参数，不包含 API Key。",
+        workflowSteps: "选择来源 → 预检 → 查看影响 → 确认执行 → 结果摘要",
+        lastBackup: "最近成功备份",
+        lastRecovery: "最近恢复点",
+        never: "暂无",
+        previewTitle: "影响预览",
+        previewCounts: { added: "新增", updated: "更新", skipped: "跳过", conflicts: "冲突", invalid: "无效", deleted: "预计删除" },
+        previewBlocked: "此来源未通过完整性校验，不能执行写入。",
+        previewReady: "预检已完成。数据库尚未发生任何修改。",
+        previewIssues: "校验问题",
+        conflictResolution: "冲突处理",
+        keepExisting: "保留本机",
+        useIncomingBackup: "采用备份",
+        useLocal: "保留本机数据",
+        usePeer: "采用对端数据",
+        skipConflict: "跳过此冲突",
+        confirmImport: "确认执行导入",
+        replaceDanger: "替换模式会删除未包含在来源中的现有角色、聊天、消息和记忆，并先自动创建恢复点。",
+        recoveryTitle: "本地恢复点",
+        recoveryEmpty: "还没有恢复点。发生覆盖或删除前会自动创建。",
+        recoveryReason: (reason: RecoveryPointDTO["reason"]) => reason === "before_restore" ? "恢复前" : "导入前",
+        restore: "恢复",
+        restoreConfirm: "恢复会用此恢复点替换当前角色、聊天、消息和长期记忆，并先创建新的安全恢复点。确定继续吗？",
+        restoreComplete: "恢复完成。已同时保留恢复前安全点。",
+        restoreFailed: "恢复失败，原数据未被修改。",
         syncTitle: "局域网同步",
         syncHelp:
           "填写同一局域网中另一台设备的后端地址，手动选择拉取或推送数据。同步复用完整备份，不包含 API Key。",
@@ -387,6 +420,8 @@ const getPageCopy = (language: AppLanguage) =>
         syncNoRecords: "还没有同步记录。",
         syncPeerUrlRequired: "请输入同一局域网中的对端后端地址。",
         syncFailed: "同步失败",
+        syncPreviewAction: "生成差异预览",
+        confirmSync: "确认执行同步",
         syncPullConfirm:
           "将从对端读取完整备份并写入本机数据库。替换模式会清空本机角色、聊天、消息和记忆。确定继续吗？",
         syncPushConfirm:
@@ -438,8 +473,33 @@ const getPageCopy = (language: AppLanguage) =>
         validationProvider:
           "Complete every provider name, type, API base URL, and add at least one model before saving. API base URLs must be valid URLs.",
         backupTitle: "Backup & Migration",
+        aboutTitle: "About & Updates",
         backupHelp:
           "Full backups export characters, chats, and messages. Settings export model parameters but never the API key.",
+        workflowSteps: "Choose source → Preflight → Review impact → Confirm → Result",
+        lastBackup: "Latest successful backup",
+        lastRecovery: "Latest recovery point",
+        never: "None yet",
+        previewTitle: "Impact Preview",
+        previewCounts: { added: "Add", updated: "Update", skipped: "Skip", conflicts: "Conflict", invalid: "Invalid", deleted: "Expected deletion" },
+        previewBlocked: "This source failed integrity validation and cannot write data.",
+        previewReady: "Preflight is complete. No database data has been changed.",
+        previewIssues: "Validation issues",
+        conflictResolution: "Conflict resolution",
+        keepExisting: "Keep this device",
+        useIncomingBackup: "Use backup",
+        useLocal: "Keep local data",
+        usePeer: "Use peer data",
+        skipConflict: "Skip this conflict",
+        confirmImport: "Confirm Import",
+        replaceDanger: "Replace deletes existing characters, chats, messages, and memories that are absent from the source. A recovery point is created first.",
+        recoveryTitle: "Local Recovery Points",
+        recoveryEmpty: "No recovery points yet. One is created automatically before overwrite or deletion.",
+        recoveryReason: (reason: RecoveryPointDTO["reason"]) => reason === "before_restore" ? "Before restore" : "Before import",
+        restore: "Restore",
+        restoreConfirm: "Restore replaces current characters, chats, messages, and memories with this point, after first creating a new safety point. Continue?",
+        restoreComplete: "Restore complete. A pre-restore safety point was also retained.",
+        restoreFailed: "Restore failed. Existing data was not changed.",
         syncTitle: "LAN Sync",
         syncHelp:
           "Enter another device backend address on the same LAN, then pull from it or push local data to it. Sync uses full backups and never includes the API key.",
@@ -463,6 +523,8 @@ const getPageCopy = (language: AppLanguage) =>
         syncNoRecords: "No sync records yet.",
         syncPeerUrlRequired: "Enter a peer backend address on the same LAN.",
         syncFailed: "Sync failed",
+        syncPreviewAction: "Generate Difference Preview",
+        confirmSync: "Confirm Sync",
         syncPullConfirm:
           "This will read a full backup from the peer and write it into this device. Replace mode clears local characters, chats, messages, and memories. Continue?",
         syncPushConfirm:
@@ -479,7 +541,7 @@ const getPageCopy = (language: AppLanguage) =>
         noPendingChanges: "No pending changes"
       };
 
-type SettingsSection = "runtime" | "providers" | "backup";
+type SettingsSection = "runtime" | "providers" | "backup" | "about";
 type SettingsSetupFocus = "provider" | "api-key" | "model";
 type SettingsModuleFocus = `module-${AiModuleId}`;
 type SettingsFocus = SettingsSetupFocus | SettingsModuleFocus;
@@ -507,7 +569,7 @@ const readSettingsLocation = () => {
     .find((value) => value === focus);
 
   return {
-    section: section === "providers" || section === "backup" ? section : "runtime",
+    section: section === "providers" || section === "backup" || section === "about" ? section : "runtime",
     focus:
       focus === "provider" || focus === "api-key" || focus === "model"
         ? focus
@@ -602,6 +664,16 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const [syncRecords, setSyncRecords] = useState<SyncRecord[]>([]);
   const [pendingSyncDirection, setPendingSyncDirection] = useState<LanSyncDirection | null>(null);
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
+  const [pendingImportData, setPendingImportData] = useState<unknown>(null);
+  const [backupPreview, setBackupPreview] = useState<BackupPreviewDTO | null>(null);
+  const [importResolutions, setImportResolutions] = useState<Record<string, BackupConflictAction>>({});
+  const [confirmingImport, setConfirmingImport] = useState(false);
+  const [syncPreview, setSyncPreview] = useState<LanSyncSummaryDTO | null>(null);
+  const [syncResolutions, setSyncResolutions] = useState<Record<string, BackupConflictAction>>({});
+  const [confirmingSync, setConfirmingSync] = useState(false);
+  const [recoveryPoints, setRecoveryPoints] = useState<RecoveryPointDTO[]>([]);
+  const [pendingRestorePoint, setPendingRestorePoint] = useState<RecoveryPointDTO | null>(null);
+  const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
   const [expandedProviderId, setExpandedProviderId] = useState<string | null>(null);
   const [settingsLocation] = useState(readSettingsLocation);
   const [activeSection, setActiveSection] = useState<SettingsSection>(settingsLocation.section);
@@ -665,7 +737,20 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
 
   useEffect(() => {
     setSyncRecords(readSyncRecords());
+    setLastBackupAt(window.localStorage.getItem(lastBackupStorageKey));
   }, []);
+
+  const loadRecoveryPoints = useCallback(async () => {
+    try {
+      setRecoveryPoints(await api.backups.recoveryPoints());
+    } catch {
+      setRecoveryPoints([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadRecoveryPoints();
+  }, [loadRecoveryPoints]);
 
   const loadSyncInfo = useCallback(async () => {
     setSyncInfoLoading(true);
@@ -944,6 +1029,9 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       const backup = await api.backups.export();
       const stamp = new Date().toISOString().slice(0, 19).replaceAll(":", "-");
       await saveJsonFile(`local-roleplay-backup-${stamp}.json`, backup);
+      const exportedAt = new Date().toISOString();
+      window.localStorage.setItem(lastBackupStorageKey, exportedAt);
+      setLastBackupAt(exportedAt);
       setStatus(t("settings.backupExported"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("settings.failedExportBackup"));
@@ -952,8 +1040,31 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     }
   };
 
-  const importBackup = async (file: File | undefined) => {
-    if (!file) {
+  const prepareBackupImport = async (file: File | undefined) => {
+    if (!file) return;
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const parsed = JSON.parse(await readFileText(file)) as unknown;
+      const preview = await api.backups.preview(parsed, importMode);
+      setPendingImportFile(file);
+      setPendingImportData(parsed);
+      setBackupPreview(preview);
+      setImportResolutions({});
+      setConfirmingImport(false);
+    } catch (caught) {
+      setPendingImportFile(null);
+      setPendingImportData(null);
+      setBackupPreview(null);
+      setError(caught instanceof Error ? caught.message : t("settings.failedImportBackup"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const importBackup = async () => {
+    if (!pendingImportFile || !backupPreview || !pendingImportData) {
       return;
     }
 
@@ -962,10 +1073,20 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     setStatus(null);
 
     try {
-      const raw = await readFileText(file);
-      const parsed = JSON.parse(raw) as unknown;
-      const summary = await api.backups.import(parsed, importMode);
+      const conflictResolutions: BackupConflictResolutionDTO[] = Object.entries(importResolutions).map(
+        ([key, action]) => ({ key, action })
+      );
+      const summary = await api.backups.import(
+        pendingImportData,
+        importMode,
+        backupPreview.previewId,
+        conflictResolutions
+      );
       setPendingImportFile(null);
+      setPendingImportData(null);
+      setBackupPreview(null);
+      setConfirmingImport(false);
+      await loadRecoveryPoints();
       setStatus(
         t("settings.backupImported", {
           characters: summary.characters,
@@ -981,6 +1102,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   };
 
   const addSyncRecord = (result: LanSyncSummaryDTO) => {
+    if (!result.summary || !result.completedAt) return;
     const record = toSyncRecord(result);
     setSyncRecords((current) => {
       const next = [record, ...current].slice(0, 8);
@@ -998,7 +1120,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     }
   };
 
-  const runLanSync = async (direction: LanSyncDirection) => {
+  const prepareLanSync = async (direction: LanSyncDirection) => {
     if (!syncPeerUrl.trim()) {
       setError(copy.syncPeerUrlRequired);
       return;
@@ -1011,21 +1133,71 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     try {
       const result =
         direction === "pull"
-          ? await api.sync.pull({ peerBaseUrl: syncPeerUrl, mode: syncMode })
-          : await api.sync.push({ peerBaseUrl: syncPeerUrl, mode: syncMode });
+          ? await api.sync.pull({ peerBaseUrl: syncPeerUrl, mode: syncMode, phase: "preview" })
+          : await api.sync.push({ peerBaseUrl: syncPeerUrl, mode: syncMode, phase: "preview" });
 
-      addSyncRecord(result);
-
-      if (direction === "pull") {
-        applyLoadedSettings(await api.settings.get());
-        setStatus(copy.syncPulled(result.summary));
-      } else {
-        setStatus(copy.syncPushed(result.summary));
-      }
+      setPendingSyncDirection(direction);
+      setSyncPreview(result);
+      setSyncResolutions({});
+      setConfirmingSync(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : copy.syncFailed);
     } finally {
-      setPendingSyncDirection(null);
+      setLoading(false);
+    }
+  };
+
+  const runLanSync = async () => {
+    if (!pendingSyncDirection || !syncPreview) return;
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const conflictResolutions: BackupConflictResolutionDTO[] = Object.entries(syncResolutions).map(
+        ([key, action]) => ({ key, action })
+      );
+      const input = {
+        peerBaseUrl: syncPeerUrl,
+        mode: syncMode,
+        phase: "execute" as const,
+        previewId: syncPreview.preview.previewId,
+        conflictResolutions
+      };
+      const result = pendingSyncDirection === "pull"
+        ? await api.sync.pull(input)
+        : await api.sync.push(input);
+
+      addSyncRecord(result);
+
+      if (pendingSyncDirection === "pull") {
+        applyLoadedSettings(await api.settings.get());
+        setStatus(copy.syncPulled(result.summary!));
+      } else {
+        setStatus(copy.syncPushed(result.summary!));
+      }
+      setSyncPreview(null);
+      setConfirmingSync(false);
+      await loadRecoveryPoints();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : copy.syncFailed);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const restoreRecoveryPoint = async () => {
+    if (!pendingRestorePoint) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await api.backups.restoreRecoveryPoint(pendingRestorePoint.id);
+      setPendingRestorePoint(null);
+      applyLoadedSettings(await api.settings.get());
+      await loadRecoveryPoints();
+      setStatus(copy.restoreComplete);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : copy.restoreFailed);
+    } finally {
       setLoading(false);
     }
   };
@@ -1368,11 +1540,12 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       </section>
 
       <div className="border-b border-white/[0.08]">
-        <div className="flex gap-1">
+        <div className="flex gap-1 overflow-x-auto">
           {([
             ["runtime", copy.runtimeTitle],
             ["providers", copy.providersTitle],
-            ["backup", copy.backupTitle]
+            ["backup", copy.backupTitle],
+            ["about", copy.aboutTitle]
           ] as const).map(([section, label]) => {
             const active = activeSection === section;
 
@@ -1380,7 +1553,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
               <button
                 aria-pressed={active}
                 key={section}
-                className={`min-h-[44px] flex-1 whitespace-nowrap border-b-2 px-2 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
+                className={`min-h-[44px] min-w-[7.5rem] flex-none whitespace-nowrap border-b-2 px-2 text-xs font-medium transition-colors sm:min-w-0 sm:flex-1 sm:px-4 sm:text-sm ${
                   active
                     ? "border-ember-400 text-ember-200"
                     : "border-transparent text-ink-400 hover:bg-white/[0.035] hover:text-ink-100"
@@ -2048,7 +2221,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                                   return (
                                     <div
                                       key={model.id}
-                                      className={`group flex items-center gap-2.5 rounded-lg border px-3 py-2 transition-all ${
+                                      className={`group flex flex-wrap items-center gap-2.5 rounded-lg border px-3 py-2 transition-all ${
                                         manageMode
                                           ? "cursor-pointer border-white/5 bg-white/[0.02] hover:border-white/10"
                                           : isModelActive
@@ -2091,7 +2264,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                                         onClick={() => selectModel(provider.id, model.id)}
                                       />
                                       <TextInput
-                                        className={`!min-h-[30px] !flex-1 !border-0 !bg-transparent !px-1 !py-1 font-mono text-xs ${manageMode ? "pointer-events-none opacity-40" : ""}`}
+                                        className={`!min-h-[30px] !min-w-40 !flex-1 !border-0 !bg-transparent !px-1 !py-1 font-mono text-xs ${manageMode ? "pointer-events-none opacity-40" : ""}`}
                                         disabled={manageMode}
                                         placeholder={copy.modelId}
                                         value={model.model}
@@ -2099,7 +2272,26 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                                           updateModel(provider.id, model.id, { model: event.target.value, label: event.target.value })
                                         }
                                       />
-                                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-l border-white/10 pl-2 text-[11px] text-slate-400">
+                                      <TextInput
+                                        aria-label={t("settings.contextWindow")}
+                                        className={`!min-h-[30px] !w-24 !shrink-0 !px-2 !py-1 font-mono text-xs ${manageMode ? "pointer-events-none opacity-40" : ""}`}
+                                        disabled={manageMode}
+                                        max={10_000_000}
+                                        min={256}
+                                        placeholder={language === "zh-CN" ? "上下文" : "Context"}
+                                        step={1024}
+                                        title={t("help.contextWindow")}
+                                        type="number"
+                                        value={model.contextWindow ?? ""}
+                                        onChange={(event) =>
+                                          updateModel(provider.id, model.id, {
+                                            contextWindow: event.target.value
+                                              ? Number(event.target.value)
+                                              : undefined
+                                          })
+                                        }
+                                      />
+                                      <div className="flex min-w-full flex-wrap items-center gap-x-2 gap-y-1 border-t border-white/10 pt-2 text-[11px] text-slate-400 sm:min-w-0 sm:border-l sm:border-t-0 sm:pl-2 sm:pt-0">
                                         {modelCapabilityRows.map((capability) => (
                                           <label key={capability.id} className="flex cursor-pointer items-center gap-1 whitespace-nowrap">
                                             <input
@@ -2176,12 +2368,24 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         <Panel className={settingsPanelClassName} title={copy.backupTitle}>
           <div className="space-y-6">
             <p className="text-sm leading-6 text-slate-400">{copy.backupHelp}</p>
+            <div className={`rounded-lg p-3 text-xs leading-5 text-slate-400 ${settingsSurfaceClassName}`}>
+              <div className="font-medium text-slate-200">{copy.workflowSteps}</div>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <span>{copy.lastBackup}: {lastBackupAt ? new Date(lastBackupAt).toLocaleString(language === "zh-CN" ? "zh-CN" : "en-US") : copy.never}</span>
+                <span>{copy.lastRecovery}: {recoveryPoints[0] ? new Date(recoveryPoints[0].createdAt).toLocaleString(language === "zh-CN" ? "zh-CN" : "en-US") : copy.never}</span>
+              </div>
+            </div>
 
             <Field label={t("settings.importMode")}>
               <select
                 className={selectClassName}
                 value={importMode}
-                onChange={(event) => setImportMode(event.target.value as "merge" | "replace")}
+                onChange={(event) => {
+                  setImportMode(event.target.value as "merge" | "replace");
+                  setPendingImportFile(null);
+                  setPendingImportData(null);
+                  setBackupPreview(null);
+                }}
               >
                 <option value="merge">{t("settings.importModeMerge")}</option>
                 <option value="replace">{t("settings.importModeReplace")}</option>
@@ -2213,10 +2417,70 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                 onChange={(event) => {
                   const file = event.currentTarget.files?.[0];
                   event.currentTarget.value = "";
-                  setPendingImportFile(file ?? null);
+                  void prepareBackupImport(file);
                 }}
               />
             </div>
+
+            {backupPreview ? (
+              <div data-testid="backup-impact-preview" className={`space-y-4 rounded-lg p-4 ${settingsSurfaceClassName}`}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-semibold text-slate-100">{copy.previewTitle}</div>
+                  <SettingsBadge>{copy.syncModeLabel(backupPreview.mode)}</SettingsBadge>
+                </div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                  {previewCountFields.map((field) => (
+                    <div key={field} className="rounded-md border border-white/5 bg-black/10 p-2 text-center">
+                      <div className="text-lg font-semibold text-slate-100">{backupPreview.counts[field]}</div>
+                      <div className="text-xs text-slate-500">{copy.previewCounts[field]}</div>
+                    </div>
+                  ))}
+                </div>
+                <p className={`text-sm ${backupPreview.canExecute ? "text-emerald-300" : "text-amber-300"}`}>
+                  {backupPreview.canExecute ? copy.previewReady : copy.previewBlocked}
+                </p>
+                {backupPreview.mode === "replace" ? (
+                  <p className="rounded-md border border-red-400/20 bg-red-400/5 p-3 text-sm leading-6 text-red-200">{copy.replaceDanger}</p>
+                ) : null}
+                {backupPreview.issues.length ? (
+                  <div>
+                    <div className="mb-2 text-sm font-medium text-amber-200">{copy.previewIssues}</div>
+                    <ul className="space-y-1 text-sm text-amber-100/80">
+                      {backupPreview.issues.map((issue, index) => <li key={`${issue.entity}-${issue.index}-${index}`}>• {issue.message}</li>)}
+                    </ul>
+                  </div>
+                ) : null}
+                {backupPreview.mode === "merge" && backupPreview.conflicts.length ? (
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium text-slate-200">{copy.conflictResolution}</div>
+                    {backupPreview.conflicts.map((conflict, index) => (
+                      <div key={conflict.key} className="grid gap-2 rounded-md border border-white/5 p-2 sm:grid-cols-[minmax(0,1fr)_220px] sm:items-center">
+                        <span className="font-mono text-xs text-slate-400">{conflict.entity} · {conflict.id.slice(-12)}</span>
+                        <select
+                          aria-label={`${copy.conflictResolution} ${index + 1}`}
+                          className={selectClassName}
+                          value={importResolutions[conflict.key] ?? ""}
+                          onChange={(event) => setImportResolutions((current) => ({ ...current, [conflict.key]: event.target.value as BackupConflictAction }))}
+                        >
+                          <option value="">{copy.conflictResolution}</option>
+                          <option value="keep_existing">{copy.keepExisting}</option>
+                          <option value="use_incoming">{copy.useIncomingBackup}</option>
+                          <option value="skip">{copy.skipConflict}</option>
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                <Button
+                  data-testid="backup-confirm-import"
+                  disabled={loading || !backupPreview.canExecute || (backupPreview.mode === "merge" && backupPreview.conflicts.some((conflict) => !importResolutions[conflict.key]))}
+                  variant={backupPreview.mode === "replace" ? "danger" : "secondary"}
+                  onClick={() => setConfirmingImport(true)}
+                >
+                  {copy.confirmImport}
+                </Button>
+              </div>
+            ) : null}
 
             <div className={`border-t pt-6 ${settingsDividerClassName}`}>
               <div className="mb-4 flex items-start gap-3">
@@ -2290,14 +2554,22 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                     inputMode="url"
                     placeholder={copy.syncPeerPlaceholder}
                     value={syncPeerUrl}
-                    onChange={(event) => setSyncPeerUrl(event.target.value)}
+                    onChange={(event) => {
+                      setSyncPeerUrl(event.target.value);
+                      setSyncPreview(null);
+                      setPendingSyncDirection(null);
+                    }}
                   />
                 </Field>
                 <Field label={copy.syncMode}>
                   <select
                     className={selectClassName}
                     value={syncMode}
-                    onChange={(event) => setSyncMode(event.target.value as "merge" | "replace")}
+                    onChange={(event) => {
+                      setSyncMode(event.target.value as "merge" | "replace");
+                      setSyncPreview(null);
+                      setPendingSyncDirection(null);
+                    }}
                   >
                     <option value="merge">{t("settings.importModeMerge")}</option>
                     <option value="replace">{t("settings.importModeReplace")}</option>
@@ -2309,7 +2581,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                 <Button
                   disabled={loading}
                   variant="secondary"
-                  onClick={() => setPendingSyncDirection("pull")}
+                  onClick={() => void prepareLanSync("pull")}
                 >
                   <ArrowDownToLine size={16} />
                   {copy.syncPull}
@@ -2317,12 +2589,86 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                 <Button
                   disabled={loading}
                   variant="secondary"
-                  onClick={() => setPendingSyncDirection("push")}
+                  onClick={() => void prepareLanSync("push")}
                 >
                   <ArrowUpFromLine size={16} />
                   {copy.syncPush}
                 </Button>
               </div>
+
+              {syncPreview && pendingSyncDirection ? (
+                <div data-testid="sync-impact-preview" className={`mt-4 space-y-4 rounded-lg p-4 ${settingsSurfaceClassName}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="font-semibold text-slate-100">{copy.previewTitle}</div>
+                    <div className="flex gap-2"><SettingsBadge>{copy.syncDirection(pendingSyncDirection)}</SettingsBadge><SettingsBadge>{copy.syncModeLabel(syncPreview.mode)}</SettingsBadge></div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                    {previewCountFields.map((field) => (
+                      <div key={field} className="rounded-md border border-white/5 bg-black/10 p-2 text-center">
+                        <div className="text-lg font-semibold text-slate-100">{syncPreview.preview.counts[field]}</div>
+                        <div className="text-xs text-slate-500">{copy.previewCounts[field]}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className={`text-sm ${syncPreview.preview.canExecute ? "text-emerald-300" : "text-amber-300"}`}>
+                    {syncPreview.preview.canExecute ? copy.previewReady : copy.previewBlocked}
+                  </p>
+                  {syncPreview.mode === "replace" ? <p className="rounded-md border border-red-400/20 bg-red-400/5 p-3 text-sm text-red-200">{copy.replaceDanger}</p> : null}
+                  {syncPreview.preview.issues.length ? (
+                    <ul className="space-y-1 text-sm text-amber-100/80">{syncPreview.preview.issues.map((issue, index) => <li key={`${issue.entity}-${issue.index}-${index}`}>• {issue.message}</li>)}</ul>
+                  ) : null}
+                  {syncPreview.mode === "merge" && syncPreview.preview.conflicts.length ? (
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-slate-200">{copy.conflictResolution}</div>
+                      {syncPreview.preview.conflicts.map((conflict, index) => {
+                        const localAction = pendingSyncDirection === "pull" ? "keep_existing" : "use_incoming";
+                        const peerAction = pendingSyncDirection === "pull" ? "use_incoming" : "keep_existing";
+                        return (
+                          <div key={conflict.key} className="grid gap-2 rounded-md border border-white/5 p-2 sm:grid-cols-[minmax(0,1fr)_220px] sm:items-center">
+                            <span className="font-mono text-xs text-slate-400">{conflict.entity} · {conflict.id.slice(-12)}</span>
+                            <select
+                              aria-label={`${copy.conflictResolution} ${index + 1}`}
+                              className={selectClassName}
+                              value={syncResolutions[conflict.key] ?? ""}
+                              onChange={(event) => setSyncResolutions((current) => ({ ...current, [conflict.key]: event.target.value as BackupConflictAction }))}
+                            >
+                              <option value="">{copy.conflictResolution}</option>
+                              <option value={localAction}>{copy.useLocal}</option>
+                              <option value={peerAction}>{copy.usePeer}</option>
+                              <option value="skip">{copy.skipConflict}</option>
+                            </select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  <Button
+                    data-testid="sync-confirm-execute"
+                    disabled={loading || !syncPreview.preview.canExecute || (syncPreview.mode === "merge" && syncPreview.preview.conflicts.some((conflict) => !syncResolutions[conflict.key]))}
+                    variant={syncPreview.mode === "replace" ? "danger" : "secondary"}
+                    onClick={() => setConfirmingSync(true)}
+                  >{copy.confirmSync}</Button>
+                </div>
+              ) : null}
+            </div>
+
+            <div className={`border-t pt-6 ${settingsDividerClassName}`}>
+              <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-100"><History size={16} className="text-slate-400" />{copy.recoveryTitle}</div>
+              {recoveryPoints.length === 0 ? (
+                <div className={`rounded-lg px-4 py-5 text-center text-sm text-slate-500 ${settingsSurfaceClassName}`}>{copy.recoveryEmpty}</div>
+              ) : (
+                <div className="space-y-2">
+                  {recoveryPoints.map((point) => (
+                    <div key={point.id} className={`grid gap-3 rounded-lg p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center ${settingsSurfaceClassName}`}>
+                      <div>
+                        <div className="flex flex-wrap gap-2"><SettingsBadge>{copy.recoveryReason(point.reason)}</SettingsBadge><span className="text-sm text-slate-300">{new Date(point.createdAt).toLocaleString(language === "zh-CN" ? "zh-CN" : "en-US")}</span></div>
+                        <div className="mt-2 font-mono text-xs text-slate-500">{point.summary.characters} / {point.summary.chats} / {point.summary.messages} / {point.summary.memories}</div>
+                      </div>
+                      <Button variant="secondary" onClick={() => setPendingRestorePoint(point)}>{copy.restore}</Button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className={`border-t pt-6 ${settingsDividerClassName}`}>
@@ -2369,20 +2715,22 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         </Panel>
       ) : null}
 
-      {pendingImportFile ? (
+      {activeSection === "about" ? <AboutUpdatesPanel language={language} /> : null}
+
+      {confirmingImport && pendingImportFile && backupPreview ? (
         <ConfirmDialog
           cancelLabel={t("common.cancel")}
           confirmLabel={t("common.confirm")}
           loading={loading}
-          message={t("settings.importBackupConfirm")}
+          message={backupPreview.mode === "replace" ? copy.replaceDanger : t("settings.importBackupConfirm")}
           title={t("settings.importBackupTitle")}
-          variant="primary"
-          onCancel={() => setPendingImportFile(null)}
-          onConfirm={() => void importBackup(pendingImportFile)}
+          variant={backupPreview.mode === "replace" ? "danger" : "primary"}
+          onCancel={() => setConfirmingImport(false)}
+          onConfirm={() => void importBackup()}
         />
       ) : null}
 
-      {pendingSyncDirection ? (
+      {confirmingSync && pendingSyncDirection && syncPreview ? (
         <ConfirmDialog
           cancelLabel={t("common.cancel")}
           confirmLabel={t("common.confirm")}
@@ -2391,9 +2739,22 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
             pendingSyncDirection === "pull" ? copy.syncPullConfirm : copy.syncPushConfirm
           }
           title={copy.syncTitle}
-          variant="primary"
-          onCancel={() => setPendingSyncDirection(null)}
-          onConfirm={() => void runLanSync(pendingSyncDirection)}
+          variant={syncPreview.mode === "replace" ? "danger" : "primary"}
+          onCancel={() => setConfirmingSync(false)}
+          onConfirm={() => void runLanSync()}
+        />
+      ) : null}
+
+      {pendingRestorePoint ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={copy.restore}
+          loading={loading}
+          message={copy.restoreConfirm}
+          title={copy.recoveryTitle}
+          variant="danger"
+          onCancel={() => setPendingRestorePoint(null)}
+          onConfirm={() => void restoreRecoveryPoint()}
         />
       ) : null}
 

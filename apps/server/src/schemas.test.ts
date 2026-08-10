@@ -6,6 +6,7 @@ import {
   chatAgentDraftSchema,
   chatBatchArchiveSchema,
   chatBatchFolderSchema,
+  chatRenameFolderSchema,
   chatBatchPermanentDeleteSchema,
   chatBatchTrashSchema,
   chatBranchSchema,
@@ -21,6 +22,7 @@ import {
   chatUpdateSchema,
   imageGenerationSchema,
   messageUpdateSchema,
+  regenerateRequestSchema,
   settingsUpdateSchema,
   voiceTranscriptionSchema
 } from "./schemas.js";
@@ -64,6 +66,33 @@ describe("continueRequestSchema", () => {
       { type: "continue", requestId: "continue-1", messageId: "assistant-1" }
     );
     assert.throws(() => parseBody(continueRequestSchema, { type: "continue", requestId: "" }));
+  });
+});
+
+describe("regenerateRequestSchema", () => {
+  it("accepts bounded optional regeneration guidance", () => {
+    assert.deepEqual(
+      parseBody(regenerateRequestSchema, {
+        type: "regenerate",
+        requestId: "request-1",
+        messageId: "message-1",
+        guidance: "  Keep the facts, but make the reply more restrained.  "
+      }),
+      {
+        type: "regenerate",
+        requestId: "request-1",
+        messageId: "message-1",
+        guidance: "Keep the facts, but make the reply more restrained."
+      }
+    );
+    assert.throws(() =>
+      parseBody(regenerateRequestSchema, {
+        type: "regenerate",
+        requestId: "request-1",
+        messageId: "message-1",
+        guidance: "x".repeat(1001)
+      })
+    );
   });
 });
 
@@ -176,6 +205,20 @@ describe("chatBatchFolderSchema", () => {
       { ids: ["chat-a", "chat-b"], folder: "Main story" }
     );
     assert.throws(() => parseBody(chatBatchFolderSchema, { ids: [], folder: "Main story" }));
+  });
+});
+
+describe("chatRenameFolderSchema", () => {
+  it("trims folder names and does not allow the unfiled state as a source", () => {
+    assert.deepEqual(
+      parseBody(chatRenameFolderSchema, { from: "  Main story  ", to: "  New story  " }),
+      { from: "Main story", to: "New story" }
+    );
+    assert.deepEqual(
+      parseBody(chatRenameFolderSchema, { from: "Main story", to: "   " }),
+      { from: "Main story", to: "" }
+    );
+    assert.throws(() => parseBody(chatRenameFolderSchema, { from: "", to: "New story" }));
   });
 });
 
@@ -330,7 +373,13 @@ describe("settingsUpdateSchema", () => {
           provider: "openai",
           apiBaseUrl: "https://api.openai.com/v1",
           models: [
-            { id: "model-1", label: "GPT", model: "gpt-4o-mini", capabilities: ["text_generation"] }
+            {
+              id: "model-1",
+              label: "GPT",
+              model: "gpt-4o-mini",
+              contextWindow: 128000,
+              capabilities: ["text_generation"]
+            }
           ]
         }
       ],
@@ -339,8 +388,36 @@ describe("settingsUpdateSchema", () => {
     });
 
     assert.equal(parsed.providers[0]?.models[0]?.model, "gpt-4o-mini");
+    assert.equal(parsed.providers[0]?.models[0]?.contextWindow, 128000);
     assert.deepEqual(parsed.providers[0]?.models[0]?.capabilities, ["text_generation"]);
     assert.equal(parsed.activeProviderId, "provider-1");
+  });
+
+  it("rejects invalid model context windows", () => {
+    assert.throws(() =>
+      parseBody(settingsUpdateSchema, {
+        activeProvider: "openai-compatible",
+        apiBaseUrl: "https://api.openai.com/v1",
+        model: "local-model",
+        temperature: 0.8,
+        maxTokens: 800,
+        topP: 1,
+        language: "zh-CN",
+        providers: [
+          {
+            id: "provider-1",
+            label: "Local",
+            provider: "openai-compatible",
+            apiBaseUrl: "https://api.openai.com/v1",
+            models: [
+              { id: "model-1", label: "Local", model: "local-model", contextWindow: 128 }
+            ]
+          }
+        ],
+        activeProviderId: "provider-1",
+        activeModelId: "model-1"
+      })
+    );
   });
 
   it("rejects unknown model capabilities", () => {
@@ -421,7 +498,9 @@ describe("settingsUpdateSchema", () => {
         {
           id: "persona-1",
           name: "Investigator",
+          avatar: "data:image/png;base64,YQ==",
           config: {
+            displayName: "Rowan",
             prefix: "User boundary.",
             prompt: "User is an investigator.",
             suffix: "Keep replies concise."
@@ -431,7 +510,18 @@ describe("settingsUpdateSchema", () => {
     });
 
     assert.equal(parsed.userPersonaPresets?.[0]?.name, "Investigator");
+    assert.equal(parsed.userPersonaPresets?.[0]?.avatar, "data:image/png;base64,YQ==");
+    assert.equal(parsed.userPersonaPresets?.[0]?.config.displayName, "Rowan");
     assert.equal(parsed.userPersonaPresets?.[0]?.config.prompt, "User is an investigator.");
+  });
+
+  it("accepts a chat-scoped persona avatar", () => {
+    const parsed = parseBody(chatUpdateSchema, {
+      userAvatar: "data:image/png;base64,YQ=="
+    });
+
+    assert.equal(parsed.userAvatar, "data:image/png;base64,YQ==");
+    assert.throws(() => parseBody(chatUpdateSchema, { userAvatar: "x".repeat(3_000_001) }));
   });
 
 });
@@ -698,6 +788,66 @@ describe("backupImportSchema", () => {
       }
     });
     assert.equal(parsed.characters[0]?.isFavorite, true);
+  });
+
+  it("preserves valid prompt breakdowns and rejects unknown categories", () => {
+    const base = {
+      schemaVersion: 1,
+      mode: "merge",
+      characters: [],
+      chats: [],
+      messages: [
+        {
+          chatId: "chat-1",
+          role: "assistant",
+          content: "Reply",
+          promptBreakdown: {
+            promptTokens: 120,
+            promptTokensEstimated: false,
+            includedMessageCount: 2,
+            sections: [
+              {
+                id: "character",
+                tokenEstimate: 40,
+                characterCount: 80,
+                itemCount: 1
+              },
+              {
+                id: "history",
+                tokenEstimate: 80,
+                characterCount: 160,
+                itemCount: 2
+              }
+            ]
+          }
+        }
+      ]
+    };
+    const parsed = parseBody(backupImportSchema, base);
+    assert.equal(parsed.messages[0]?.promptBreakdown?.promptTokens, 120);
+    assert.equal(parsed.messages[0]?.promptBreakdown?.sections[1]?.id, "history");
+
+    assert.throws(() =>
+      parseBody(backupImportSchema, {
+        ...base,
+        messages: [
+          {
+            ...base.messages[0],
+            promptBreakdown: {
+              ...base.messages[0].promptBreakdown,
+              sections: [
+                {
+                  id: "hidden_tool_output",
+                  tokenEstimate: 1,
+                  characterCount: 1,
+                  itemCount: 1
+                }
+              ]
+            }
+          }
+        ]
+      })
+    );
   });
 
   it("rejects legacy backup character fields that do not use prefix/prompt/suffix", () => {

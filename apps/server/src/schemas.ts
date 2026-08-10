@@ -16,6 +16,29 @@ const tokenUsageSchema = z.object({
   estimated: z.boolean().default(false)
 });
 
+const promptBreakdownSectionSchema = z.object({
+  id: z.enum([
+    "character",
+    "user_persona",
+    "user_profile",
+    "lore",
+    "memory",
+    "history",
+    "generation_instruction",
+    "formatting"
+  ]),
+  tokenEstimate: z.number().int().min(0),
+  characterCount: z.number().int().min(0),
+  itemCount: z.number().int().min(0)
+});
+
+const promptBreakdownSchema = z.object({
+  promptTokens: z.number().int().min(0),
+  promptTokensEstimated: z.boolean(),
+  includedMessageCount: z.number().int().min(0),
+  sections: z.array(promptBreakdownSectionSchema).max(8)
+});
+
 const loreMatchSchema = z.object({
   id: idSchema,
   characterId: idSchema,
@@ -96,6 +119,7 @@ const backgroundUrlSchema = z
   );
 
 const characterAvatarSchema = z.string().trim().max(3_000_000).nullable().optional();
+const userAvatarSchema = z.string().trim().max(3_000_000);
 
 export const characterCreateSchema = z.object({
   name: z.string().trim().min(1),
@@ -301,6 +325,7 @@ export const chatCreateSchema = z.object({
   memoryTurns: z.number().int().min(1).max(50).default(12),
   autoMemoryEnabled: z.boolean().default(true),
   userPersona: z.string().max(12000).default(""),
+  userAvatar: userAvatarSchema.default(""),
   userProfileSummary: z.string().default("")
 });
 
@@ -315,6 +340,7 @@ export const chatUpdateSchema = z
     memoryTurns: z.number().int().min(1).max(50).optional(),
     autoMemoryEnabled: z.boolean().optional(),
     userPersona: z.string().max(12000).optional(),
+    userAvatar: userAvatarSchema.optional(),
     userProfileSummary: z.string().optional()
   })
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");
@@ -327,6 +353,11 @@ export const chatBatchArchiveSchema = z.object({
 export const chatBatchFolderSchema = z.object({
   ids: z.array(idSchema).min(1).max(100).transform((ids) => [...new Set(ids)]),
   folder: z.string().trim().max(80)
+});
+
+export const chatRenameFolderSchema = z.object({
+  from: z.string().trim().min(1).max(80),
+  to: z.string().trim().max(80)
 });
 
 const chatBatchIdsSchema = z.array(idSchema).min(1).max(100).transform((ids) => [...new Set(ids)]);
@@ -361,7 +392,7 @@ export const chatMemoryUpdateSchema = z
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");
 
 export const chatAgentDraftSchema = z.object({
-  mode: z.enum(["scene_summary", "next_steps", "reply_drafts", "memory_lore_candidates"]),
+  mode: z.enum(["scene_summary", "next_steps", "reply_drafts", "memory_lore_candidates", "continuity_check", "character_consistency"]),
   focus: z.string().trim().max(1000).optional()
 });
 
@@ -381,6 +412,7 @@ export const messageCreateSchema = z.object({
   variants: z.array(z.string()).default([]),
   activeVariantIndex: z.number().int().min(0).default(0),
   tokenUsage: tokenUsageSchema.nullable().optional(),
+  promptBreakdown: promptBreakdownSchema.nullable().optional(),
   loreMatches: z.array(loreMatchSchema).nullable().optional(),
   memoryMatches: z.array(matchedMemorySchema).nullable().optional()
 });
@@ -395,6 +427,7 @@ export const messageUpdateSchema = z
   variants: z.array(z.string()).optional(),
   activeVariantIndex: z.number().int().min(0).optional(),
   tokenUsage: tokenUsageSchema.nullable().optional(),
+  promptBreakdown: promptBreakdownSchema.nullable().optional(),
   loreMatches: z.array(loreMatchSchema).nullable().optional(),
   memoryMatches: z.array(matchedMemorySchema).nullable().optional()
   })
@@ -413,6 +446,7 @@ const providerModelSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
   model: z.string().min(1),
+  contextWindow: z.number().int().min(256).max(10_000_000).optional(),
   capabilities: z
     .array(z.enum(["text_generation", "text_embedding", "audio_transcription", "text_to_speech", "image_generation"]))
     .max(5)
@@ -449,7 +483,9 @@ export const moduleModelPreferencesSchema = z
 const userPersonaPresetSchema = z.object({
   id: z.string().trim().min(1).max(120),
   name: z.string().trim().min(1).max(80),
+  avatar: userAvatarSchema.default(""),
   config: z.object({
+    displayName: z.string().trim().max(80).default(""),
     prefix: z.string().max(4000).default(""),
     prompt: z.string().max(12000).default(""),
     suffix: z.string().max(4000).default("")
@@ -509,7 +545,8 @@ export const generationRequestSchema = z.object({
 export const regenerateRequestSchema = z.object({
   type: z.literal("regenerate"),
   requestId: z.string().min(1),
-  messageId: idSchema
+  messageId: idSchema,
+  guidance: z.string().trim().min(1).max(1000).optional()
 });
 
 export const continueRequestSchema = z.object({
@@ -531,10 +568,14 @@ export const stopGenerationRequestSchema = z.object({
 
 const backupDateSchema = z.string().datetime().optional();
 
-const backupSettingsSchema = settingsUpdateSchema.omit({ apiKey: true }).partial();
+const backupProviderProfileSchema = providerProfileSchema.omit({ key: true });
+export const backupSettingsSchema = settingsUpdateSchema
+  .omit({ apiKey: true, providers: true })
+  .extend({ providers: z.array(backupProviderProfileSchema).default([]) })
+  .partial();
 const backupLoreEntriesSchema = z.union([loreEntriesSchema, storedPrivateCharacterSchema]);
 
-const backupCharacterSchema = z
+export const backupCharacterSchema = z
   .object({
     id: idSchema.optional(),
     cardId: idSchema,
@@ -572,7 +613,7 @@ const backupCharacterSchema = z
     updatedAt: character.updatedAt
   }));
 
-const backupChatSchema = chatCreateSchema.extend({
+export const backupChatSchema = chatCreateSchema.extend({
   id: idSchema.optional(),
   characterId: idSchema.nullable(),
   parentChatId: idSchema.nullable().optional(),
@@ -582,17 +623,19 @@ const backupChatSchema = chatCreateSchema.extend({
   isArchived: z.boolean().default(false),
   folder: z.string().trim().max(80).default(""),
   deletedAt: z.string().datetime().nullable().default(null),
+  memoryUpdatedAt: z.string().datetime().nullable().optional(),
+  userProfileUpdatedAt: z.string().datetime().nullable().optional(),
   createdAt: backupDateSchema,
   updatedAt: backupDateSchema
 });
 
-const backupMessageSchema = messageCreateSchema.extend({
+export const backupMessageSchema = messageCreateSchema.extend({
   id: idSchema.optional(),
   createdAt: backupDateSchema,
   updatedAt: backupDateSchema
 });
 
-const backupMemorySchema = chatMemoryCreateSchema.extend({
+export const backupMemorySchema = chatMemoryCreateSchema.extend({
   id: idSchema.optional(),
   chatId: idSchema,
   lastMatchedAt: z.string().datetime().nullable().optional(),
@@ -609,6 +652,29 @@ export const backupImportSchema = z.object({
   messages: z.array(backupMessageSchema).default([]),
   memories: z.array(backupMemorySchema).default([]),
   mode: z.enum(["merge", "replace"]).default("merge")
+});
+
+export const backupConflictResolutionSchema = z.object({
+  key: z.string().min(1).max(300),
+  action: z.enum(["keep_existing", "use_incoming", "skip"])
+});
+
+export const backupPreviewRequestSchema = z
+  .object({
+    schemaVersion: z.unknown().optional(),
+    exportedAt: z.unknown().optional(),
+    settings: z.unknown().optional(),
+    characters: z.unknown().optional(),
+    chats: z.unknown().optional(),
+    messages: z.unknown().optional(),
+    memories: z.unknown().optional(),
+    mode: z.enum(["merge", "replace"]).default("merge")
+  })
+  .passthrough();
+
+export const backupExecuteSchema = backupPreviewRequestSchema.extend({
+  previewId: z.string().min(16).max(128),
+  conflictResolutions: z.array(backupConflictResolutionSchema).max(20_000).default([])
 });
 
 export const chatArchiveImportSchema = z.object({
@@ -642,5 +708,8 @@ export const imageGenerationSchema = z.object({
 
 export const lanSyncRequestSchema = z.object({
   peerBaseUrl: z.string().trim().min(1).max(300),
-  mode: z.enum(["merge", "replace"]).default("merge")
+  mode: z.enum(["merge", "replace"]).default("merge"),
+  phase: z.enum(["preview", "execute"]).default("preview"),
+  previewId: z.string().min(16).max(128).optional(),
+  conflictResolutions: z.array(backupConflictResolutionSchema).max(20_000).default([])
 });

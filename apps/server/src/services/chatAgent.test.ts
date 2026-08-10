@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   buildChatAgentDraftMessages,
+  extractChatAgentActions,
   getChatAgentModeTitle,
   type ChatAgentMode
 } from "./chatAgent.js";
@@ -10,7 +11,9 @@ const modes: ChatAgentMode[] = [
   "scene_summary",
   "next_steps",
   "reply_drafts",
-  "memory_lore_candidates"
+  "memory_lore_candidates",
+  "continuity_check",
+  "character_consistency"
 ];
 
 describe("chatAgent", () => {
@@ -41,5 +44,23 @@ describe("chatAgent", () => {
       assert.doesNotMatch(systemPrompt, /create standalone lorebook/i);
       assert.doesNotMatch(systemPrompt, /group chat with/i);
     }
+  });
+
+  it("extracts only user-confirmable draft and candidate actions", () => {
+    const drafts = extractChatAgentActions(
+      "reply_drafts",
+      "[DRAFT]Ask about the promise.[/DRAFT]\n[DRAFT]Wait and observe.[/DRAFT]"
+    );
+    assert.deepEqual(drafts.map((action) => action.kind), ["reply_draft", "reply_draft"]);
+    assert.deepEqual(drafts.map((action) => action.content), ["Ask about the promise.", "Wait and observe."]);
+
+    const candidates = extractChatAgentActions(
+      "memory_lore_candidates",
+      "[MEMORY The blue door | The user trusts the blue door. | blue door, trust]\n[LORE blue door, hinge | The door hinge always squeaks.]"
+    );
+    assert.deepEqual(candidates.map((action) => action.kind), ["memory_candidate", "lore_candidate"]);
+    assert.deepEqual(candidates[0]?.keywords, ["blue door", "trust"]);
+    assert.deepEqual(candidates[1]?.keywords, ["blue door", "hinge"]);
+    assert.deepEqual(extractChatAgentActions("continuity_check", "Nothing to save."), []);
   });
 });

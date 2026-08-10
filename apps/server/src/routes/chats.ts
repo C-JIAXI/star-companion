@@ -7,6 +7,7 @@ import {
   chatArchiveImportSchema,
   chatBatchArchiveSchema,
   chatBatchFolderSchema,
+  chatRenameFolderSchema,
   chatBatchPermanentDeleteSchema,
   chatBatchTrashSchema,
   chatBranchSchema,
@@ -25,6 +26,7 @@ import {
   refreshChatMemoryEmbeddings,
   updateChatMemoriesFromTurn
 } from "../services/chatMemories.js";
+import { resolveModuleSettings } from "../services/moduleModels.js";
 import { getOrCreateSettings } from "./settings.js";
 
 export const chatsRouter = Router();
@@ -75,7 +77,7 @@ chatsRouter.get(
       data: chats.map((chat) => {
         const lastMessage = chat.messages[0];
         return {
-          ...serializeChat(chat, chat._count.messages),
+          ...serializeChat(chat, chat._count.messages, false),
           lastMessagePreview:
             lastMessage && (lastMessage.role === "user" || lastMessage.role === "assistant")
               ? {
@@ -127,6 +129,19 @@ chatsRouter.post(
         where: { id: { in: body.ids } },
         data: { folder: body.folder }
       });
+    });
+
+    response.json({ ok: true, data: { updated: result.count } });
+  })
+);
+
+chatsRouter.post(
+  "/rename-folder",
+  asyncHandler(async (request, response) => {
+    const body = parseBody(chatRenameFolderSchema, request.body);
+    const result = await prisma.chat.updateMany({
+      where: { folder: body.from },
+      data: { folder: body.to }
     });
 
     response.json({ ok: true, data: { updated: result.count } });
@@ -217,6 +232,37 @@ chatsRouter.post(
 );
 
 chatsRouter.post(
+  "/:id/auto-title",
+  asyncHandler(async (request, response) => {
+    const chatId = requireParam(request, "id");
+    const current = await prisma.chat.findFirst({
+      where: { id: chatId, deletedAt: null },
+      select: { title: true }
+    });
+    if (!current) {
+      throw new HttpError(404, "Chat not found");
+    }
+    if (current.title !== "New Chat") {
+      response.json({ ok: true, data: null });
+      return;
+    }
+
+    const suggestion = await createChatTitleSuggestion(chatId);
+    const result = await prisma.chat.updateMany({
+      where: { id: chatId, deletedAt: null, title: "New Chat" },
+      data: { title: suggestion.title }
+    });
+    if (result.count === 0) {
+      response.json({ ok: true, data: null });
+      return;
+    }
+
+    const chat = await prisma.chat.findUniqueOrThrow({ where: { id: chatId } });
+    response.json({ ok: true, data: serializeChat(chat) });
+  })
+);
+
+chatsRouter.post(
   "/:id/opening-message",
   asyncHandler(async (request, response) => {
     const chatId = requireParam(request, "id");
@@ -262,6 +308,7 @@ chatsRouter.post(
         memoryTurns: chat.memoryTurns,
         autoMemoryEnabled: chat.autoMemoryEnabled,
         userPersona: chat.userPersona,
+        userAvatar: chat.userAvatar,
         userProfileSummary: chat.userProfileSummary,
         userProfileUpdatedAt: chat.userProfileUpdatedAt,
         createdAt: now,
@@ -281,6 +328,10 @@ chatsRouter.post(
         activeVariantIndex: message.activeVariantIndex,
         tokenUsage:
           message.tokenUsage === null ? Prisma.JsonNull : (message.tokenUsage as Prisma.InputJsonValue),
+        promptBreakdown:
+          message.promptBreakdown === null
+            ? Prisma.JsonNull
+            : (message.promptBreakdown as Prisma.InputJsonValue),
         loreMatches:
           message.loreMatches === null ? Prisma.JsonNull : (message.loreMatches as Prisma.InputJsonValue),
         memoryMatches:
@@ -456,7 +507,9 @@ chatsRouter.put(
         ...(embeddingSourceChanged
           ? {
               embedding: Prisma.JsonNull,
-              embeddingModel: null,
+              embeddingSource: null,
+              embeddingDimensions: null,
+              embeddingStatus: "stale",
               embeddingUpdatedAt: null
             }
           : {})
@@ -503,12 +556,58 @@ chatsRouter.post(
 
     const settings = await getOrCreateSettings();
     await updateChatMemoriesFromTurn({ chatId, settings });
-    await refreshChatMemoryEmbeddings({ chatId, settings });
     const memories = await prisma.chatMemory.findMany({
       where: { chatId },
       orderBy: [{ enabled: "desc" }, { importance: "desc" }, { updatedAt: "desc" }]
     });
 
+    response.json({ ok: true, data: memories.map(serializeChatMemory) });
+  })
+);
+
+chatsRouter.post(
+  "/:id/memories/reindex",
+  asyncHandler(async (request, response) => {
+    const chatId = requireParam(request, "id");
+    const chat = await prisma.chat.findFirst({
+      where: { id: chatId, deletedAt: null },
+      select: { id: true }
+    });
+    if (!chat) {
+      throw new HttpError(404, "Chat not found");
+    }
+
+    const enabledMemoryCount = await prisma.chatMemory.count({
+      where: { chatId, enabled: true }
+    });
+    if (enabledMemoryCount === 0) {
+      const memories = await prisma.chatMemory.findMany({
+        where: { chatId },
+        orderBy: [{ enabled: "desc" }, { importance: "desc" }, { updatedAt: "desc" }]
+      });
+      response.json({ ok: true, data: memories.map(serializeChatMemory) });
+      return;
+    }
+
+    const settings = await getOrCreateSettings();
+    try {
+      resolveModuleSettings(settings, "memory_embedding");
+    } catch {
+      throw new HttpError(400, "Configure a compatible memory embedding model before rebuilding the index.");
+    }
+
+    const index = await refreshChatMemoryEmbeddings({ chatId, settings, force: true });
+    if (!index) {
+      throw new HttpError(
+        502,
+        "Memory embedding index rebuild failed. Keyword retrieval remains available."
+      );
+    }
+
+    const memories = await prisma.chatMemory.findMany({
+      where: { chatId },
+      orderBy: [{ enabled: "desc" }, { importance: "desc" }, { updatedAt: "desc" }]
+    });
     response.json({ ok: true, data: memories.map(serializeChatMemory) });
   })
 );

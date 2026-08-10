@@ -1,4 +1,5 @@
 import { prisma } from "../db.js";
+import { randomUUID } from "node:crypto";
 import { HttpError } from "../lib/http.js";
 import { completeChatCompletion, type ChatCompletionMessage } from "./completions.js";
 import { buildPromptContext } from "./promptBuilder.js";
@@ -9,7 +10,9 @@ export type ChatAgentMode =
   | "scene_summary"
   | "next_steps"
   | "reply_drafts"
-  | "memory_lore_candidates";
+  | "memory_lore_candidates"
+  | "continuity_check"
+  | "character_consistency";
 
 type CreateChatAgentDraftInput = {
   chatId: string;
@@ -20,6 +23,14 @@ type CreateChatAgentDraftInput = {
 type AgentModeConfig = {
   title: string;
   instruction: string;
+};
+
+type AgentAction = {
+  id: string;
+  kind: "reply_draft" | "memory_candidate" | "lore_candidate";
+  title: string;
+  content: string;
+  keywords?: string[];
 };
 
 const modeConfig = {
@@ -44,7 +55,8 @@ const modeConfig = {
     instruction: [
       "Write 2 to 3 alternative user reply drafts for the current single-character chat.",
       "Make each draft ready to paste into the user's message box.",
-      "Keep the drafts distinct in tone or strategy."
+      "Keep the drafts distinct in tone or strategy.",
+      "Wrap every sendable draft exactly in [DRAFT] and [/DRAFT] markers."
     ].join("\n")
   },
   memory_lore_candidates: {
@@ -52,10 +64,44 @@ const modeConfig = {
     instruction: [
       "Identify candidate notes that the user may later save manually.",
       "Separate durable chat memory candidates from character embedded lore candidates.",
-      "Do not claim anything was saved. Do not propose standalone lorebook or worldbook structures."
+      "Do not claim anything was saved. Do not propose standalone lorebook or worldbook structures.",
+      "For a memory candidate, use [MEMORY title | content | comma-separated keywords].",
+      "For a character lore candidate, use [LORE comma-separated keys | content]."
     ].join("\n")
+  },
+  continuity_check: {
+    title: "Continuity Check",
+    instruction: "Check the current single-character scene for contradictions, unresolved facts, timeline ambiguity, and missing context. Separate confirmed facts from possible inconsistencies."
+  },
+  character_consistency: {
+    title: "Character Consistency",
+    instruction: "Assess whether the recent character replies remain consistent with the provided character card, relationship state, and matched lore. Identify only concrete risks and offer a concise repair direction."
   }
 } satisfies Record<ChatAgentMode, AgentModeConfig>;
+
+const splitKeywords = (value: string) => value.split(",").map((item) => item.trim()).filter(Boolean).slice(0, 12);
+
+export const extractChatAgentActions = (mode: ChatAgentMode, content: string): AgentAction[] => {
+  if (mode === "reply_drafts") {
+    return [...content.matchAll(/\[DRAFT\]([\s\S]*?)\[\/DRAFT\]/gi)]
+      .map((match) => match[1].trim())
+      .filter(Boolean)
+      .slice(0, 3)
+      .map((item, index) => ({ id: randomUUID(), kind: "reply_draft" as const, title: `Draft ${index + 1}`, content: item }));
+  }
+  if (mode !== "memory_lore_candidates") return [];
+  const actions: AgentAction[] = [];
+  for (const match of content.matchAll(/\[(MEMORY|LORE)\s+([^\]]+)\]/gi)) {
+    const fields = match[2].split("|").map((item) => item.trim());
+    if (match[1].toUpperCase() === "MEMORY" && fields.length >= 2) {
+      actions.push({ id: randomUUID(), kind: "memory_candidate", title: fields[0] || "Memory", content: fields[1], keywords: splitKeywords(fields[2] ?? "") });
+    }
+    if (match[1].toUpperCase() === "LORE" && fields.length >= 2) {
+      actions.push({ id: randomUUID(), kind: "lore_candidate", title: fields[0] || "Lore", content: fields[1], keywords: splitKeywords(fields[0]) });
+    }
+  }
+  return actions.slice(0, 8);
+};
 
 export const buildChatAgentDraftMessages = (
   baseMessages: ChatCompletionMessage[],
@@ -119,6 +165,7 @@ export const createChatAgentDraft = async ({
     title: modeConfig[mode].title,
     content,
     createdAt: new Date().toISOString(),
+    actions: extractChatAgentActions(mode, content),
     matchedLoreEntries: context.matchedLoreEntries,
     matchedMemoryEntries: context.matchedMemoryEntries
   };

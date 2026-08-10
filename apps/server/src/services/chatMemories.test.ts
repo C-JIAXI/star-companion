@@ -7,6 +7,7 @@ import {
   buildMemoryRerankMessages,
   cosineSimilarity,
   recallChatMemories,
+  refreshChatMemoryEmbeddings,
   updateChatMemoriesFromTurn
 } from "./chatMemories.js";
 
@@ -190,35 +191,37 @@ describe("chat memory helpers", () => {
       );
     }) as typeof fetch;
 
+    const settings = createSettings({
+      providers: [
+        {
+          id: "embedding-provider",
+          label: "Embedding",
+          provider: "openai-compatible",
+          apiBaseUrl: "https://embedding.example/v1",
+          models: [
+            {
+              id: "embedding-model",
+              label: "Embedding",
+              model: "text-embedding-3-small",
+              capabilities: ["text_embedding"]
+            }
+          ]
+        }
+      ],
+      moduleModelPreferences: {
+        memory_embedding: {
+          providerId: "embedding-provider",
+          modelId: "embedding-model"
+        }
+      }
+    });
+    await refreshChatMemoryEmbeddings({ chatId: ids.chatId, settings });
     const recentMessages = await prisma.message.findMany({ where: { chatId: ids.chatId } });
     const memories = await recallChatMemories({
       chatId: ids.chatId,
       query: "What commitment did they make for after winter?",
       recentMessages,
-      settings: createSettings({
-        providers: [
-          {
-            id: "embedding-provider",
-            label: "Embedding",
-            provider: "openai-compatible",
-            apiBaseUrl: "https://embedding.example/v1",
-            models: [
-              {
-                id: "embedding-model",
-                label: "Embedding",
-                model: "text-embedding-3-small",
-                capabilities: ["text_embedding"]
-              }
-            ]
-          }
-        ],
-        moduleModelPreferences: {
-          memory_embedding: {
-            providerId: "embedding-provider",
-            modelId: "embedding-model"
-          }
-        }
-      })
+      settings
     });
 
     assert.equal(memories[0]?.id, semanticMemory.id);
@@ -226,6 +229,79 @@ describe("chat memory helpers", () => {
     assert.equal(stored.embeddingModel, "openai-compatible:text-embedding-3-small");
     assert.ok(stored.embeddingUpdatedAt);
     assert.ok(cosineSimilarity([0, 1], [0, 1]) > cosineSimilarity([0, 1], [1, 0]));
+  });
+
+  it("keeps completed embedding batches ready when a later batch fails", async () => {
+    const chat = await prisma.chat.create({
+      data: {
+        title: "Partial embedding failure chat",
+        characterId: ids.characterId
+      }
+    });
+    await prisma.chatMemory.createMany({
+      data: Array.from({ length: 65 }, (_, index) => ({
+        chatId: chat.id,
+        title: `Batch memory ${index + 1}`,
+        content: `Durable fact ${index + 1}`,
+        keywords: [],
+        importance: 3,
+        enabled: true,
+        sourceMessageIds: []
+      }))
+    });
+
+    let embeddingCallCount = 0;
+    globalThis.fetch = (async (_input, init) => {
+      embeddingCallCount += 1;
+      if (embeddingCallCount === 2) {
+        return new Response(JSON.stringify({ error: { message: "second batch failed" } }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      const body = JSON.parse(String(init?.body)) as { input?: string[] };
+      return new Response(
+        JSON.stringify({
+          model: "text-embedding-3-small",
+          data: (body.input ?? []).map((_value, index) => ({ index, embedding: [1, 0] }))
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as typeof fetch;
+
+    const settings = createSettings({
+      apiKey: "sk-test",
+      providers: [
+        {
+          id: "partial-embedding-provider",
+          label: "Embedding",
+          provider: "openai-compatible",
+          apiBaseUrl: "https://embedding.example/v1",
+          models: [
+            {
+              id: "partial-embedding-model",
+              label: "Embedding",
+              model: "text-embedding-3-small",
+              capabilities: ["text_embedding"]
+            }
+          ]
+        }
+      ],
+      moduleModelPreferences: {
+        memory_embedding: {
+          providerId: "partial-embedding-provider",
+          modelId: "partial-embedding-model"
+        }
+      }
+    });
+
+    const index = await refreshChatMemoryEmbeddings({ chatId: chat.id, settings, force: true });
+    assert.equal(index, null);
+    const memories = await prisma.chatMemory.findMany({ where: { chatId: chat.id } });
+    assert.equal(memories.filter((memory) => memory.embeddingStatus === "ready").length, 64);
+    assert.equal(memories.filter((memory) => memory.embeddingStatus === "failed").length, 1);
+
+    await prisma.chat.delete({ where: { id: chat.id } });
   });
 
   it("returns a maintenance summary when automatic memory creates entries", async () => {

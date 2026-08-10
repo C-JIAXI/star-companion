@@ -8,7 +8,11 @@ import {
   type ChatCompletionMessage
 } from "./completions.js";
 import { resolveModuleSettings } from "./moduleModels.js";
-import { buildPromptContext } from "./promptBuilder.js";
+import {
+  appendPromptBreakdownInstruction,
+  buildPromptContext,
+  finalizePromptBreakdown
+} from "./promptBuilder.js";
 
 const openingInstruction: ChatCompletionMessage = {
   role: "user",
@@ -58,6 +62,11 @@ export const createChatOpeningMessage = async (chatId: string) => {
   }
 
   const tokenUsage = estimateTokenUsage(messages, content);
+  const promptBreakdown = finalizePromptBreakdown(
+    appendPromptBreakdownInstruction(context.promptBreakdown, openingInstruction.content),
+    tokenUsage.promptTokens,
+    tokenUsage.estimated
+  );
   const message = await prisma.message.create({
     data: {
       chatId,
@@ -67,6 +76,7 @@ export const createChatOpeningMessage = async (chatId: string) => {
       variants: [content],
       activeVariantIndex: 0,
       tokenUsage,
+      promptBreakdown,
       loreMatches: context.matchedLoreEntries,
       memoryMatches: context.matchedMemoryEntries
     }

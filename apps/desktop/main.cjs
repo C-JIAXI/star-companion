@@ -1,15 +1,36 @@
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
-const { DatabaseSync } = require("node:sqlite");
 const { pathToFileURL } = require("node:url");
+const { autoUpdater } = require("electron-updater");
+const { restoreSafetyCopy, runProtectedMigrations } = require("./migration-safety.cjs");
+const {
+  classifyUpdateError,
+  createInitialUpdateState,
+  reduceUpdateState
+} = require("./update-state.cjs");
 
 const APP_NAME = "Star Companion";
+const readDesktopBuildType = () => {
+  if (!app.isPackaged) return "development";
+  try {
+    const packageMetadata = JSON.parse(fs.readFileSync(path.join(app.getAppPath(), "package.json"), "utf8"));
+    return packageMetadata.starCompanionBuildType === "release" ? "release" : "preview";
+  } catch {
+    return "preview";
+  }
+};
+const DESKTOP_BUILD_TYPE = readDesktopBuildType();
 
 let mainWindow = null;
+let updateState = createInitialUpdateState({
+  enabled: DESKTOP_BUILD_TYPE === "release" && process.platform === "win32",
+  disabledReason: DESKTOP_BUILD_TYPE === "release" ? "unsupported_platform" : "development_build",
+  currentVersion: app.getVersion()
+});
 
 const writeStartupLog = (message) => {
   if (!process.env.DESKTOP_STARTUP_LOG) {
@@ -60,93 +81,62 @@ const ensureDesktopSecret = (dataDir) => {
   return secret;
 };
 
-const ensureMigrationTable = (db) => {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS "_prisma_migrations" (
-      "id" TEXT PRIMARY KEY NOT NULL,
-      "checksum" TEXT NOT NULL,
-      "finished_at" DATETIME,
-      "migration_name" TEXT NOT NULL,
-      "logs" TEXT,
-      "rolled_back_at" DATETIME,
-      "started_at" DATETIME NOT NULL DEFAULT current_timestamp,
-      "applied_steps_count" INTEGER UNSIGNED NOT NULL DEFAULT 0
-    )
-  `);
-};
+const safeErrorCode = (error) => typeof error?.code === "string" ? error.code : error?.name || "STARTUP_FAILED";
 
-const hasExistingAppTables = (db) =>
-  Boolean(
-    db
-      .prepare(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('UserSettings', 'Character', 'Chat', 'Message') LIMIT 1"
-      )
-      .get()
-  );
-
-const readAppliedMigrations = (db) =>
-  new Set(
-    db
-      .prepare(
-        'SELECT "migration_name" FROM "_prisma_migrations" WHERE "finished_at" IS NOT NULL AND "rolled_back_at" IS NULL'
-      )
-      .all()
-      .map((row) => row.migration_name)
-  );
-
-const recordMigration = (db, migrationName, sql) => {
-  const now = new Date().toISOString();
-  const checksum = crypto.createHash("sha256").update(sql).digest("hex");
-
-  db.prepare(`
-    INSERT INTO "_prisma_migrations" (
-      "id",
-      "checksum",
-      "finished_at",
-      "migration_name",
-      "logs",
-      "rolled_back_at",
-      "started_at",
-      "applied_steps_count"
-    )
-    VALUES (?, ?, ?, ?, NULL, NULL, ?, 1)
-  `).run(crypto.randomUUID(), checksum, now, migrationName, now);
-};
-
-const runDesktopMigrations = (serverDir, databasePath) => {
-  const migrationsDir = path.join(serverDir, "prisma", "migrations");
-  const db = new DatabaseSync(databasePath);
-
-  try {
-    ensureMigrationTable(db);
-
-    const migrationNames = fs
-      .readdirSync(migrationsDir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .sort();
-    const applied = readAppliedMigrations(db);
-
-    if (applied.size === 0 && hasExistingAppTables(db)) {
-      for (const migrationName of migrationNames) {
-        const sql = fs.readFileSync(path.join(migrationsDir, migrationName, "migration.sql"), "utf8");
-        recordMigration(db, migrationName, sql);
-      }
-      return;
-    }
-
-    for (const migrationName of migrationNames) {
-      if (applied.has(migrationName)) {
-        continue;
-      }
-
-      const sql = fs.readFileSync(path.join(migrationsDir, migrationName, "migration.sql"), "utf8");
-      db.exec(sql);
-      recordMigration(db, migrationName, sql);
-    }
-  } finally {
-    db.close();
+const updatePublicState = (event) => {
+  updateState = reduceUpdateState(updateState, event);
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send("updates:state", updateState);
   }
+  return updateState;
+};
+
+const configureUpdates = () => {
+  ipcMain.handle("updates:get-state", () => updateState);
+  ipcMain.handle("updates:check", async () => {
+    if (updateState.status === "disabled") return updateState;
+    updatePublicState({ type: "check_started" });
+    try {
+      await autoUpdater.checkForUpdates();
+    } catch (error) {
+      if (updateState.status !== "error") updatePublicState({ type: "error", code: classifyUpdateError(error, "checking") });
+    }
+    return updateState;
+  });
+  ipcMain.handle("updates:download", async () => {
+    if (updateState.status !== "available") return updateState;
+    updatePublicState({ type: "download_started" });
+    try {
+      await autoUpdater.downloadUpdate();
+    } catch (error) {
+      if (updateState.status !== "error") updatePublicState({ type: "error", code: classifyUpdateError(error, "downloading") });
+    }
+    return updateState;
+  });
+  ipcMain.handle("updates:defer", () => updatePublicState({ type: "deferred" }));
+  ipcMain.handle("updates:install", () => {
+    if (!['downloaded', 'deferred'].includes(updateState.status) || updateState.progressPercent !== 100) return updateState;
+    updatePublicState({ type: "install_confirmed" });
+    setImmediate(() => autoUpdater.quitAndInstall(false, true));
+    return updateState;
+  });
+
+  if (updateState.status === "disabled") return;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.on("update-available", (info) => updatePublicState({ type: "update_available", version: info.version, releaseNotes: info.releaseNotes }));
+  autoUpdater.on("update-not-available", () => updatePublicState({ type: "update_not_available" }));
+  autoUpdater.on("download-progress", (progress) => updatePublicState({
+    type: "download_progress",
+    percent: progress.percent,
+    transferred: progress.transferred,
+    total: progress.total
+  }));
+  autoUpdater.on("update-downloaded", (info) => updatePublicState({ type: "downloaded", version: info.version }));
+  autoUpdater.on("error", (error) => updatePublicState({
+    type: "error",
+    code: classifyUpdateError(error, updateState.status === "downloading" ? "downloading" : "checking")
+  }));
 };
 
 const waitForHealth = (port) =>
@@ -191,10 +181,7 @@ const startServer = async () => {
     process.env.STAR_COMPANION_DATA_DIR || path.join(app.getPath("appData"), "StarCompanion");
 
   fs.mkdirSync(dataDir, { recursive: true });
-  writeStartupLog(`serverDir=${serverDir}`);
-  writeStartupLog(`webDistDir=${webDistDir}`);
-  writeStartupLog(`appData=${app.getPath("appData")}`);
-  writeStartupLog(`dataDir=${dataDir}`);
+  writeStartupLog("resourcesResolved=true");
 
   const port = await getAvailablePort();
   const databasePath = path.join(dataDir, "star-companion.db");
@@ -205,10 +192,27 @@ const startServer = async () => {
   process.env.CORS_ORIGIN = `http://127.0.0.1:${port}`;
   process.env.WEB_DIST_DIR = webDistDir;
   process.env.API_KEY_ENCRYPTION_SECRET = ensureDesktopSecret(dataDir);
+  process.env.STAR_COMPANION_APP_VERSION = app.getVersion();
+  process.env.STAR_COMPANION_PLATFORM = "windows";
+  process.env.STAR_COMPANION_BUILD_TYPE = DESKTOP_BUILD_TYPE;
 
-  runDesktopMigrations(serverDir, databasePath);
+  const migrationReport = runProtectedMigrations({
+    databasePath,
+    migrationsDirectory: path.join(serverDir, "prisma", "migrations"),
+    recoveryDirectory: path.join(dataDir, "upgrade-recovery"),
+    appVersion: app.getVersion()
+  });
+  process.env.STAR_COMPANION_MIGRATION_REPORT = JSON.stringify({
+    status: migrationReport.recoveryCreated || (migrationReport.previousAppVersion && migrationReport.previousAppVersion !== app.getVersion()) ? "upgraded" : "ready",
+    previousAppVersion: migrationReport.previousAppVersion,
+    previousSchemaVersion: migrationReport.previousSchemaVersion,
+    appliedMigrations: migrationReport.appliedMigrations,
+    recoveryCreated: migrationReport.recoveryCreated
+  });
+  writeStartupLog(`migrationStatus=${migrationReport.recoveryCreated ? "upgraded_with_recovery" : "ready"}`);
   await import(pathToFileURL(path.join(serverDir, "dist", "index.js")).href);
   await waitForHealth(port);
+  writeStartupLog("serverReady=true");
 
   return port;
 };
@@ -225,7 +229,8 @@ const createWindow = async (port) => {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      preload: path.join(__dirname, "preload.cjs")
     }
   });
 
@@ -239,15 +244,54 @@ const createWindow = async (port) => {
 
 app.setName(APP_NAME);
 app.setAppUserModelId("local.star-companion.app");
+configureUpdates();
 
 app.whenReady().then(async () => {
   try {
     const port = await startServer();
     await createWindow(port);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    writeStartupLog(`error=${message}`);
-    dialog.showErrorBox(`${APP_NAME} failed to start`, message);
+    const code = safeErrorCode(error);
+    writeStartupLog(`startupError=${code}`);
+    const dataDir = process.env.STAR_COMPANION_DATA_DIR || path.join(app.getPath("appData"), "StarCompanion");
+    const recoveryDirectory = path.join(dataDir, "upgrade-recovery");
+    const latestRecoveryId = fs.existsSync(recoveryDirectory)
+      ? fs.readdirSync(recoveryDirectory).filter((name) => name.endsWith(".json")).sort().at(-1)?.replace(/\.json$/, "") || null
+      : null;
+    const buttons = latestRecoveryId ? ["Close", "Open recovery folder", "Restore latest safety copy"] : ["Close", "Open recovery folder"];
+    const choice = dialog.showMessageBoxSync({
+      type: "error",
+      title: `${APP_NAME} failed to start`,
+      message: code === "SCHEMA_TOO_NEW" || code === "APP_TOO_OLD"
+        ? "This data belongs to a newer Star Companion version. Update the app before trying again."
+        : "Star Companion could not safely upgrade the local database. The original database was not deleted.",
+      detail: `Diagnostic code: ${code}. You can open the recovery folder and keep it for support.`,
+      buttons,
+      defaultId: 0,
+      cancelId: 0
+    });
+    if (choice === 1) {
+      fs.mkdirSync(recoveryDirectory, { recursive: true });
+      await shell.openPath(recoveryDirectory);
+    } else if (choice === 2 && latestRecoveryId) {
+      const confirmed = dialog.showMessageBoxSync({
+        type: "warning",
+        title: "Restore pre-upgrade database",
+        message: "Replace the current database with the latest pre-upgrade safety copy?",
+        detail: "The app will remain closed after restoring. Install the previous compatible version or contact support before opening it again.",
+        buttons: ["Cancel", "Restore safety copy"],
+        defaultId: 0,
+        cancelId: 0
+      });
+      if (confirmed === 1) {
+        try {
+          restoreSafetyCopy({ databasePath: path.join(dataDir, "star-companion.db"), recoveryDirectory, recoveryId: latestRecoveryId });
+          dialog.showMessageBoxSync({ type: "info", title: "Database restored", message: "The pre-upgrade database was restored.", buttons: ["Close"] });
+        } catch {
+          dialog.showMessageBoxSync({ type: "error", title: "Restore failed", message: "The recovery copy could not be restored. The existing database was preserved.", buttons: ["Close"] });
+        }
+      }
+    }
     app.quit();
   }
 });

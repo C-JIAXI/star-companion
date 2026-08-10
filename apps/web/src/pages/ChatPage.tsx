@@ -10,6 +10,7 @@ import {
   Clipboard,
   Download,
   FileText,
+  Gauge,
   GitBranch,
   Image,
   ListChecks,
@@ -27,6 +28,7 @@ import {
   User,
   Volume2,
   VolumeX,
+  WifiOff,
   X
 } from "lucide-react";
 import {
@@ -50,10 +52,12 @@ import { readFileAsDataUrl, saveTextFile } from "../lib/files";
 import { queueChatMessageJump, takeChatMessageJump } from "../lib/messageNavigation";
 import { generateId } from "../lib/uuid";
 import { useWebSocket } from "../lib/useWebSocket";
+import { usePlaceholderSrc } from "../placeholderImages";
 import { useAppStore } from "../store/useAppStore";
 import type {
   CharacterDTO,
   ChatAgentDraftDTO,
+  ChatAgentActionDTO,
   ChatAgentMode,
   ChatMemoryDTO,
   ChatMessageSearchDTO,
@@ -97,6 +101,53 @@ const CHAT_QUEUE_STORAGE_PREFIX = "star-companion:chat-queue:";
 const MAX_QUEUED_MESSAGES = 10;
 const GENERATION_ERROR_PREFIX = "[GENERATION_FAILED] ";
 const MAX_CHAT_BACKGROUND_FILE_SIZE = 2 * 1024 * 1024;
+const MAX_PERSONA_AVATAR_FILE_SIZE = 2 * 1024 * 1024;
+const PERSONA_AVATAR_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "image/avif"
+]);
+
+const estimateLocalTokens = (value: string) => {
+  const compact = value.trim();
+  return compact ? Math.max(1, Math.ceil(compact.length / 2)) : 0;
+};
+
+function ChatContextBoundary({
+  includedCount,
+  outsideCount
+}: {
+  includedCount: number;
+  outsideCount: number;
+}) {
+  const { t } = useI18n();
+
+  return (
+    <div
+      className="mb-4 flex items-center gap-3 sm:mb-6"
+      data-context-included-count={includedCount}
+      data-context-outside-count={outsideCount}
+      data-testid="chat-context-boundary"
+    >
+      <span className="h-px min-w-4 flex-1 border-t border-dashed border-ember-300/35" />
+      <div className="flex max-w-[min(78vw,34rem)] items-start gap-2 text-center text-xs text-slate-400">
+        <Gauge className="mt-0.5 shrink-0 text-ember-300" size={14} />
+        <div className="min-w-0">
+          <p className="font-semibold text-slate-200">{t("chat.contextBoundaryTitle")}</p>
+          <p className="mt-0.5 leading-5">
+            {t("chat.contextBoundaryDetail", {
+              included: includedCount,
+              outside: outsideCount
+            })}
+          </p>
+        </div>
+      </div>
+      <span className="h-px min-w-4 flex-1 border-t border-dashed border-ember-300/35" />
+    </div>
+  );
+}
 const CHAT_PAGE_STYLE_TAG = "chat-page-character-html-css";
 const emptyMemoryForm = {
   title: "",
@@ -109,7 +160,9 @@ const agentModes: ChatAgentMode[] = [
   "scene_summary",
   "next_steps",
   "reply_drafts",
-  "memory_lore_candidates"
+  "memory_lore_candidates",
+  "continuity_check",
+  "character_consistency"
 ];
 
 const getMessagePreview = (content: string, maxLength = 180) => {
@@ -301,6 +354,7 @@ export function ChatPage({
   const [transcriptIncludeTimestamps, setTranscriptIncludeTimestamps] = useState(true);
   const [transcriptExportedAt, setTranscriptExportedAt] = useState(() => new Date().toISOString());
   const [showReadinessDialog, setShowReadinessDialog] = useState(false);
+  const [showContextBudgetDialog, setShowContextBudgetDialog] = useState(false);
   const [showStoryNavigator, setShowStoryNavigator] = useState(false);
   const [storyChats, setStoryChats] = useState<ChatDTO[]>([]);
   const [storyNavigatorLoading, setStoryNavigatorLoading] = useState(false);
@@ -317,11 +371,14 @@ export function ChatPage({
   const [backgroundDraft, setBackgroundDraft] = useState("");
   const [backgroundInputValue, setBackgroundInputValue] = useState("");
   const [debugMessage, setDebugMessage] = useState<MessageDTO | null>(null);
+  const [guidedRegenerateMessage, setGuidedRegenerateMessage] = useState<MessageDTO | null>(null);
+  const [regenerationGuidance, setRegenerationGuidance] = useState("");
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
   const [agentMode, setAgentMode] = useState<ChatAgentMode>("next_steps");
   const [agentFocus, setAgentFocus] = useState("");
   const [agentDraft, setAgentDraft] = useState<ChatAgentDraftDTO | null>(null);
   const [agentLoading, setAgentLoading] = useState(false);
+  const [pendingAgentAction, setPendingAgentAction] = useState<ChatAgentActionDTO | null>(null);
   const [messageSearchOpen, setMessageSearchOpen] = useState(false);
   const [messageSearchQuery, setMessageSearchQuery] = useState("");
   const [messageSearchResult, setMessageSearchResult] = useState<ChatMessageSearchDTO | null>(null);
@@ -353,6 +410,7 @@ export function ChatPage({
   const [editingPersonaDraft, setEditingPersonaDraft] = useState<UserCustomConfigDTO>(() =>
     emptyUserCustomConfig()
   );
+  const [editingPersonaAvatar, setEditingPersonaAvatar] = useState("");
   const [userPersonaPresets, setUserPersonaPresets] = useState<UserPersonaPresetDTO[]>([]);
   const [personaPresetName, setPersonaPresetName] = useState("");
   const [editingProfileDraft, setEditingProfileDraft] = useState("");
@@ -376,6 +434,13 @@ export function ChatPage({
   const queuedMessagesRef = useRef<QueuedChatMessage[]>([]);
   const interruptForQueueRef = useRef(false);
   const resendRequestRef = useRef<{ requestId: string; messageId: string } | null>(null);
+  const pendingGenerationDraftRef = useRef<{
+    requestId: string;
+    chatId: string;
+    content: string;
+  } | null>(null);
+  const previousConnectionRef = useRef(false);
+  const refreshChatAfterReconnectRef = useRef<string | null>(null);
   const draftTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
   const backgroundFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -385,6 +450,8 @@ export function ChatPage({
   });
   const hasMessagesRef = useRef(false);
   const autoTitleChatIdsRef = useRef(new Set<string>());
+  const tRef = useRef(t);
+  tRef.current = t;
 
   const autoResizeDraftTextArea = () => {
     const el = draftTextAreaRef.current;
@@ -473,14 +540,19 @@ export function ChatPage({
   const {
     send: sendWs,
     connect,
+    reconnect,
     disconnect,
-    isConnected
+    isConnected,
+    connectionState
   } = useWebSocket({
     onMessage(message) {
       const handlers = onMessageHandlersRef.current;
       const msg = message as GenerationServerMessage;
 
       if (msg.type === "user_message") {
+        if (pendingGenerationDraftRef.current?.requestId === msg.requestId) {
+          pendingGenerationDraftRef.current = null;
+        }
         handlers.upsertMessage(msg.message);
         return;
       }
@@ -589,6 +661,9 @@ export function ChatPage({
       }
 
       if (msg.type === "generation_done" || msg.type === "generation_stopped") {
+        if (pendingGenerationDraftRef.current?.requestId === msg.requestId) {
+          pendingGenerationDraftRef.current = null;
+        }
         if (resendRequestRef.current?.requestId === msg.requestId) {
           resendRequestRef.current = null;
         }
@@ -614,6 +689,9 @@ export function ChatPage({
       }
 
       if (msg.type === "error") {
+        if (msg.requestId && pendingGenerationDraftRef.current?.requestId === msg.requestId) {
+          pendingGenerationDraftRef.current = null;
+        }
         if (resendRequestRef.current?.requestId === msg.requestId) {
           resendRequestRef.current = null;
         }
@@ -667,10 +745,197 @@ export function ChatPage({
     };
   }, [connect, disconnect]);
 
+  useEffect(() => {
+    const wasConnected = previousConnectionRef.current;
+    previousConnectionRef.current = isConnected;
+
+    if (!wasConnected && isConnected) {
+      const chatId = refreshChatAfterReconnectRef.current;
+      if (!chatId) return;
+      refreshChatAfterReconnectRef.current = null;
+      const timerId = window.setTimeout(() => {
+        void api.chats
+          .get(chatId)
+          .then((chat) => {
+            if (draftChatIdRef.current !== chatId) return;
+            setActiveChat(chat);
+            setChatMemories(chat.memories ?? []);
+            setAutoMemoryEnabled(chat.autoMemoryEnabled);
+            hasMessagesRef.current = chat.messages.length > 0;
+            setStatus(t("chat.connectionRestored"));
+            onChatsChanged();
+          })
+          .catch(() => {
+            setError(t("chat.connectionRefreshFailed"));
+          });
+      }, 200);
+      return () => window.clearTimeout(timerId);
+    }
+
+    if (!wasConnected || isConnected || !activeRequestId) return;
+
+    const pendingDraft = pendingGenerationDraftRef.current;
+    if (pendingDraft?.requestId === activeRequestId) {
+      if (draftChatIdRef.current === pendingDraft.chatId) {
+        setDraft((current) => current || pendingDraft.content);
+      } else {
+        saveStoredChatDraft(pendingDraft.chatId, pendingDraft.content);
+      }
+      pendingGenerationDraftRef.current = null;
+    }
+
+    refreshChatAfterReconnectRef.current = generationChatId ?? draftChatIdRef.current;
+    resendRequestRef.current = null;
+    interruptForQueueRef.current = false;
+    streamingBufferRef.current = "";
+    setActiveRequestId(null);
+    setGenerationChatId(null);
+    setStreamingContent("");
+    setStreamingCharacterId(null);
+    setStreamingContextCounts(null);
+    setLoading(false);
+    setError(t("chat.connectionLostDuringGeneration"));
+  }, [activeRequestId, generationChatId, isConnected, onChatsChanged, t]);
+
   const characterMap = useMemo(
     () => new Map(characters.map((character) => [character.id, character])),
     [characters]
   );
+
+  const activeUserDisplayName = useMemo(
+    () => parseUserCustomConfig(activeChat?.userPersona).displayName.trim(),
+    [activeChat?.userPersona]
+  );
+  const editingPersonaAvatarPreview = usePlaceholderSrc(
+    editingPersonaAvatar,
+    editingPersonaDraft.displayName.trim() || "You"
+  );
+  const memoryEmbeddingConfigured = runtimeSettings
+    ? hasCompatibleModuleModel(runtimeSettings, "memory_embedding")
+    : false;
+  const memoryIndexSummary = useMemo(() => {
+    const enabled = chatMemories.filter((memory) => memory.enabled);
+    return {
+      total: enabled.length,
+      ready: enabled.filter((memory) => memory.embeddingStatus === "ready").length,
+      stale: enabled.filter(
+        (memory) =>
+          memory.embeddingStatus !== "ready" && memory.embeddingStatus !== "failed"
+      ).length,
+      failed: enabled.filter((memory) => memory.embeddingStatus === "failed").length
+    };
+  }, [chatMemories]);
+
+  const activeChatModel = useMemo(() => {
+    const preference = runtimeSettings?.moduleModelPreferences?.chat;
+    const providerId = preference?.providerId ?? activeProviderId;
+    const modelId = preference?.modelId ?? activeModelId;
+    const provider = settingsProviders.find((entry) => entry.id === providerId);
+    const model = provider?.models.find((entry) => entry.id === modelId);
+    return provider && model ? { provider, model } : null;
+  }, [activeModelId, activeProviderId, runtimeSettings?.moduleModelPreferences?.chat, settingsProviders]);
+
+  const contextBudget = useMemo(() => {
+    if (!activeChat) return null;
+
+    const includedMessages = activeChat.messages.filter(
+      (message) =>
+        message.contextIncluded &&
+        (message.role === "user" || message.role === "assistant" || message.role === "system")
+    );
+    let latestUsageIndex = -1;
+    for (let index = includedMessages.length - 1; index >= 0; index -= 1) {
+      if (includedMessages[index]?.role === "assistant" && includedMessages[index]?.tokenUsage) {
+        latestUsageIndex = index;
+        break;
+      }
+    }
+
+    let promptEstimate = 0;
+    if (latestUsageIndex >= 0) {
+      const latestUsage = includedMessages[latestUsageIndex]?.tokenUsage;
+      promptEstimate = (latestUsage?.promptTokens ?? 0) + (latestUsage?.completionTokens ?? 0);
+      promptEstimate += includedMessages
+        .slice(latestUsageIndex + 1)
+        .reduce((total, message) => total + estimateLocalTokens(message.content), 0);
+    } else {
+      const character = activeChat.characterId
+        ? characterMap.get(activeChat.characterId)
+        : undefined;
+      const recentMessages = includedMessages.slice(
+        -Math.max(1, Math.min(activeChat.memoryTurns, 50)) * 2 - 1
+      );
+      const alwaysActiveLore =
+        character?.loreEntries
+          .filter((entry) => entry.enabled && entry.alwaysActive)
+          .map((entry) => entry.content) ?? [];
+      const likelyMemories = [...(activeChat.memories ?? [])]
+        .filter((memory) => memory.enabled)
+        .sort((left, right) => right.importance - left.importance)
+        .slice(0, 5)
+        .map((memory) => `${memory.title}\n${memory.content}`);
+      promptEstimate = estimateLocalTokens(
+        [
+          character?.prefix ?? "",
+          character?.prompt ?? "",
+          character?.suffix ?? "",
+          ...alwaysActiveLore,
+          activeChat.userPersona,
+          activeChat.userProfileSummary,
+          ...likelyMemories,
+          ...recentMessages.map((message) => message.content)
+        ].join("\n\n")
+      );
+    }
+
+    promptEstimate += estimateLocalTokens(draft);
+    const responseReserve = runtimeSettings?.maxTokens ?? 800;
+    const totalEstimate = promptEstimate + responseReserve;
+    const contextWindow = activeChatModel?.model.contextWindow ?? null;
+    const utilization = contextWindow ? totalEstimate / contextWindow : null;
+    const status =
+      utilization === null
+        ? "unknown"
+        : utilization > 1
+          ? "exceeded"
+          : utilization >= 0.8
+            ? "warning"
+            : "safe";
+
+    return {
+      promptEstimate,
+      responseReserve,
+      totalEstimate,
+      contextWindow,
+      utilization,
+      remaining: contextWindow ? Math.max(0, contextWindow - totalEstimate) : null,
+      status
+    } as const;
+  }, [activeChat, activeChatModel, characterMap, draft, runtimeSettings?.maxTokens]);
+
+  const contextBudgetStatusLabel = contextBudget
+    ? t(
+        contextBudget.status === "safe"
+          ? "chat.contextBudgetSafe"
+          : contextBudget.status === "warning"
+            ? "chat.contextBudgetWarning"
+            : contextBudget.status === "exceeded"
+              ? "chat.contextBudgetExceeded"
+              : "chat.contextBudgetUnknown"
+      )
+    : "";
+
+  const contextBudgetStatusClassName =
+    contextBudget?.status === "safe"
+      ? "bg-emerald-500/15 text-emerald-300"
+      : contextBudget?.status === "warning"
+        ? "bg-amber-500/15 text-amber-300"
+        : contextBudget?.status === "exceeded"
+          ? "bg-rose-500/15 text-rose-300"
+          : "bg-white/10 text-slate-400";
+
+  const formatContextTokens = (value: number) =>
+    value.toLocaleString(language === "zh-CN" ? "zh-CN" : "en-US");
 
   const transcriptPreview = useMemo(() => {
     if (!activeChat) return "";
@@ -904,6 +1169,25 @@ export function ChatPage({
     return activeChat.messages.slice(startIndex, startIndex + MESSAGES_PER_PAGE);
   }, [activeChat, safeMessagePage]);
 
+  const nextReplyContext = useMemo(() => {
+    if (!activeChat) {
+      return null;
+    }
+
+    const messageLimit = Math.max(1, Math.min(activeChat.memoryTurns, 50)) * 2 + 1;
+    const eligibleMessages = activeChat.messages.filter(
+      (message) => message.contextIncluded === true
+    );
+    const includedMessages = eligibleMessages.slice(-messageLimit);
+
+    return {
+      includedIds: new Set(includedMessages.map((message) => message.id)),
+      firstIncludedMessageId: includedMessages[0]?.id ?? null,
+      includedCount: includedMessages.length,
+      outsideCount: Math.max(0, eligibleMessages.length - includedMessages.length)
+    };
+  }, [activeChat]);
+
   const bookmarkedMessages = useMemo(
     () =>
       (activeChat?.messages ?? [])
@@ -1042,9 +1326,12 @@ export function ChatPage({
 
     autoTitleChatIdsRef.current.add(activeChat.id);
     void api.chats
-      .titleSuggestion(activeChat.id)
-      .then((suggestion) => api.chats.update(activeChat.id, { title: suggestion.title }))
-      .then((updated) => applyChatUpdate(updated))
+      .autoTitle(activeChat.id)
+      .then((updated) => {
+        if (updated) {
+          applyChatUpdate(updated);
+        }
+      })
       .catch(() => {
         // Automatic titles are best-effort and must never interrupt the first reply.
       });
@@ -1177,14 +1464,14 @@ export function ChatPage({
 
   useEffect(() => {
     void loadChat(selectedChatId).catch((caught: unknown) => {
-      const message = caught instanceof Error ? caught.message : t("chat.failedLoadChat");
+      const message = caught instanceof Error ? caught.message : tRef.current("chat.failedLoadChat");
       if (selectedChatId && /chat not found/i.test(message)) {
         onSelectChat(null);
         return;
       }
       setError(message);
     });
-  }, [onSelectChat, selectedChatId, t]);
+  }, [onSelectChat, selectedChatId]);
 
   useEffect(() => {
     if (!selectedChatId || draftChatIdRef.current !== selectedChatId) {
@@ -1324,7 +1611,10 @@ export function ChatPage({
     setStatus(null);
     try {
       const userPersona = serializeUserCustomConfig(editingPersonaDraft);
-      const updated = await api.chats.update(activeChat.id, { userPersona });
+      const updated = await api.chats.update(activeChat.id, {
+        userPersona,
+        userAvatar: editingPersonaAvatar
+      });
       applyChatUpdate(updated);
       setShowUserConfigDialog(false);
       setStatus(t("chat.userConfigSaved"));
@@ -1368,10 +1658,12 @@ export function ChatPage({
 
   const savePersonaPreset = async () => {
     const name = personaPresetName.trim();
+    const config = {
+      ...editingPersonaDraft,
+      displayName: editingPersonaDraft.displayName.trim() || name
+    };
     const hasContent =
-      editingPersonaDraft.prefix.trim() ||
-      editingPersonaDraft.prompt.trim() ||
-      editingPersonaDraft.suffix.trim();
+      config.displayName || config.prefix.trim() || config.prompt.trim() || config.suffix.trim();
     if (!name || !hasContent) {
       setError(t("chat.personaPresetInvalid"));
       return;
@@ -1388,7 +1680,8 @@ export function ChatPage({
         {
           id: generateId(),
           name,
-          config: editingPersonaDraft,
+          avatar: editingPersonaAvatar,
+          config,
           createdAt: timestamp,
           updatedAt: timestamp
         }
@@ -1405,7 +1698,11 @@ export function ChatPage({
   };
 
   const applyPersonaPreset = (preset: UserPersonaPresetDTO) => {
-    setEditingPersonaDraft(preset.config);
+    setEditingPersonaDraft({
+      ...preset.config,
+      displayName: preset.config.displayName?.trim() || preset.name
+    });
+    setEditingPersonaAvatar(preset.avatar ?? "");
     setStatus(t("chat.personaPresetApplied"));
   };
 
@@ -1455,6 +1752,7 @@ export function ChatPage({
 
   const startEditingUserConfig = () => {
     setEditingPersonaDraft(parseUserCustomConfig(activeChat?.userPersona));
+    setEditingPersonaAvatar(activeChat?.userAvatar ?? "");
     setPersonaPresetName("");
     setShowUserConfigDialog(true);
     setMemorySettingsOpen(false);
@@ -1512,6 +1810,7 @@ export function ChatPage({
   const cancelEditingUserConfig = () => {
     setShowUserConfigDialog(false);
     setEditingPersonaDraft(emptyUserCustomConfig());
+    setEditingPersonaAvatar("");
     setPersonaPresetName("");
   };
 
@@ -1604,6 +1903,10 @@ export function ChatPage({
         return t("chat.agentModeReplyDrafts");
       case "memory_lore_candidates":
         return t("chat.agentModeMemoryLore");
+      case "continuity_check":
+        return language === "zh-CN" ? "连续性检查" : "Continuity Check";
+      case "character_consistency":
+        return language === "zh-CN" ? "角色一致性" : "Character Consistency";
     }
   };
 
@@ -1617,6 +1920,10 @@ export function ChatPage({
         return t("chat.agentModeReplyDraftsHelp");
       case "memory_lore_candidates":
         return t("chat.agentModeMemoryLoreHelp");
+      case "continuity_check":
+        return language === "zh-CN" ? "发现矛盾与缺失上下文" : "Find contradictions and missing context";
+      case "character_consistency":
+        return language === "zh-CN" ? "检查角色表现是否跑偏" : "Check recent character consistency";
     }
   };
 
@@ -1633,7 +1940,7 @@ export function ChatPage({
         mode: agentMode,
         focus: agentFocus.trim() || undefined
       });
-      setAgentDraft(draftResult);
+      setAgentDraft({ ...draftResult, actions: draftResult.actions ?? [] });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.agentFailed"));
     } finally {
@@ -1648,6 +1955,45 @@ export function ChatPage({
 
     setDraft(agentDraft.content.trim());
     requestAnimationFrame(autoResizeDraftTextArea);
+  };
+
+  const applyAgentAction = async (action: ChatAgentActionDTO) => {
+    if (!activeChat) return;
+    if (action.kind === "reply_draft") {
+      setDraft(action.content);
+      requestAnimationFrame(autoResizeDraftTextArea);
+      setStatus(language === "zh-CN" ? "回复草案已插入输入框。" : "Reply draft inserted into the composer.");
+      return;
+    }
+    setAgentLoading(true);
+    setError(null);
+    try {
+      if (action.kind === "memory_candidate") {
+        const memory = await api.chats.memories.create(activeChat.id, {
+          title: action.title,
+          content: action.content,
+          keywords: action.keywords ?? [],
+          importance: 3
+        });
+        setChatMemories((current) => [memory, ...current]);
+      } else {
+        if (!activeChat.characterId) throw new Error(language === "zh-CN" ? "当前聊天没有绑定角色。" : "This chat has no character.");
+        const character = await api.characters.get(activeChat.characterId);
+        const updated = await api.characters.update(character.id, {
+          loreEntries: [...character.loreEntries, {
+            id: generateId(), keys: action.keywords ?? [], content: action.content,
+            priority: 0, scope: "prompt", triggerMode: "both", alwaysActive: false, enabled: true
+          }]
+        });
+        setStatus(language === "zh-CN" ? `已添加到 ${updated.name} 的角色 lore。` : `Added to ${updated.name}'s character lore.`);
+      }
+      setAgentDraft((current) => current ? { ...current, actions: current.actions.filter((item) => item.id !== action.id) } : current);
+      if (action.kind === "memory_candidate") setStatus(language === "zh-CN" ? "长期记忆已保存。" : "Long-term memory saved.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.agentFailed"));
+    } finally {
+      setAgentLoading(false);
+    }
   };
 
   const copyAgentDraft = async () => {
@@ -2040,6 +2386,11 @@ export function ChatPage({
       setStreamingCharacterId(null);
       setStreamingContextCounts(null);
       streamingBufferRef.current = "";
+      pendingGenerationDraftRef.current = {
+        requestId,
+        chatId,
+        content: normalizedContent
+      };
       saveStoredChatDraft(chatId, "");
       setDraft("");
       requestAnimationFrame(() => {
@@ -2047,8 +2398,11 @@ export function ChatPage({
           draftTextAreaRef.current.style.height = "auto";
         }
       });
-      sendWs(payload);
+      if (!sendWs(payload)) {
+        throw new Error(t("chat.websocketFailed"));
+      }
     } catch (caught) {
+      pendingGenerationDraftRef.current = null;
       if (draftChatIdRef.current === chatId) {
         setDraft((current) => current || normalizedContent);
       } else {
@@ -2061,6 +2415,50 @@ export function ChatPage({
       setStreamingContextCounts(null);
     } finally {
       // Loading ends when the WebSocket sends generation_done, generation_stopped, or error.
+    }
+  };
+
+  const updatePersonaAvatarFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (!PERSONA_AVATAR_MIME_TYPES.has(file.type)) {
+      setError(t("chat.personaAvatarInvalid"));
+      return;
+    }
+    if (file.size > MAX_PERSONA_AVATAR_FILE_SIZE) {
+      setError(t("chat.personaAvatarTooLarge"));
+      return;
+    }
+
+    try {
+      setEditingPersonaAvatar(await readFileAsDataUrl(file));
+      setError(null);
+      setStatus(t("chat.personaAvatarUploaded"));
+    } catch {
+      setError(t("chat.personaAvatarUploadFailed"));
+    }
+  };
+
+  const rebuildMemoryIndex = async () => {
+    if (!activeChat || memoryIndexSummary.total === 0) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const memories = await api.chats.memories.reindex(activeChat.id);
+      setChatMemories(memories);
+      const ready = memories.filter(
+        (memory) => memory.enabled && memory.embeddingStatus === "ready"
+      ).length;
+      const total = memories.filter((memory) => memory.enabled).length;
+      setStatus(t("chat.memoryIndexRebuilt", { ready, total }));
+    } catch (caught) {
+      await loadChatMemories();
+      setError(caught instanceof Error ? caught.message : t("chat.failedRebuildMemoryIndex"));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -2131,7 +2529,9 @@ export function ChatPage({
       type: "stop",
       requestId: activeRequestId
     };
-    sendWs(payload);
+    if (!sendWs(payload)) {
+      reconnect();
+    }
   };
 
   const dispatchQueuedMessages = () => {
@@ -2174,9 +2574,9 @@ export function ChatPage({
     onMessageHandlersRef.current.dispatchQueuedMessages = dispatchQueuedMessages;
   }, [activeChat, isConnected]);
 
-  const regenerateMessage = async (message: MessageDTO) => {
+  const regenerateMessage = async (message: MessageDTO, guidance?: string) => {
     if (message.role !== "assistant") {
-      return;
+      return false;
     }
 
     setLoading(true);
@@ -2189,7 +2589,8 @@ export function ChatPage({
       const payload: GenerationClientMessage = {
         type: "regenerate",
         requestId,
-        messageId: message.id
+        messageId: message.id,
+        ...(guidance?.trim() ? { guidance: guidance.trim() } : {})
       };
       setActiveRequestId(requestId);
       setGenerationChatId(message.chatId);
@@ -2197,13 +2598,17 @@ export function ChatPage({
       setStreamingCharacterId(message.characterId);
       setStreamingContextCounts(null);
       streamingBufferRef.current = "";
-      sendWs(payload);
+      if (!sendWs(payload)) {
+        throw new Error(t("chat.websocketFailed"));
+      }
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedRegenerate"));
       setLoading(false);
       setActiveRequestId(null);
       setGenerationChatId(null);
       setStreamingContextCounts(null);
+      return false;
     }
   };
 
@@ -2280,13 +2685,30 @@ export function ChatPage({
       setStreamingCharacterId(message.characterId);
       setStreamingContextCounts(null);
       streamingBufferRef.current = "";
-      sendWs(payload);
+      if (!sendWs(payload)) {
+        throw new Error(t("chat.websocketFailed"));
+      }
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedContinue"));
       setLoading(false);
       setActiveRequestId(null);
       setGenerationChatId(null);
       setStreamingContextCounts(null);
+      return false;
+    }
+  };
+
+  const openGuidedRegenerate = (message: MessageDTO) => {
+    setGuidedRegenerateMessage(message);
+    setRegenerationGuidance("");
+  };
+
+  const runGuidedRegenerate = async () => {
+    if (!guidedRegenerateMessage || !regenerationGuidance.trim()) return;
+    if (await regenerateMessage(guidedRegenerateMessage, regenerationGuidance)) {
+      setGuidedRegenerateMessage(null);
+      setRegenerationGuidance("");
     }
   };
 
@@ -2703,7 +3125,9 @@ export function ChatPage({
       setStreamingContextCounts(null);
       streamingBufferRef.current = "";
       setIsNearBottom(true);
-      sendWs(payload);
+      if (!sendWs(payload)) {
+        throw new Error(t("chat.websocketFailed"));
+      }
       requestAnimationFrame(() => scrollToBottom());
     } catch (caught) {
       resendRequestRef.current = null;
@@ -3030,6 +3454,21 @@ export function ChatPage({
                       <div className="border-b border-white/10 pb-2">
                         <button
                           className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
+                          data-testid="chat-context-budget-trigger"
+                          type="button"
+                          onClick={() => {
+                            setMemorySettingsOpen(false);
+                            setShowContextBudgetDialog(true);
+                          }}
+                        >
+                          <span>{t("chat.contextBudgetTitle")}</span>
+                          <Gauge size={14} className="text-slate-400" />
+                        </button>
+                      </div>
+
+                      <div className="border-b border-white/10 pb-2 pt-2">
+                        <button
+                          className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
                           type="button"
                           onClick={openMemoryDialog}
                         >
@@ -3256,6 +3695,20 @@ export function ChatPage({
                             pagedMessages.map((message) => {
                               const isUser = message.role === "user";
                               const isSystem = message.role === "system";
+                              const nextContextState =
+                                message.contextIncluded !== true
+                                  ? "excluded"
+                                  : nextReplyContext?.includedIds.has(message.id)
+                                    ? "included"
+                                    : "outside";
+                              const contextBoundary =
+                                nextReplyContext?.outsideCount &&
+                                nextReplyContext.firstIncludedMessageId === message.id ? (
+                                  <ChatContextBoundary
+                                    includedCount={nextReplyContext.includedCount}
+                                    outsideCount={nextReplyContext.outsideCount}
+                                  />
+                                ) : null;
                               const isErrorSystem =
                                 isSystem && message.content.startsWith(GENERATION_ERROR_PREFIX);
                               const character = message.characterId
@@ -3277,7 +3730,9 @@ export function ChatPage({
                                     key={message.id}
                                     className={messageShellClassName}
                                     data-message-id={message.id}
+                                    data-next-reply-context={nextContextState}
                                   >
+                                    {contextBoundary}
                                     <ErrorBubble
                                       characterAvatar={
                                         lastAssistant?.characterId
@@ -3311,7 +3766,9 @@ export function ChatPage({
                                     key={message.id}
                                     className={messageShellClassName}
                                     data-message-id={message.id}
+                                    data-next-reply-context={nextContextState}
                                   >
+                                    {contextBoundary}
                                     <SystemNotification content={message.content} />
                                   </div>
                                 );
@@ -3323,9 +3780,13 @@ export function ChatPage({
                                     key={message.id}
                                     className={messageShellClassName}
                                     data-message-id={message.id}
+                                    data-next-reply-context={nextContextState}
                                   >
+                                    {contextBoundary}
                                     <UserMessageBubble
                                       message={message}
+                                      userName={activeUserDisplayName}
+                                      userAvatar={activeChat.userAvatar}
                                       showAvatar={showMessageAvatars}
                                       showTimestamp={showMessageTimestamps}
                                       onCopy={() => void copyMessage(message)}
@@ -3346,7 +3807,9 @@ export function ChatPage({
                                   key={message.id}
                                   className={messageShellClassName}
                                   data-message-id={message.id}
+                                  data-next-reply-context={nextContextState}
                                 >
+                                  {contextBoundary}
                                   <AssistantMessageBubble
                                     message={message}
                                     avatar={character?.avatar}
@@ -3368,6 +3831,7 @@ export function ChatPage({
                                     onToggleContext={() => void toggleMessageContext(message)}
                                     onContinue={() => void continueMessage(message)}
                                     onRegenerate={() => void regenerateMessage(message)}
+                                    onRegenerateWithGuidance={() => openGuidedRegenerate(message)}
                                     onEdit={() => startEditingMessage(message)}
                                     onDelete={() => setPendingDeleteMessage(message)}
                                     onVariantPrev={() => void switchVariant(message, -1)}
@@ -3482,6 +3946,40 @@ export function ChatPage({
                         className="mx-auto max-w-3xl rounded-lg border border-white/[0.1] bg-ink-950/95 p-1.5 shadow-xl shadow-black/30 sm:p-2 xl:bg-ink-950/70"
                         id="chat-composer"
                       >
+                        {connectionState !== "connected" ? (
+                          <div
+                            aria-live="polite"
+                            className="mb-1.5 flex min-h-9 items-center gap-2 rounded-md border border-amber-500/20 bg-amber-500/[0.08] px-2.5 py-1.5 text-xs text-amber-200"
+                            data-testid="chat-connection-status"
+                            role="status"
+                          >
+                            {connectionState === "connecting" ? (
+                              <RefreshCw className="shrink-0 animate-spin" size={14} />
+                            ) : (
+                              <WifiOff className="shrink-0" size={14} />
+                            )}
+                            <span className="min-w-0 flex-1">
+                              {t(
+                                connectionState === "connecting"
+                                  ? "chat.connectionConnecting"
+                                  : connectionState === "reconnecting"
+                                    ? "chat.connectionReconnecting"
+                                    : "chat.connectionDisconnected"
+                              )}
+                            </span>
+                            {connectionState !== "connecting" ? (
+                              <button
+                                className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-md px-2 font-semibold text-amber-100 transition-colors hover:bg-amber-500/15"
+                                data-chat-action="reconnect"
+                                type="button"
+                                onClick={reconnect}
+                              >
+                                <RefreshCw size={13} />
+                                {t("chat.reconnectNow")}
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
                         {queuedMessages.length > 0 ? (
                           <div
                             className="mb-1.5 border-b border-white/5 px-1 pb-2"
@@ -3738,6 +4236,7 @@ export function ChatPage({
                               ? "border-ember-500/40 bg-ember-500/15 text-ember-100"
                               : "border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/20 hover:bg-white/[0.06]"
                           }`}
+                          data-testid={`agent-mode-${mode}`}
                           type="button"
                           onClick={() => setAgentMode(mode)}
                         >
@@ -3810,6 +4309,27 @@ export function ChatPage({
                         <div className="custom-scrollbar max-h-[34dvh] overflow-y-auto whitespace-pre-wrap break-words text-sm leading-6 text-slate-200 sm:max-h-none">
                           {agentDraft.content}
                         </div>
+                        {agentDraft.actions.length ? (
+                          <div className="space-y-2 border-t border-white/10 pt-3">
+                            {agentDraft.actions.map((action) => (
+                              <div key={action.id} className="flex items-start justify-between gap-2 rounded-md border border-white/10 bg-white/[0.03] p-2">
+                                <div className="min-w-0">
+                                  <p className="text-xs font-semibold text-slate-200">{action.title}</p>
+                                  <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-slate-400">{action.content}</p>
+                                </div>
+                                <button className="shrink-0 rounded-md bg-ember-500 px-2 py-1 text-xs font-semibold text-ink-950 disabled:cursor-not-allowed disabled:opacity-60" data-testid={`agent-action-${action.id}`} disabled={agentLoading} type="button" onClick={() => {
+                                  if (action.kind === "reply_draft") {
+                                    void applyAgentAction(action);
+                                  } else {
+                                    setPendingAgentAction(action);
+                                  }
+                                }}>
+                                  {action.kind === "reply_draft" ? (language === "zh-CN" ? "插入" : "Insert") : (language === "zh-CN" ? "应用" : "Apply")}
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     ) : (
                       <div className="flex h-full min-h-[150px] items-center justify-center text-center text-sm leading-6 text-slate-500">
@@ -4044,6 +4564,92 @@ export function ChatPage({
           onConfirm={() => void deleteLongTermMemory()}
         />
       ) : null}
+      {pendingAgentAction ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={language === "zh-CN" ? "确认保存" : "Save candidate"}
+          loading={agentLoading}
+          message={
+            language === "zh-CN"
+              ? pendingAgentAction.kind === "memory_candidate"
+                ? "此候选将作为长期记忆写入当前聊天。"
+                : "此候选将添加到当前角色的内嵌 lore。"
+              : pendingAgentAction.kind === "memory_candidate"
+                ? "This candidate will be saved as long-term memory for the current chat."
+                : "This candidate will be added to the current character's embedded lore."
+          }
+          title={language === "zh-CN" ? "保存 Agent 候选" : "Save Agent Candidate"}
+          onCancel={() => setPendingAgentAction(null)}
+          onConfirm={() => {
+            const action = pendingAgentAction;
+            setPendingAgentAction(null);
+            void applyAgentAction(action);
+          }}
+        />
+      ) : null}
+      {guidedRegenerateMessage ? (
+        <Modal
+          title={t("chat.guidedRegenerateTitle")}
+          onClose={() => {
+            setGuidedRegenerateMessage(null);
+            setRegenerationGuidance("");
+          }}
+        >
+          <div className="space-y-4">
+            <p className="text-sm leading-6 text-slate-400">{t("chat.guidedRegenerateHelp")}</p>
+            <div className="border-l-2 border-white/10 pl-3">
+              <p className="text-[11px] font-semibold uppercase text-slate-500">
+                {t("chat.guidedRegenerateOriginal")}
+              </p>
+              <p className="mt-1 line-clamp-4 whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">
+                {guidedRegenerateMessage.content}
+              </p>
+            </div>
+            <label className="block space-y-2 text-sm font-medium text-slate-300">
+              <span>{t("chat.guidedRegenerateLabel")}</span>
+              <TextArea
+                autoFocus
+                className="!h-32"
+                data-testid="guided-regenerate-input"
+                maxLength={1000}
+                placeholder={t("chat.guidedRegeneratePlaceholder")}
+                value={regenerationGuidance}
+                onChange={(event) => setRegenerationGuidance(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                    event.preventDefault();
+                    void runGuidedRegenerate();
+                  }
+                }}
+              />
+            </label>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs tabular-nums text-slate-500">
+                {regenerationGuidance.length} / 1000
+              </span>
+              <div className="flex gap-2">
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setGuidedRegenerateMessage(null);
+                    setRegenerationGuidance("");
+                  }}
+                >
+                  {t("common.cancel")}
+                </Button>
+                <Button
+                  data-testid="guided-regenerate-run"
+                  disabled={Boolean(activeRequestId) || !regenerationGuidance.trim()}
+                  onClick={() => void runGuidedRegenerate()}
+                >
+                  <Sparkles size={15} />
+                  {t("chat.guidedRegenerateRun")}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
       {messageSearchOpen ? (
         <Modal title={t("chat.searchMessages")} onClose={() => setMessageSearchOpen(false)}>
           <div className="space-y-4">
@@ -4221,6 +4827,57 @@ export function ChatPage({
             <p className="whitespace-pre-line break-words text-xs leading-5 text-slate-400">
               {t("chat.userConfigHelp")}
             </p>
+            <div className="space-y-2 border-b border-white/10 pb-4" data-testid="persona-identity">
+              <label className="block text-sm font-semibold text-slate-300" htmlFor="persona-display-name">
+                {t("chat.personaDisplayName")}
+              </label>
+              <TextInput
+                id="persona-display-name"
+                maxLength={80}
+                placeholder={t("chat.personaDisplayNamePlaceholder")}
+                value={editingPersonaDraft.displayName}
+                onChange={(event) => updateUserConfigDraft("displayName", event.target.value)}
+              />
+              <p className="text-xs leading-5 text-slate-500">{t("chat.personaDisplayNameHelp")}</p>
+              <div className="flex flex-wrap items-center gap-3 pt-1">
+                <img
+                  alt=""
+                  className="h-14 w-14 shrink-0 rounded-md border border-white/10 object-cover"
+                  data-testid="persona-avatar-preview"
+                  src={editingPersonaAvatarPreview}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <label className="inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-white/10 bg-ink-800 px-3 text-xs font-medium text-slate-200 transition-colors hover:bg-ink-700 focus-within:ring-2 focus-within:ring-ember-500/35">
+                    <Image size={14} />
+                    {editingPersonaAvatar
+                      ? t("chat.personaAvatarReplace")
+                      : t("chat.personaAvatarUpload")}
+                    <input
+                      accept="image/png,image/jpeg,image/webp,image/gif,image/avif"
+                      className="sr-only"
+                      data-testid="persona-avatar-upload"
+                      type="file"
+                      onChange={(event) => {
+                        void updatePersonaAvatarFile(event.target.files?.[0]);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+                  {editingPersonaAvatar ? (
+                    <Button
+                      aria-label={t("chat.personaAvatarRemove")}
+                      className="!h-10 !min-h-10 !w-10 !px-0"
+                      data-testid="persona-avatar-remove"
+                      title={t("chat.personaAvatarRemove")}
+                      variant="ghost"
+                      onClick={() => setEditingPersonaAvatar("")}
+                    >
+                      <X size={15} />
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            </div>
             <div
               className="space-y-3 rounded-lg border border-white/10 bg-ink-950/35 p-4"
               data-testid="persona-presets"
@@ -4258,7 +4915,15 @@ export function ChatPage({
                       key={preset.id}
                       className="flex flex-col gap-3 rounded-lg border border-white/10 bg-ink-950/40 p-3 sm:flex-row sm:items-center sm:justify-between"
                     >
-                      <div className="min-w-0">
+                      <div className="flex min-w-0 items-center gap-3">
+                        {preset.avatar ? (
+                          <img
+                            alt=""
+                            className="h-9 w-9 shrink-0 rounded-md border border-white/10 object-cover"
+                            src={preset.avatar}
+                          />
+                        ) : null}
+                        <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-slate-100">{preset.name}</p>
                         <p className="mt-1 break-words text-xs leading-5 text-slate-500">
                           {preset.config.prompt ||
@@ -4266,6 +4931,7 @@ export function ChatPage({
                             preset.config.suffix ||
                             t("chat.userConfigEmpty")}
                         </p>
+                        </div>
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
                         <Button
@@ -4453,6 +5119,130 @@ export function ChatPage({
                 );
               })
             )}
+          </div>
+        </Modal>
+      ) : null}
+      {showContextBudgetDialog && contextBudget ? (
+        <Modal
+          panelClassName="max-w-lg"
+          title={t("chat.contextBudgetTitle")}
+          onClose={() => setShowContextBudgetDialog(false)}
+        >
+          <div className="space-y-4" data-testid="chat-context-budget-dialog">
+            <p className="text-sm leading-6 text-slate-400">{t("chat.contextBudgetHelp")}</p>
+
+            <div className="border-b border-white/10 pb-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-slate-500">
+                    {t("chat.contextBudgetModel")}
+                  </p>
+                  <p className="mt-1 truncate text-sm font-semibold text-slate-100">
+                    {activeChatModel
+                      ? `${activeChatModel.provider.label} / ${activeChatModel.model.label}`
+                      : t("chat.contextBudgetUnknownModel")}
+                  </p>
+                </div>
+                <span
+                  className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${contextBudgetStatusClassName}`}
+                  data-context-budget-status={contextBudget.status}
+                >
+                  {contextBudgetStatusLabel}
+                </span>
+              </div>
+
+              <div className="mt-4 flex items-end justify-between gap-3">
+                <p
+                  className="text-2xl font-semibold tabular-nums text-slate-100"
+                  data-testid="context-budget-total"
+                >
+                  {formatContextTokens(contextBudget.totalEstimate)}
+                  <span className="ml-1 text-sm font-medium text-slate-500">tokens</span>
+                </p>
+                {contextBudget.contextWindow ? (
+                  <p className="text-xs tabular-nums text-slate-500">
+                    {Math.round((contextBudget.utilization ?? 0) * 100)}%
+                  </p>
+                ) : null}
+              </div>
+
+              {contextBudget.contextWindow ? (
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className={`h-full rounded-full transition-[width] ${
+                      contextBudget.status === "safe"
+                        ? "bg-emerald-400"
+                        : contextBudget.status === "warning"
+                          ? "bg-amber-400"
+                          : "bg-rose-400"
+                    }`}
+                    style={{
+                      width: `${Math.min(100, Math.round((contextBudget.utilization ?? 0) * 100))}%`
+                    }}
+                  />
+                </div>
+              ) : null}
+            </div>
+
+            <dl className="grid grid-cols-2 gap-x-5 gap-y-3 text-sm">
+              <div>
+                <dt className="text-xs text-slate-500">{t("chat.contextBudgetPrompt")}</dt>
+                <dd className="mt-1 tabular-nums text-slate-200">
+                  {formatContextTokens(contextBudget.promptEstimate)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">{t("chat.contextBudgetResponse")}</dt>
+                <dd className="mt-1 tabular-nums text-slate-200">
+                  {formatContextTokens(contextBudget.responseReserve)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">{t("chat.contextBudgetWindow")}</dt>
+                <dd className="mt-1 tabular-nums text-slate-200" data-testid="context-budget-window">
+                  {contextBudget.contextWindow
+                    ? formatContextTokens(contextBudget.contextWindow)
+                    : t("common.notSet")}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">{t("chat.contextBudgetRemaining")}</dt>
+                <dd className="mt-1 tabular-nums text-slate-200">
+                  {contextBudget.remaining === null
+                    ? t("common.notSet")
+                    : formatContextTokens(contextBudget.remaining)}
+                </dd>
+              </div>
+            </dl>
+
+            {!contextBudget.contextWindow ? (
+              <p className="border-l-2 border-amber-500/40 pl-3 text-xs leading-5 text-amber-200/80">
+                {t("chat.contextBudgetConfigure")}
+              </p>
+            ) : null}
+
+            <p className="text-xs leading-5 text-slate-500">{t("chat.contextBudgetNote")}</p>
+
+            <div className="flex flex-wrap justify-end gap-2 border-t border-white/10 pt-3">
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setShowContextBudgetDialog(false);
+                  openMemoryDialog();
+                }}
+              >
+                {t("chat.contextBudgetAdjustHistory")}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setShowContextBudgetDialog(false);
+                  navigateToSection("settings", "model");
+                }}
+              >
+                {t("chat.contextBudgetOpenSettings")}
+              </Button>
+            </div>
           </div>
         </Modal>
       ) : null}
@@ -4683,7 +5473,7 @@ export function ChatPage({
                     variant="secondary"
                     onClick={() => void refreshLongTermMemory()}
                   >
-                    <RefreshCw size={14} />
+                    <BrainCircuit size={14} />
                     {t("chat.refreshMemory")}
                   </Button>
                   <Button
@@ -4706,6 +5496,76 @@ export function ChatPage({
                   onChange={(event) => void updateAutoMemoryEnabled(event.target.checked)}
                 />
               </label>
+
+              {memoryIndexSummary.total > 0 ? (
+                <div
+                  className={`flex flex-col gap-3 border-l-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between ${
+                    !memoryEmbeddingConfigured
+                      ? "border-slate-500 bg-white/[0.02]"
+                      : memoryIndexSummary.failed > 0
+                        ? "border-rose-500/60 bg-rose-500/[0.04]"
+                        : memoryIndexSummary.stale > 0
+                          ? "border-amber-500/60 bg-amber-500/[0.04]"
+                          : "border-cyan-500/60 bg-cyan-500/[0.04]"
+                  }`}
+                  data-memory-index-state={
+                    !memoryEmbeddingConfigured
+                      ? "unconfigured"
+                      : memoryIndexSummary.failed > 0
+                        ? "failed"
+                        : memoryIndexSummary.stale > 0
+                          ? "stale"
+                          : "ready"
+                  }
+                  data-testid="memory-index-summary"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-200">
+                      {t("chat.memoryIndexProgress", {
+                        ready: memoryIndexSummary.ready,
+                        total: memoryIndexSummary.total
+                      })}
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-400">
+                      {t(
+                        !memoryEmbeddingConfigured
+                          ? "chat.memoryIndexUnconfigured"
+                          : memoryIndexSummary.failed > 0
+                            ? "chat.memoryIndexFailedHelp"
+                            : memoryIndexSummary.stale > 0
+                              ? "chat.memoryIndexStaleHelp"
+                              : "chat.memoryIndexReadyHelp",
+                        {
+                          failed: memoryIndexSummary.failed,
+                          stale: memoryIndexSummary.stale
+                        }
+                      )}
+                    </p>
+                  </div>
+                  {memoryEmbeddingConfigured ? (
+                    <Button
+                      className="shrink-0 !min-h-[34px] !px-3 text-xs"
+                      data-testid="memory-index-rebuild"
+                      disabled={loading}
+                      variant="secondary"
+                      onClick={() => void rebuildMemoryIndex()}
+                    >
+                      <RefreshCw size={14} />
+                      {t("chat.rebuildMemoryIndex")}
+                    </Button>
+                  ) : (
+                    <Button
+                      className="shrink-0 !min-h-[34px] !px-3 text-xs"
+                      data-testid="memory-index-configure"
+                      variant="secondary"
+                      onClick={() => openModuleModelSettings("memory_embedding")}
+                    >
+                      <Settings size={14} />
+                      {t("chat.configureMemoryEmbedding")}
+                    </Button>
+                  )}
+                </div>
+              ) : null}
 
               {editingMemory ? (
                 <div className="space-y-3 rounded-lg border border-ember-500/20 bg-ember-500/[0.04] p-4">
@@ -4827,20 +5687,30 @@ export function ChatPage({
                             }`}>
                               {memory.enabled ? t("common.enabled") : t("common.disabled")}
                             </span>
-                            <span
-                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                                memory.embeddingUpdatedAt
-                                  ? "bg-cyan-500/15 text-cyan-300"
-                                  : "bg-white/10 text-slate-400"
-                              }`}
-                              title={memory.embeddingModel ?? undefined}
-                            >
-                              {t(
-                                memory.embeddingUpdatedAt
-                                  ? "chat.memoryVectorReady"
-                                  : "chat.memoryKeywordOnly"
-                              )}
-                            </span>
+                            {memory.enabled ? (
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                                  memory.embeddingStatus === "ready"
+                                    ? "bg-cyan-500/15 text-cyan-300"
+                                    : memory.embeddingStatus === "failed"
+                                      ? "bg-rose-500/15 text-rose-300"
+                                      : "bg-white/10 text-slate-400"
+                                }`}
+                                title={memory.embeddingModel ?? undefined}
+                              >
+                                {t(
+                                  memory.embeddingStatus === "ready"
+                                    ? "chat.memoryVectorReady"
+                                    : memory.embeddingStatus === "failed"
+                                      ? "chat.memoryVectorFailed"
+                                      : memory.embeddingStatus === "stale"
+                                        ? memory.embeddingModel
+                                          ? "chat.memoryVectorStale"
+                                          : "chat.memoryKeywordOnly"
+                                        : "chat.memoryKeywordOnly"
+                                )}
+                              </span>
+                            ) : null}
                           </div>
                           <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">
                             {memory.content}
@@ -4860,22 +5730,30 @@ export function ChatPage({
                         </div>
                         <div className="flex shrink-0 items-center gap-1">
                           <button
+                            aria-label={t(
+                              memory.enabled ? "chat.disableMemory" : "chat.enableMemory"
+                            )}
                             className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200"
+                            title={t(memory.enabled ? "chat.disableMemory" : "chat.enableMemory")}
                             type="button"
                             onClick={() => void toggleLongTermMemory(memory)}
                           >
                             <Check size={14} />
                           </button>
                           <button
+                            aria-label={t("chat.editMemory")}
                             className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200"
+                            title={t("chat.editMemory")}
                             type="button"
                             onClick={() => startEditingMemory(memory)}
                           >
                             <FileText size={14} />
                           </button>
                           <button
+                            aria-label={t("chat.deleteMemory")}
                             className="grid h-8 w-8 place-items-center rounded-lg text-rose-400 transition-colors hover:bg-rose-500/15"
                             data-chat-memory-action="delete"
+                            title={t("chat.deleteMemory")}
                             type="button"
                             onClick={() => setPendingDeleteMemory(memory)}
                           >

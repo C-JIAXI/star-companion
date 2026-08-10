@@ -7,6 +7,7 @@ import { settingsUpdateSchema, userProfileUpdateSchema } from "../schemas.js";
 import { serializeSettings } from "../serializers.js";
 import { encryptApiKey, hasStoredApiKey, isEncryptedApiKey } from "../services/apiKeyVault.js";
 import { validateModuleModelPreferences } from "../services/moduleModels.js";
+import { getConfiguredMemoryEmbeddingSource } from "../services/chatMemories.js";
 import { HttpError } from "../lib/http.js";
 
 export const settingsRouter = Router();
@@ -357,6 +358,24 @@ settingsRouter.put(
       where: { id: existing.id },
       data
     });
+
+    let memoryEmbeddingSourceChanged = false;
+    try {
+      memoryEmbeddingSourceChanged =
+        getConfiguredMemoryEmbeddingSource(existing) !== getConfiguredMemoryEmbeddingSource(settings);
+    } catch {
+      memoryEmbeddingSourceChanged = true;
+    }
+    if (memoryEmbeddingSourceChanged) {
+      await prisma.chatMemory.updateMany({
+        data: {
+          embeddingStatus: "stale",
+          embeddingSource: null,
+          embeddingDimensions: null,
+          embeddingUpdatedAt: null
+        }
+      });
+    }
 
     response.json({
       ok: true,

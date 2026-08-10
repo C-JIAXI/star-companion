@@ -69,6 +69,7 @@ export const importChatArchive = async ({ archive, title }: ChatArchiveImportInp
         memoryTurns: archive.chat.memoryTurns,
         autoMemoryEnabled: archive.chat.autoMemoryEnabled,
         userPersona: archive.chat.userPersona,
+        userAvatar: archive.chat.userAvatar ?? "",
         userProfileSummary: archive.chat.userProfileSummary
       }
     });
@@ -86,6 +87,7 @@ export const importChatArchive = async ({ archive, title }: ChatArchiveImportInp
           variants: source.variants as Prisma.InputJsonValue,
           activeVariantIndex: source.activeVariantIndex,
           tokenUsage: source.tokenUsage === null ? Prisma.JsonNull : (source.tokenUsage as Prisma.InputJsonValue),
+          promptBreakdown: source.promptBreakdown === null ? Prisma.JsonNull : (source.promptBreakdown as Prisma.InputJsonValue),
           loreMatches: source.loreMatches === null ? Prisma.JsonNull : (source.loreMatches as Prisma.InputJsonValue),
           memoryMatches: source.memoryMatches === null ? Prisma.JsonNull : (source.memoryMatches as Prisma.InputJsonValue),
           ...(source.createdAt ? { createdAt: new Date(source.createdAt) } : {}),

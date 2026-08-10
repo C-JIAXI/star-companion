@@ -1,7 +1,11 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import initSqlJs from "sql.js";
+import { analyzeBackupCandidate } from "../server-dist/services/backupContract.js";
+import { backupImportSchema } from "../server-dist/schemas.js";
+import { generatedBuildInfo } from "../server-dist/generated/buildInfo.js";
+import { runProtectedMobileMigrations } from "./migration-safety.mjs";
 
 const now = () => new Date().toISOString();
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -43,6 +47,8 @@ const compareDesc = (field) => (a, b) => String(b[field]).localeCompare(String(a
 const compareAsc = (field) => (a, b) => String(a[field]).localeCompare(String(b[field]));
 
 const toInteger = (value) => (value === undefined || value === null ? null : Number(value));
+const RECOVERY_POINT_LIMIT = 10;
+const RECOVERY_POINT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 export class MobileStore {
   constructor(filePath) {
@@ -50,51 +56,25 @@ export class MobileStore {
     this.SQL = null;
     this.db = null;
     this.writeQueue = Promise.resolve();
+    this.migrationReport = null;
   }
 
   async load() {
     await mkdir(path.dirname(this.filePath), { recursive: true });
     this.SQL = await initSqlJs();
 
-    try {
-      const bytes = await readFile(this.filePath);
-      this.db = new this.SQL.Database(bytes);
-    } catch (error) {
-      if (error?.code !== "ENOENT") {
-        throw error;
-      }
-      this.db = new this.SQL.Database();
-    }
-
-    this.migrate();
+    const migrated = await runProtectedMobileMigrations({
+      SQL: this.SQL,
+      filePath: this.filePath,
+      appVersion: generatedBuildInfo.appVersion
+    });
+    this.db = migrated.db;
+    this.migrationReport = migrated.report;
 
     if (!this.readRecord("settings", "settings")) {
       await this.writeRecord("settings", defaultSettings());
       await this.persist();
     }
-  }
-
-  migrate() {
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS records (
-        type TEXT NOT NULL,
-        id TEXT NOT NULL,
-        data TEXT NOT NULL,
-        cardId TEXT,
-        chatId TEXT,
-        characterId TEXT,
-        role TEXT,
-        enabled INTEGER,
-        importance INTEGER,
-        createdAt TEXT,
-        updatedAt TEXT,
-        PRIMARY KEY (type, id)
-      )
-    `);
-    this.db.run("CREATE INDEX IF NOT EXISTS idx_records_type_updated ON records(type, updatedAt)");
-    this.db.run("CREATE INDEX IF NOT EXISTS idx_records_type_created ON records(type, createdAt)");
-    this.db.run("CREATE INDEX IF NOT EXISTS idx_records_type_card ON records(type, cardId)");
-    this.db.run("CREATE INDEX IF NOT EXISTS idx_records_type_chat ON records(type, chatId)");
   }
 
   async persist() {
@@ -103,6 +83,25 @@ export class MobileStore {
       await writeFile(this.filePath, Buffer.from(this.db.export()));
     });
     await this.writeQueue;
+  }
+
+  async atomicWrite(operation) {
+    const before = this.db.export();
+    this.db.run("BEGIN");
+    try {
+      const result = await operation();
+      this.db.run("COMMIT");
+      await this.persist();
+      return result;
+    } catch (error) {
+      try {
+        this.db.run("ROLLBACK");
+      } catch {
+        this.db.close();
+        this.db = new this.SQL.Database(before);
+      }
+      throw error;
+    }
   }
 
   select(sql, params = []) {
@@ -319,12 +318,14 @@ export class MobileStore {
       isCheckpoint: input.isCheckpoint === true,
       isPinned: input.isPinned === true,
       isArchived: input.isArchived === true,
+      folder: input.folder ?? "",
       deletedAt: input.deletedAt ?? null,
       backgroundUrl: input.backgroundUrl ?? "",
       memoryTurns: input.memoryTurns ?? 12,
       autoMemoryEnabled: input.autoMemoryEnabled ?? true,
       memoryUpdatedAt: input.memoryUpdatedAt ?? null,
       userPersona: input.userPersona ?? "",
+      userAvatar: input.userAvatar ?? "",
       userProfileSummary: input.userProfileSummary ?? "",
       userProfileUpdatedAt: input.userProfileUpdatedAt ?? null,
       createdAt: input.createdAt ?? timestamp,
@@ -453,6 +454,7 @@ export class MobileStore {
       variants: input.variants ?? [],
       activeVariantIndex: input.activeVariantIndex ?? 0,
       tokenUsage: input.tokenUsage ?? null,
+      promptBreakdown: input.promptBreakdown ?? null,
       loreMatches: input.loreMatches ?? null,
       memoryMatches: input.memoryMatches ?? null,
       createdAt: input.createdAt ?? timestamp,
@@ -530,6 +532,9 @@ export class MobileStore {
       sourceMessageIds: input.sourceMessageIds ?? [],
       embedding,
       embeddingModel: embedding ? input.embeddingModel ?? null : null,
+      embeddingSource: embedding ? input.embeddingSource ?? null : null,
+      embeddingDimensions: embedding ? input.embeddingDimensions ?? embedding.length : null,
+      embeddingStatus: input.embeddingStatus ?? (embedding ? "ready" : "stale"),
       embeddingUpdatedAt: embedding ? input.embeddingUpdatedAt ?? null : null,
       lastMatchedAt: input.lastMatchedAt ?? null,
       createdAt: input.createdAt ?? timestamp,
@@ -549,6 +554,22 @@ export class MobileStore {
     return clone(memory);
   }
 
+  async markMemoryEmbeddingsStale() {
+    const memories = this.readRecords("memory");
+    for (const memory of memories) {
+      await this.writeRecord("memory", {
+        ...memory,
+        embedding: null,
+        embeddingSource: null,
+        embeddingDimensions: null,
+        embeddingStatus: "stale",
+        embeddingUpdatedAt: null,
+        updatedAt: now()
+      });
+    }
+    await this.persist();
+  }
+
   async deleteMemory(chatId, memoryId) {
     const existing = this.getMemory(chatId, memoryId);
     if (!existing) return false;
@@ -557,66 +578,203 @@ export class MobileStore {
     return true;
   }
 
-  async importBackup(backup) {
+  previewBackup(candidate, settings) {
+    const current = backupImportSchema.parse({
+      ...this.exportBackup(settings),
+      mode: "merge"
+    });
+    return analyzeBackupCandidate(candidate, current).preview;
+  }
+
+  listRecoveryPoints() {
+    return clone(
+      this.readRecords("recoveryPoint", "", [], "ORDER BY createdAt DESC").map(
+        ({ snapshot: _snapshot, ...point }) => point
+      )
+    );
+  }
+
+  async createRecoveryPoint(reason, settings) {
+    const snapshot = { ...this.exportBackup(settings), mode: "replace" };
+    const point = {
+      id: randomUUID(),
+      reason,
+      createdAt: now(),
+      summary: {
+        settings: snapshot.settings ? 1 : 0,
+        characters: snapshot.characters.length,
+        chats: snapshot.chats.length,
+        messages: snapshot.messages.length,
+        memories: snapshot.memories.length
+      },
+      snapshot
+    };
+    await this.writeRecord("recoveryPoint", point);
+    const points = this.readRecords("recoveryPoint", "", [], "ORDER BY createdAt DESC");
+    const cutoff = Date.now() - RECOVERY_POINT_MAX_AGE_MS;
+    for (const [index, entry] of points.entries()) {
+      if (index >= RECOVERY_POINT_LIMIT || Date.parse(entry.createdAt) < cutoff) {
+        await this.deleteRecord("recoveryPoint", entry.id);
+      }
+    }
+    return point;
+  }
+
+  mergeProviderKeys(incoming, existing) {
+    if (!Array.isArray(incoming)) return incoming;
+    const keys = new Map(
+      (Array.isArray(existing) ? existing : []).flatMap((provider) =>
+        provider && typeof provider.id === "string" && typeof provider.key === "string"
+          ? [[provider.id, provider.key]]
+          : []
+      )
+    );
+    return incoming.map((provider) => {
+      const key = provider && typeof provider.id === "string" ? keys.get(provider.id) : undefined;
+      return key ? { ...provider, key } : provider;
+    });
+  }
+
+  shouldApplyBackupRecord(record, mode, resolutions) {
+    if (record.status === "invalid") return false;
+    if (mode === "replace") return true;
+    if (record.status === "skipped") return false;
+    if (record.status === "added") return true;
+    return Boolean(record.key && resolutions.get(record.key) === "use_incoming");
+  }
+
+  async applyBackupAnalysis(analysis, resolutions) {
+    const { backup, records } = analysis;
     if (backup.mode === "replace") {
       this.db.run("DELETE FROM records WHERE type IN ('character', 'chat', 'message', 'memory')");
     }
 
-    if (backup.settings) {
+    const existingSettings = this.getSettings();
+    let settingsImported = false;
+    if (records.settings && this.shouldApplyBackupRecord(records.settings, backup.mode, resolutions)) {
+      const incoming = records.settings.value;
       await this.writeRecord("settings", {
-        ...this.getSettings(),
-        ...backup.settings,
+        ...existingSettings,
+        ...incoming,
+        ...(incoming.providers
+          ? { providers: this.mergeProviderKeys(incoming.providers, existingSettings.providers) }
+          : {}),
         id: "settings",
         updatedAt: now()
       });
+      settingsImported = true;
     }
 
-    for (const character of backup.characters ?? []) {
-      await this.upsertCharacterByCardId(character);
+    const appliedCounts = { characters: 0, chats: 0, messages: 0, memories: 0 };
+    for (const entity of ["characters", "chats", "messages", "memories"]) {
+      const type = entity === "characters" ? "character" : entity === "chats" ? "chat" : entity === "messages" ? "message" : "memory";
+      for (const record of records[entity]) {
+        if (!this.shouldApplyBackupRecord(record, backup.mode, resolutions)) continue;
+        const value = {
+          ...record.value,
+          id: record.value.id ?? randomUUID(),
+          ...(entity === "chats" ? { folder: record.value.folder ?? "", deletedAt: record.value.deletedAt ?? null } : {}),
+          ...(entity === "memories"
+            ? {
+                embedding: null,
+                embeddingModel: null,
+                embeddingSource: null,
+                embeddingDimensions: null,
+                embeddingStatus: "stale",
+                embeddingUpdatedAt: null
+              }
+            : {}),
+          updatedAt: record.value.updatedAt ?? now()
+        };
+        await this.writeRecord(type, value);
+        appliedCounts[entity] += 1;
+      }
     }
 
-    for (const chat of backup.chats ?? []) {
-      const existing = this.readRecord("chat", chat.id);
-      await this.writeRecord("chat", {
-        ...(existing ?? {}),
-        ...chat,
-        id: chat.id ?? randomUUID(),
-        deletedAt: chat.deletedAt ?? null,
-        updatedAt: chat.updatedAt ?? now()
-      });
+    let added = 0;
+    let updated = 0;
+    let skipped = 0;
+    let conflictsResolved = 0;
+    const allRecords = [
+      ...(records.settings ? [records.settings] : []),
+      ...records.characters,
+      ...records.chats,
+      ...records.messages,
+      ...records.memories
+    ];
+    for (const record of allRecords) {
+      if (record.status === "added") added += 1;
+      else if (record.status === "skipped") skipped += 1;
+      else if (record.status === "conflict") {
+        const action = backup.mode === "replace" ? "use_incoming" : resolutions.get(record.key);
+        if (action === "use_incoming") {
+          updated += 1;
+          conflictsResolved += 1;
+        } else {
+          skipped += 1;
+        }
+      }
     }
+    return { mode: backup.mode, ...appliedCounts, settingsImported, added, updated, skipped, conflictsResolved };
+  }
 
-    let memories = 0;
-    for (const memory of backup.memories ?? []) {
-      if (!this.readRecord("chat", memory.chatId)) continue;
-      await this.writeRecord("memory", {
-        ...memory,
-        id: memory.id ?? randomUUID(),
-        updatedAt: memory.updatedAt ?? now()
-      });
-      memories += 1;
-    }
+  async importBackup(input, settings) {
+    return this.atomicWrite(async () => {
+      const current = backupImportSchema.parse({ ...this.exportBackup(settings), mode: "merge" });
+      const analysis = analyzeBackupCandidate(input, current);
+      if (analysis.preview.previewId !== input.previewId) {
+        const error = new Error("Data changed after the preview. Run the preview again before importing.");
+        error.status = 409;
+        throw error;
+      }
+      if (!analysis.preview.canExecute) {
+        const error = new Error("The backup cannot be imported until its validation issues are fixed.");
+        error.status = 400;
+        throw error;
+      }
+      const resolutions = new Map((input.conflictResolutions ?? []).map((entry) => [entry.key, entry.action]));
+      if (input.mode === "merge" && analysis.preview.conflicts.some((entry) => !resolutions.has(entry.key))) {
+        const error = new Error("Choose an action for every conflict before importing.");
+        error.status = 409;
+        throw error;
+      }
+      const recoveryPoint = analysis.preview.requiresRecoveryPoint
+        ? await this.createRecoveryPoint("before_import", settings)
+        : null;
+      const applied = await this.applyBackupAnalysis(analysis, resolutions);
+      return {
+        ...applied,
+        recoveryPointId: recoveryPoint?.id ?? null,
+        completedAt: now()
+      };
+    });
+  }
 
-    let messages = 0;
-    for (const message of backup.messages ?? []) {
-      if (!this.readRecord("chat", message.chatId)) continue;
-      await this.writeRecord("message", {
-        ...message,
-        id: message.id ?? randomUUID(),
-        updatedAt: message.updatedAt ?? now()
-      });
-      messages += 1;
-    }
-
-    await this.persist();
-    return {
-      mode: backup.mode,
-      characters: backup.characters?.length ?? 0,
-      chats: backup.chats?.length ?? 0,
-      messages,
-      memories,
-      settingsImported: Boolean(backup.settings)
-    };
+  async restoreRecoveryPoint(id, settings) {
+    return this.atomicWrite(async () => {
+      const point = this.readRecord("recoveryPoint", id);
+      if (!point) {
+        const error = new Error("Recovery point not found.");
+        error.status = 404;
+        throw error;
+      }
+      const current = backupImportSchema.parse({ ...this.exportBackup(settings), mode: "merge" });
+      const analysis = analyzeBackupCandidate({ ...point.snapshot, mode: "replace" }, current);
+      if (!analysis.preview.canExecute) {
+        const error = new Error("This recovery point failed integrity validation and was not restored.");
+        error.status = 400;
+        throw error;
+      }
+      const safetyPoint = await this.createRecoveryPoint("before_restore", settings);
+      const applied = await this.applyBackupAnalysis(analysis, new Map());
+      const completedAt = now();
+      return {
+        recoveryPointId: id,
+        safetyRecoveryPointId: safetyPoint.id,
+        completedAt,
+        summary: { ...applied, recoveryPointId: safetyPoint.id, completedAt }
+      };
+    });
   }
 
   exportBackup(settings) {

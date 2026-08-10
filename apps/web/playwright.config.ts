@@ -8,15 +8,23 @@ export default defineConfig({
   timeout: 45_000,
   reporter: "list",
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL: "http://127.0.0.1:5174",
     trace: "retain-on-failure"
   },
-  webServer: {
-    command: "npm run dev --prefix ../..",
-    url: "http://127.0.0.1:5173",
-    reuseExistingServer: true,
-    timeout: 120_000
-  },
+  webServer: [
+    {
+      command: "node ../../scripts/e2e/start-server.mjs",
+      url: "http://127.0.0.1:4010/api/health",
+      reuseExistingServer: false,
+      timeout: 120_000
+    },
+    {
+      command: "node ../../scripts/e2e/start-web.mjs",
+      url: "http://127.0.0.1:5174",
+      reuseExistingServer: false,
+      timeout: 120_000
+    }
+  ],
   projects: [
     {
       name: "chromium",

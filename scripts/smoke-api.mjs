@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdir, readFile, readdir, rm } from "node:fs/promises";
@@ -17,6 +18,7 @@ const prismaTmpRoot = path.join(serverDir, "prisma", ".tmp");
 const tsxCliPath = path.join(serverDir, "node_modules", "tsx", "dist", "cli.mjs");
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const withoutExportTimestamp = ({ exportedAt: _exportedAt, ...backup }) => backup;
 
 const log = (message) => {
   console.log(`[smoke-api] ${message}`);
@@ -245,7 +247,7 @@ const createFakeModelServer = (port) => {
     lastChatCompletionBody = body;
     const joinedMessages = (body.messages ?? []).map((message) => message.content ?? "").join("\n\n");
     const content = joinedMessages.includes("read-only context assistant")
-      ? "Agent draft: check the smoke path and ask for the next diagnostic signal."
+      ? "Agent draft: [DRAFT]Ask for the next diagnostic signal.[/DRAFT]"
       : joinedMessages.includes("Generate a concise title for this local-first")
         ? '"Smoke Title Suggestion"'
         : "Smoke model reply.";
@@ -378,6 +380,16 @@ const initializeFreshDatabase = async (dbPath) => {
   const db = new DatabaseSync(dbPath);
 
   try {
+    db.exec(`CREATE TABLE IF NOT EXISTS "_prisma_migrations" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "checksum" TEXT NOT NULL,
+      "finished_at" DATETIME,
+      "migration_name" TEXT NOT NULL,
+      "logs" TEXT,
+      "rolled_back_at" DATETIME,
+      "started_at" DATETIME NOT NULL DEFAULT current_timestamp,
+      "applied_steps_count" INTEGER UNSIGNED NOT NULL DEFAULT 0
+    )`);
     const entries = await readdir(migrationsDir, { withFileTypes: true });
     const migrationNames = entries
       .filter((entry) => entry.isDirectory())
@@ -387,6 +399,9 @@ const initializeFreshDatabase = async (dbPath) => {
     for (const migrationName of migrationNames) {
       const sql = await readFile(path.join(migrationsDir, migrationName, "migration.sql"), "utf8");
       db.exec(sql);
+      const appliedAt = new Date().toISOString();
+      db.prepare('INSERT INTO "_prisma_migrations" (id, checksum, finished_at, migration_name, started_at, applied_steps_count) VALUES (?, ?, ?, ?, ?, 1)')
+        .run(randomUUID(), createHash("sha256").update(sql).digest("hex"), appliedAt, migrationName, appliedAt);
     }
   } finally {
     db.close();
@@ -426,6 +441,11 @@ const main = async () => {
     const health = await waitForHealth(baseUrl, server);
     assert.equal(health.ok, true);
     assert.equal(health.database, "connected");
+    const appInfo = await requestData(baseUrl, "/api/app/info");
+    assert.match(appInfo.appVersion, /^\d+\.\d+\.\d+/);
+    assert.match(appInfo.schemaVersion, /^\d+_/);
+    assert.equal(appInfo.migration.status, "ready");
+    assert.equal("apiKey" in appInfo, false);
 
     log("Verifying settings lifecycle");
     const initialSettings = await requestData(baseUrl, "/api/settings");
@@ -460,6 +480,7 @@ const main = async () => {
               id: "smoke-model",
               label: "Smoke Model",
               model: "fake-agent-model",
+              contextWindow: 32768,
               capabilities: [
                 "text_generation",
                 "text_embedding",
@@ -482,7 +503,9 @@ const main = async () => {
         {
           id: "smoke-persona",
           name: "Smoke Persona",
+          avatar: "data:image/png;base64,YQ==",
           config: {
+            displayName: "Smoke User",
             prefix: "User boundary.",
             prompt: "User likes practical tests.",
             suffix: "Keep it brief."
@@ -506,11 +529,14 @@ const main = async () => {
     assert.equal("apiKey" in updatedSettings, false);
     assert.equal("key" in updatedSettings.providers[0], false);
     assert.equal(updatedSettings.providers[0]?.hasKey, true);
+    assert.equal(updatedSettings.providers[0]?.models[0]?.contextWindow, 32768);
     assert.deepEqual(updatedSettings.moduleModelPreferences.agent, {
       providerId: "smoke-provider",
       modelId: "smoke-model"
     });
     assert.equal(updatedSettings.userPersonaPresets[0]?.name, "Smoke Persona");
+    assert.equal(updatedSettings.userPersonaPresets[0]?.avatar, "data:image/png;base64,YQ==");
+    assert.equal(updatedSettings.userPersonaPresets[0]?.config.displayName, "Smoke User");
     assert.equal(updatedSettings.userPersonaPresets[0]?.config.prompt, "User likes practical tests.");
 
     const preservedSettings = await requestData(baseUrl, "/api/settings", {
@@ -533,6 +559,7 @@ const main = async () => {
     assert.equal(preservedSettings.ttsAutoPlay, true);
     assert.equal("key" in preservedSettings.providers[0], false);
     assert.equal(preservedSettings.providers[0]?.hasKey, true);
+    assert.equal(preservedSettings.providers[0]?.models[0]?.contextWindow, 32768);
 
     const importedProviderModels = await requestData(
       baseUrl,
@@ -561,6 +588,7 @@ const main = async () => {
     const fetchedSettings = await requestData(baseUrl, "/api/settings");
     assert.equal(fetchedSettings.hasApiKey, true);
     assert.equal(fetchedSettings.userProfileSummary, "Prefers terse technical answers.");
+    assert.equal(fetchedSettings.providers[0]?.models[0]?.contextWindow, 32768);
     assert.equal("apiKey" in fetchedSettings, false);
 
     const testRequestCountBefore = fakeModelServer.getChatCompletionRequests();
@@ -880,6 +908,7 @@ const main = async () => {
       backgroundUrl: "https://example.com/background.png",
       memoryTurns: 10,
       userPersona: "Be direct.",
+      userAvatar: "data:image/png;base64,YQ==",
       userProfileSummary: "Prefers terse technical answers."
     };
     const createdChat = await requestData(baseUrl, "/api/chats", {
@@ -890,6 +919,7 @@ const main = async () => {
     assert.equal(createdChat.characterId, createdCharacter.id);
     assert.equal(createdChat.folder, "Smoke folder");
     assert.equal(createdChat.autoMemoryEnabled, true);
+    assert.equal(createdChat.userAvatar, "data:image/png;base64,YQ==");
 
     const batchFolderResult = await requestData(baseUrl, "/api/chats/batch-folder", {
       method: "POST",
@@ -898,10 +928,18 @@ const main = async () => {
     assert.equal(batchFolderResult.updated, 1);
     assert.equal((await requestData(baseUrl, `/api/chats/${createdChat.id}`)).folder, "Smoke folder updated");
 
+    const renamedFolderResult = await requestData(baseUrl, "/api/chats/rename-folder", {
+      method: "POST",
+      body: { from: "Smoke folder updated", to: "Smoke folder renamed" }
+    });
+    assert.equal(renamedFolderResult.updated, 1);
+    assert.equal((await requestData(baseUrl, `/api/chats/${createdChat.id}`)).folder, "Smoke folder renamed");
+
     const listedChats = await requestData(baseUrl, "/api/chats");
     const listedChat = listedChats.find((item) => item.id === createdChat.id);
     assert.ok(listedChat);
     assert.equal(listedChat.messageCount, 0);
+    assert.equal("userAvatar" in listedChat, false);
 
     const openingChat = await requestData(baseUrl, "/api/chats", {
       method: "POST",
@@ -1038,6 +1076,15 @@ const main = async () => {
     const listedMemories = await requestData(baseUrl, `/api/chats/${createdChat.id}/memories`);
     assert.equal(listedMemories.length, 1);
 
+    const reindexedMemories = await requestData(
+      baseUrl,
+      `/api/chats/${createdChat.id}/memories/reindex`,
+      { method: "POST" }
+    );
+    assert.equal(reindexedMemories.length, 1);
+    assert.equal(reindexedMemories[0]?.embeddingStatus, "ready");
+    assert.equal(reindexedMemories[0]?.embeddingDimensions, 3);
+
     const updatedMemory = await requestData(
       baseUrl,
       `/api/chats/${createdChat.id}/memories/${createdMemory.id}`,
@@ -1051,6 +1098,13 @@ const main = async () => {
     );
     assert.equal(updatedMemory.enabled, false);
     assert.equal(updatedMemory.importance, 5);
+    const disabledReindexResult = await requestData(
+      baseUrl,
+      `/api/chats/${createdChat.id}/memories/reindex`,
+      { method: "POST" }
+    );
+    assert.equal(disabledReindexResult.length, 1);
+    assert.equal(disabledReindexResult[0]?.enabled, false);
 
     const userMessage = await requestData(baseUrl, "/api/messages", {
       method: "POST",
@@ -1078,6 +1132,19 @@ const main = async () => {
           completionTokens: 7,
           totalTokens: 19,
           estimated: true
+        },
+        promptBreakdown: {
+          promptTokens: 12,
+          promptTokensEstimated: true,
+          includedMessageCount: 1,
+          sections: [
+            {
+              id: "history",
+              tokenEstimate: 12,
+              characterCount: 21,
+              itemCount: 1
+            }
+          ]
         },
         loreMatches: [
           {
@@ -1109,6 +1176,8 @@ const main = async () => {
     assert.equal(assistantMessage.role, "assistant");
     assert.equal(assistantMessage.activeVariantIndex, 1);
     assert.equal(assistantMessage.tokenUsage.totalTokens, 19);
+    assert.equal(assistantMessage.promptBreakdown.promptTokens, 12);
+    assert.equal(assistantMessage.promptBreakdown.sections[0]?.id, "history");
     assert.equal(assistantMessage.memoryMatches[0].id, createdMemory.id);
 
     const excludedUserMessage = await requestData(baseUrl, `/api/messages/${userMessage.id}`, {
@@ -1136,6 +1205,12 @@ const main = async () => {
     assert.equal(continuedMessage?.content, "Nominal status confirmed. Continued.");
     assert.equal(continuedMessage?.variants.length, 2);
     assert.equal(continuedMessage?.variants[1], "Nominal status confirmed. Continued.");
+    assert.ok(continuedMessage?.promptBreakdown?.promptTokens > 0);
+    assert.ok(
+      continuedMessage?.promptBreakdown?.sections.some(
+        (section) => section.id === "generation_instruction"
+      )
+    );
 
     const listedMessages = await requestData(
       baseUrl,
@@ -1177,15 +1252,55 @@ const main = async () => {
     assert.equal(chatAfterTitleSuggestion.title, createdChat.title);
     assert.equal(chatAfterTitleSuggestion.messages.length, 2);
 
+    const skippedAutoTitle = await requestData(baseUrl, `/api/chats/${createdChat.id}/auto-title`, {
+      method: "POST"
+    });
+    assert.equal(skippedAutoTitle, null);
+    assert.equal((await requestData(baseUrl, `/api/chats/${createdChat.id}`)).title, createdChat.title);
+
+    const defaultTitleChat = await requestData(baseUrl, "/api/chats", {
+      method: "POST",
+      expectedStatus: 201,
+      body: { title: "New Chat", characterId: createdCharacter.id }
+    });
+    await requestData(baseUrl, "/api/messages", {
+      method: "POST",
+      expectedStatus: 201,
+      body: { chatId: defaultTitleChat.id, role: "user", content: "Open the smoke-test door." }
+    });
+    await requestData(baseUrl, "/api/messages", {
+      method: "POST",
+      expectedStatus: 201,
+      body: {
+        chatId: defaultTitleChat.id,
+        role: "assistant",
+        characterId: createdCharacter.id,
+        content: "The smoke-test door is open."
+      }
+    });
+    const appliedAutoTitle = await requestData(
+      baseUrl,
+      `/api/chats/${defaultTitleChat.id}/auto-title`,
+      { method: "POST" }
+    );
+    assert.equal(appliedAutoTitle.title, "Smoke Title Suggestion");
+    assert.equal(
+      (await requestData(baseUrl, `/api/chats/${defaultTitleChat.id}`)).title,
+      "Smoke Title Suggestion"
+    );
+    await permanentlyDeleteChat(baseUrl, defaultTitleChat.id);
+
     const agentDraft = await requestData(baseUrl, `/api/chats/${createdChat.id}/agent-draft`, {
       method: "POST",
       body: {
-        mode: "next_steps",
+        mode: "reply_drafts",
         focus: "smoke path"
       }
     });
-    assert.equal(agentDraft.mode, "next_steps");
+    assert.equal(agentDraft.mode, "reply_drafts");
     assert.match(agentDraft.content, /Agent draft/);
+    assert.equal(agentDraft.actions[0]?.kind, "reply_draft");
+    assert.equal(agentDraft.actions[0]?.content, "Ask for the next diagnostic signal.");
     assert.equal(Array.isArray(agentDraft.matchedLoreEntries), true);
     assert.equal(Array.isArray(agentDraft.matchedMemoryEntries), true);
     const chatAfterAgentDraft = await requestData(baseUrl, `/api/chats/${createdChat.id}`);
@@ -1199,6 +1314,7 @@ const main = async () => {
     assert.equal(chatArchive.messages[0]?.isBookmarked, true);
     assert.equal(chatArchive.memories.length, 1);
     assert.equal(chatArchive.chat.isArchived, true);
+    assert.equal(chatArchive.chat.userAvatar, "data:image/png;base64,YQ==");
     const importedArchive = await requestData(baseUrl, "/api/chats/import-archive", {
       method: "POST",
       expectedStatus: 201,
@@ -1211,6 +1327,7 @@ const main = async () => {
     assert.equal(importedArchive.messages[0]?.isBookmarked, true);
     assert.equal(importedArchive.memories.length, 1);
     assert.equal(importedArchive.isArchived, false);
+    assert.equal(importedArchive.userAvatar, "data:image/png;base64,YQ==");
     await permanentlyDeleteChat(baseUrl, importedArchive.id);
 
     const branchedChat = await requestData(baseUrl, `/api/chats/${createdChat.id}/branches`, {
@@ -1222,12 +1339,14 @@ const main = async () => {
       }
     });
     assert.equal(branchedChat.title, "Smoke Branch");
-    assert.equal(branchedChat.folder, "Smoke folder updated");
+    assert.equal(branchedChat.folder, "Smoke folder renamed");
     assert.equal(branchedChat.parentChatId, createdChat.id);
     assert.equal(branchedChat.branchSourceMessageId, assistantMessage.id);
     assert.equal(branchedChat.messages.length, 2);
     assert.equal(branchedChat.messages[0]?.contextIncluded, false);
     assert.equal(branchedChat.messages[0]?.isBookmarked, true);
+    assert.equal(branchedChat.userAvatar, "data:image/png;base64,YQ==");
+    assert.ok(branchedChat.messages[1]?.promptBreakdown?.promptTokens > 0);
     assert.equal(branchedChat.memories.length, 0);
     await permanentlyDeleteChat(baseUrl, branchedChat.id);
 
@@ -1313,6 +1432,7 @@ const main = async () => {
     assert.equal(exportedBackup.chats.length, 1);
     assert.equal(exportedBackup.chats[0]?.isPinned, true);
     assert.equal(exportedBackup.chats[0]?.isArchived, true);
+    assert.equal(exportedBackup.chats[0]?.userAvatar, "data:image/png;base64,YQ==");
     assert.equal(exportedBackup.messages.length, 2);
     assert.equal(exportedBackup.memories.length, 1);
     assert.equal(
@@ -1332,11 +1452,54 @@ const main = async () => {
         "__privateCharacter" in exportedPrivateBackupCharacter.loreEntries
     );
 
-    const importedBackupSummary = await requestData(baseUrl, "/api/backups/import", {
+    const recoveryPointsBeforePreview = await requestData(baseUrl, "/api/backups/recovery-points");
+    const replacePreview = await requestData(baseUrl, "/api/backups/preview", {
       method: "POST",
       body: {
         ...exportedBackup,
         mode: "replace"
+      }
+    });
+    assert.equal(replacePreview.canExecute, true);
+    assert.equal(replacePreview.counts.invalid, 0);
+    assert.deepEqual(
+      withoutExportTimestamp(await requestData(baseUrl, "/api/backups/export")),
+      withoutExportTimestamp(exportedBackup)
+    );
+    assert.equal(
+      (await requestData(baseUrl, "/api/backups/recovery-points")).length,
+      recoveryPointsBeforePreview.length
+    );
+
+    const damagedPreview = await requestData(baseUrl, "/api/backups/preview", {
+      method: "POST",
+      body: { schemaVersion: 2, exportedAt: "invalid", characters: [{ id: "broken" }], mode: "merge" }
+    });
+    assert.equal(damagedPreview.canExecute, false);
+    assert.ok(damagedPreview.issues.some((issue) => issue.code === "schema_version"));
+    assert.equal(JSON.stringify(damagedPreview).includes("sk-smoke-test-key"), false);
+
+    const missingReferencePreview = await requestData(baseUrl, "/api/backups/preview", {
+      method: "POST",
+      body: {
+        schemaVersion: 1,
+        mode: "merge",
+        chats: [{ id: "orphan-chat", title: "Orphan", characterId: "missing-character" }],
+        messages: [{ id: "orphan-message", chatId: "missing-chat", role: "user", content: "not echoed" }],
+        memories: []
+      }
+    });
+    assert.equal(missingReferencePreview.canExecute, false);
+    assert.ok(missingReferencePreview.issues.some((issue) => issue.code === "missing_reference"));
+    assert.equal(JSON.stringify(missingReferencePreview).includes("not echoed"), false);
+
+    const importedBackupSummary = await requestData(baseUrl, "/api/backups/import", {
+      method: "POST",
+      body: {
+        ...exportedBackup,
+        mode: "replace",
+        previewId: replacePreview.previewId,
+        conflictResolutions: []
       }
     });
     assert.equal(importedBackupSummary.mode, "replace");
@@ -1344,13 +1507,130 @@ const main = async () => {
     assert.equal(importedBackupSummary.chats, 1);
     assert.equal(importedBackupSummary.messages, 2);
     assert.equal(importedBackupSummary.memories, 1);
+    assert.equal(
+      (await requestData(baseUrl, `/api/chats/${createdChat.id}`)).userAvatar,
+      "data:image/png;base64,YQ=="
+    );
     assert.equal(importedBackupSummary.settingsImported, true);
+    assert.ok(importedBackupSummary.recoveryPointId);
 
-    const pulledSyncSummary = await requestData(baseUrl, "/api/sync/pull", {
+    const mergeAddition = {
+      schemaVersion: 1,
+      mode: "merge",
+      characters: [{
+        id: `merge-add-${runId}`,
+        cardId: `merge-add-card-${runId}`,
+        name: "Merge Addition",
+        avatar: null,
+        description: "",
+        tags: [],
+        prefix: "",
+        prompt: "Merge fixture",
+        suffix: "",
+        htmlCss: "",
+        openingHtml: "",
+        loreEntries: [],
+        quickReplies: [],
+        isFavorite: false
+      }],
+      chats: [],
+      messages: [],
+      memories: []
+    };
+    const mergeAdditionPreview = await requestData(baseUrl, "/api/backups/preview", {
+      method: "POST",
+      body: mergeAddition
+    });
+    assert.equal(mergeAdditionPreview.counts.added, 1);
+    assert.equal(mergeAdditionPreview.counts.conflicts, 0);
+    const mergeAdditionSummary = await requestData(baseUrl, "/api/backups/import", {
+      method: "POST",
+      body: {
+        ...mergeAddition,
+        previewId: mergeAdditionPreview.previewId,
+        conflictResolutions: []
+      }
+    });
+    assert.equal(mergeAdditionSummary.added, 1);
+    assert.equal(mergeAdditionSummary.recoveryPointId, null);
+    await request(baseUrl, `/api/characters/${mergeAddition.characters[0].id}`, {
+      method: "DELETE",
+      expectedStatus: 204
+    });
+
+    const conflictBackup = {
+      ...exportedBackup,
+      characters: exportedBackup.characters.map((character) =>
+        character.id === createdCharacter.id ? { ...character, name: "Incoming Conflict Name" } : character
+      )
+    };
+    const conflictPreview = await requestData(baseUrl, "/api/backups/preview", {
+      method: "POST",
+      body: { ...conflictBackup, mode: "merge" }
+    });
+    assert.ok(conflictPreview.conflicts.some((entry) => entry.key === `characters:${createdCharacter.id}`));
+    const unresolvedResponse = await request(baseUrl, "/api/backups/import", {
+      method: "POST",
+      expectedStatus: 409,
+      body: {
+        ...conflictBackup,
+        mode: "merge",
+        previewId: conflictPreview.previewId,
+        conflictResolutions: []
+      }
+    });
+    assert.equal(unresolvedResponse.ok, false);
+
+    const resolvedConflictSummary = await requestData(baseUrl, "/api/backups/import", {
+      method: "POST",
+      body: {
+        ...conflictBackup,
+        mode: "merge",
+        previewId: conflictPreview.previewId,
+        conflictResolutions: [{ key: `characters:${createdCharacter.id}`, action: "use_incoming" }]
+      }
+    });
+    assert.equal(resolvedConflictSummary.updated, 1);
+    assert.ok(resolvedConflictSummary.recoveryPointId);
+    assert.equal((await requestData(baseUrl, `/api/characters/${createdCharacter.id}`)).name, "Incoming Conflict Name");
+
+    const restoreResult = await requestData(
+      baseUrl,
+      `/api/backups/recovery-points/${resolvedConflictSummary.recoveryPointId}/restore`,
+      { method: "POST" }
+    );
+    assert.equal(
+      (await requestData(baseUrl, `/api/characters/${createdCharacter.id}`)).name,
+      exportedBackup.characters.find((character) => character.id === createdCharacter.id)?.name
+    );
+    assert.ok(restoreResult.safetyRecoveryPointId);
+
+    const beforeFailedRestore = await requestData(baseUrl, "/api/backups/export");
+    const corruptionDb = new DatabaseSync(tempDbPath);
+    try {
+      corruptionDb
+        .prepare('UPDATE "RecoveryPoint" SET "snapshot" = ? WHERE "id" = ?')
+        .run(JSON.stringify({ schemaVersion: 1, characters: "damaged" }), restoreResult.safetyRecoveryPointId);
+    } finally {
+      corruptionDb.close();
+    }
+    const failedRestore = await request(
+      baseUrl,
+      `/api/backups/recovery-points/${restoreResult.safetyRecoveryPointId}/restore`,
+      { method: "POST", expectedStatus: 400 }
+    );
+    assert.equal(failedRestore.ok, false);
+    assert.deepEqual(
+      withoutExportTimestamp(await requestData(baseUrl, "/api/backups/export")),
+      withoutExportTimestamp(beforeFailedRestore)
+    );
+
+    const pulledSyncPreview = await requestData(baseUrl, "/api/sync/pull", {
       method: "POST",
       body: {
         peerBaseUrl: baseUrl,
-        mode: "merge"
+        mode: "merge",
+        phase: "preview"
       }
     });
     const syncInfo = await requestData(baseUrl, "/api/sync/info");
@@ -1359,26 +1639,44 @@ const main = async () => {
     assert.equal(Array.isArray(syncInfo.lanUrls), true);
     assert.equal(typeof syncInfo.lanReachable, "boolean");
 
-    assert.equal(pulledSyncSummary.direction, "pull");
-    assert.equal(pulledSyncSummary.mode, "merge");
-    assert.equal(pulledSyncSummary.summary.characters, 2);
-    assert.equal(pulledSyncSummary.summary.chats, 1);
-    assert.equal(pulledSyncSummary.summary.messages, 2);
-    assert.equal(pulledSyncSummary.summary.memories, 1);
+    assert.equal(pulledSyncPreview.direction, "pull");
+    assert.equal(pulledSyncPreview.phase, "preview");
+    assert.equal(pulledSyncPreview.summary, null);
+    const pulledSyncSummary = await requestData(baseUrl, "/api/sync/pull", {
+      method: "POST",
+      body: {
+        peerBaseUrl: baseUrl,
+        mode: "merge",
+        phase: "execute",
+        previewId: pulledSyncPreview.preview.previewId,
+        conflictResolutions: []
+      }
+    });
+    assert.equal(pulledSyncSummary.phase, "execute");
+    assert.ok(pulledSyncSummary.summary.skipped > 0);
 
+    const pushedSyncPreview = await requestData(baseUrl, "/api/sync/push", {
+      method: "POST",
+      body: {
+        peerBaseUrl: baseUrl,
+        mode: "merge",
+        phase: "preview"
+      }
+    });
     const pushedSyncSummary = await requestData(baseUrl, "/api/sync/push", {
       method: "POST",
       body: {
         peerBaseUrl: baseUrl,
-        mode: "merge"
+        mode: "merge",
+        phase: "execute",
+        previewId: pushedSyncPreview.preview.previewId,
+        conflictResolutions: []
       }
     });
     assert.equal(pushedSyncSummary.direction, "push");
     assert.equal(pushedSyncSummary.mode, "merge");
-    assert.equal(pushedSyncSummary.summary.characters, 2);
-    assert.equal(pushedSyncSummary.summary.chats, 1);
-    assert.equal(pushedSyncSummary.summary.messages, 2);
-    assert.equal(pushedSyncSummary.summary.memories, 1);
+    assert.equal(pushedSyncSummary.phase, "execute");
+    assert.ok(pushedSyncSummary.summary.skipped > 0);
 
     const restoredImportedPrivateCharacter = await requestData(
       baseUrl,

@@ -2,13 +2,17 @@ import type {
   ApiEnvelope,
   AvailableModelsDTO,
   BackupDTO,
+  BackupConflictResolutionDTO,
   BackupImportSummaryDTO,
+  BackupPreviewDTO,
   ChatAgentDraftDTO,
   ChatAgentDraftRequestDTO,
   ChatBatchArchiveRequestDTO,
   ChatBatchArchiveResultDTO,
   ChatBatchFolderRequestDTO,
   ChatBatchFolderResultDTO,
+  ChatRenameFolderRequestDTO,
+  ChatRenameFolderResultDTO,
   ChatBatchPermanentDeleteRequestDTO,
   ChatBatchPermanentDeleteResultDTO,
   ChatBatchTrashRequestDTO,
@@ -45,6 +49,9 @@ import type {
   VoiceTranscriptionRequestDTO,
   PaginatedCharactersDTO,
   PublicUserSettingsDTO,
+  RecoveryPointDTO,
+  RecoveryPointRestoreResultDTO,
+  AppInfoDTO,
   SettingsInput
 } from "../types";
 import { resolveApiUrl } from "./appBackend";
@@ -129,6 +136,9 @@ const request = async <T>(path: string, options: RequestOptions = {}): Promise<T
 };
 
 export const api = {
+  app: {
+    info: () => request<AppInfoDTO>("/api/app/info")
+  },
   characters: {
     list: () => request<CharacterDTO[]>("/api/characters"),
     get: (id: string) => request<CharacterDTO>(`/api/characters/${id}`),
@@ -221,6 +231,11 @@ export const api = {
         method: "POST",
         body: input
       }),
+    renameFolder: (input: ChatRenameFolderRequestDTO) =>
+      request<ChatRenameFolderResultDTO>("/api/chats/rename-folder", {
+        method: "POST",
+        body: input
+      }),
     batchTrash: (input: ChatBatchTrashRequestDTO) =>
       request<ChatBatchTrashResultDTO>("/api/chats/batch-trash", {
         method: "POST",
@@ -248,6 +263,8 @@ export const api = {
       request<ChatTitleSuggestionDTO>(`/api/chats/${id}/title-suggestion`, {
         method: "POST"
       }),
+    autoTitle: (id: string) =>
+      request<ChatDTO | null>(`/api/chats/${id}/auto-title`, { method: "POST" }),
     openingMessage: (id: string) =>
       request<MessageDTO>(`/api/chats/${id}/opening-message`, {
         method: "POST"
@@ -280,7 +297,9 @@ export const api = {
       remove: (chatId: string, memoryId: string) =>
         request<void>(`/api/chats/${chatId}/memories/${memoryId}`, { method: "DELETE" }),
       refresh: (chatId: string) =>
-        request<ChatMemoryDTO[]>(`/api/chats/${chatId}/memories/refresh`, { method: "POST" })
+        request<ChatMemoryDTO[]>(`/api/chats/${chatId}/memories/refresh`, { method: "POST" }),
+      reindex: (chatId: string) =>
+        request<ChatMemoryDTO[]>(`/api/chats/${chatId}/memories/reindex`, { method: "POST" })
     }
   },
   messages: {
@@ -336,10 +355,30 @@ export const api = {
   },
   backups: {
     export: () => request<BackupDTO>("/api/backups/export"),
-    import: (backup: unknown, mode: "merge" | "replace") =>
-      request<BackupImportSummaryDTO>("/api/backups/import", {
+    preview: (backup: unknown, mode: "merge" | "replace") =>
+      request<BackupPreviewDTO>("/api/backups/preview", {
         method: "POST",
         body: { ...(backup && typeof backup === "object" ? backup : {}), mode }
+      }),
+    import: (
+      backup: unknown,
+      mode: "merge" | "replace",
+      previewId: string,
+      conflictResolutions: BackupConflictResolutionDTO[]
+    ) =>
+      request<BackupImportSummaryDTO>("/api/backups/import", {
+        method: "POST",
+        body: {
+          ...(backup && typeof backup === "object" ? backup : {}),
+          mode,
+          previewId,
+          conflictResolutions
+        }
+      }),
+    recoveryPoints: () => request<RecoveryPointDTO[]>("/api/backups/recovery-points"),
+    restoreRecoveryPoint: (id: string) =>
+      request<RecoveryPointRestoreResultDTO>(`/api/backups/recovery-points/${id}/restore`, {
+        method: "POST"
       })
   },
   sync: {

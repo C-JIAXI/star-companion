@@ -14,6 +14,7 @@ import { mediaRouter } from "./routes/media.js";
 import { settingsRouter } from "./routes/settings.js";
 import { syncRouter } from "./routes/sync.js";
 import { attachChatSocket } from "./realtime/chatSocket.js";
+import { getAppInfo } from "./services/appInfo.js";
 
 const APP_NAME = "Star Companion";
 const app = express();
@@ -38,6 +39,24 @@ app.get("/api/health", async (_request, response, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+app.get("/api/app/info", async (_request, response) => {
+  const info = getAppInfo();
+  if (!process.env.STAR_COMPANION_MIGRATION_REPORT) {
+    try {
+      const applied = await prisma.$queryRawUnsafe<Array<{ migration_name: string; checksum: string }>>(
+        'SELECT "migration_name", "checksum" FROM "_prisma_migrations" WHERE "finished_at" IS NOT NULL AND "rolled_back_at" IS NULL ORDER BY "migration_name" DESC LIMIT 1'
+      );
+      const latest = applied[0];
+      info.migration.status = latest?.migration_name === info.schemaVersion && latest.checksum === info.schemaChecksum
+        ? "ready"
+        : latest?.migration_name && latest.migration_name > info.schemaVersion ? "too_new" : "unknown";
+    } catch {
+      info.migration.status = "unknown";
+    }
+  }
+  response.json({ ok: true, data: info });
 });
 
 app.use("/api/characters", charactersRouter);

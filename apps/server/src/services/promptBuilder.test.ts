@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import type { UserSettings } from "@prisma/client";
 import { prisma } from "../db.js";
-import { buildPromptContext } from "./promptBuilder.js";
+import { buildPromptContext, finalizePromptBreakdown } from "./promptBuilder.js";
 import { createCharacterExportCard, importCharacterCard } from "./characterCards.js";
 import { serializeUserCustomConfig } from "./userCustomConfig.js";
 
@@ -156,6 +156,7 @@ describe("buildPromptContext", () => {
         characterId: character.id,
         memoryTurns: 4,
         userPersona: serializeUserCustomConfig({
+          displayName: "Prompt-visible identity must stay UI-only",
           prefix: "The user is roleplaying as a cautious investigator.",
           prompt: "They value truth over comfort.",
           suffix: "Keep the relationship tense but cooperative."
@@ -265,6 +266,7 @@ describe("buildPromptContext", () => {
     assert.match(promptText, /The user is roleplaying as a cautious investigator\./);
     assert.match(promptText, /They value truth over comfort\./);
     assert.match(promptText, /Keep the relationship tense but cooperative\./);
+    assert.doesNotMatch(promptText, /Prompt-visible identity must stay UI-only/);
     assert.match(
       promptText,
       /The user is roleplaying as a cautious investigator\.[\s\S]*They value truth over comfort\.[\s\S]*Keep the relationship tense but cooperative\./
@@ -290,6 +292,25 @@ describe("buildPromptContext", () => {
     assert.deepEqual(
       new Set(matchedMemoryContents),
       new Set(["The user and character have agreed to keep clues explicit."])
+    );
+    assert.equal(
+      context.promptBreakdown.sections.reduce(
+        (total, section) => total + section.tokenEstimate,
+        0
+      ),
+      context.promptBreakdown.promptTokens
+    );
+    assert.equal(
+      context.promptBreakdown.sections.find((section) => section.id === "history")?.itemCount,
+      2
+    );
+    assert.equal(
+      context.promptBreakdown.sections.find((section) => section.id === "lore")?.itemCount,
+      4
+    );
+    assert.equal(
+      context.promptBreakdown.sections.find((section) => section.id === "memory")?.itemCount,
+      1
     );
     assert.doesNotMatch(promptText, /Disabled lore content/);
     assert.match(promptText, /Prompt Test Character: The assistant says assistant-key\./);
@@ -346,6 +367,31 @@ describe("buildPromptContext", () => {
     assert.doesNotMatch(promptText, /Hidden prefix instruction\./);
     assert.doesNotMatch(promptText, /Hidden prompt instruction for imported private cards\./);
     assert.doesNotMatch(promptText, /Hidden suffix instruction\./);
+  });
+
+  it("reconciles estimated category weights to provider prompt usage", () => {
+    const breakdown = finalizePromptBreakdown(
+      {
+        promptTokens: 100,
+        promptTokensEstimated: true,
+        includedMessageCount: 3,
+        sections: [
+          { id: "character", tokenEstimate: 30, characterCount: 60, itemCount: 1 },
+          { id: "history", tokenEstimate: 70, characterCount: 140, itemCount: 3 }
+        ]
+      },
+      257,
+      false
+    );
+
+    assert.equal(breakdown.promptTokens, 257);
+    assert.equal(breakdown.promptTokensEstimated, false);
+    assert.equal(
+      breakdown.sections.reduce((total, section) => total + section.tokenEstimate, 0),
+      257
+    );
+    assert.equal(breakdown.sections[0]?.tokenEstimate, 77);
+    assert.equal(breakdown.sections[1]?.tokenEstimate, 180);
   });
 
   it("keeps excluded messages in storage but omits them from prompt context", async () => {

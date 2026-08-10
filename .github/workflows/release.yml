@@ -1,4 +1,4 @@
-name: Release
+name: Signed release artifacts
 
 on:
   workflow_dispatch:
@@ -8,8 +8,15 @@ on:
 
 jobs:
   windows-desktop:
-    name: Build Windows desktop artifacts
+    name: Build signed Windows desktop artifacts
     runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: read
+    env:
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      STAR_COMPANION_BUILD_COMMIT: ${{ github.sha }}
 
     steps:
       - name: Checkout
@@ -27,12 +34,62 @@ jobs:
       - name: Generate Prisma client
         run: npm run db:generate
 
-      - name: Build desktop installer
-        run: npm run desktop:build
+      - name: Verify release signing inputs
+        run: npm run desktop:release:preflight
+
+      - name: Build signed desktop installer
+        run: npm run desktop:release
+
+      - name: Verify artifacts and generate checksums
+        run: npm run release:verify:windows && node scripts/release/generate-checksums.mjs --platform=windows
 
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: star-companion-desktop-windows
-          path: dist/desktop/**
+          name: Star-Companion-${{ github.ref_name }}-windows
+          path: |
+            dist/desktop/**
+            dist/release/*-windows-SHA256SUMS.txt
+          if-no-files-found: error
+
+  android:
+    name: Build signed Android release artifacts
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    env:
+      STAR_COMPANION_ANDROID_STORE_PASSWORD: ${{ secrets.STAR_COMPANION_ANDROID_STORE_PASSWORD }}
+      STAR_COMPANION_ANDROID_KEY_ALIAS: ${{ secrets.STAR_COMPANION_ANDROID_KEY_ALIAS }}
+      STAR_COMPANION_ANDROID_KEY_PASSWORD: ${{ secrets.STAR_COMPANION_ANDROID_KEY_PASSWORD }}
+      STAR_COMPANION_BUILD_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: npm ci
+      - run: npm run db:generate
+      - name: Materialize signing key only inside the release job
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.STAR_COMPANION_ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo "Android release keystore secret is missing."; exit 1; }
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/star-companion-release.jks"
+          echo "STAR_COMPANION_ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/star-companion-release.jks" >> "$GITHUB_ENV"
+      - run: npm run mobile:build:release
+      - run: npm run release:verify:android && node scripts/release/generate-checksums.mjs --platform=android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Star-Companion-${{ github.ref_name }}-android
+          path: |
+            dist/android/*.apk
+            dist/android/*.aab
+            dist/release/*-android-SHA256SUMS.txt
           if-no-files-found: error

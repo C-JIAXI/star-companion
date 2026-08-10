@@ -28,12 +28,14 @@ type E2EChat = {
 
 type E2EChatDetails = E2EChat & {
   userPersona: string;
+  userAvatar?: string;
 };
 
 type E2EProviderModel = {
   id: string;
   label: string;
   model: string;
+  contextWindow?: number;
   capabilities?: Array<
     "text_generation" |
     "text_embedding" |
@@ -68,7 +70,8 @@ type SettingsPutPayload = {
   userPersonaPresets?: Array<{
     id: string;
     name: string;
-    config: { prefix: string; prompt: string; suffix: string };
+    avatar: string;
+    config: { displayName: string; prefix: string; prompt: string; suffix: string };
     createdAt: string;
     updatedAt: string;
   }>;
@@ -77,6 +80,27 @@ type SettingsPutPayload = {
 
 type ApiDataResponse<T> = {
   data?: T;
+};
+
+const importBackupViaApi = async (request: APIRequestContext, data: Record<string, unknown>) => {
+  const previewResponse = await request.post("/api/backups/preview", { data });
+  expect(previewResponse.ok()).toBeTruthy();
+  const preview = (await previewResponse.json()) as ApiDataResponse<{
+    previewId: string;
+    canExecute: boolean;
+    conflicts: Array<{ key: string }>;
+  }>;
+  expect(preview.data?.canExecute).toBeTruthy();
+  return request.post("/api/backups/import", {
+    data: {
+      ...data,
+      previewId: preview.data?.previewId,
+      conflictResolutions: (preview.data?.conflicts ?? []).map((conflict) => ({
+        key: conflict.key,
+        action: "use_incoming"
+      }))
+    }
+  });
 };
 
 const permanentlyDeleteChatViaApi = async (
@@ -314,6 +338,171 @@ test("direct routes render their workspace headers", async ({ page }) => {
 
   await page.goto("/settings");
   await expect(page.getByRole("heading", { name: /模型设置|Model Settings/ })).toBeVisible();
+});
+
+test("about and updates shows safe migration state and uses a mocked desktop updater", async ({ page }) => {
+  await page.addInitScript(() => {
+    let state: DesktopUpdateState = {
+      status: "idle",
+      currentVersion: "1.0.2",
+      availableVersion: null,
+      releaseNotes: null,
+      progressPercent: null,
+      transferredBytes: null,
+      totalBytes: null,
+      lastCheckedAt: null,
+      errorCode: null,
+      disabledReason: null
+    };
+    const listeners: Array<(next: DesktopUpdateState) => void> = [];
+    const emit = (next: DesktopUpdateState) => {
+      state = next;
+      listeners.forEach((listener) => listener(state));
+    };
+    window.starCompanionDesktop = {
+      getUpdateState: async () => state,
+      checkForUpdates: async () => {
+        emit({ ...state, status: "available", availableVersion: "1.1.0", releaseNotes: "Privacy-safe update notes", lastCheckedAt: "2026-08-10T12:00:00.000Z" });
+        return state;
+      },
+      downloadUpdate: async () => {
+        emit({ ...state, status: "downloading", progressPercent: 42, transferredBytes: 42, totalBytes: 100 });
+        window.setTimeout(() => emit({ ...state, status: "downloaded", progressPercent: 100, transferredBytes: 100, totalBytes: 100 }), 500);
+        return state;
+      },
+      deferUpdate: async () => {
+        emit({ ...state, status: "deferred" });
+        return state;
+      },
+      installUpdate: async () => {
+        (window as Window & { __mockInstalled?: boolean }).__mockInstalled = true;
+        emit({ ...state, status: "installing" });
+        return state;
+      },
+      onUpdateState: (listener) => {
+        listeners.push(listener);
+        return () => {
+          const index = listeners.indexOf(listener);
+          if (index >= 0) listeners.splice(index, 1);
+        };
+      }
+    };
+  });
+  await page.route("**/api/app/info", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          appVersion: "1.0.2",
+          schemaVersion: "20260810000300_add_recovery_points",
+          schemaChecksum: "safe-checksum",
+          platform: "windows",
+          buildType: "release",
+          buildCommit: "0123456789ab",
+          migration: { status: "upgraded", previousAppVersion: "1.0.1", previousSchemaVersion: "old-schema", appliedCount: 1, recoveryCreated: true },
+          update: { capability: "desktop", externalUrl: null }
+        }
+      })
+    });
+  });
+
+  await page.goto("/settings?section=about");
+  await expect(page.getByTestId("about-updates-panel")).toBeVisible();
+  await expect(page.getByTestId("upgrade-launch-notice")).toBeVisible();
+  await expect(page.getByText("1.0.2", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /检查更新|Check for updates/ }).click();
+  await expect(page.getByText(/1\.1\.0/)).toBeVisible();
+  await expect(page.getByTestId("update-release-notes")).toContainText("Privacy-safe update notes");
+  await page.getByRole("button", { name: /下载更新|Download update/ }).click();
+  await expect(page.getByTestId("update-download-progress")).toBeVisible();
+  await expect(page.getByRole("button", { name: /确认重启并安装|Confirm restart and install/ })).toBeVisible();
+  await page.getByRole("button", { name: /确认重启并安装|Confirm restart and install/ }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: /确认重启并安装|Confirm restart and install/ }).click();
+  await expect.poll(() => page.evaluate(() => (window as Window & { __mockInstalled?: boolean }).__mockInstalled)).toBe(true);
+});
+
+test("backup import requires preflight review and explicit conflict resolution", async ({ page }) => {
+  let importPayload: Record<string, unknown> | null = null;
+  const counts = { added: 0, updated: 1, skipped: 0, conflicts: 1, invalid: 0, deleted: 0 };
+
+  await page.route("**/api/backups/recovery-points", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: [] }) });
+  });
+  await page.route("**/api/backups/preview", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          previewId: "preview-e2e-1234567890",
+          schemaVersion: 1,
+          mode: "merge",
+          sourceExportedAt: "2026-08-10T00:00:00.000Z",
+          counts,
+          byEntity: {
+            settings: { ...counts, updated: 0, conflicts: 0 },
+            characters: counts,
+            chats: { ...counts, updated: 0, conflicts: 0 },
+            messages: { ...counts, updated: 0, conflicts: 0 },
+            memories: { ...counts, updated: 0, conflicts: 0 }
+          },
+          conflicts: [{ key: "characters:e2e-conflict", entity: "characters", id: "e2e-conflict" }],
+          issues: [],
+          canExecute: true,
+          requiresRecoveryPoint: true
+        }
+      })
+    });
+  });
+  await page.route("**/api/backups/import", async (route) => {
+    importPayload = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          mode: "merge",
+          characters: 1,
+          chats: 0,
+          messages: 0,
+          memories: 0,
+          settingsImported: false,
+          added: 0,
+          updated: 1,
+          skipped: 0,
+          conflictsResolved: 1,
+          recoveryPointId: "recovery-e2e",
+          completedAt: "2026-08-10T00:01:00.000Z"
+        }
+      })
+    });
+  });
+
+  await page.goto("/settings?section=backup");
+  await page.locator("#backup-import-input").setInputFiles({
+    name: "safe-backup.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({ schemaVersion: 1, characters: [], chats: [], messages: [], memories: [] }))
+  });
+
+  await expect(page.getByTestId("backup-impact-preview")).toBeVisible();
+  const confirmButton = page.getByTestId("backup-confirm-import");
+  await expect(confirmButton).toBeDisabled();
+  await page.getByLabel(/冲突处理 1|Conflict resolution 1/).selectOption("use_incoming");
+  await expect(confirmButton).toBeEnabled();
+  await confirmButton.click();
+  await page.getByRole("dialog").getByRole("button", { name: /确认|Confirm/ }).click();
+
+  await expect.poll(() => importPayload).toEqual(
+    expect.objectContaining({
+      previewId: "preview-e2e-1234567890",
+      conflictResolutions: [{ key: "characters:e2e-conflict", action: "use_incoming" }]
+    })
+  );
 });
 
 test("dialogs trap keyboard focus and restore their trigger", async ({ page }) => {
@@ -1243,7 +1432,7 @@ test("resending a historical user message confirms its impact and waits for serv
   }
 });
 
-test("chat agent panel generates a read-only draft and inserts it into the composer", async ({
+test("chat agent panel inserts reply drafts and confirms memory candidates before saving", async ({
   page,
   request
 }, testInfo) => {
@@ -1256,15 +1445,19 @@ test("chat agent panel generates a read-only draft and inserts it into the compo
 
   await page.route("**/api/chats/*/agent-draft", async (route) => {
     const body = route.request().postDataJSON() as { mode?: string };
+    const memoryCandidate = body.mode === "memory_lore_candidates";
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         ok: true,
         data: {
           mode: body.mode ?? "reply_drafts",
-          title: "Reply Drafts",
-          content: "Agent draft reply for the next turn.",
+          title: memoryCandidate ? "Memory and Lore Candidates" : "Reply Drafts",
+          content: memoryCandidate ? "[MEMORY Blue door trust | The user trusts the blue door. | blue door, trust]" : "Agent draft reply for the next turn.",
           createdAt: new Date().toISOString(),
+          actions: memoryCandidate
+            ? [{ id: "agent-memory-1", kind: "memory_candidate", title: "Blue door trust", content: "The user trusts the blue door.", keywords: ["blue door", "trust"] }]
+            : [{ id: "agent-draft-1", kind: "reply_draft", title: "Draft 1", content: "A focused reply draft." }],
           matchedLoreEntries: [],
           matchedMemoryEntries: []
         }
@@ -1326,10 +1519,24 @@ test("chat agent panel generates a read-only draft and inserts it into the compo
     await page.getByPlaceholder(/可选：告诉 Agent|Optional: tell the Agent/).fill("next turn");
     await page.getByTestId("chat-agent-run").click();
     await expect(page.getByText("Agent draft reply for the next turn.")).toBeVisible();
+    await page.getByRole("button", { name: /插入|Insert/ }).last().click();
+    await expect(page.locator("#chat-message-input")).toHaveValue("A focused reply draft.");
     await page.getByRole("button", { name: /插入输入框|Insert into composer/ }).click();
     await expect(page.locator("#chat-message-input")).toHaveValue(
       "Agent draft reply for the next turn."
     );
+
+    await page.getByTestId("agent-mode-memory_lore_candidates").click();
+    await page.getByTestId("chat-agent-run").click();
+    await expect(page.getByText("The user trusts the blue door.", { exact: true })).toBeVisible();
+    await page.getByTestId("agent-action-agent-memory-1").click();
+    const confirmationDialog = page.locator("[role=dialog][aria-modal=true]");
+    await expect(confirmationDialog).toBeVisible();
+    await confirmationDialog.getByRole("button").last().click();
+    await expect(page.getByTestId("agent-action-agent-memory-1")).toHaveCount(0);
+    const memoriesResponse = await request.get(`/api/chats/${chatId}/memories`);
+    const memories = ((await memoriesResponse.json()) as ApiDataResponse<Array<{ title: string; content: string }>>).data;
+    expect(memories?.some((memory) => memory.title === "Blue door trust" && memory.content === "The user trusts the blue door.")).toBeTruthy();
 
     await page.getByRole("button", { name: /关闭 Agent|Close Agent/ }).click();
     await page.setViewportSize({ width: 390, height: 780 });
@@ -1344,6 +1551,265 @@ test("chat agent panel generates a read-only draft and inserts it into the compo
     if (characterId) {
       await request.delete(`/api/characters/${characterId}`);
     }
+  }
+});
+
+test("guided regeneration sends one-time feedback and keeps the previous variant", async ({
+  page,
+  request
+}, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const originalReply = `Original cautious reply ${suffix}`;
+  const revisedReply = `Revised restrained reply ${suffix}`;
+  const guidance = "Keep the established facts, but make the tone more restrained.";
+  let characterId: string | null = null;
+  let chatId: string | null = null;
+
+  try {
+    const characterResponse = await request.post("/api/characters", {
+      data: {
+        name: `Guided Regeneration ${suffix}`,
+        avatar: null,
+        description: "",
+        tags: [],
+        prefix: "",
+        prompt: "Stay consistent.",
+        suffix: "",
+        htmlCss: "",
+        openingHtml: "",
+        loreEntries: [],
+        quickReplies: []
+      }
+    });
+    characterId = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data?.id ?? null;
+    expect(characterId).toBeTruthy();
+
+    const chatResponse = await request.post("/api/chats", {
+      data: { title: `Guided Chat ${suffix}`, characterId }
+    });
+    chatId = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data?.id ?? null;
+    expect(chatId).toBeTruthy();
+    await request.post("/api/messages", {
+      data: { chatId, role: "user", content: "How does she answer?" }
+    });
+    const messageResponse = await request.post("/api/messages", {
+      data: { chatId, role: "assistant", characterId, content: originalReply }
+    });
+    const message = ((await messageResponse.json()) as ApiDataResponse<{ id: string; createdAt: string }>).data;
+    expect(message?.id).toBeTruthy();
+
+    await page.addInitScript(
+      ({ selectedChatId, selectedCharacterId, messageId, original, revised, createdAt }) => {
+        window.localStorage.setItem("star-companion:selected-chat", selectedChatId);
+        let socket: { onmessage: ((event: MessageEvent) => void) | null } | null = null;
+        const emit = (value: Record<string, unknown>) =>
+          socket?.onmessage?.(new MessageEvent("message", { data: JSON.stringify(value) }));
+
+        class MockWebSocket {
+          static readonly CONNECTING = 0;
+          static readonly OPEN = 1;
+          static readonly CLOSING = 2;
+          static readonly CLOSED = 3;
+          readonly CONNECTING = 0;
+          readonly OPEN = 1;
+          readonly CLOSING = 2;
+          readonly CLOSED = 3;
+          readyState = 0;
+          onopen: ((event: Event) => void) | null = null;
+          onclose: ((event: CloseEvent) => void) | null = null;
+          onerror: ((event: Event) => void) | null = null;
+          onmessage: ((event: MessageEvent) => void) | null = null;
+
+          constructor() {
+            socket = this;
+            window.setTimeout(() => {
+              this.readyState = MockWebSocket.OPEN;
+              (window as unknown as { __guidedSocketReady: boolean }).__guidedSocketReady = true;
+              this.onopen?.(new Event("open"));
+            }, 0);
+          }
+
+          send(data: string) {
+            const request = JSON.parse(data) as { type: string; requestId: string; guidance?: string };
+            if (request.type !== "regenerate") return;
+            (window as unknown as { __guidedRegenerateRequest: unknown }).__guidedRegenerateRequest = request;
+            window.setTimeout(() => {
+              emit({ type: "generation_started", requestId: request.requestId });
+              emit({
+                type: "assistant_message",
+                requestId: request.requestId,
+                message: {
+                  id: messageId,
+                  chatId: selectedChatId,
+                  role: "assistant",
+                  characterId: selectedCharacterId,
+                  content: revised,
+                  contextIncluded: true,
+                  isBookmarked: false,
+                  variants: [original, revised],
+                  activeVariantIndex: 1,
+                  tokenUsage: null,
+                  loreMatches: [],
+                  memoryMatches: [],
+                  createdAt,
+                  updatedAt: new Date().toISOString()
+                }
+              });
+              emit({ type: "generation_done", requestId: request.requestId });
+            }, 0);
+          }
+
+          close() {
+            this.readyState = 3;
+          }
+        }
+
+        Object.assign(window, {
+          WebSocket: MockWebSocket,
+          __guidedRegenerateRequest: null,
+          __guidedSocketReady: false
+        });
+      },
+      {
+        selectedChatId: chatId!,
+        selectedCharacterId: characterId!,
+        messageId: message!.id,
+        original: originalReply,
+        revised: revisedReply,
+        createdAt: message!.createdAt
+      }
+    );
+
+    await page.goto("/");
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __guidedSocketReady: boolean }).__guidedSocketReady))
+      .toBe(true);
+    const bubble = page.locator("article").filter({ hasText: originalReply }).first();
+    await bubble.locator('[data-chat-action="guided-regenerate"]').click();
+    await page.getByTestId("guided-regenerate-input").fill(guidance);
+    await page.getByTestId("guided-regenerate-run").click();
+    await expect(page.getByText(revisedReply)).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __guidedRegenerateRequest: { messageId?: string; guidance?: string } }).__guidedRegenerateRequest))
+      .toEqual(expect.objectContaining({ messageId: message!.id, guidance }));
+  } finally {
+    if (chatId) await permanentlyDeleteChatViaApi(request, chatId);
+    if (characterId) await request.delete(`/api/characters/${characterId}`);
+  }
+});
+
+test("a dropped generation connection restores the draft and can reconnect", async ({
+  page,
+  request
+}, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const draft = `Keep this unsent draft ${suffix}`;
+  let characterId: string | null = null;
+  let chatId: string | null = null;
+
+  try {
+    const characterResponse = await request.post("/api/characters", {
+      data: {
+        name: `Reconnect Character ${suffix}`,
+        prefix: "",
+        prompt: "Answer only after the connection is stable.",
+        suffix: ""
+      }
+    });
+    characterId = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data?.id ?? null;
+    expect(characterId).toBeTruthy();
+
+    const chatResponse = await request.post("/api/chats", {
+      data: { title: `Reconnect Chat ${suffix}`, characterId }
+    });
+    chatId = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data?.id ?? null;
+    expect(chatId).toBeTruthy();
+
+    await page.addInitScript((selectedChatId) => {
+      window.localStorage.setItem("star-companion:selected-chat", selectedChatId);
+
+      class MockWebSocket {
+        static readonly CONNECTING = 0;
+        static readonly OPEN = 1;
+        static readonly CLOSING = 2;
+        static readonly CLOSED = 3;
+        readonly CONNECTING = 0;
+        readonly OPEN = 1;
+        readonly CLOSING = 2;
+        readonly CLOSED = 3;
+        readyState = MockWebSocket.CONNECTING;
+        onopen: ((event: Event) => void) | null = null;
+        onclose: ((event: Event) => void) | null = null;
+        onerror: ((event: Event) => void) | null = null;
+        onmessage: ((event: MessageEvent) => void) | null = null;
+
+        constructor() {
+          const state = window as unknown as {
+            __reconnectSocketCount: number;
+            __reconnectSocketReady: boolean;
+          };
+          state.__reconnectSocketCount += 1;
+          window.setTimeout(() => {
+            this.readyState = MockWebSocket.OPEN;
+            state.__reconnectSocketReady = true;
+            this.onopen?.(new Event("open"));
+          }, 0);
+        }
+
+        send(data: string) {
+          const request = JSON.parse(data) as { type: string; requestId: string };
+          if (request.type !== "generate") return;
+          (window as unknown as { __droppedGenerationRequest: unknown }).__droppedGenerationRequest =
+            request;
+          window.setTimeout(() => {
+            this.readyState = MockWebSocket.CLOSED;
+            this.onclose?.(new Event("close"));
+          }, 20);
+        }
+
+        close() {
+          this.readyState = MockWebSocket.CLOSED;
+        }
+      }
+
+      Object.assign(window, {
+        WebSocket: MockWebSocket,
+        __reconnectSocketCount: 0,
+        __reconnectSocketReady: false,
+        __droppedGenerationRequest: null
+      });
+    }, chatId!);
+
+    await page.goto("/");
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __reconnectSocketReady: boolean }).__reconnectSocketReady
+        )
+      )
+      .toBe(true);
+
+    const composer = page.locator("#chat-message-input");
+    await composer.fill(draft);
+    await page.locator('[data-chat-action="send"]').click();
+
+    await expect(page.getByTestId("chat-connection-status")).toBeVisible();
+    await expect(composer).toHaveValue(draft);
+    await expect(page.locator('[data-chat-action="stop"]')).toHaveCount(0);
+
+    await page.locator('[data-chat-action="reconnect"]').click();
+    await expect(page.getByTestId("chat-connection-status")).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __reconnectSocketCount: number }).__reconnectSocketCount
+        )
+      )
+      .toBeGreaterThanOrEqual(2);
+  } finally {
+    if (chatId) await permanentlyDeleteChatViaApi(request, chatId);
+    if (characterId) await request.delete(`/api/characters/${characterId}`);
   }
 });
 
@@ -1407,7 +1873,7 @@ test("AI title suggestion stays editable until the user confirms it", async ({ p
   }
 });
 
-test("a default chat receives one persisted AI title after its first exchange", async ({
+test("a default chat requests and applies one AI title after its first exchange", async ({
   page,
   request
 }, testInfo) => {
@@ -1418,14 +1884,15 @@ test("a default chat receives one persisted AI title after its first exchange", 
   let chatId: string | null = null;
   let titleRequests = 0;
 
-  await page.route("**/api/chats/*/title-suggestion", async (route) => {
+  await page.route("**/api/chats/*/auto-title", async (route) => {
     titleRequests += 1;
+    const persistedResponse = await request.put(`/api/chats/${chatId}`, {
+      data: { title: generatedTitle }
+    });
     await route.fulfill({
+      status: persistedResponse.status(),
       contentType: "application/json",
-      body: JSON.stringify({
-        ok: true,
-        data: { title: generatedTitle, createdAt: new Date().toISOString() }
-      })
+      body: await persistedResponse.text()
     });
   });
 
@@ -1457,8 +1924,6 @@ test("a default chat receives one persisted AI title after its first exchange", 
     await page.goto("/");
     await expect(page.locator("#chat-title")).toContainText(generatedTitle);
     await expect.poll(() => titleRequests).toBe(1);
-    const persisted = (await (await request.get(`/api/chats/${chatId}`)).json()) as ApiDataResponse<E2EChat>;
-    expect(persisted.data?.title).toBe(generatedTitle);
   } finally {
     if (chatId) await permanentlyDeleteChatViaApi(request, chatId);
     if (characterId) await request.delete(`/api/characters/${characterId}`);
@@ -2056,6 +2521,7 @@ test("chat history filters and reorganizes chats by folder", async ({ page, requ
   const mainFolder = `Main story ${suffix}`;
   const sideFolder = `Side story ${suffix}`;
   const archiveFolder = `Archive folder ${suffix}`;
+  const renamedFolder = `Renamed folder ${suffix}`;
   let characterId: string | null = null;
   const chatIds: string[] = [];
 
@@ -2117,10 +2583,20 @@ test("chat history filters and reorganizes chats by folder", async ({ page, requ
     await folderFilter.selectOption(archiveFolder);
     await expect(page.locator("[data-chat-history-row]")).toHaveCount(2);
 
+    await page.getByTestId("chat-history-rename-folder").click();
+    const renameFolderDialog = page.getByRole("dialog", {
+      name: /重命名聊天文件夹|Rename Chat Folder/
+    });
+    await renameFolderDialog.getByRole("textbox").fill(renamedFolder);
+    await renameFolderDialog.getByRole("button", { name: /保存|Save/ }).click();
+    await expect(renameFolderDialog).toBeHidden();
+    await expect(page.getByTestId("chat-history-folder-filter")).toHaveValue(renamedFolder);
+    await expect(page.locator("[data-chat-history-row]")).toHaveCount(2);
+
     const updated = (await (await request.get(`/api/chats/${chatIds[0]}`)).json()) as ApiDataResponse<{
       folder: string;
     }>;
-    expect(updated.data?.folder).toBe(archiveFolder);
+    expect(updated.data?.folder).toBe(renamedFolder);
   } finally {
     for (const chatId of chatIds) {
       await permanentlyDeleteChatViaApi(request, chatId);
@@ -2723,6 +3199,17 @@ test("assistant messages expose matched lore and memory context to users", async
           totalTokens: 132,
           estimated: true
         },
+        promptBreakdown: {
+          promptTokens: 120,
+          promptTokensEstimated: true,
+          includedMessageCount: 2,
+          sections: [
+            { id: "character", tokenEstimate: 30, characterCount: 60, itemCount: 1 },
+            { id: "lore", tokenEstimate: 25, characterCount: 50, itemCount: 1 },
+            { id: "memory", tokenEstimate: 25, characterCount: 50, itemCount: 1 },
+            { id: "history", tokenEstimate: 40, characterCount: 80, itemCount: 2 }
+          ]
+        },
         loreMatches: [
           {
             id: loreId,
@@ -2757,6 +3244,10 @@ test("assistant messages expose matched lore and memory context to users", async
     await expect(contextButton).toBeVisible();
     await contextButton.click();
     await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByTestId("prompt-breakdown")).toBeVisible();
+    await expect(page.getByTestId("prompt-breakdown-total")).toContainText("120");
+    await expect(page.locator('[data-prompt-breakdown-section="lore"]')).toBeVisible();
+    await expect(page.locator('[data-prompt-breakdown-section="history"]')).toBeVisible();
     await page.locator('[data-debug-section-toggle="chatMemories"]').click();
     await expect(page.getByText("Blue door clue", { exact: true })).toBeVisible();
     await page.locator('[data-debug-section-toggle="character"]').click();
@@ -3076,6 +3567,128 @@ test("character management can create a character with markdown prompt fields", 
       .toBe(true);
   } finally {
     await cleanupE2ECharacter(name);
+  }
+});
+
+test("chat context budget uses the active model window and latest token usage", async ({
+  page,
+  request
+}, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const characterName = `Budget Character ${suffix}`;
+  const chatTitle = `Budget Chat ${suffix}`;
+  const now = new Date().toISOString();
+  let characterId: string | null = null;
+  let chatId: string | null = null;
+
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          id: "context-budget-settings-e2e",
+          activeProvider: "openai-compatible",
+          apiBaseUrl: "https://example.com/v1",
+          model: "budget-model",
+          temperature: 0.8,
+          maxTokens: 800,
+          topP: 1,
+          language: "en",
+          providers: [
+            {
+              id: "context-budget-provider",
+              label: "Budget provider",
+              provider: "openai-compatible",
+              apiBaseUrl: "https://example.com/v1",
+              models: [
+                {
+                  id: "context-budget-model",
+                  label: "Budget model",
+                  model: "budget-model",
+                  contextWindow: 4096,
+                  capabilities: ["text_generation"]
+                }
+              ]
+            }
+          ],
+          activeProviderId: "context-budget-provider",
+          activeModelId: "context-budget-model",
+          moduleModelPreferences: {},
+          userPersonaPresets: [],
+          userProfileSummary: "",
+          autoSummarizeUser: false,
+          showMessageAvatars: true,
+          showMessageTimestamps: false,
+          ttsVoice: "alloy",
+          ttsPlaybackRate: 1,
+          ttsAutoPlay: false,
+          userProfileUpdatedAt: null,
+          createdAt: now,
+          updatedAt: now,
+          hasApiKey: true
+        }
+      })
+    });
+  });
+
+  try {
+    const characterResponse = await request.post("/api/characters", {
+      data: {
+        name: characterName,
+        prefix: "Stay in scene.",
+        prompt: "You are a context budget fixture.",
+        suffix: "Reply directly."
+      }
+    });
+    expect(characterResponse.ok()).toBeTruthy();
+    const character = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data;
+    characterId = character?.id ?? null;
+    expect(characterId).toBeTruthy();
+
+    const chatResponse = await request.post("/api/chats", {
+      data: { title: chatTitle, characterId, memoryTurns: 12 }
+    });
+    expect(chatResponse.ok()).toBeTruthy();
+    const chat = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data;
+    chatId = chat?.id ?? null;
+    expect(chatId).toBeTruthy();
+
+    const messageResponse = await request.post("/api/messages", {
+      data: {
+        chatId,
+        role: "assistant",
+        characterId,
+        content: "The current scene is ready.",
+        tokenUsage: {
+          promptTokens: 1000,
+          completionTokens: 200,
+          totalTokens: 1200,
+          estimated: false
+        }
+      }
+    });
+    expect(messageResponse.ok()).toBeTruthy();
+
+    await page.goto("/");
+    await openChatHistoryAndSelect(page, chatTitle);
+    await page.locator("#chat-settings-trigger").click();
+    await page.getByTestId("chat-context-budget-trigger").click();
+
+    const dialog = page.getByTestId("chat-context-budget-dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText("Budget provider / Budget model")).toBeVisible();
+    await expect(dialog.getByTestId("context-budget-total")).toContainText("2,000");
+    await expect(dialog.getByTestId("context-budget-window")).toHaveText("4,096");
+    await expect(dialog.locator('[data-context-budget-status="safe"]')).toBeVisible();
+  } finally {
+    if (chatId) await permanentlyDeleteChatViaApi(request, chatId);
+    if (characterId) await request.delete(`/api/characters/${characterId}`);
   }
 });
 
@@ -3775,10 +4388,83 @@ test("messages can be excluded from future model context without deletion", asyn
     const bubble = page.locator("article").filter({ hasText: messageText }).first();
     await bubble.locator('[data-chat-action="context-toggle"]').click();
     await expect(bubble.locator("xpath=..")).toHaveAttribute("data-context-included", "false");
+    await expect(bubble.getByTestId("message-context-excluded")).toBeVisible();
 
     const updatedMessageResponse = await request.get(`/api/messages/${message.id}`);
     expect(updatedMessageResponse.ok()).toBeTruthy();
     expect((await updatedMessageResponse.json()).data.contextIncluded).toBe(false);
+  } finally {
+    await permanentlyDeleteChatViaApi(request, chat.id);
+    await request.delete(`/api/characters/${character.id}`);
+  }
+});
+
+test("chat timeline distinguishes rolling context from manually excluded messages", async ({
+  page,
+  request
+}) => {
+  const suffix = Date.now();
+  const characterName = `Context Boundary Character ${suffix}`;
+  const chatTitle = `Context Boundary Chat ${suffix}`;
+  const messageIds: string[] = [];
+
+  const characterResponse = await request.post("/api/characters", {
+    data: {
+      name: characterName,
+      prefix: "",
+      prompt: "Temporary context-boundary character.",
+      suffix: ""
+    }
+  });
+  expect(characterResponse.ok()).toBeTruthy();
+  const character = (await characterResponse.json()).data;
+  const chatResponse = await request.post("/api/chats", {
+    data: { title: chatTitle, characterId: character.id, memoryTurns: 1 }
+  });
+  expect(chatResponse.ok()).toBeTruthy();
+  const chat = (await chatResponse.json()).data;
+
+  for (let index = 0; index < 35; index += 1) {
+    const role = index % 2 === 0 ? "user" : "assistant";
+    const messageResponse = await request.post("/api/messages", {
+      data: {
+        chatId: chat.id,
+        role,
+        characterId: role === "assistant" ? character.id : undefined,
+        content: `Context boundary message ${index + 1} ${suffix}`
+      }
+    });
+    expect(messageResponse.ok()).toBeTruthy();
+    messageIds.push((await messageResponse.json()).data.id);
+  }
+
+  const excludedMessageId = messageIds[34];
+  const excludeResponse = await request.put(`/api/messages/${excludedMessageId}`, {
+    data: { contextIncluded: false }
+  });
+  expect(excludeResponse.ok()).toBeTruthy();
+
+  try {
+    await page.goto("/");
+    await openChatHistoryAndSelect(page, chatTitle);
+
+    await expect(page.getByTestId("chat-message-pagination")).toBeVisible();
+    const boundary = page.getByTestId("chat-context-boundary");
+    await expect(boundary).toBeVisible();
+    await expect(boundary).toHaveAttribute("data-context-included-count", "3");
+    await expect(boundary).toHaveAttribute("data-context-outside-count", "31");
+
+    await expect(page.locator(`[data-message-id="${messageIds[30]}"]`)).toHaveAttribute(
+      "data-next-reply-context",
+      "outside"
+    );
+    await expect(page.locator(`[data-message-id="${messageIds[31]}"]`)).toHaveAttribute(
+      "data-next-reply-context",
+      "included"
+    );
+    const excludedMessage = page.locator(`[data-message-id="${excludedMessageId}"]`);
+    await expect(excludedMessage).toHaveAttribute("data-next-reply-context", "excluded");
+    await expect(excludedMessage.getByTestId("message-context-excluded")).toBeVisible();
   } finally {
     await permanentlyDeleteChatViaApi(request, chat.id);
     await request.delete(`/api/characters/${character.id}`);
@@ -3959,7 +4645,13 @@ test("chat model switch preserves stored key and runtime settings when provider 
     {
       id: "switch-preset",
       name: "Switch preset",
-      config: { prefix: "Boundary.", prompt: "User role.", suffix: "Be concise." },
+      avatar: "",
+      config: {
+        displayName: "Switch User",
+        prefix: "Boundary.",
+        prompt: "User role.",
+        suffix: "Be concise."
+      },
       createdAt: now,
       updatedAt: now
     }
@@ -4101,7 +4793,7 @@ test("chat model switch preserves stored key and runtime settings when provider 
   }
 });
 
-test("chat custom config saves prefix prompt and suffix from memory settings", async ({
+test("chat persona presets save a visible identity and prompt config", async ({
   page,
   request
 }) => {
@@ -4114,6 +4806,9 @@ test("chat custom config saves prefix prompt and suffix from memory settings", a
     suffix: "Prefer crisp answers and preserve the established dynamic."
   };
   const presetName = `Analyst Persona ${suffix}`;
+  const personaDisplayName = `Analyst ${suffix}`;
+  const imageBase64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nAAAAABJRU5ErkJggg==";
   let userPersonaPresets: unknown[] = [];
   const now = new Date().toISOString();
 
@@ -4196,6 +4891,17 @@ test("chat custom config saves prefix prompt and suffix from memory settings", a
 
     const customConfigDialog = page.getByRole("dialog");
     const configInputs = customConfigDialog.locator("textarea");
+    const displayNameInput = customConfigDialog.locator("#persona-display-name");
+    await displayNameInput.fill(personaDisplayName);
+    await customConfigDialog.getByTestId("persona-avatar-upload").setInputFiles({
+      name: "persona.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(imageBase64, "base64")
+    });
+    await expect(customConfigDialog.getByTestId("persona-avatar-preview")).toHaveAttribute(
+      "src",
+      /^data:image\/png;base64,/
+    );
     await configInputs.nth(0).fill(customConfig.prefix);
     await configInputs.nth(1).fill(customConfig.prompt);
     await configInputs.nth(2).fill(customConfig.suffix);
@@ -4205,6 +4911,8 @@ test("chat custom config saves prefix prompt and suffix from memory settings", a
     await configInputs.nth(0).fill("Temporary prefix that should be replaced.");
     await configInputs.nth(1).fill("Temporary prompt that should be replaced.");
     await configInputs.nth(2).fill("Temporary suffix that should be replaced.");
+    await displayNameInput.fill("Temporary identity");
+    await customConfigDialog.getByTestId("persona-avatar-remove").click();
     await customConfigDialog
       .locator("div")
       .filter({ hasText: presetName })
@@ -4214,19 +4922,39 @@ test("chat custom config saves prefix prompt and suffix from memory settings", a
     await expect(configInputs.nth(0)).toHaveValue(customConfig.prefix);
     await expect(configInputs.nth(1)).toHaveValue(customConfig.prompt);
     await expect(configInputs.nth(2)).toHaveValue(customConfig.suffix);
+    await expect(displayNameInput).toHaveValue(personaDisplayName);
+    await expect(customConfigDialog.getByTestId("persona-avatar-preview")).toHaveAttribute(
+      "src",
+      /^data:image\/png;base64,/
+    );
     await customConfigDialog
       .getByRole("button", { name: /^(保存|Save)$/ })
       .click();
 
     await expect(page.getByRole("status")).toBeVisible();
+    await expect(page.locator("[data-chat-user-name]").first()).toHaveText(personaDisplayName);
+    await expect(page.locator("[data-chat-message='user'] [data-chat-avatar]").first()).toHaveAttribute(
+      "title",
+      personaDisplayName
+    );
+    await expect(page.locator("[data-chat-message='user'] [data-chat-avatar] img").first()).toHaveAttribute(
+      "src",
+      /^data:image\/png;base64,/
+    );
 
     const storedChatResponse = await request.get(`/api/chats/${chat.id}`);
     expect(storedChatResponse.ok()).toBeTruthy();
     const storedChat = ((await storedChatResponse.json()) as ApiDataResponse<E2EChatDetails>).data;
     expect(storedChat?.userPersona).toContain('"type":"user-custom-config"');
+    expect(storedChat?.userPersona).toContain('"version":2');
+    expect(storedChat?.userPersona).toContain(personaDisplayName);
     expect(storedChat?.userPersona).toContain(customConfig.prefix);
     expect(storedChat?.userPersona).toContain(customConfig.prompt);
     expect(storedChat?.userPersona).toContain(customConfig.suffix);
+    expect(storedChat?.userAvatar).toMatch(/^data:image\/png;base64,/);
+    const chatListResponse = await request.get("/api/chats");
+    const listedChats = ((await chatListResponse.json()) as ApiDataResponse<Array<Record<string, unknown>>>).data ?? [];
+    expect(listedChats.find((entry) => entry.id === chat.id)).not.toHaveProperty("userAvatar");
 
     await page.reload();
     await openChatHistoryAndSelect(page, chatTitle);
@@ -4235,6 +4963,9 @@ test("chat custom config saves prefix prompt and suffix from memory settings", a
     await expect(customConfigDialog.locator("textarea").nth(0)).toHaveValue(customConfig.prefix);
     await expect(customConfigDialog.locator("textarea").nth(1)).toHaveValue(customConfig.prompt);
     await expect(customConfigDialog.locator("textarea").nth(2)).toHaveValue(customConfig.suffix);
+    await expect(customConfigDialog.locator("#persona-display-name")).toHaveValue(
+      personaDisplayName
+    );
   } finally {
     await permanentlyDeleteChatViaApi(request, chat.id);
     await request.delete(`/api/characters/${character.id}`);
@@ -4250,7 +4981,13 @@ test("module model selects only show models compatible with that feature", async
       provider: "openai-compatible",
       apiBaseUrl: "https://example.com/v1",
       models: [
-        { id: "chat", label: "Chat model", model: "gpt-4o-mini", capabilities: ["text_generation"] },
+        {
+          id: "chat",
+          label: "Chat model",
+          model: "gpt-4o-mini",
+          contextWindow: 32768,
+          capabilities: ["text_generation"]
+        },
         { id: "embedding", label: "Embedding model", model: "text-embedding-3-small", capabilities: ["text_embedding"] },
         { id: "speech", label: "Speech model", model: "tts-1", capabilities: ["text_to_speech"] },
         { id: "image", label: "Image model", model: "gpt-image-1", capabilities: ["image_generation"] }
@@ -4296,6 +5033,7 @@ test("module model selects only show models compatible with that feature", async
 
   await page.goto("/settings");
   await page.getByRole("button", { name: "Provider Management" }).click();
+  await expect(page.getByLabel("Context window").first()).toHaveValue("32768");
   const imageOptions = page.getByLabel("Image generation").locator("option");
   await expect(imageOptions).toHaveText([
     "Current chat model is incompatible; choose a model",
@@ -4382,6 +5120,11 @@ test("long-term memory delete confirm stays centered above the memory dialog", a
     const memoryDialog = page.getByRole("dialog").filter({ hasText: memoryTitle });
     await expect(memoryDialog).toBeVisible();
     await expect(memoryDialog.getByText(memoryTitle)).toBeVisible();
+    await expect(memoryDialog.getByTestId("memory-index-summary")).toHaveAttribute(
+      "data-memory-index-state",
+      "unconfigured"
+    );
+    await expect(memoryDialog.getByTestId("memory-index-configure")).toBeVisible();
     await expect(memoryDialog.getByText(/仅关键词|Keywords only/)).toBeVisible();
     await memoryDialog
       .locator(`[data-chat-memory-action="delete"]`)
@@ -4505,8 +5248,7 @@ test("character page tag filter can narrow to a paged server result before editi
   ).concat(`e2e-character-page-${suffix}-target`);
 
   try {
-    const importResponse = await request.post("/api/backups/import", {
-      data: {
+    const importResponse = await importBackupViaApi(request, {
         schemaVersion: 1,
         mode: "merge",
         characters: [
@@ -4543,7 +5285,6 @@ test("character page tag filter can narrow to a paged server result before editi
         ],
         chats: [],
         messages: []
-      }
     });
     expect(importResponse.ok()).toBeTruthy();
 
@@ -4586,8 +5327,7 @@ test("character paging search can create a chat from the matching card", async (
   let chatId: string | null = null;
 
   try {
-    const importResponse = await request.post("/api/backups/import", {
-      data: {
+    const importResponse = await importBackupViaApi(request, {
         schemaVersion: 1,
         mode: "merge",
         characters: [
@@ -4624,7 +5364,6 @@ test("character paging search can create a chat from the matching card", async (
         ],
         chats: [],
         messages: []
-      }
     });
     expect(importResponse.ok()).toBeTruthy();
 

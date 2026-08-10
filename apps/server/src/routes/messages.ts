@@ -29,6 +29,9 @@ const normalizeTokenUsage = (
 const normalizeJsonArray = <T>(value: T[] | null | undefined) =>
   value === null ? Prisma.JsonNull : value;
 
+const normalizeJsonObject = <T extends object>(value: T | null | undefined) =>
+  value === null ? Prisma.JsonNull : value;
+
 messagesRouter.get(
   "/",
   asyncHandler(async (request, response) => {
@@ -59,6 +62,7 @@ messagesRouter.post(
     const data: Prisma.MessageUncheckedCreateInput = {
       ...body,
       tokenUsage: normalizeTokenUsage(body.tokenUsage),
+      promptBreakdown: normalizeJsonObject(body.promptBreakdown),
       loreMatches: normalizeJsonArray(body.loreMatches),
       memoryMatches: normalizeJsonArray(body.memoryMatches)
     };
@@ -104,6 +108,7 @@ messagesRouter.put(
     const data: Prisma.MessageUncheckedUpdateInput = {
       ...body,
       tokenUsage: normalizeTokenUsage(body.tokenUsage),
+      promptBreakdown: normalizeJsonObject(body.promptBreakdown),
       loreMatches: normalizeJsonArray(body.loreMatches),
       memoryMatches: normalizeJsonArray(body.memoryMatches)
     };

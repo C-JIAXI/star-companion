@@ -1,6 +1,25 @@
+import groovy.json.JsonSlurper
+
 apply plugin: 'com.android.application'
 
-def starCompanionVersionName = "1.0.2"
+def rootPackage = new JsonSlurper().parse(file('../../package.json'))
+def starCompanionVersionName = rootPackage.version as String
+def versionParts = starCompanionVersionName.split('[-+]')[0].split('\\.').collect { it as Integer }
+def starCompanionVersionCode = versionParts[0] * 1000000 + versionParts[1] * 1000 + versionParts[2]
+def signingProperties = new Properties()
+def signingPropertiesFile = rootProject.file('signing.properties')
+if (signingPropertiesFile.exists()) {
+    signingPropertiesFile.withInputStream { signingProperties.load(it) }
+}
+def signingValue = { String envName, String propertyName ->
+    System.getenv(envName) ?: signingProperties.getProperty(propertyName)
+}
+def releaseKeystorePath = signingValue('STAR_COMPANION_ANDROID_KEYSTORE_PATH', 'storeFile')
+def releaseStorePassword = signingValue('STAR_COMPANION_ANDROID_STORE_PASSWORD', 'storePassword')
+def releaseKeyAlias = signingValue('STAR_COMPANION_ANDROID_KEY_ALIAS', 'keyAlias')
+def releaseKeyPassword = signingValue('STAR_COMPANION_ANDROID_KEY_PASSWORD', 'keyPassword')
+def releaseSigningReady = [releaseKeystorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword].every { it }
+def releaseKeystoreFile = releaseKeystorePath ? (new File(releaseKeystorePath).isAbsolute() ? file(releaseKeystorePath) : rootProject.file(releaseKeystorePath)) : null
 
 android {
     namespace = "local.starcompanion.app"
@@ -9,7 +28,7 @@ android {
         applicationId "local.starcompanion.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 3
+        versionCode starCompanionVersionCode
         versionName starCompanionVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
@@ -18,16 +37,38 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (releaseSigningReady) {
+            release {
+                storeFile releaseKeystoreFile
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
     buildTypes {
         release {
+            if (releaseSigningReady) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
     applicationVariants.all { variant ->
         variant.outputs.all {
-            outputFileName = "Star Companion.apk"
+            outputFileName = "Star-Companion-${variant.versionName}-android-${variant.buildType.name}.apk"
         }
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    def requestsRelease = graph.allTasks.any { task ->
+        task.path == ':app:assembleRelease' || task.path == ':app:bundleRelease' || task.path == ':app:packageRelease'
+    }
+    if (requestsRelease && !releaseSigningReady) {
+        throw new GradleException('Android release signing is not configured. Set the four STAR_COMPANION_ANDROID_* signing variables or create untracked android/signing.properties.')
     }
 }
 

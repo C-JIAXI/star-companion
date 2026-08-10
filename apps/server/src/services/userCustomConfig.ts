@@ -1,15 +1,12 @@
 type UserCustomConfig = {
+  displayName: string;
   prefix: string;
   prompt: string;
   suffix: string;
 };
 
-type UserCustomConfigEnvelope = UserCustomConfig & {
-  type: "user-custom-config";
-  version: 1;
-};
-
 const emptyUserCustomConfig = (): UserCustomConfig => ({
+  displayName: "",
   prefix: "",
   prompt: "",
   suffix: ""
@@ -18,15 +15,19 @@ const emptyUserCustomConfig = (): UserCustomConfig => ({
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
-const isUserCustomConfigEnvelope = (value: unknown): value is UserCustomConfigEnvelope =>
+const isUserCustomConfigEnvelope = (value: unknown) =>
   isRecord(value) &&
   value.type === "user-custom-config" &&
-  value.version === 1 &&
+  (value.version === 1 || value.version === 2) &&
   typeof value.prefix === "string" &&
   typeof value.prompt === "string" &&
-  typeof value.suffix === "string";
+  typeof value.suffix === "string" &&
+  (value.version === 1 || typeof value.displayName === "string");
 
-const normalizeUserCustomConfig = (value?: Partial<UserCustomConfig> | null): UserCustomConfig => ({
+const normalizeUserCustomConfig = (
+  value?: Partial<UserCustomConfig> | null
+): UserCustomConfig => ({
+  displayName: value?.displayName ?? "",
   prefix: value?.prefix ?? "",
   prompt: value?.prompt ?? "",
   suffix: value?.suffix ?? ""
@@ -42,7 +43,7 @@ export const parseUserCustomConfig = (value?: string | null): UserCustomConfig =
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (isUserCustomConfigEnvelope(parsed)) {
-      return normalizeUserCustomConfig(parsed);
+      return normalizeUserCustomConfig(parsed as Partial<UserCustomConfig>);
     }
   } catch {}
 
@@ -52,15 +53,20 @@ export const parseUserCustomConfig = (value?: string | null): UserCustomConfig =
 export const serializeUserCustomConfig = (value?: Partial<UserCustomConfig> | null) => {
   const normalized = normalizeUserCustomConfig(value);
 
-  if (!normalized.prefix.trim() && !normalized.prompt.trim() && !normalized.suffix.trim()) {
+  if (
+    !normalized.displayName.trim() &&
+    !normalized.prefix.trim() &&
+    !normalized.prompt.trim() &&
+    !normalized.suffix.trim()
+  ) {
     return "";
   }
 
   return JSON.stringify({
     type: "user-custom-config",
-    version: 1,
+    version: 2,
     ...normalized
-  } satisfies UserCustomConfigEnvelope);
+  });
 };
 
 export const getUserCustomConfigSegments = (value?: string | null) => {

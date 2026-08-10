@@ -91,6 +91,8 @@ model Chat {
   memoryUpdatedAt       DateTime?
   /// Explicit user-authored persona / preference notes for this chat.
   userPersona           String    @default("")
+  /// Chat-scoped user persona avatar. Omitted from chat-list API responses to avoid large payloads.
+  userAvatar            String    @default("")
   userProfileSummary    String    @default("")
   userProfileUpdatedAt  DateTime?
   createdAt             DateTime  @default(now())
@@ -116,6 +118,9 @@ model ChatMemory {
   sourceMessageIds   Json      @default("[]")
   embedding          Json?
   embeddingModel     String?
+  embeddingSource    String?
+  embeddingDimensions Int?
+  embeddingStatus    String    @default("stale")
   embeddingUpdatedAt DateTime?
   lastMatchedAt      DateTime?
   createdAt          DateTime  @default(now())
@@ -142,6 +147,8 @@ model Message {
   variants           Json     @default("[]")
   activeVariantIndex Int      @default(0)
   tokenUsage         Json?
+  /// Token-only itemization of the prompt used to generate this assistant message.
+  promptBreakdown    Json?
   loreMatches        Json?
   memoryMatches      Json?
   createdAt          DateTime @default(now())
@@ -154,4 +161,16 @@ model Message {
   @@index([chatId, createdAt])
   @@index([chatId, isBookmarked, createdAt])
   @@index([characterId])
+}
+
+/// Local, bounded safety snapshot created before destructive data protection operations.
+/// The snapshot uses backup schemaVersion 1 and never contains API keys.
+model RecoveryPoint {
+  id        String   @id @default(cuid())
+  reason    String
+  summary   Json
+  snapshot  Json
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }

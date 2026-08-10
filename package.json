@@ -19,22 +19,34 @@
   "scripts": {
     "postinstall": "node scripts/dev/install-subprojects.mjs",
     "dev": "node scripts/dev/ensure-dev-db.mjs && concurrently -n shared,server,web -c cyan,green,magenta \"npm run dev --prefix packages/shared\" \"npm run dev --prefix apps/server\" \"npm run dev --prefix apps/web\"",
-    "build": "npm run build --prefix packages/shared && npm run build --prefix apps/server && npm run build --prefix apps/web",
+    "version:generate": "node scripts/release/generate-version.mjs",
+    "version:check": "node scripts/release/check-version.mjs",
+    "test:release-tools": "node --test scripts/release/version-core.test.mjs apps/desktop/update-state.test.cjs scripts/migrations/migration-safety.test.mjs scripts/mobile/migration-safety.test.mjs",
+    "build": "npm run version:generate && npm run build --prefix packages/shared && npm run build --prefix apps/server && npm run build --prefix apps/web",
     "desktop:icon": "node scripts/desktop/generate-desktop-icon.mjs",
     "desktop:prepare": "npm run desktop:icon && node scripts/desktop/prepare-desktop-resources.mjs",
     "desktop:dev": "npm run desktop:icon && npm run build && electron .",
-    "desktop:pack": "npm run build && npm run desktop:prepare && electron-builder --dir",
-    "desktop:build": "npm run build && npm run desktop:prepare && electron-builder --publish=never",
+    "desktop:pack": "npm run build && npm run desktop:prepare && electron-builder --config electron-builder.config.cjs --dir",
+    "desktop:build": "npm run build && npm run desktop:prepare && electron-builder --config electron-builder.config.cjs --publish=never && node scripts/release/collect-windows-metadata.mjs",
+    "desktop:smoke:packaged": "node --disable-warning=ExperimentalWarning scripts/desktop/smoke-packaged.mjs",
+    "desktop:release:preflight": "node scripts/release/preflight-windows-signing.mjs",
+    "desktop:release": "npm run desktop:release:preflight && npm run build && npm run desktop:prepare && electron-builder --config electron-builder.release.config.cjs --publish=never && node scripts/release/collect-windows-metadata.mjs",
     "mobile:build:web": "node scripts/mobile/build-mobile-web.mjs",
     "mobile:sync": "npm run mobile:build:web && cap sync android",
     "mobile:open:android": "npm run mobile:sync && cap open android",
-    "mobile:build:android": "npm run mobile:sync && cd android && gradlew.bat assembleDebug",
+    "mobile:build:android": "npm run mobile:sync && node scripts/mobile/run-gradle.mjs assembleDebug",
+    "mobile:release:preflight": "node scripts/release/preflight-android-signing.mjs",
+    "mobile:build:release": "node scripts/mobile/build-release.mjs",
     "mobile-backend:start": "npm run start --prefix apps/mobile-backend",
     "mobile-backend:smoke": "node scripts/mobile/smoke-mobile-backend.mjs",
     "test:server": "npm run test --prefix apps/server",
     "test:api": "node --disable-warning=ExperimentalWarning scripts/smoke-api.mjs",
     "test:e2e": "npm run test:e2e --prefix apps/web",
-    "lint": "npm run lint --prefix packages/shared && npm run lint --prefix apps/server && npm run lint --prefix apps/web",
+    "lint": "npm run version:check && npm run lint --prefix packages/shared && npm run lint --prefix apps/server && npm run lint --prefix apps/web",
+    "release:checksums": "node scripts/release/generate-checksums.mjs",
+    "release:verify:windows": "node scripts/release/verify-artifacts.mjs --platform=windows",
+    "release:verify:android": "node scripts/release/verify-artifacts.mjs --platform=android",
+    "release:check": "node scripts/release/run-release-check.mjs",
     "format": "prettier --write .",
     "db:generate": "npm run db:generate --prefix apps/server",
     "db:init": "node scripts/dev/init-dev-db.mjs",
@@ -57,59 +69,13 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.4"
   },
-  "build": {
-    "appId": "local.star-companion.app",
-    "productName": "Star Companion",
-    "artifactName": "Star Companion.${ext}",
-    "directories": {
-      "output": "dist/desktop"
-    },
-    "files": [
-      "apps/desktop/**/*"
-    ],
-    "extraResources": [
-      {
-        "from": "dist/desktop-resources/web",
-        "to": "web"
-      },
-      {
-        "from": "dist/desktop-resources/server/dist",
-        "to": "server/dist"
-      },
-      {
-        "from": "dist/desktop-resources/server/prisma",
-        "to": "server/prisma"
-      },
-      {
-        "from": "dist/desktop-resources/server/package.json",
-        "to": "server/package.json"
-      },
-      {
-        "from": "dist/desktop-resources/server/package-lock.json",
-        "to": "server/package-lock.json"
-      },
-      {
-        "from": "dist/desktop-resources/server/node_modules",
-        "to": "server/node_modules",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
-    "win": {
-      "icon": "apps/desktop/assets/app-icon.ico",
-      "signAndEditExecutable": false,
-      "target": [
-        "nsis"
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true
-    }
-  },
   "dependencies": {
-    "@capacitor/share": "^8.0.1"
+    "@capacitor/share": "^8.0.1",
+    "electron-updater": "^6.6.2"
+  },
+  "overrides": {
+    "electron-updater": {
+      "js-yaml": "5.2.3"
+    }
   }
 }

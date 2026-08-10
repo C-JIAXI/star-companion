@@ -39,6 +39,7 @@ const readRawBody = (request) =>
 const createFakeModelServer = () => {
   let chatCompletionRequests = 0;
   let lastChatCompletionBody = null;
+  const chatCompletionBodies = [];
 
   const server = createServer(async (request, response) => {
     if (request.method === "GET" && request.url === "/models") {
@@ -77,7 +78,7 @@ const createFakeModelServer = () => {
           model: body.model,
           data: inputs.map((input, index) => ({
             index,
-            embedding: /commitment|vowed|harbor|festival/i.test(String(input))
+            embedding: /commitment|vowed|harbor|festival/i.test(String(input).split("\n")[0] ?? "")
               ? [0, 1]
               : [1, 0]
           }))
@@ -95,6 +96,7 @@ const createFakeModelServer = () => {
     const body = await readJsonBody(request);
     chatCompletionRequests += 1;
     lastChatCompletionBody = body;
+    chatCompletionBodies.push(body);
     const joinedMessages = (body.messages ?? []).map((message) => message.content ?? "").join("\n\n");
 
     if (body.stream) {
@@ -111,7 +113,7 @@ const createFakeModelServer = () => {
 
     let content = "Mobile assistant reply.";
     if (joinedMessages.includes("read-only context assistant")) {
-      content = "Mobile agent draft: ask about the blue door hinge.";
+      content = "Mobile agent draft: [DRAFT]Ask about the blue door hinge.[/DRAFT]";
     } else if (joinedMessages.includes("Generate a concise title for this local-first")) {
       content = '"Mobile Blue Door"';
     } else if (joinedMessages.includes("concise local user profile memory")) {
@@ -158,7 +160,8 @@ const createFakeModelServer = () => {
       resolve({
         close: () => server.close(),
         getChatCompletionRequests: () => chatCompletionRequests,
-        getLastChatCompletionBody: () => lastChatCompletionBody
+        getLastChatCompletionBody: () => lastChatCompletionBody,
+        getChatCompletionBodies: () => [...chatCompletionBodies]
       });
     });
   });
@@ -298,6 +301,12 @@ try {
   const health = await waitForHealth();
   assert.equal(health.ok, true);
   assert.equal(health.database, "sqlite");
+  const appInfo = await request("/api/app/info");
+  assert.match(appInfo.appVersion, /^\d+\.\d+\.\d+/);
+  assert.equal(appInfo.platform, "android");
+  assert.equal(appInfo.schemaVersion, "001_records");
+  assert.equal(appInfo.migration.status, "ready");
+  assert.equal("apiKey" in appInfo, false);
 
   const modelSettings = {
     activeProvider: "openai-compatible",
@@ -316,7 +325,7 @@ try {
         apiBaseUrl: `http://127.0.0.1:${modelPort}`,
         key: "mobile-provider-key",
         models: [
-          { id: "mobile-chat", label: "Chat", model: "fake-mobile-model", capabilities: ["text_generation"] },
+          { id: "mobile-chat", label: "Chat", model: "fake-mobile-model", contextWindow: 128000, capabilities: ["text_generation"] },
           { id: "mobile-embedding", label: "Embedding", model: "fake-mobile-embedding", capabilities: ["text_embedding"] },
           { id: "mobile-stt", label: "Transcription", model: "fake-mobile-transcribe", capabilities: ["audio_transcription"] },
           { id: "mobile-tts", label: "Speech", model: "fake-mobile-tts", capabilities: ["text_to_speech"] },
@@ -343,7 +352,9 @@ try {
       {
         id: "mobile-persona",
         name: "Mobile Persona",
+        avatar: "data:image/png;base64,YQ==",
         config: {
+          displayName: "Mobile User",
           prefix: "Mobile user boundary.",
           prompt: "Mobile user likes stable smoke tests.",
           suffix: "Keep it short."
@@ -364,6 +375,9 @@ try {
   assert.equal(savedModelSettings.ttsAutoPlay, true);
   assert.equal(savedModelSettings.hasApiKey, true);
   assert.equal(savedModelSettings.userPersonaPresets[0]?.name, "Mobile Persona");
+  assert.equal(savedModelSettings.userPersonaPresets[0]?.avatar, "data:image/png;base64,YQ==");
+  assert.equal(savedModelSettings.userPersonaPresets[0]?.config.displayName, "Mobile User");
+  assert.equal(savedModelSettings.providers[0]?.models[0]?.contextWindow, 128000);
   assert.equal("key" in savedModelSettings.providers[0], false);
   assert.equal(savedModelSettings.providers[0]?.hasKey, true);
 
@@ -398,6 +412,7 @@ try {
   assert.equal(switchedModelSettings.ttsAutoPlay, true);
   assert.equal(switchedModelSettings.autoSummarizeUser, true);
   assert.equal(switchedModelSettings.userPersonaPresets[0]?.config.prompt, "Mobile user likes stable smoke tests.");
+  assert.equal(switchedModelSettings.providers[0]?.models[0]?.contextWindow, 128000);
   assert.deepEqual(switchedModelSettings.moduleModelPreferences.image_generation, {
     providerId: "mobile-provider",
     modelId: "mobile-image"
@@ -542,19 +557,48 @@ try {
   assert.equal(publicCard.character.prompt, "Reply as a local mobile character.");
   assert.equal("isFavorite" in publicCard.character, false);
 
+  const mobilePersonaEnvelope = JSON.stringify({
+    type: "user-custom-config",
+    version: 2,
+    displayName: "Mobile User",
+    prefix: "Mobile user boundary.",
+    prompt: "Mobile user likes stable smoke tests.",
+    suffix: "Keep it short."
+  });
   const chat = await request("/api/chats", {
     method: "POST",
     body: {
       title: "Mobile smoke chat",
       characterId: character.id,
+      folder: "Mobile smoke folder",
       memoryTurns: 12,
       autoMemoryEnabled: true,
       backgroundUrl: "",
-      userPersona: "",
+      userPersona: mobilePersonaEnvelope,
+      userAvatar: "data:image/png;base64,YQ==",
       userProfileSummary: ""
     }
   });
   assert.equal(chat.characterId, character.id);
+  assert.equal(chat.folder, "Mobile smoke folder");
+  assert.equal(chat.userAvatar, "data:image/png;base64,YQ==");
+
+  const movedToFolder = await request("/api/chats/batch-folder", {
+    method: "POST",
+    body: { ids: [chat.id], folder: "Mobile organized folder" }
+  });
+  assert.equal(movedToFolder.updated, 1);
+  assert.equal((await request(`/api/chats/${chat.id}`)).folder, "Mobile organized folder");
+  const renamedFolder = await request("/api/chats/rename-folder", {
+    method: "POST",
+    body: { from: "Mobile organized folder", to: "Mobile renamed folder" }
+  });
+  assert.equal(renamedFolder.updated, 1);
+  assert.equal((await request(`/api/chats/${chat.id}`)).folder, "Mobile renamed folder");
+  assert.equal(
+    (await request(`/api/chats/${chat.id}/auto-title`, { method: "POST" })).data,
+    null
+  );
 
   const pinnedChat = await request(`/api/chats/${chat.id}`, {
     method: "PUT",
@@ -577,6 +621,7 @@ try {
   const chatsAfterPin = await request("/api/chats");
   assert.equal(chatsAfterPin[0]?.id, chat.id);
   assert.equal(chatsAfterPin[0]?.isPinned, true);
+  assert.equal("userAvatar" in chatsAfterPin[0], false);
 
   const openingChat = await request("/api/chats", {
     method: "POST",
@@ -591,6 +636,12 @@ try {
   assert.equal(openingMessage.role, "assistant");
   assert.equal(openingMessage.characterId, character.id);
   assert.match(openingMessage.content, /Mobile assistant reply/);
+  assert.ok(openingMessage.promptBreakdown?.promptTokens > 0);
+  assert.ok(
+    openingMessage.promptBreakdown?.sections.some(
+      (section) => section.id === "generation_instruction"
+    )
+  );
   const openingChatAfterMessage = await request(`/api/chats/${openingChat.id}`);
   assert.equal(openingChatAfterMessage.messages.length, 1);
   const secondOpening = await requestFailure(`/api/chats/${openingChat.id}/opening-message`, {
@@ -632,7 +683,21 @@ try {
     body: { ids: batchTrashIds }
   })).deleted, 2);
 
+  const generationBodyStart = fakeModelServer.getChatCompletionBodies().length;
   const generationEvents = await runGeneration(chat.id, "Please remember that I like blue doors.");
+  const generationBody = fakeModelServer
+    .getChatCompletionBodies()
+    .slice(generationBodyStart)
+    .find((body) => body.stream === true);
+  assert.ok(generationBody);
+  const generationPrompt = generationBody.messages
+    .map((message) => message.content ?? "")
+    .join("\n\n");
+  assert.match(generationPrompt, /Mobile user boundary\./);
+  assert.match(generationPrompt, /Mobile user likes stable smoke tests\./);
+  assert.match(generationPrompt, /Keep it short\./);
+  assert.doesNotMatch(generationPrompt, /Mobile User/);
+  assert.doesNotMatch(generationPrompt, /user-custom-config/);
   const startedCharacterEvent = generationEvents.find((event) => event.type === "generation_character_started");
   assert.ok(startedCharacterEvent);
   assert.equal(startedCharacterEvent.characterId, character.id);
@@ -648,6 +713,12 @@ try {
   assert.equal(chatAfterGeneration.messages.length, 2);
   assert.equal(chatAfterGeneration.memories.length, 1);
   assert.match(chatAfterGeneration.memories[0].content, /blue door/i);
+  assert.ok(chatAfterGeneration.messages[1]?.promptBreakdown?.promptTokens > 0);
+  assert.ok(
+    chatAfterGeneration.messages[1]?.promptBreakdown?.sections.some(
+      (section) => section.id === "user_persona"
+    )
+  );
 
   const excludedUserMessage = await request(`/api/messages/${chatAfterGeneration.messages[0].id}`, {
     method: "PUT",
@@ -674,9 +745,40 @@ try {
   assert.equal(continuedMessage?.id, lastAssistantMessage.id);
   assert.equal(continuedMessage?.content, "Mobile assistant reply. Mobile assistant reply.");
   assert.equal(continuedMessage?.variants.length, 1);
+  assert.ok(continuedMessage?.promptBreakdown?.promptTokens > 0);
+  assert.ok(
+    continuedMessage?.promptBreakdown?.sections.some(
+      (section) => section.id === "generation_instruction"
+    )
+  );
   const chatAfterContinuation = await request(`/api/chats/${chat.id}`);
   assert.equal(chatAfterContinuation.messages.length, 2);
   assert.equal(chatAfterContinuation.messages[1]?.content, "Mobile assistant reply. Mobile assistant reply.");
+
+  const regenerationBodyStart = fakeModelServer.getChatCompletionBodies().length;
+  const regenerationEvents = await runSocketRequest({
+    type: "regenerate",
+    messageId: lastAssistantMessage.id,
+    guidance: "Make the replacement warmer."
+  });
+  const regeneratedMessage = regenerationEvents.find(
+    (event) => event.type === "assistant_message"
+  )?.message;
+  assert.equal(regeneratedMessage?.id, lastAssistantMessage.id);
+  assert.ok(regeneratedMessage?.variants.length >= 2);
+  assert.ok(
+    regeneratedMessage?.promptBreakdown?.sections.some(
+      (section) => section.id === "generation_instruction"
+    )
+  );
+  const regenerationBody = fakeModelServer
+    .getChatCompletionBodies()
+    .slice(regenerationBodyStart)
+    .find((body) => body.stream === true);
+  const regenerationPrompt = regenerationBody?.messages
+    .map((message) => message.content ?? "")
+    .join("\n\n") ?? "";
+  assert.match(regenerationPrompt, /revisionGuidance.*Make the replacement warmer\./s);
 
   const messageSearch = await request(
     `/api/chats/${chat.id}/message-search?${new URLSearchParams({
@@ -693,6 +795,12 @@ try {
   assert.ok(memoryRefresh.length >= 1);
   assert.equal(memoryRefresh[0].embeddingModel, "openai-compatible:fake-mobile-embedding");
   assert.ok(memoryRefresh[0].embeddingUpdatedAt);
+
+  const reindexedMemories = await request(`/api/chats/${chat.id}/memories/reindex`, {
+    method: "POST"
+  });
+  assert.ok(reindexedMemories.length >= 1);
+  assert.equal(reindexedMemories[0]?.embeddingStatus, "ready");
 
   const semanticMemory = await request(`/api/chats/${chat.id}/memories`, {
     method: "POST",
@@ -734,6 +842,8 @@ try {
   });
   assert.equal(agentDraft.mode, "reply_drafts");
   assert.match(agentDraft.content, /Mobile agent draft/);
+  assert.equal(agentDraft.actions[0]?.kind, "reply_draft");
+  assert.equal(agentDraft.actions[0]?.content, "Ask about the blue door hinge.");
   assert.equal(Array.isArray(agentDraft.matchedLoreEntries), true);
   assert.equal(Array.isArray(agentDraft.matchedMemoryEntries), true);
   const chatAfterAgentDraft = await request(`/api/chats/${chat.id}`);
@@ -745,6 +855,11 @@ try {
   assert.equal(chatArchive.messages.length, 6);
   assert.equal(chatArchive.messages[0]?.contextIncluded, false);
   assert.equal(chatArchive.messages[0]?.isBookmarked, true);
+  assert.equal(chatArchive.chat.userAvatar, "data:image/png;base64,YQ==");
+  assert.ok(
+    chatArchive.messages.find((message) => message.role === "assistant")?.promptBreakdown
+      ?.promptTokens > 0
+  );
   const importedArchive = await request("/api/chats/import-archive", {
     method: "POST",
     body: { archive: chatArchive, title: "Mobile Imported Archive" }
@@ -756,6 +871,12 @@ try {
   assert.equal(importedArchive.messages[0]?.isBookmarked, true);
   assert.ok(importedArchive.memories.length >= 1);
   assert.equal(importedArchive.isArchived, false);
+  assert.equal(importedArchive.folder, "Mobile renamed folder");
+  assert.equal(importedArchive.userAvatar, "data:image/png;base64,YQ==");
+  assert.ok(
+    importedArchive.messages.find((message) => message.role === "assistant")?.promptBreakdown
+      ?.promptTokens > 0
+  );
   await permanentlyDeleteChat(importedArchive.id);
 
   const branchedChat = await request(`/api/chats/${chat.id}/branches`, {
@@ -775,6 +896,9 @@ try {
   assert.equal(branchedChat.messages[0]?.contextIncluded, false);
   assert.equal(branchedChat.messages[0]?.isBookmarked, true);
   assert.equal(branchedChat.memories.length, 0);
+  assert.equal(branchedChat.folder, "Mobile renamed folder");
+  assert.equal(branchedChat.userAvatar, "data:image/png;base64,YQ==");
+  assert.ok(branchedChat.messages[1]?.promptBreakdown?.promptTokens > 0);
   await permanentlyDeleteChat(branchedChat.id);
 
   const checkpointChat = await request(`/api/chats/${chat.id}/branches`, {
@@ -789,6 +913,7 @@ try {
   assert.equal(checkpointChat.parentChatId, chat.id);
   assert.equal(checkpointChat.messages.length, 2);
   assert.equal(checkpointChat.memories.length, 0);
+  assert.equal(checkpointChat.userAvatar, "data:image/png;base64,YQ==");
   await permanentlyDeleteChat(checkpointChat.id);
 
   const lineageParent = await request("/api/chats", {
@@ -841,11 +966,63 @@ try {
   assert.equal(backup.chats.length, 1);
   assert.equal(backup.chats[0]?.isPinned, true);
   assert.equal(backup.chats[0]?.isArchived, true);
+  assert.equal(backup.chats[0]?.folder, "Mobile renamed folder");
+  assert.equal(backup.chats[0]?.userAvatar, "data:image/png;base64,YQ==");
   assert.equal(backup.messages.length, 6);
+  assert.ok(
+    backup.messages.find((message) => message.role === "assistant")?.promptBreakdown
+      ?.promptTokens > 0
+  );
   assert.equal("key" in backup.settings.providers[0], false);
   assert.equal(backup.settings.providers[0]?.hasKey, true);
   assert.ok(backup.memories.length >= 1);
   assert.equal("embedding" in backup.memories[0], false);
+
+  const recoveryBeforePreview = await request("/api/backups/recovery-points");
+  const replacePreview = await request("/api/backups/preview", {
+    method: "POST",
+    body: { ...backup, mode: "replace" }
+  });
+  assert.equal(replacePreview.canExecute, true);
+  assert.equal((await request("/api/backups/recovery-points")).length, recoveryBeforePreview.length);
+  const replaceSummary = await request("/api/backups/import", {
+    method: "POST",
+    body: {
+      ...backup,
+      mode: "replace",
+      previewId: replacePreview.previewId,
+      conflictResolutions: []
+    }
+  });
+  assert.ok(replaceSummary.recoveryPointId);
+  assert.equal(replaceSummary.characters, 1);
+
+  const conflictBackup = {
+    ...backup,
+    characters: backup.characters.map((entry) => ({ ...entry, name: "Mobile Incoming Conflict" }))
+  };
+  const conflictPreview = await request("/api/backups/preview", {
+    method: "POST",
+    body: { ...conflictBackup, mode: "merge" }
+  });
+  assert.equal(conflictPreview.conflicts.length, 1);
+  const conflictSummary = await request("/api/backups/import", {
+    method: "POST",
+    body: {
+      ...conflictBackup,
+      mode: "merge",
+      previewId: conflictPreview.previewId,
+      conflictResolutions: [{ key: conflictPreview.conflicts[0].key, action: "use_incoming" }]
+    }
+  });
+  assert.ok(conflictSummary.recoveryPointId);
+  assert.equal((await request(`/api/characters/${character.id}`)).name, "Mobile Incoming Conflict");
+  const mobileRestore = await request(
+    `/api/backups/recovery-points/${conflictSummary.recoveryPointId}/restore`,
+    { method: "POST" }
+  );
+  assert.ok(mobileRestore.safetyRecoveryPointId);
+  assert.equal((await request(`/api/characters/${character.id}`)).name, character.name);
 
   const exportedText = await request("/api/exports/text", {
     method: "POST",
@@ -874,31 +1051,48 @@ try {
   assert.equal(Array.isArray(syncInfo.lanUrls), true);
   assert.equal(syncInfo.listeningHost, "0.0.0.0");
 
+  const pulledSyncPreview = await request("/api/sync/pull", {
+    method: "POST",
+    body: {
+      peerBaseUrl,
+      mode: "merge",
+      phase: "preview"
+    }
+  });
+  assert.equal(pulledSyncPreview.direction, "pull");
+  assert.equal(pulledSyncPreview.summary, null);
   const pulledSyncSummary = await request("/api/sync/pull", {
     method: "POST",
     body: {
       peerBaseUrl,
-      mode: "merge"
+      mode: "merge",
+      phase: "execute",
+      previewId: pulledSyncPreview.preview.previewId,
+      conflictResolutions: []
     }
   });
-  assert.equal(pulledSyncSummary.direction, "pull");
-  assert.equal(pulledSyncSummary.summary.characters, 1);
-  assert.equal(pulledSyncSummary.summary.chats, 1);
-  assert.equal(pulledSyncSummary.summary.messages, 6);
-  assert.ok(pulledSyncSummary.summary.memories >= 1);
+  assert.ok(pulledSyncSummary.summary.skipped > 0);
 
+  const pushedSyncPreview = await request("/api/sync/push", {
+    method: "POST",
+    body: {
+      peerBaseUrl,
+      mode: "merge",
+      phase: "preview"
+    }
+  });
   const pushedSyncSummary = await request("/api/sync/push", {
     method: "POST",
     body: {
       peerBaseUrl,
-      mode: "merge"
+      mode: "merge",
+      phase: "execute",
+      previewId: pushedSyncPreview.preview.previewId,
+      conflictResolutions: []
     }
   });
   assert.equal(pushedSyncSummary.direction, "push");
-  assert.equal(pushedSyncSummary.summary.characters, 1);
-  assert.equal(pushedSyncSummary.summary.chats, 1);
-  assert.equal(pushedSyncSummary.summary.messages, 6);
-  assert.ok(pushedSyncSummary.summary.memories >= 1);
+  assert.ok(pushedSyncSummary.summary.skipped > 0);
 
   console.log("Mobile backend smoke passed");
 } finally {
