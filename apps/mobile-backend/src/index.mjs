@@ -2340,14 +2340,15 @@ app.post(
     }
     const controller = new AbortController();
     request.once("aborted", () => controller.abort());
+    const agentSettings = resolveModuleSettings(store.getSettings(), "agent");
     const result = await executeMobileReliableText({
       module: "agent",
       operation: `character_${body.task}`,
       requestId: body.requestId,
       messages: buildCharacterDraftMessages(body),
       signal: controller.signal,
-      maxTokens: Math.min(store.getSettings().maxTokens, 1200),
-      temperature: Math.min(store.getSettings().temperature, 0.5)
+      maxTokens: Math.min(agentSettings.maxTokens, 1200),
+      temperature: Math.min(agentSettings.temperature, 0.5)
     });
     const meta = getCharacterDraftMeta(body.task);
     response.json({ ok: true, data: { requestId: body.requestId, task: body.task, title: meta.title, notice: "AI-generated draft. Review it for accuracy before applying or saving.", sentFieldCategories: meta.sentFieldCategories, items: parseCharacterDraftItems(result.content), createdAt: new Date().toISOString() } });

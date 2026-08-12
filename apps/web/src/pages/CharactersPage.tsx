@@ -254,7 +254,7 @@ const toForm = (character: CharacterDTO): CharacterForm => ({
   prompt: character.prompt,
   suffix: character.suffix,
   htmlCss: character.htmlCss,
-  openingHtml: character.openingHtml,
+  openingHtml: character.visibility === "private" && !character.canViewPrompt ? "" : character.openingHtml,
   loreEntries: (character.loreEntries ?? []).map((entry) => ({
     id: entry.id,
     keys: entry.keys,
@@ -422,6 +422,11 @@ export function CharactersPage({
   const [pendingEditorExit, setPendingEditorExit] = useState<"new" | "list" | null>(null);
   const characterRequestRef = useRef(0);
   const unlockedPasswordRef = useRef<Record<string, string>>({});
+  useEffect(() => () => {
+    draftAbortRef.current?.abort();
+    draftAbortRef.current = null;
+    unlockedPasswordRef.current = {};
+  }, []);
   const editorCoverSrc = usePlaceholderSrc(form.avatar, selectedId ?? undefined);
   const usingUploadedAvatar = form.avatar.startsWith("data:image/");
   const expandedTextFieldTitle =
@@ -890,8 +895,21 @@ export function CharactersPage({
       setWizardStep(item.field === "name" || item.field === "avatar" || item.field === "description" ? 0 : item.field === "openingHtml" || item.field === "quickReplies" ? 2 : item.field === "prompt" ? 1 : 3);
     }
     window.setTimeout(() => {
-      const root = document.querySelector<HTMLElement>(`[data-character-field="${item.field}"]`);
-      const target = root?.matches("input,textarea,button,[contenteditable=true]") ? root : root?.querySelector<HTMLElement>("input,textarea,button,[contenteditable=true]");
+      const indexedSelector = item.itemIndex === undefined
+        ? null
+        : `[data-character-field="${item.field}"][data-character-item-index="${item.itemIndex}"]`;
+      const root = (indexedSelector ? document.querySelector<HTMLElement>(indexedSelector) : null)
+        ?? document.querySelector<HTMLElement>(`[data-character-field="${item.field}"]`);
+      const issueTarget = item.code === "lore_content_empty" ? "lore-content"
+        : item.code === "lore_keywords_missing" || item.code === "lore_keywords_overlap" ? "lore-keys"
+          : item.code === "lore_trigger_invalid" ? "lore-trigger"
+            : item.code === "quick_reply_content_empty" ? "quick-reply-content"
+              : item.code === "quick_reply_label_empty" || item.code === "quick_reply_label_duplicate" ? "quick-reply-label"
+                : null;
+      const exactTarget = issueTarget ? root?.querySelector<HTMLElement>(`[data-character-focus="${issueTarget}"]`) : null;
+      const target = exactTarget?.matches("input,textarea,select,button,[contenteditable=true]") ? exactTarget
+        : exactTarget?.querySelector<HTMLElement>("input,textarea,select,button,[contenteditable=true]")
+          ?? (root?.matches("input,textarea,select,button,[contenteditable=true]") ? root : root?.querySelector<HTMLElement>("input,textarea,select,button,[contenteditable=true]"));
       root?.scrollIntoView({ behavior: "smooth", block: "center" });
       target?.focus();
     }, 50);
@@ -906,7 +924,7 @@ export function CharactersPage({
     setError(null);
     try {
       const input = toInput(form);
-      setDraftResult(await api.characters.draft({
+      const result = await api.characters.draft({
         requestId: `character_agent_${crypto.randomUUID()}`,
         task: draftTask,
         brief: draftBrief.trim() || undefined,
@@ -921,13 +939,24 @@ export function CharactersPage({
           loreEntries: input.loreEntries ?? [],
           quickReplies: input.quickReplies ?? []
         }
-      }, controller.signal));
+      }, controller.signal);
+      if (draftAbortRef.current === controller && !controller.signal.aborted) setDraftResult(result);
     } catch (caught) {
-      if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "AI draft failed");
+      if (draftAbortRef.current === controller && !controller.signal.aborted) setError(caught instanceof Error ? caught.message : "AI draft failed");
     } finally {
-      if (draftAbortRef.current === controller) draftAbortRef.current = null;
-      setDraftLoading(false);
+      if (draftAbortRef.current === controller) {
+        draftAbortRef.current = null;
+        setDraftLoading(false);
+      }
     }
+  };
+
+  const cancelCharacterDraft = () => {
+    const controller = draftAbortRef.current;
+    if (!controller) return;
+    draftAbortRef.current = null;
+    controller.abort();
+    setDraftLoading(false);
   };
 
   const applyDraftItems = (ids: string[]) => {
@@ -1568,6 +1597,7 @@ export function CharactersPage({
                   <button
                     key={section.id}
                     type="button"
+                    data-testid={`character-editor-section-${section.id}`}
                     className={`min-h-[44px] flex-1 whitespace-nowrap border-b-2 px-2 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
                       activeEditorSection === section.id
                         ? "border-ember-400 text-ember-100"
@@ -1596,10 +1626,12 @@ export function CharactersPage({
                         <HelpLabel
                           label={t("characters.prefix")}
                           description={t("help.characterPrefix")}
+                          descriptionId="character-prefix-help"
                         />
                       }
                     >
                       <MarkdownEditor
+                        ariaDescribedBy="character-prefix-help"
                         value={form.prefix}
                         onChange={(nextValue) => setForm({ ...form, prefix: nextValue })}
                         height={180}
@@ -1611,10 +1643,12 @@ export function CharactersPage({
                         <HelpLabel
                           label={t("characters.prompt")}
                           description={t("help.characterPrompt")}
+                          descriptionId="character-prompt-help"
                         />
                       }
                     >
                       <MarkdownEditor
+                        ariaDescribedBy="character-prompt-help"
                         value={form.prompt}
                         onChange={(nextValue) => setForm({ ...form, prompt: nextValue })}
                         height={320}
@@ -1626,10 +1660,12 @@ export function CharactersPage({
                         <HelpLabel
                           label={t("characters.suffix")}
                           description={t("help.characterSuffix")}
+                          descriptionId="character-suffix-help"
                         />
                       }
                     >
                       <MarkdownEditor
+                        ariaDescribedBy="character-suffix-help"
                         value={form.suffix}
                         onChange={(nextValue) => setForm({ ...form, suffix: nextValue })}
                         height={220}
@@ -1705,6 +1741,7 @@ export function CharactersPage({
                           <HelpLabel
                             label={t("characters.htmlCss")}
                             description={t("help.characterHtmlCss")}
+                            descriptionId="character-html-css-help"
                           />
                           <Button
                             aria-label={`${t("characters.expandEditor")} ${t("characters.htmlCss")}`}
@@ -1721,6 +1758,7 @@ export function CharactersPage({
                       }
                     >
                       <TextArea
+                        aria-describedby="character-html-css-help"
                         aria-label={t("characters.htmlCss")}
                         value={form.htmlCss}
                         onChange={(event) => setForm({ ...form, htmlCss: event.target.value })}
@@ -1802,6 +1840,7 @@ export function CharactersPage({
                           <HelpLabel
                             label={t("characters.openingHtml")}
                             description={t("help.characterOpeningHtml")}
+                            descriptionId="character-opening-html-help"
                           />
                           <Button
                             aria-label={`${t("characters.expandEditor")} ${t("characters.openingHtml")}`}
@@ -1819,6 +1858,7 @@ export function CharactersPage({
                     >
                       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                         <TextArea
+                          aria-describedby="character-opening-html-help"
                           aria-label={t("characters.openingHtml")}
                           value={form.openingHtml}
                           onChange={(event) =>
@@ -1877,6 +1917,8 @@ export function CharactersPage({
                                 ? "border-white/10 bg-ink-950/40"
                                 : "border-white/5 bg-ink-950/20 opacity-60"
                             }`}
+                            data-character-field="loreEntries"
+                            data-character-item-index={index}
                             key={entry._localId}
                           >
                             <div
@@ -1949,7 +1991,7 @@ export function CharactersPage({
                               <div className="px-4 pb-4 pt-3">
                                 <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_140px]">
                                   <div className="space-y-3">
-                                    <Field label={t("characters.loreEntryKeys")}>
+                                    <div data-character-focus="lore-keys"><Field label={t("characters.loreEntryKeys")}>
                                       <TextInput
                                         placeholder={t("characters.loreEntryKeysPlaceholder")}
                                         value={entry.keys.join(", ")}
@@ -1963,8 +2005,8 @@ export function CharactersPage({
                                           setForm({ ...form, loreEntries: next });
                                         }}
                                       />
-                                    </Field>
-                                    <Field container="div" label={t("characters.loreEntryContent")}>
+                                    </Field></div>
+                                    <div data-character-focus="lore-content"><Field container="div" label={t("characters.loreEntryContent")}>
                                       <MarkdownEditor
                                         height={180}
                                         value={entry.content}
@@ -1974,7 +2016,7 @@ export function CharactersPage({
                                           setForm({ ...form, loreEntries: next });
                                         }}
                                       />
-                                    </Field>
+                                    </Field></div>
                                   </div>
                                   <div className="space-y-3">
                                     <Field
@@ -1982,10 +2024,12 @@ export function CharactersPage({
                                         <HelpLabel
                                           label={t("common.priority")}
                                           description={t("characters.loreEntryPriorityHelp")}
+                                          descriptionId={`character-lore-priority-help-${index}`}
                                         />
                                       }
                                     >
                                       <TextInput
+                                        aria-describedby={`character-lore-priority-help-${index}`}
                                         type="number"
                                         value={String(entry.priority)}
                                         onChange={(event) => {
@@ -1998,7 +2042,7 @@ export function CharactersPage({
                                         }}
                                       />
                                     </Field>
-                                    <Field label={t("characters.loreEntryTriggerMode")}>
+                                    <div data-character-focus="lore-trigger"><Field label={t("characters.loreEntryTriggerMode")}>
                                       <select
                                         className="w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-2 text-sm text-slate-200 focus:border-ember-500/50 focus:outline-none focus:ring-1 focus:ring-ember-500/30"
                                         value={entry.triggerMode}
@@ -2024,7 +2068,7 @@ export function CharactersPage({
                                           {t("characters.loreEntryTriggerAssistant")}
                                         </option>
                                       </select>
-                                    </Field>
+                                    </Field></div>
                                     <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-400">
                                       <input
                                         checked={entry.alwaysActive}
@@ -2109,6 +2153,8 @@ export function CharactersPage({
                       {form.quickReplies.map((qr, index) => (
                         <div
                           className="rounded-lg border border-white/10 bg-ink-950/40 transition-colors"
+                          data-character-field="quickReplies"
+                          data-character-item-index={index}
                           key={qr._localId}
                         >
                           <div
@@ -2152,7 +2198,7 @@ export function CharactersPage({
                             }`}
                           >
                             <div className="px-4 pb-4 pt-3 space-y-3">
-                              <Field label={t("characters.quickReplyLabel")}>
+                              <div data-character-focus="quick-reply-label"><Field label={t("characters.quickReplyLabel")}>
                                 <TextInput
                                   placeholder={t("characters.quickReplyLabelPlaceholder")}
                                   value={qr.label}
@@ -2162,8 +2208,8 @@ export function CharactersPage({
                                     setForm({ ...form, quickReplies: next });
                                   }}
                                 />
-                              </Field>
-                              <Field container="div" label={t("characters.quickReplyContent")}>
+                              </Field></div>
+                              <div data-character-focus="quick-reply-content"><Field container="div" label={t("characters.quickReplyContent")}>
                                 <TextArea
                                   className="!h-[120px] min-h-[120px]"
                                   placeholder={t("characters.quickReplyContentPlaceholder")}
@@ -2174,7 +2220,7 @@ export function CharactersPage({
                                     setForm({ ...form, quickReplies: next });
                                   }}
                                 />
-                              </Field>
+                              </Field></div>
                             </div>
                           </div>
                         </div>
@@ -2222,7 +2268,7 @@ export function CharactersPage({
                   <Field label={language === "zh-CN" ? "独立任务" : "Independent task"}><select className="min-h-[44px] w-full rounded-lg border border-white/10 bg-ink-950 px-3 text-sm text-slate-200" value={draftTask} onChange={(event) => setDraftTask(event.target.value as CharacterDraftTask)}>{([ ["generate_core_prompt", "生成核心设定 / Generate core prompt"], ["refine_prompt", "收紧现有 prompt / Refine prompt"], ["consistency_questions", "一致性问题 / Consistency questions"], ["suggest_lore", "提议 lore / Suggest lore"], ["suggest_quick_replies", "提议快捷回复 / Suggest quick replies"], ["find_contradictions", "检查潜在矛盾 / Find contradictions"] ] as const).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
                   <Field label={language === "zh-CN" ? "可选要点" : "Optional points"}><TextArea value={draftBrief} onChange={(event) => setDraftBrief(event.target.value)} placeholder={language === "zh-CN" ? "只填写这次草案需要考虑的要点" : "Only the points needed for this draft"} /></Field>
                   <div className="rounded-lg border border-white/10 p-3 text-xs leading-5 text-slate-400"><strong className="text-slate-200">{language === "zh-CN" ? "将发送的字段类别：" : "Field categories sent: "}</strong>{({ generate_core_prompt: "name, description, points", refine_prompt: "prompt, points", consistency_questions: "name, prompt", suggest_lore: "prompt, existing lore keywords, points", suggest_quick_replies: "prompt, existing quick-reply labels, points", find_contradictions: "prefix, prompt, suffix, lore entries" } as Record<CharacterDraftTask, string>)[draftTask]}<br />{language === "zh-CN" ? "不会发送 API Key、其他角色、聊天正文、persona、用户画像或长期记忆。" : "API keys, other characters, chat text, persona, profile summaries, and long-term memories are never sent."}</div>
-                  <div className="flex flex-wrap gap-2"><Button disabled={draftLoading} data-testid="run-character-draft" onClick={() => void requestCharacterDraft()}><Sparkles size={15} />{draftLoading ? (language === "zh-CN" ? "生成中" : "Generating") : (language === "zh-CN" ? "生成草案" : "Generate draft")}</Button>{draftLoading ? <Button variant="ghost" onClick={() => draftAbortRef.current?.abort()}>{language === "zh-CN" ? "取消" : "Cancel"}</Button> : null}</div>
+                  <div className="flex flex-wrap gap-2"><Button disabled={draftLoading} data-testid="run-character-draft" onClick={() => void requestCharacterDraft()}><Sparkles size={15} />{draftLoading ? (language === "zh-CN" ? "生成中" : "Generating") : (language === "zh-CN" ? "生成草案" : "Generate draft")}</Button>{draftLoading ? <Button variant="ghost" onClick={cancelCharacterDraft}>{language === "zh-CN" ? "取消" : "Cancel"}</Button> : null}</div>
                   {draftResult ? <div className="space-y-3"><p className="text-xs font-medium text-amber-200">{language === "zh-CN" ? "AI 草案：可能不准确，请逐项审阅。" : "AI draft: may be inaccurate; review every item."}</p>{draftResult.items.map((item) => <article key={item.id} className="min-w-0 overflow-hidden rounded-lg border border-white/10 bg-ink-950/40 p-4"><h4 className="text-sm font-semibold text-slate-100">{item.title}</h4><div className="mt-3 grid min-w-0 gap-3 md:grid-cols-2"><div className="min-w-0"><p className="text-[11px] uppercase text-slate-500">{language === "zh-CN" ? "原内容" : "Current"}</p><pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs text-slate-400">{item.field === "prompt" ? form.prompt : item.field === "loreEntries" ? `${form.loreEntries.length} lore entries` : item.field === "quickReplies" ? `${form.quickReplies.length} quick replies` : language === "zh-CN" ? "不修改字段" : "No field change"}</pre></div><div className="min-w-0"><p className="text-[11px] uppercase text-slate-500">{language === "zh-CN" ? "建议内容" : "Suggested"}</p><pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs text-slate-200">{item.suggestion}</pre></div></div>{["prompt", "loreEntries", "quickReplies"].includes(item.field) ? <Button className="mt-3" variant="secondary" onClick={() => applyDraftItems([item.id])}>{language === "zh-CN" ? "应用此项" : "Apply item"}</Button> : null}</article>)}<div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={() => setDraftApplyAllConfirm(true)}>{language === "zh-CN" ? "全部应用" : "Apply all"}</Button><Button variant="ghost" onClick={() => setDraftResult(null)}>{language === "zh-CN" ? "放弃草案" : "Discard"}</Button></div></div> : null}
                 </section>
               ) : null}

@@ -184,7 +184,8 @@ const createPrivateCharacterCardFile = async (name: string, password: string) =>
     exportedAt: new Date().toISOString(),
     character: {
       name,
-      avatar: null
+      avatar: null,
+      openingHtml: "<section>Hidden private opening.</section>"
     },
     protectedPayload: {
       version: 1,
@@ -3927,15 +3928,23 @@ test("character creation studio preserves advanced fields, checks quality, appli
   const suffix = `${testInfo.project.name}-${Date.now()}`;
   const name = `Original Studio ${suffix}`;
   let createdId = "";
+  let createdChatId = "";
   let aiRequest: Record<string, unknown> | null = null;
 
   await page.route("**/api/characters/draft", async (route) => {
     aiRequest = route.request().postDataJSON() as Record<string, unknown>;
+    if (aiRequest.brief === "cancel-me") {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: {
       requestId: aiRequest.requestId, task: aiRequest.task, title: "Core prompt draft",
       notice: "AI-generated draft. Review it for accuracy before applying or saving.",
       sentFieldCategories: ["name", "description", "brief"], createdAt: new Date().toISOString(),
-      items: [{ id: "studio-draft-1", field: "prompt", title: "Original core draft", suggestion: "AI suggested original core prompt." }]
+      items: [
+        { id: "studio-draft-1", field: "prompt", title: "Original core draft", suggestion: "AI suggested original core prompt." },
+        { id: "studio-draft-2", field: "loreEntries", title: "Original lore draft", suggestion: "A proposed original lore entry.", loreEntry: { keys: ["draft-key"], content: "Draft lore content.", priority: 0, scope: "prompt", triggerMode: "both", alwaysActive: false, enabled: true } },
+        { id: "studio-draft-3", field: "quickReplies", title: "Original reply draft", suggestion: "A proposed quick reply.", quickReply: { label: "Draft greeting", content: "Hello from the draft." } }
+      ]
     } }) });
   });
 
@@ -3948,9 +3957,16 @@ test("character creation studio preserves advanced fields, checks quality, appli
     await page.getByLabel(/简介|Description/).fill("An original character created in the guided studio.");
     await page.getByRole("button", { name: /下一步（可跳过）|Next \(optional\)/ }).click();
     await page.locator('[data-character-field="prompt"] .roleplay-md-editor textarea').fill("Original user core prompt.");
+    await page.getByRole("button", { name: /下一步（可跳过）|Next \(optional\)/ }).click();
+    await page.getByRole("button", { name: /下一步（可跳过）|Next \(optional\)/ }).click();
+    await expect(page.getByTestId("character-review-preview")).toContainText(name);
+    await page.getByRole("button", { name: /上一步|Previous/ }).click();
     await page.getByRole("button", { name: /切换高级编辑|Switch to advanced/ }).click();
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("star-companion-character-editor-mode"))).toBe("advanced");
     const promptEditors = page.locator(".roleplay-md-editor textarea");
     await expect(promptEditors.nth(1)).toHaveValue("Original user core prompt.");
+    await expect(promptEditors.nth(1)).toHaveAttribute("aria-describedby", "character-prompt-help");
+    await expect(page.locator("#character-prompt-help")).toContainText(/提示词|prompt/i);
     await promptEditors.nth(0).fill("Advanced prefix must survive basic save.");
     await promptEditors.nth(2).fill("Advanced suffix must survive basic save.");
     await page.getByRole("button", { name: /开场 HTML|Opening HTML/i }).click();
@@ -3963,17 +3979,49 @@ test("character creation studio preserves advanced fields, checks quality, appli
     await page.getByRole("button", { name: /^检查$|^Review$/ }).click();
     await page.getByTestId("run-character-quality").click();
     await expect(page.getByTestId("character-quality-panel")).toContainText(/估算|Estimated|≈/);
+    await page.getByLabel(/简介|Description/).fill("");
+    await page.getByTestId("run-character-quality").click();
+    await page.getByTestId("character-quality-panel").locator("button", { hasText: "description_empty" }).click();
+    await expect(page.getByLabel(/简介|Description/)).toBeFocused();
+    await page.getByLabel(/简介|Description/).fill("An original character created in the guided studio.");
+    await page.getByRole("button", { name: /^检查$|^Review$/ }).click();
+    await page.getByTestId("run-character-quality").click();
     await expect(page.getByTestId("character-quality-panel")).toContainText(/未发现问题|No issues found/);
 
     await page.getByRole("button", { name: /创作助手|Draft assistant/ }).click();
+    await page.getByLabel(/可选要点|Optional points/).fill("cancel-me");
+    await page.getByTestId("run-character-draft").click();
+    await page.getByRole("button", { name: /^取消$|^Cancel$/ }).click();
+    await expect(page.getByTestId("run-character-draft")).toBeEnabled();
+    await expect(page.getByText("AI suggested original core prompt.")).toHaveCount(0);
+    await page.getByLabel(/可选要点|Optional points/).fill("");
     await page.getByTestId("run-character-draft").click();
     await expect(page.getByText("AI suggested original core prompt.")).toBeVisible();
     expect(aiRequest).not.toBeNull();
     expect(JSON.stringify(aiRequest)).not.toContain("apiKey");
     expect(JSON.stringify(aiRequest)).not.toContain("chat");
-    await page.getByRole("button", { name: /应用此项|Apply item/ }).click();
+    await page.getByText("Original core draft").locator(".." ).getByRole("button", { name: /应用此项|Apply item/ }).click();
     await page.getByRole("button", { name: /撤销上次草稿操作|Undo last draft action/ }).click();
+    await page.getByRole("button", { name: /放弃草案|Discard/ }).click();
+    await expect(page.getByText("AI suggested original core prompt.")).toHaveCount(0);
+    await page.getByTestId("run-character-draft").click();
+    await page.getByRole("button", { name: /全部应用|Apply all/ }).click();
+    const applyAllDialog = page.getByRole("dialog", { name: /全部应用 AI 草案|Apply all AI drafts/ });
+    await expect(applyAllDialog).toBeVisible();
+    await applyAllDialog.getByRole("button", { name: /应用并保留撤销|Apply and keep undo/ }).click();
+    await page.getByTestId("character-editor-section-prompt").click();
+    await expect(page.locator('[data-character-field="prompt"] .roleplay-md-editor textarea').nth(1)).toHaveValue("AI suggested original core prompt.");
+    await page.getByTestId("character-editor-section-lore").click();
+    await expect(page.getByText("draft-key", { exact: true })).toBeVisible();
+    await page.getByTestId("character-editor-section-quickReplies").click();
+    await expect(page.getByText("Draft greeting", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: /撤销上次草稿操作|Undo last draft action/ }).click();
+    await expect(page.getByText("Draft greeting", { exact: true })).toHaveCount(0);
+    await page.getByTestId("character-editor-section-prompt").click();
+    await expect(page.locator('[data-character-field="prompt"] .roleplay-md-editor textarea').nth(1)).toHaveValue("Original user core prompt.");
     await page.getByRole("button", { name: /基础模式|Basic/ }).click();
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("star-companion-character-editor-mode"))).toBe("basic");
+    await page.getByRole("button", { name: /2\. (核心设定|Core)/ }).click();
     await expect(page.locator('[data-character-field="prompt"] .roleplay-md-editor textarea')).toHaveValue("Original user core prompt.");
     await page.getByTestId("character-save").click();
     await expect(page.getByRole("status")).toContainText(/角色已保存|Character saved/);
@@ -4010,7 +4058,9 @@ test("character creation studio preserves advanced fields, checks quality, appli
     await page.getByTestId("character-start-chat").click();
     await expect(page).toHaveURL(/\/$/);
     await expect.poll(() => page.evaluate(() => localStorage.getItem("star-companion:selected-chat"))).not.toBeNull();
+    createdChatId = await page.evaluate(() => localStorage.getItem("star-companion:selected-chat") ?? "");
   } finally {
+    if (createdChatId) await permanentlyDeleteChatViaApi(request, createdChatId).catch(() => {});
     if (createdId) await request.delete(`/api/characters/${createdId}`);
   }
 });
@@ -5745,6 +5795,7 @@ test("private character imports keep export enabled before unlock and reveal pro
     ).toBeVisible();
     await expect(page.locator(".roleplay-md-editor textarea")).toHaveCount(0);
     await expect(page.getByText("Hidden private prompt.")).toHaveCount(0);
+    await expect(page.getByText("Hidden private opening.")).toHaveCount(0);
 
     await page.getByRole("button", { name: /输入密码查看|Unlock with Password/ }).click();
     await page.getByLabel(/密码|Password/).fill(password);
@@ -5759,6 +5810,10 @@ test("private character imports keep export enabled before unlock and reveal pro
     await expect(promptEditors.nth(1)).toHaveValue("Hidden private prompt.");
     await expect(promptEditors.nth(2)).toHaveValue("Hidden private suffix.");
     await expect(page.getByText("Hidden private prompt.").first()).toBeVisible();
+    await page.getByTestId("character-editor-section-html").click();
+    await expect(page.locator('[data-character-field="htmlCss"] textarea').first()).toHaveValue(".private-card { color: #abc; }");
+    await page.getByTestId("character-editor-section-opening").click();
+    await expect(page.locator('[data-character-field="openingHtml"] textarea').first()).toHaveValue("<section>Hidden private opening.</section>");
   } finally {
     if (createdId) {
       await request.delete(`/api/characters/${createdId}`);

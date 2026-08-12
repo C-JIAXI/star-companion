@@ -498,7 +498,17 @@ try {
   assert.equal(importedPrivateCharacter.id, character.id);
   assert.equal(importedPrivateCharacter.visibility, "private");
   assert.equal(importedPrivateCharacter.canViewPrompt, false);
+  assert.equal(importedPrivateCharacter.htmlCss, "");
   assert.equal(importedPrivateCharacter.prompt, "");
+
+  const metadataUpdatedPrivateCharacter = await request(`/api/characters/${character.id}`, {
+    method: "PUT",
+    body: { name: "Mobile Smoke Character Metadata", avatar: "https://example.test/mobile-private.png", tags: ["mobile", "private-metadata"] }
+  });
+  assert.equal(metadataUpdatedPrivateCharacter.canViewPrompt, false);
+  assert.equal(metadataUpdatedPrivateCharacter.name, "Mobile Smoke Character Metadata");
+  assert.equal(metadataUpdatedPrivateCharacter.avatar, "https://example.test/mobile-private.png");
+  assert.deepEqual(metadataUpdatedPrivateCharacter.tags, ["mobile", "private-metadata"]);
 
   const duplicatedPrivateCharacter = await request(`/api/characters/${character.id}/duplicate`, {
     method: "POST",
@@ -569,6 +579,7 @@ try {
   assert.equal(unlockedPrivateCharacter.visibility, "private");
   assert.equal(unlockedPrivateCharacter.canViewPrompt, true);
   assert.equal(unlockedPrivateCharacter.prompt, "Reply as a local mobile character.");
+  assert.equal(unlockedPrivateCharacter.name, "Mobile Smoke Character Metadata");
 
   const characterDraftCount = fakeModelServer.getChatCompletionRequests();
   const characterDraft = await request("/api/characters/draft", {
@@ -1117,7 +1128,7 @@ try {
   const backup = await request("/api/backups/export");
   assert.equal(backup.schemaVersion, 1);
   assert.equal(backup.characters.length, 1);
-  assert.equal(backup.characters[0]?.avatar, "data:image/png;base64,QUJDRA==");
+  assert.equal(backup.characters[0]?.avatar, "https://example.test/mobile-private.png");
   assert.equal(backup.characters[0]?.isFavorite, true);
   assert.equal(backup.chats.length, 1);
   assert.equal(backup.chats[0]?.isPinned, true);
@@ -1197,7 +1208,7 @@ try {
     { method: "POST" }
   );
   assert.ok(mobileRestore.safetyRecoveryPointId);
-  assert.equal((await request(`/api/characters/${character.id}`)).name, character.name);
+  assert.equal((await request(`/api/characters/${character.id}`)).name, metadataUpdatedPrivateCharacter.name);
   const restoredMobileBackup = await request("/api/backups/export");
   assert.deepEqual(restoredMobileBackup.memoryRevisions, backup.memoryRevisions);
   assert.deepEqual(restoredMobileBackup.memoryOperations, backup.memoryOperations);

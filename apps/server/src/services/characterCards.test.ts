@@ -21,6 +21,7 @@ const baseCharacter = {
   prompt: "This private prompt must remain hidden until the password is provided.",
   suffix: "Keep replies concise.",
   htmlCss: ".card { color: #fff; }",
+  openingHtml: "<section>Hidden opening.</section>",
   loreEntries: [
     {
       id: "entry-1",
@@ -59,6 +60,8 @@ describe("character private cards", () => {
     assert.equal(hidden.prefix, "");
     assert.equal(hidden.prompt, "");
     assert.equal(hidden.suffix, "");
+    assert.equal(hidden.htmlCss, "");
+    assert.equal(hidden.openingHtml, baseCharacter.openingHtml, "openingHtml remains a public card-protocol field");
     assert.deepEqual(hidden.loreEntries, []);
 
     const wrongPassword = resolveCharacterRecord(
@@ -73,6 +76,8 @@ describe("character private cards", () => {
     );
     assert.equal(unlocked.canViewPrompt, true);
     assert.equal(unlocked.prompt, baseCharacter.prompt);
+    assert.equal(unlocked.htmlCss, baseCharacter.htmlCss);
+    assert.equal(unlocked.openingHtml, baseCharacter.openingHtml);
     assert.deepEqual(unlocked.loreEntries, baseCharacter.loreEntries);
 
     const promptFields = resolveCharacterPromptFields(

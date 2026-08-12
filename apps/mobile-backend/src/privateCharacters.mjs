@@ -327,7 +327,7 @@ export const resolveCharacterRecord = (character, password) => {
       prefix: canViewPrompt ? fields.prefix : "",
       prompt: canViewPrompt ? fields.prompt : "",
       suffix: canViewPrompt ? fields.suffix : "",
-      htmlCss: fields.htmlCss,
+      htmlCss: canViewPrompt ? fields.htmlCss : "",
       loreEntries: canViewPrompt ? fields.loreEntries : [],
       visibility: "private",
       canViewPrompt

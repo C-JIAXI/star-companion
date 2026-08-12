@@ -851,7 +851,24 @@ const main = async () => {
     assert.equal(importedPrivateCharacter.visibility, "private");
     assert.equal(importedPrivateCharacter.cardId, importablePrivateCard.cardId);
     assert.equal(importedPrivateCharacter.canViewPrompt, false);
+    assert.equal(importedPrivateCharacter.htmlCss, "");
     assert.equal(importedPrivateCharacter.prompt, "");
+
+    const metadataUpdatedPrivateCharacter = await requestData(
+      baseUrl,
+      `/api/characters/${importedPrivateCharacter.id}`,
+      {
+        method: "PUT",
+        body: {
+          name: `${importablePrivateCard.character.name} Metadata Updated`,
+          avatar: "https://example.test/private-metadata.png",
+          tags: ["private-metadata", "sentinel"]
+        }
+      }
+    );
+    assert.equal(metadataUpdatedPrivateCharacter.canViewPrompt, false);
+    assert.equal(metadataUpdatedPrivateCharacter.avatar, "https://example.test/private-metadata.png");
+    assert.deepEqual(metadataUpdatedPrivateCharacter.tags, ["private-metadata", "sentinel"]);
 
     const renamedPrivateCard = {
       ...importablePrivateCard,

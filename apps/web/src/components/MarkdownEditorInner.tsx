@@ -16,6 +16,7 @@ export type MarkdownEditorProps = {
   placeholder?: string;
   height?: number | string;
   className?: string;
+  ariaDescribedBy?: string;
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
 };
@@ -26,6 +27,7 @@ export default function MarkdownEditorInner({
   placeholder,
   height = 180,
   className = "",
+  ariaDescribedBy,
   isFullscreen = false,
   onToggleFullscreen
 }: MarkdownEditorProps) {
@@ -81,6 +83,7 @@ export default function MarkdownEditorInner({
         data-color-mode="dark"
         className="roleplay-md-editor"
         textareaProps={{
+          "aria-describedby": ariaDescribedBy,
           placeholder,
           spellCheck: false
         }}

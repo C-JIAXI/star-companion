@@ -200,7 +200,7 @@ export function Field({
   );
 }
 
-export function HelpLabel({ label, description }: { label: ReactNode; description: ReactNode }) {
+export function HelpLabel({ label, description, descriptionId }: { label: ReactNode; description: ReactNode; descriptionId?: string }) {
   const triggerRef = useRef<HTMLSpanElement>(null);
   const [open, setOpen] = useState(false);
   const [tooltipStyle, setTooltipStyle] = useState<CSSProperties | null>(null);
@@ -255,6 +255,7 @@ export function HelpLabel({ label, description }: { label: ReactNode; descriptio
       <span className="relative inline-flex">
         <span
           ref={triggerRef}
+          aria-describedby={descriptionId}
           aria-label={typeof label === "string" ? `${label} help` : "Field help"}
           className="inline-grid h-4 w-4 cursor-help place-items-center rounded-full text-ink-500 outline-none transition-colors hover:text-ember-300 focus:text-ember-300"
           role="img"
@@ -267,6 +268,7 @@ export function HelpLabel({ label, description }: { label: ReactNode; descriptio
           <HelpCircle size={14} />
         </span>
       </span>
+      {descriptionId ? <span id={descriptionId} className="sr-only">{description}</span> : null}
       {open && tooltipStyle && typeof document !== "undefined"
         ? createPortal(
             <span
