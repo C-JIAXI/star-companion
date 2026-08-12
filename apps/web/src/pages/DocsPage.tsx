@@ -152,7 +152,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "创建原创角色",
-              body: "想立即开始时，可在“新建聊天”中使用快速创建，只填写名称和核心设定；需要标签、提示词分段、lore、快捷回复或样式时，再进入角色工坊使用高级编辑器。编辑器会标记未保存状态，并在返回、新建角色、切换页面或刷新前提醒。"
+              body: "想立即开始时，可在“新建聊天”中使用快速创建。角色工坊的基础模式按身份、核心设定、开场体验、检查与创建四步引导；核心设定直接使用现有 prompt。高级模式显示 prefix、prompt、suffix、内嵌 lore、快捷回复和样式。两种模式共享同一草稿，切换或基础保存不会清空高级字段。编辑器会标记未保存状态并在离开前提醒。"
             },
             {
               title: "开始聊天",
@@ -226,7 +226,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           items: [
             {
               title: "角色设定",
-              body: "把角色身份、背景、目标、语气、关系和互动边界写清楚。封面可填写 HTTPS 图片地址，也可选择 2 MB 内的本地 PNG、JPEG、WebP、GIF 或 AVIF 图片。"
+              body: "基础模式的核心角色设定就是现有 prompt：写清身份、行为、语气和边界即可，不需要技术性系统提示包装。保存前检查在本地确定性运行，显示可定位的错误、警告、建议及 prefix / prompt / suffix / 始终启用 lore 的 token 近似估算。封面可填写 HTTPS 图片地址，也可选择 2 MB 内的本地 PNG、JPEG、WebP、GIF 或 AVIF 图片。"
             },
             {
               title: "标签与筛选",
@@ -246,7 +246,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "开场 HTML 与导入导出",
-              body: "开场页面适合展示角色介绍、序章或欢迎页；角色卡支持导入导出和复制。副本会获得新的角色卡身份，私密角色的副本仍保持加密。再次导入同一张角色卡会更新原角色，即使角色名称已变更。"
+              body: "开场页面适合展示角色介绍、序章或欢迎页，并与聊天消息共用清洗和作用域渲染边界。可选创作助手只把当前任务需要的字段类别发送给 Agent 模型，返回可逐项审阅、应用、放弃和撤销的草案；不会自动保存，也不会发送其他角色、聊天、persona、画像或长期记忆。角色卡导入导出、同 cardId 覆盖、私密加密和安全复制协议保持不变。"
             }
           ],
           note: "建议先完善角色设定、标签和背景词条，再按需要添加快捷指令和视觉样式。"
@@ -439,7 +439,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Create an original character",
-            body: "For the fastest start, use Quick Create in New Chat and enter only a name and core definition. Open Character Studio when you need tags, prompt sections, lore, quick replies, or styling. The editor marks unsaved work and warns before returning, starting another character, changing pages, or refreshing."
+            body: "For the fastest start, use Quick Create in New Chat. Character Studio Basic mode guides Identity, Core, Opening, and Review using the existing prompt as the core definition. Advanced mode exposes prefix, prompt, suffix, embedded lore, quick replies, and styling. Both modes share one draft, so switching or saving in Basic never clears Advanced fields. Unsaved work is protected before leaving."
           },
           {
             title: "Start chatting",
@@ -539,7 +539,7 @@ const getDocsCopy = (language: string): DocsCopy => {
         items: [
           {
             title: "Character setup",
-            body: "Describe the character's identity, background, goals, voice, relationship, and interaction boundaries. Covers can use an HTTPS URL or a local PNG, JPEG, WebP, GIF, or AVIF image up to 2 MB."
+            body: "The Basic core character definition maps directly to the existing prompt field: describe identity, behaviour, voice, and boundaries without a technical system wrapper. Deterministic local checks identify focusable errors, warnings, and suggestions, with approximate token budgets for prefix, prompt, suffix, and always-on lore. Covers can use an HTTPS URL or a local PNG, JPEG, WebP, GIF, or AVIF image up to 2 MB."
           },
           {
             title: "Tags and filtering",
@@ -559,7 +559,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Opening HTML and import/export",
-            body: "Opening pages are useful for introductions, prologues, or welcome screens. Character cards support import, export, and duplication. A duplicate receives a new card identity, while private duplicates stay encrypted. Re-importing the same card updates the existing character even if its name changed."
+            body: "Opening pages use the same sanitized, scoped renderer as saved chat content. The optional drafting assistant sends only task-minimal field categories through the configured Agent module and returns structured suggestions to review, apply, discard, or undo. It never auto-saves or sends other characters, chat text, personas, profile summaries, or memories. Character-card import/export, same-card updates, encrypted private cards, and safe duplication remain unchanged."
           }
         ],
         note: "Start with the character setup, tags, and background entries, then add quick commands and visual styling as needed."

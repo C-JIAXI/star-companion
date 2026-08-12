@@ -281,6 +281,12 @@ describe("characterUpdateRequestSchema", () => {
       })
     );
   });
+
+  it("enforces the HTML and CSS limits used by the character quality checker", () => {
+    assert.equal(characterUpdateRequestSchema.safeParse({ openingHtml: "x".repeat(200_001) }).success, false);
+    assert.equal(characterUpdateRequestSchema.safeParse({ htmlCss: "x".repeat(100_001) }).success, false);
+    assert.equal(characterUpdateRequestSchema.safeParse({ openingHtml: "<section>safe</section>", htmlCss: ".card{}" }).success, true);
+  });
 });
 
 describe("characterBatchTagsSchema", () => {

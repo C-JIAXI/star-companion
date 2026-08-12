@@ -62,7 +62,7 @@ function useDialogFocus<T extends HTMLElement>({
     if (activeElement && !surfaceRef.current?.contains(activeElement)) {
       previousFocusRef.current = activeElement;
     }
-    const frame = window.requestAnimationFrame(() => {
+    const focusInside = () => {
       const surface = surfaceRef.current;
       if (!surface || surface.contains(document.activeElement)) {
         return;
@@ -76,7 +76,9 @@ function useDialogFocus<T extends HTMLElement>({
         getFocusableElements(surface)[0] ??
         surface;
       target.focus({ preventScroll: true });
-    });
+    };
+    focusInside();
+    const frame = window.requestAnimationFrame(focusInside);
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const surface = surfaceRef.current;

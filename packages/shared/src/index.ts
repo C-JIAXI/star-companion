@@ -1,4 +1,5 @@
 export type MessageRole = "user" | "assistant" | "system";
+export * from "./characterQuality.js";
 export type AppLanguage = "zh-CN" | "en";
 export type CharacterVisibility = "public" | "private";
 
@@ -176,6 +177,52 @@ export interface PublicCharacterCardDTO {
   cardId: string;
   exportedAt: string;
   character: CharacterCardContentDTO;
+}
+
+export type CharacterDraftTask =
+  | "generate_core_prompt"
+  | "refine_prompt"
+  | "consistency_questions"
+  | "suggest_lore"
+  | "suggest_quick_replies"
+  | "find_contradictions";
+
+export type CharacterDraftField = "prompt" | "loreEntries" | "quickReplies" | "questions" | "analysis";
+
+export interface CharacterDraftRequestDTO {
+  requestId: string;
+  task: CharacterDraftTask;
+  brief?: string;
+  characterId?: string;
+  accessPassword?: string;
+  draft: {
+    name: string;
+    description: string;
+    prefix: string;
+    prompt: string;
+    suffix: string;
+    loreEntries: Array<Omit<CharacterLoreEntryDTO, "id"> & { id?: string }>;
+    quickReplies: Array<Omit<QuickReplyDTO, "id"> & { id?: string }>;
+  };
+}
+
+export interface CharacterDraftItemDTO {
+  id: string;
+  field: CharacterDraftField;
+  title: string;
+  suggestion: string;
+  loreEntry?: Omit<CharacterLoreEntryDTO, "id">;
+  quickReply?: Omit<QuickReplyDTO, "id">;
+}
+
+export interface CharacterDraftResponseDTO {
+  requestId: string;
+  task: CharacterDraftTask;
+  title: string;
+  notice: string;
+  sentFieldCategories: string[];
+  items: CharacterDraftItemDTO[];
+  createdAt: string;
 }
 
 export type CharacterSortMode =

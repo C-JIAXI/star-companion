@@ -371,6 +371,15 @@ export function ScopedHtmlRenderer({
       link.setAttribute("rel", "noreferrer noopener nofollow");
     }
 
+    for (const image of template.content.querySelectorAll("img[src]")) {
+      const source = image.getAttribute("src")?.trim() ?? "";
+      if (!/^https:\/\//i.test(source) && !/^data:image\/(?:png|gif|jpeg|jpg|webp|avif);base64,/i.test(source)) {
+        image.removeAttribute("src");
+      }
+      image.setAttribute("referrerpolicy", "no-referrer");
+      image.setAttribute("loading", "lazy");
+    }
+
     const FONT_SIZE_MAP: Record<string, string> = {
       "1": "0.75rem",
       "2": "0.875rem",

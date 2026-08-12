@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+const CHARACTER_HTML_MAX_LENGTH = 200_000;
+const CHARACTER_CSS_MAX_LENGTH = 100_000;
+
 export const idSchema = z.string().min(1);
 
 const stringArraySchema = z.array(z.string().trim().min(1)).default([]);
@@ -145,8 +148,8 @@ export const characterCreateSchema = z.object({
   prefix: z.string().default(""),
   prompt: z.string().default(""),
   suffix: z.string().default(""),
-  htmlCss: z.string().default(""),
-  openingHtml: z.string().default(""),
+  htmlCss: z.string().max(CHARACTER_CSS_MAX_LENGTH).default(""),
+  openingHtml: z.string().max(CHARACTER_HTML_MAX_LENGTH).default(""),
   loreEntries: loreEntriesSchema,
   quickReplies: quickRepliesSchema
 });
@@ -159,8 +162,8 @@ const characterUpdateFieldsSchema = z.object({
   prefix: z.string().optional(),
   prompt: z.string().optional(),
   suffix: z.string().optional(),
-  htmlCss: z.string().optional(),
-  openingHtml: z.string().optional(),
+  htmlCss: z.string().max(CHARACTER_CSS_MAX_LENGTH).optional(),
+  openingHtml: z.string().max(CHARACTER_HTML_MAX_LENGTH).optional(),
   loreEntries: loreEntriesInputSchema.optional(),
   quickReplies: quickRepliesInputSchema.optional(),
   isFavorite: z.boolean().optional()
@@ -187,6 +190,30 @@ export const characterExportSchema = z.object({
 
 export const characterUnlockSchema = z.object({
   password: z.string().min(1)
+});
+
+export const characterDraftSchema = z.object({
+  requestId: z.string().trim().min(1).max(240),
+  task: z.enum([
+    "generate_core_prompt",
+    "refine_prompt",
+    "consistency_questions",
+    "suggest_lore",
+    "suggest_quick_replies",
+    "find_contradictions"
+  ]),
+  brief: z.string().trim().max(4000).optional(),
+  characterId: idSchema.optional(),
+  accessPassword: z.string().min(1).optional(),
+  draft: z.object({
+    name: z.string().max(500),
+    description: z.string().max(20_000),
+    prefix: z.string().max(200_000),
+    prompt: z.string().max(400_000),
+    suffix: z.string().max(200_000),
+    loreEntries: z.array(loreEntrySchema).max(500),
+    quickReplies: z.array(quickReplySchema).max(100)
+  })
 });
 
 const publicCharacterCardSchema = z.object({

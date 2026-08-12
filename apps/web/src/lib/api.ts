@@ -26,6 +26,8 @@ import type {
   CharacterBatchTagsResultDTO,
   CharacterCardImportInput,
   CharacterDTO,
+  CharacterDraftRequestDTO,
+  CharacterDraftResponseDTO,
   CharacterExportMode,
   CharacterInput,
   CharacterSortMode,
@@ -70,6 +72,7 @@ import { resolveApiUrl } from "./appBackend";
 type RequestOptions = {
   method?: "GET" | "POST" | "PUT" | "DELETE";
   body?: unknown;
+  signal?: AbortSignal;
 };
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -105,6 +108,7 @@ const request = async <T>(path: string, options: RequestOptions = {}): Promise<T
     method: options.method ?? "GET",
     headers: options.body ? { "Content-Type": "application/json" } : undefined,
     body: options.body ? JSON.stringify(options.body) : undefined
+    ,signal: options.signal
   });
 
   if (response.status === 204) {
@@ -192,6 +196,12 @@ export const api = {
     },
     create: (input: CharacterInput) =>
       request<CharacterDTO>("/api/characters", { method: "POST", body: input }),
+    draft: (input: CharacterDraftRequestDTO, signal?: AbortSignal) =>
+      request<CharacterDraftResponseDTO>("/api/characters/draft", {
+        method: "POST",
+        body: input,
+        signal
+      }),
     duplicate: (id: string, name: string) =>
       request<CharacterDTO>(`/api/characters/${id}/duplicate`, {
         method: "POST",

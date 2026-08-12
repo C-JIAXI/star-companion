@@ -264,7 +264,9 @@ const createFakeModelServer = (port) => {
     chatCompletionRequests += 1;
     lastChatCompletionBody = body;
     const joinedMessages = (body.messages ?? []).map((message) => message.content ?? "").join("\n\n");
-    const content = joinedMessages.includes("read-only context assistant")
+    const content = joinedMessages.includes("read-only drafting assistant for an original")
+      ? JSON.stringify({ items: [{ field: "prompt", title: "Smoke core draft", suggestion: "A structured original smoke character draft." }] })
+      : joinedMessages.includes("read-only context assistant")
       ? "Agent draft: [DRAFT]Ask for the next diagnostic signal.[/DRAFT]"
       : joinedMessages.includes("Generate a concise title for this local-first")
         ? '"Smoke Title Suggestion"'
@@ -764,6 +766,31 @@ const main = async () => {
       characterPayload.prompt,
       "public export should keep the current prompt"
     );
+
+    const characterDraftRequestCount = fakeModelServer.getChatCompletionRequests();
+    const characterDraft = await requestData(baseUrl, "/api/characters/draft", {
+      method: "POST",
+      body: {
+        requestId: `character-draft-${runId}`,
+        task: "refine_prompt",
+        draft: {
+          name: fetchedCharacterAfterUpdate.name,
+          description: fetchedCharacterAfterUpdate.description,
+          prefix: fetchedCharacterAfterUpdate.prefix,
+          prompt: fetchedCharacterAfterUpdate.prompt,
+          suffix: fetchedCharacterAfterUpdate.suffix,
+          loreEntries: fetchedCharacterAfterUpdate.loreEntries,
+          quickReplies: fetchedCharacterAfterUpdate.quickReplies
+        }
+      }
+    });
+    assert.equal(characterDraft.task, "refine_prompt");
+    assert.equal(characterDraft.items[0]?.field, "prompt");
+    assert.equal(fakeModelServer.getChatCompletionRequests(), characterDraftRequestCount + 1);
+    const characterAfterDraft = await requestData(baseUrl, `/api/characters/${createdCharacter.id}`);
+    assert.equal(characterAfterDraft.prompt, fetchedCharacterAfterUpdate.prompt, "AI draft must not write character data");
+    const sentDraft = JSON.parse(fakeModelServer.getLastChatCompletionBody().messages[1].content);
+    assert.deepEqual(Object.keys(sentDraft), ["prompt", "brief"]);
     assert.deepEqual(publicCard.character.tags, characterPayload.tags);
     assert.equal(publicCard.character.avatar, localAvatar);
     assert.equal("isFavorite" in publicCard.character, false);
@@ -1924,6 +1951,11 @@ const main = async () => {
       const lifecycle = diagnosticDb.prepare('SELECT id, module, operation, status, activeAttemptId, outputStarted, errorCode, messageId FROM "ModelRequest" ORDER BY createdAt DESC LIMIT 8').all();
       const attempts = diagnosticDb.prepare('SELECT id, requestId, attemptNumber, module, status, errorCode, messageId, reservedCostMicros FROM "ModelUsageAttempt" ORDER BY startedAt DESC LIMIT 12').all();
       diagnosticDb.close();
+      const characterDraftLifecycle = lifecycle.find((item) => item.id === `character-draft-${runId}`);
+      assert.equal(characterDraftLifecycle?.module, "agent");
+      assert.equal(characterDraftLifecycle?.operation, "character_refine_prompt");
+      assert.equal(characterDraftLifecycle?.status, "succeeded");
+      assert.equal(attempts.some((item) => item.requestId === `character-draft-${runId}` && item.module === "agent" && item.status === "succeeded"), true);
       console.error(`[smoke-api] lifecycle diagnostics\n${JSON.stringify({ lifecycle, attempts }, null, 2)}`);
     } catch (diagnosticError) {
       console.error(`[smoke-api] lifecycle diagnostics unavailable: ${diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)}`);

@@ -16,6 +16,7 @@ import {
   characterBatchTagsSchema,
   characterCreateSchema,
   characterDuplicateSchema,
+  characterDraftSchema,
   characterExportSchema,
   characterImportSchema,
   characterPageQuerySchema,
@@ -54,6 +55,7 @@ import {
   settingsUpdateSchema,
   lanSyncRequestSchema
 } from "../server-dist/schemas.js";
+import { buildCharacterDraftMessages, getCharacterDraftMeta, parseCharacterDraftItems } from "../server-dist/services/characterDraftProtocol.js";
 import { applyCharacterTagOperation } from "../server-dist/services/characterTags.js";
 import {
   decryptApiKey,
@@ -2317,6 +2319,38 @@ app.post(
     const body = parseBody(characterCreateSchema, request.body);
     const character = await store.createCharacter(body);
     response.status(201).json({ ok: true, data: serializeCharacter(character) });
+  })
+);
+
+app.post(
+  "/api/characters/draft",
+  asyncHandler(async (request, response) => {
+    const body = parseBody(characterDraftSchema, request.body);
+    if (body.characterId) {
+      const character = store.getCharacter(body.characterId);
+      if (!character) throw notFound("Character not found");
+      if (serializeCharacter(character).visibility === "private") {
+        if (!body.accessPassword) {
+          const error = new Error("Private character password is required for AI drafting");
+          error.status = 403;
+          throw error;
+        }
+        assertCharacterUnlockPassword(character, body.accessPassword);
+      }
+    }
+    const controller = new AbortController();
+    request.once("aborted", () => controller.abort());
+    const result = await executeMobileReliableText({
+      module: "agent",
+      operation: `character_${body.task}`,
+      requestId: body.requestId,
+      messages: buildCharacterDraftMessages(body),
+      signal: controller.signal,
+      maxTokens: Math.min(store.getSettings().maxTokens, 1200),
+      temperature: Math.min(store.getSettings().temperature, 0.5)
+    });
+    const meta = getCharacterDraftMeta(body.task);
+    response.json({ ok: true, data: { requestId: body.requestId, task: body.task, title: meta.title, notice: "AI-generated draft. Review it for accuracy before applying or saving.", sentFieldCategories: meta.sentFieldCategories, items: parseCharacterDraftItems(result.content), createdAt: new Date().toISOString() } });
   })
 );
 

@@ -14,13 +14,16 @@ import {
   Plus,
   Save,
   Search,
+  Sparkles,
   Star,
   Tag,
   Trash2,
   X,
   CheckSquare,
   Copy,
-  Square
+  Square,
+  RotateCcw,
+  ListChecks
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { CharacterCard } from "../components/CharacterCard";
@@ -30,10 +33,13 @@ import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { readFileAsDataUrl, readFileText, saveJsonFile } from "../lib/files";
 import { usePlaceholderSrc } from "../placeholderImages";
+import { checkCharacterQuality, type CharacterQualityIssue } from "@local-roleplay/shared";
 import type {
   CharacterCardImportInput,
   CharacterBatchTagsRequestDTO,
   CharacterDTO,
+  CharacterDraftResponseDTO,
+  CharacterDraftTask,
   CharacterExportMode,
   CharacterInput,
   CharacterLoreEntryDTO,
@@ -88,7 +94,8 @@ const blankQuickReply = (): QuickReplyDTO & { _localId: string; _collapsed: bool
 });
 
 type QuickReplyForm = ReturnType<typeof blankQuickReply>;
-type EditorSectionId = "prompt" | "tags" | "html" | "opening" | "lore" | "quickReplies";
+type EditorSectionId = "prompt" | "tags" | "html" | "opening" | "lore" | "quickReplies" | "review" | "assistant";
+type CharacterEditorMode = "basic" | "advanced";
 type PasswordDialogMode = "unlock" | "export-private" | "export-public";
 type ExpandedTextField = "htmlCss" | "openingHtml";
 
@@ -289,6 +296,27 @@ const toInput = (form: CharacterForm): CharacterInput => ({
   }))
 });
 
+const BASIC_EDITABLE_FIELDS = ["name", "avatar", "description", "tags", "prompt", "openingHtml", "quickReplies"] as const;
+const toBasicUpdate = (form: CharacterForm, saved: CharacterForm, locked: boolean): Partial<CharacterInput> => {
+  const current = toInput(form);
+  const previous = toInput(saved);
+  const update: Partial<CharacterInput> = {};
+  for (const field of BASIC_EDITABLE_FIELDS) {
+    if (locked && field === "prompt") continue;
+    if (JSON.stringify(current[field]) !== JSON.stringify(previous[field])) {
+      Object.assign(update, { [field]: current[field] });
+    }
+  }
+  return update;
+};
+
+const copyForm = (form: CharacterForm): CharacterForm => ({
+  ...form,
+  tags: [...form.tags],
+  loreEntries: form.loreEntries.map((entry) => ({ ...entry, keys: [...entry.keys] })),
+  quickReplies: form.quickReplies.map((reply) => ({ ...reply }))
+});
+
 const serializeCharacterForm = (form: CharacterForm) =>
   JSON.stringify({
     ...form,
@@ -343,6 +371,7 @@ export function CharactersPage({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedCharacter, setSelectedCharacter] = useState<CharacterDTO | null>(null);
   const [form, setForm] = useState<CharacterForm>(blankForm);
+  const [savedForm, setSavedForm] = useState<CharacterForm>(() => copyForm(blankForm));
   const [savedFormSnapshot, setSavedFormSnapshot] = useState(() =>
     serializeCharacterForm(blankForm)
   );
@@ -360,6 +389,18 @@ export function CharactersPage({
   const [passwordDialogMode, setPasswordDialogMode] = useState<PasswordDialogMode | null>(null);
   const [passwordValue, setPasswordValue] = useState("");
   const [activeEditorSection, setActiveEditorSection] = useState<EditorSectionId>("prompt");
+  const [editorMode, setEditorMode] = useState<CharacterEditorMode>(() =>
+    window.localStorage.getItem("star-companion-character-editor-mode") === "advanced" ? "advanced" : "basic"
+  );
+  const [wizardStep, setWizardStep] = useState(0);
+  const [qualityVisible, setQualityVisible] = useState(false);
+  const [undoStack, setUndoStack] = useState<Array<{ form: CharacterForm; mode: CharacterEditorMode }>>([]);
+  const [draftTask, setDraftTask] = useState<CharacterDraftTask>("generate_core_prompt");
+  const [draftBrief, setDraftBrief] = useState("");
+  const [draftResult, setDraftResult] = useState<CharacterDraftResponseDTO | null>(null);
+  const [draftLoading, setDraftLoading] = useState(false);
+  const [draftApplyAllConfirm, setDraftApplyAllConfirm] = useState(false);
+  const draftAbortRef = useRef<AbortController | null>(null);
   const [batchMode, setBatchMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batchTagDialogOpen, setBatchTagDialogOpen] = useState(false);
@@ -377,6 +418,7 @@ export function CharactersPage({
   );
   const [expandedTextField, setExpandedTextField] = useState<ExpandedTextField | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
   const [pendingEditorExit, setPendingEditorExit] = useState<"new" | "list" | null>(null);
   const characterRequestRef = useRef(0);
   const unlockedPasswordRef = useRef<Record<string, string>>({});
@@ -449,9 +491,32 @@ export function CharactersPage({
 
   const selected = selectedCharacter;
   const isLockedPrivateCharacter = selected?.visibility === "private" && !selected.canViewPrompt;
+  const quality = useMemo(
+    () => checkCharacterQuality(form, { protectedContentAvailable: !isLockedPrivateCharacter }),
+    [form, isLockedPrivateCharacter]
+  );
+  const blockingQualityIssues = quality.issues.filter((item) => item.severity === "error");
   const currentFormSnapshot = useMemo(() => serializeCharacterForm(form), [form]);
   const editorOpen = isCreating || Boolean(selectedId && selectedCharacter);
   const hasUnsavedChanges = editorOpen && currentFormSnapshot !== savedFormSnapshot;
+  const showIdentityFields = editorMode === "advanced" || !isCreating || wizardStep === 0;
+
+  const switchEditorMode = (mode: CharacterEditorMode) => {
+    if (mode === editorMode) return;
+    setUndoStack((current) => [...current.slice(-9), { form: copyForm(form), mode: editorMode }]);
+    setEditorMode(mode);
+    window.localStorage.setItem("star-companion-character-editor-mode", mode);
+    if (mode === "advanced") setActiveEditorSection("prompt");
+  };
+
+  const undoDraftChange = () => {
+    const previous = undoStack[undoStack.length - 1];
+    if (!previous) return;
+    setForm(copyForm(previous.form));
+    setEditorMode(previous.mode);
+    window.localStorage.setItem("star-companion-character-editor-mode", previous.mode);
+    setUndoStack((current) => current.slice(0, -1));
+  };
 
   const privateCharacterCopy = useMemo(
     () =>
@@ -561,7 +626,11 @@ export function CharactersPage({
     const nextForm = toForm(character);
     setSelectedCharacter(character);
     setForm(nextForm);
+    setSavedForm(copyForm(nextForm));
     setSavedFormSnapshot(serializeCharacterForm(nextForm));
+    setUndoStack([]);
+    setDraftResult(null);
+    setQualityVisible(false);
   };
 
   const loadCharacters = async (
@@ -699,7 +768,11 @@ export function CharactersPage({
     setSelectedId(null);
     setSelectedCharacter(null);
     setForm(nextForm);
+    setSavedForm(copyForm(nextForm));
     setSavedFormSnapshot(serializeCharacterForm(nextForm));
+    setWizardStep(0);
+    setUndoStack([]);
+    setDraftResult(null);
     setError(null);
     setStatus(null);
   };
@@ -709,6 +782,7 @@ export function CharactersPage({
     setSelectedId(null);
     setSelectedCharacter(null);
     setForm(nextForm);
+    setSavedForm(copyForm(nextForm));
     setSavedFormSnapshot(serializeCharacterForm(nextForm));
     setIsCreating(false);
     setError(null);
@@ -738,7 +812,7 @@ export function CharactersPage({
     }
   };
 
-  const saveCharacter = async () => {
+  const saveCharacter = async (startChatAfterCreate = false) => {
     setLoading(true);
     setError(null);
     setStatus(null);
@@ -749,9 +823,16 @@ export function CharactersPage({
           ? unlockedPasswordRef.current[editingCharacter.id]
           : undefined;
       if (editingCharacter) {
+        const updates = editorMode === "basic"
+          ? toBasicUpdate(form, savedForm, isLockedPrivateCharacter)
+          : toInput(form);
+        if (Object.keys(updates).length === 0) {
+          setStatus(t("characters.saved"));
+          return;
+        }
         const updated = await api.characters.update(
           editingCharacter.id,
-          toInput(form),
+          updates,
           accessPassword
         );
         applyCharacterToEditor(updated);
@@ -771,10 +852,13 @@ export function CharactersPage({
         setFavoriteOnly(false);
         setCharacterPage(1);
         setSelectedId(created.id);
+        setJustCreatedId(created.id);
         applyCharacterToEditor(created);
         await loadCharacters(1, "", "", false, characterSort, created.id);
+        if (startChatAfterCreate) onPlay(created.id);
       }
       setStatus(t("characters.saved"));
+      setUndoStack([]);
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "";
       if (message.includes("password is required")) {
@@ -785,6 +869,82 @@ export function CharactersPage({
     } finally {
       setLoading(false);
     }
+  };
+
+  const focusQualityIssue = (item: CharacterQualityIssue) => {
+    const section: EditorSectionId = item.field === "loreEntries" ? "lore"
+      : item.field === "quickReplies" ? "quickReplies"
+        : item.field === "openingHtml" ? "opening"
+          : item.field === "htmlCss" ? "html"
+            : item.field === "avatar" || item.field === "name" || item.field === "description" ? "prompt"
+              : "prompt";
+    if (editorMode === "basic" && (section === "lore" || section === "html")) switchEditorMode("advanced");
+    if (item.field === "loreEntries" && item.itemIndex !== undefined) {
+      setForm((current) => ({ ...current, loreEntries: current.loreEntries.map((entry, index) => index === item.itemIndex ? { ...entry, _collapsed: false } : entry) }));
+    }
+    if (item.field === "quickReplies" && item.itemIndex !== undefined) {
+      setForm((current) => ({ ...current, quickReplies: current.quickReplies.map((entry, index) => index === item.itemIndex ? { ...entry, _collapsed: false } : entry) }));
+    }
+    setActiveEditorSection(section);
+    if (isCreating && editorMode === "basic") {
+      setWizardStep(item.field === "name" || item.field === "avatar" || item.field === "description" ? 0 : item.field === "openingHtml" || item.field === "quickReplies" ? 2 : item.field === "prompt" ? 1 : 3);
+    }
+    window.setTimeout(() => {
+      const root = document.querySelector<HTMLElement>(`[data-character-field="${item.field}"]`);
+      const target = root?.matches("input,textarea,button,[contenteditable=true]") ? root : root?.querySelector<HTMLElement>("input,textarea,button,[contenteditable=true]");
+      root?.scrollIntoView({ behavior: "smooth", block: "center" });
+      target?.focus();
+    }, 50);
+  };
+
+  const requestCharacterDraft = async () => {
+    if (isLockedPrivateCharacter) return;
+    draftAbortRef.current?.abort();
+    const controller = new AbortController();
+    draftAbortRef.current = controller;
+    setDraftLoading(true);
+    setError(null);
+    try {
+      const input = toInput(form);
+      setDraftResult(await api.characters.draft({
+        requestId: `character_agent_${crypto.randomUUID()}`,
+        task: draftTask,
+        brief: draftBrief.trim() || undefined,
+        characterId: selected?.id,
+        accessPassword: selected?.visibility === "private" ? unlockedPasswordRef.current[selected.id] : undefined,
+        draft: {
+          name: input.name,
+          description: input.description ?? "",
+          prefix: input.prefix ?? "",
+          prompt: input.prompt ?? "",
+          suffix: input.suffix ?? "",
+          loreEntries: input.loreEntries ?? [],
+          quickReplies: input.quickReplies ?? []
+        }
+      }, controller.signal));
+    } catch (caught) {
+      if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "AI draft failed");
+    } finally {
+      if (draftAbortRef.current === controller) draftAbortRef.current = null;
+      setDraftLoading(false);
+    }
+  };
+
+  const applyDraftItems = (ids: string[]) => {
+    if (!draftResult) return;
+    const selectedItems = draftResult.items.filter((item) => ids.includes(item.id));
+    if (!selectedItems.length) return;
+    setUndoStack((current) => [...current.slice(-9), { form: copyForm(form), mode: editorMode }]);
+    setForm((current) => {
+      const next = copyForm(current);
+      for (const item of selectedItems) {
+        if (item.field === "prompt") next.prompt = item.suggestion;
+        if (item.field === "loreEntries" && item.loreEntry) next.loreEntries.push({ ...item.loreEntry, id: "", _localId: crypto.randomUUID(), _collapsed: false });
+        if (item.field === "quickReplies" && item.quickReply) next.quickReplies.push({ ...item.quickReply, id: "", _localId: crypto.randomUUID(), _collapsed: false });
+      }
+      return next;
+    });
+    setStatus(language === "zh-CN" ? "AI 草案已应用到未保存编辑，可撤销。" : "AI draft applied to unsaved edits. You can undo it.");
   };
 
   const duplicateCharacter = async () => {
@@ -1224,6 +1384,38 @@ export function CharactersPage({
             <div className="space-y-8">
               <ErrorNotice message={error} />
               <SuccessNotice message={status} />
+              <div className="flex flex-col gap-3 rounded-lg border border-white/[0.08] bg-ink-950/35 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-slate-100">
+                    {language === "zh-CN" ? "创作模式" : "Creation mode"}
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                    {language === "zh-CN" ? "基础与高级模式编辑同一份角色草稿，切换不会清空隐藏字段。" : "Basic and advanced modes edit the same draft. Switching never clears hidden fields."}
+                  </p>
+                </div>
+                <div className="flex gap-1 rounded-md border border-white/10 bg-ink-950 p-1" data-testid="character-editor-mode">
+                  {(["basic", "advanced"] as CharacterEditorMode[]).map((mode) => (
+                    <button key={mode} type="button" aria-pressed={editorMode === mode} className={`min-h-[44px] rounded px-4 text-sm font-medium ${editorMode === mode ? "bg-ember-500 text-ink-950" : "text-slate-300 hover:bg-white/5"}`} onClick={() => switchEditorMode(mode)}>
+                      {mode === "basic" ? (language === "zh-CN" ? "基础模式" : "Basic") : (language === "zh-CN" ? "高级模式" : "Advanced")}
+                    </button>
+                  ))}
+                  <button type="button" disabled={!undoStack.length} className="min-h-[44px] rounded px-3 text-slate-300 disabled:opacity-40" onClick={undoDraftChange} aria-label={language === "zh-CN" ? "撤销上次草稿操作" : "Undo last draft action"}><RotateCcw size={15} /></button>
+                </div>
+              </div>
+              {isCreating && editorMode === "basic" ? (
+                <div className="space-y-3" data-testid="character-wizard">
+                  <ol className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label={language === "zh-CN" ? "创建步骤" : "Creation steps"}>
+                    {(language === "zh-CN" ? ["身份", "核心设定", "开场体验", "检查与创建"] : ["Identity", "Core", "Opening", "Review"]).map((label, index) => (
+                      <li key={label}><button type="button" className={`min-h-[44px] w-full rounded-md border px-2 text-xs ${wizardStep === index ? "border-ember-400 bg-ember-500/10 text-ember-100" : "border-white/10 text-slate-400"}`} onClick={() => setWizardStep(index)}>{index + 1}. {label}</button></li>
+                    ))}
+                  </ol>
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <Button variant="ghost" disabled={wizardStep === 0} onClick={() => setWizardStep((step) => Math.max(0, step - 1))}><ChevronLeft size={14} />{language === "zh-CN" ? "上一步" : "Previous"}</Button>
+                    <Button variant="secondary" onClick={() => switchEditorMode("advanced")}>{language === "zh-CN" ? "切换高级编辑" : "Switch to advanced"}</Button>
+                    <Button variant="ghost" disabled={wizardStep === 3} onClick={() => setWizardStep((step) => Math.min(3, step + 1))}>{language === "zh-CN" ? "下一步（可跳过）" : "Next (optional)"}<ChevronRight size={14} /></Button>
+                  </div>
+                </div>
+              ) : null}
               {selected?.visibility === "private" ? (
                 <div className="rounded-lg border border-amber-400/15 bg-amber-500/[0.08] px-4 py-3 text-sm text-amber-100">
                   <div className="flex items-center gap-2 font-medium">
@@ -1252,15 +1444,20 @@ export function CharactersPage({
                   ) : null}
                 </div>
               ) : null}
-              <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
+              {editorMode === "basic" && selected && (selected.prefix.trim() || selected.suffix.trim() || selected.htmlCss.trim() || selected.loreEntries.length > 0) ? (
+                <div className="rounded-lg border border-sky-400/15 bg-sky-500/[0.06] px-4 py-3 text-xs leading-5 text-sky-100">
+                  {language === "zh-CN" ? "此角色包含高级内容。基础模式会完整保留它们；切换高级模式即可查看。" : "This character contains advanced content. Basic mode preserves it unchanged; switch to Advanced to inspect it."}
+                </div>
+              ) : null}
+              {showIdentityFields ? <div className="grid gap-6 lg:grid-cols-[2fr_1fr]" data-character-field="name">
                 <div className="grid gap-5">
-                  <Field label={t("common.name")}>
+                  <div data-character-field="name"><Field label={t("common.name")}>
                     <TextInput
                       value={form.name}
                       onChange={(event) => setForm({ ...form, name: event.target.value })}
                     />
-                  </Field>
-                  <Field container="div" label={t("characters.avatarUrl")}>
+                  </Field></div>
+                  <div data-character-field="avatar"><Field container="div" label={t("characters.avatarUrl")}>
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                       {usingUploadedAvatar ? (
                         <div className="flex min-h-[40px] min-w-[12rem] flex-1 items-center gap-2 rounded-md border border-emerald-500/20 bg-emerald-500/5 px-3 text-sm text-emerald-100 sm:min-h-[44px]">
@@ -1303,14 +1500,22 @@ export function CharactersPage({
                         </Button>
                       ) : null}
                     </div>
-                  </Field>
-                  <Field label={t("characters.description")}>
+                  </Field></div>
+                  <div data-character-field="description"><Field label={t("characters.description")}>
                     <TextArea
                       value={form.description}
                       onChange={(event) => setForm({ ...form, description: event.target.value })}
                       className="chat-input !h-[100px] min-h-[100px] !text-sm"
                     />
-                  </Field>
+                  </Field></div>
+                  {editorMode === "basic" ? <div data-character-field="tags">
+                    <Field label={t("characters.tags")}>
+                      <div className="space-y-3">
+                        <div className="flex gap-2"><TextInput value={tagInput} placeholder={t("characters.tagInputPlaceholder")} onChange={(event) => setTagInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addTagsToForm(tagInput); } }} /><Button variant="secondary" disabled={!tagInput.trim()} onClick={() => addTagsToForm(tagInput)}>{t("characters.tagAdd")}</Button></div>
+                        <div className="flex flex-wrap gap-2">{form.tags.map((tag) => <button key={tag} type="button" className="min-h-[36px] rounded border border-ember-500/20 bg-ember-500/10 px-2.5 text-xs text-ember-100" onClick={() => removeTagFromForm(tag)}>{tag} <X className="inline" size={12} /></button>)}</div>
+                      </div>
+                    </Field>
+                  </div> : null}
                 </div>
                 <div className="group overflow-hidden rounded-lg border border-white/[0.08] bg-ink-950/35 p-0 text-sm transition-colors hover:border-white/[0.14]">
                   <div className="aspect-[4/3] w-full overflow-hidden border-b border-white/[0.08] bg-ink-800">
@@ -1356,10 +1561,10 @@ export function CharactersPage({
                     ) : null}
                   </div>
                 </div>
-              </div>
+              </div> : null}
 
-              <div className="flex overflow-x-auto border-b border-white/[0.08]">
-                {editorSections.map((section) => (
+              {editorMode === "advanced" ? <div className="flex overflow-x-auto border-b border-white/[0.08]">
+                {[...editorSections, { id: "review" as const, label: language === "zh-CN" ? "检查" : "Review" }, { id: "assistant" as const, label: language === "zh-CN" ? "创作助手" : "Draft assistant" }].map((section) => (
                   <button
                     key={section.id}
                     type="button"
@@ -1373,14 +1578,19 @@ export function CharactersPage({
                     {section.label}
                   </button>
                 ))}
-              </div>
+              </div> : null}
 
-              {activeEditorSection === "prompt" ? (
+              {(editorMode === "advanced" && activeEditorSection === "prompt") || (editorMode === "basic" && (!isCreating || wizardStep === 1)) ? (
                 isLockedPrivateCharacter ? (
                   <EmptyState>{privatePasswordCopy.lockedHelp}</EmptyState>
                 ) : (
-                  <div className="space-y-7">
-                    <Field
+                  <div className="space-y-7" data-character-field="prompt">
+                    {editorMode === "basic" ? <div className="rounded-lg border border-sky-400/15 bg-sky-500/[0.07] p-4 text-sm leading-6 text-sky-100">
+                      <p className="font-semibold">{language === "zh-CN" ? "核心角色设定" : "Core character prompt"}</p>
+                      <p className="mt-1">{language === "zh-CN" ? "这是模型理解角色的主要设定。不需要编写技术性系统提示包装；你填写的内容会发送给当前模型供应商。" : "This is the main description the model uses to understand the character. No technical system-prompt wrapper is needed. What you write is sent to the current model provider."}</p>
+                      <p className="mt-2 text-xs text-sky-200/75">{language === "zh-CN" ? "可思考：角色是谁？如何表达情绪？面对冲突如何行动？哪些事实必须一致？哪些行为不符合角色？" : "Consider: Who are they? How do they express emotion? How do they handle conflict? Which facts must remain consistent? What would be out of character?"}</p>
+                    </div> : null}
+                    {editorMode === "advanced" ? <Field
                       container="div"
                       label={
                         <HelpLabel
@@ -1394,7 +1604,7 @@ export function CharactersPage({
                         onChange={(nextValue) => setForm({ ...form, prefix: nextValue })}
                         height={180}
                       />
-                    </Field>
+                    </Field> : null}
                     <Field
                       container="div"
                       label={
@@ -1410,7 +1620,7 @@ export function CharactersPage({
                         height={320}
                       />
                     </Field>
-                    <Field
+                    {editorMode === "advanced" ? <Field
                       container="div"
                       label={
                         <HelpLabel
@@ -1424,12 +1634,12 @@ export function CharactersPage({
                         onChange={(nextValue) => setForm({ ...form, suffix: nextValue })}
                         height={220}
                       />
-                    </Field>
+                    </Field> : null}
                   </div>
                 )
               ) : null}
 
-              {activeEditorSection === "tags" ? (
+              {editorMode === "advanced" && activeEditorSection === "tags" ? (
                 <div className="space-y-4">
                   <div className="rounded-lg border border-white/[0.08] bg-ink-950/30 p-4">
                     <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-100">
@@ -1483,11 +1693,11 @@ export function CharactersPage({
                 </div>
               ) : null}
 
-              {activeEditorSection === "html" ? (
+              {editorMode === "advanced" && activeEditorSection === "html" ? (
                 isLockedPrivateCharacter ? (
                   <EmptyState>{privatePasswordCopy.lockedHelp}</EmptyState>
                 ) : (
-                  <div className="space-y-5">
+                  <div className="space-y-5" data-character-field="htmlCss">
                     <Field
                       container="div"
                       label={
@@ -1580,11 +1790,11 @@ export function CharactersPage({
                 )
               ) : null}
 
-              {activeEditorSection === "opening" ? (
+              {(editorMode === "advanced" && activeEditorSection === "opening") || (editorMode === "basic" && (!isCreating || wizardStep === 2)) ? (
                 isLockedPrivateCharacter ? (
                   <EmptyState>{privatePasswordCopy.lockedHelp}</EmptyState>
                 ) : (
-                  <div className="space-y-5">
+                  <div className="space-y-5" data-character-field="openingHtml">
                     <Field
                       container="div"
                       label={
@@ -1618,16 +1828,8 @@ export function CharactersPage({
                           placeholder={t("characters.openingHtmlPlaceholder")}
                         />
                         {form.openingHtml.trim() ? (
-                          <div
-                            className="rounded-lg overflow-hidden border border-white/10 bg-white"
-                            style={{ height: 300 }}
-                          >
-                            <iframe
-                              title={t("characters.openingHtmlPreview")}
-                              srcDoc={form.openingHtml}
-                              sandbox="allow-scripts"
-                              className="w-full h-full border-0"
-                            />
+                          <div className="h-[300px] overflow-y-auto rounded-lg border border-white/10 bg-ink-950 p-4" data-testid="opening-html-preview">
+                            <ScopedHtmlRenderer content={form.openingHtml} />
                           </div>
                         ) : (
                           <div
@@ -1645,11 +1847,11 @@ export function CharactersPage({
                 )
               ) : null}
 
-              {activeEditorSection === "lore" ? (
+              {editorMode === "advanced" && activeEditorSection === "lore" ? (
                 isLockedPrivateCharacter ? (
                   <EmptyState>{privatePasswordCopy.lockedHelp}</EmptyState>
                 ) : (
-                  <div className="border-t border-white/5 pt-5">
+                  <div className="border-t border-white/5 pt-5" data-character-field="loreEntries">
                     <div className="mb-3 flex items-center justify-between">
                       <p className="text-sm font-semibold text-slate-100">
                         {t("characters.loreEntries")}
@@ -1891,8 +2093,8 @@ export function CharactersPage({
                 )
               ) : null}
 
-              {activeEditorSection === "quickReplies" ? (
-                <div className="space-y-4">
+              {((editorMode === "advanced" && activeEditorSection === "quickReplies") || (editorMode === "basic" && (!isCreating || wizardStep === 2))) ? (
+                <div className="space-y-4" data-character-field="quickReplies">
                   <div className="flex items-center justify-between">
                     <p className="text-sm font-semibold text-slate-200">
                       {t("characters.quickReplies")}
@@ -1995,6 +2197,45 @@ export function CharactersPage({
                 </div>
               ) : null}
 
+              {(editorMode === "advanced" && activeEditorSection === "review") || (editorMode === "basic" && (!isCreating || wizardStep === 3)) ? (
+                <section className="space-y-4" data-testid="character-quality-panel">
+                  {editorMode === "basic" && isCreating ? <div className="grid gap-4 rounded-lg border border-white/10 bg-ink-950/35 p-4 sm:grid-cols-[7rem_minmax(0,1fr)]" data-testid="character-review-preview">
+                    <img alt="" className="aspect-square w-28 rounded-lg object-cover ring-1 ring-white/10" src={editorCoverSrc} />
+                    <div className="min-w-0"><p className="truncate text-base font-semibold text-slate-100">{form.name || (language === "zh-CN" ? "未命名角色" : "Unnamed character")}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-400">{form.description || (language === "zh-CN" ? "暂无简介" : "No description")}</p><div className="mt-3 flex flex-wrap gap-2">{form.tags.map((tag) => <span key={tag} className="rounded border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-300">{tag}</span>)}</div></div>
+                  </div> : null}
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div><h3 className="flex items-center gap-2 text-sm font-semibold text-slate-100"><ListChecks size={16} />{language === "zh-CN" ? "保存前质量检查" : "Pre-save quality check"}</h3><p className="mt-1 text-xs text-slate-500">{language === "zh-CN" ? "完全在本地运行，不读取或上传外部数据。警告不会阻止保存。" : "Runs entirely locally without reading or uploading external data. Warnings do not block saving."}</p></div>
+                    <Button data-testid="run-character-quality" variant="secondary" onClick={() => setQualityVisible(true)}>{language === "zh-CN" ? "运行检查" : "Run check"}</Button>
+                  </div>
+                  {isLockedPrivateCharacter ? <EmptyState>{language === "zh-CN" ? "私密内容未解锁，不会检查或显示受保护字段。" : "Protected fields are not checked or displayed until this private character is unlocked."}</EmptyState> : null}
+                  <div className="grid grid-cols-2 gap-2 rounded-lg border border-white/10 bg-ink-950/40 p-3 sm:grid-cols-5" aria-label={language === "zh-CN" ? "Prompt token 估算" : "Estimated prompt tokens"}>
+                    {([ ["prefix", quality.budget.prefixTokens], ["prompt", quality.budget.promptTokens], ["suffix", quality.budget.suffixTokens], [language === "zh-CN" ? "始终启用 lore" : "always-on lore", quality.budget.alwaysActiveLoreTokens], [language === "zh-CN" ? "合计" : "total", quality.budget.totalTokens] ] as Array<[string, number]>).map(([label, value]) => <div key={label} className="min-w-0 rounded bg-white/[0.03] p-2"><div className="truncate text-[11px] text-slate-500">{label}</div><div className="mt-1 font-mono text-sm text-slate-200">≈ {value}</div></div>)}
+                  </div>
+                  <p className="text-xs text-slate-500">{language === "zh-CN" ? "字符近似估算，不调用模型，不展示完整组装 Prompt。聊天生成后可在消息的 Prompt 构成中查看实际分段。" : "Character-based estimate only. It does not call a model or expose the assembled prompt. After generation, inspect the message Prompt breakdown for actual sections."}</p>
+                  {qualityVisible ? <div className="space-y-2" role="list">{quality.issues.length ? quality.issues.map((item, index) => <button key={`${item.code}-${index}`} type="button" role="listitem" className="flex min-h-[44px] w-full items-start gap-3 rounded-lg border border-white/10 bg-ink-950/35 p-3 text-left hover:border-white/20" onClick={() => focusQualityIssue(item)}><span className="rounded bg-white/10 px-2 py-0.5 text-[10px] uppercase text-slate-200">{item.severity}</span><span className="min-w-0 text-sm leading-5 text-slate-300"><span className="mr-2 font-mono text-xs text-slate-500">{item.code}</span>{item.message[language === "zh-CN" ? "zh-CN" : "en"]}</span></button>) : <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 text-sm text-emerald-200" role="status">{language === "zh-CN" ? "未发现问题。" : "No issues found."}</div>}</div> : null}
+                </section>
+              ) : null}
+
+              {editorMode === "advanced" && activeEditorSection === "assistant" ? (
+                isLockedPrivateCharacter ? <EmptyState>{language === "zh-CN" ? "先解锁私密角色，才能使用创作助手。" : "Unlock the private character before using the drafting assistant."}</EmptyState> : <section className="space-y-4" data-testid="character-draft-assistant">
+                  <div className="rounded-lg border border-violet-400/15 bg-violet-500/[0.07] p-4"><h3 className="flex items-center gap-2 text-sm font-semibold text-violet-100"><Sparkles size={16} />{language === "zh-CN" ? "可选 AI 创作助手" : "Optional AI drafting assistant"}</h3><p className="mt-2 text-xs leading-5 text-violet-100/80">{language === "zh-CN" ? "只返回可审阅草案，不会保存或静默覆盖。请求通过后端 Agent 模型、统一预算、重试和备用链路。" : "Returns reviewable drafts only—never saves or silently overwrites. Requests use the backend Agent model and the unified budget, retry, and fallback lifecycle."}</p></div>
+                  <Field label={language === "zh-CN" ? "独立任务" : "Independent task"}><select className="min-h-[44px] w-full rounded-lg border border-white/10 bg-ink-950 px-3 text-sm text-slate-200" value={draftTask} onChange={(event) => setDraftTask(event.target.value as CharacterDraftTask)}>{([ ["generate_core_prompt", "生成核心设定 / Generate core prompt"], ["refine_prompt", "收紧现有 prompt / Refine prompt"], ["consistency_questions", "一致性问题 / Consistency questions"], ["suggest_lore", "提议 lore / Suggest lore"], ["suggest_quick_replies", "提议快捷回复 / Suggest quick replies"], ["find_contradictions", "检查潜在矛盾 / Find contradictions"] ] as const).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
+                  <Field label={language === "zh-CN" ? "可选要点" : "Optional points"}><TextArea value={draftBrief} onChange={(event) => setDraftBrief(event.target.value)} placeholder={language === "zh-CN" ? "只填写这次草案需要考虑的要点" : "Only the points needed for this draft"} /></Field>
+                  <div className="rounded-lg border border-white/10 p-3 text-xs leading-5 text-slate-400"><strong className="text-slate-200">{language === "zh-CN" ? "将发送的字段类别：" : "Field categories sent: "}</strong>{({ generate_core_prompt: "name, description, points", refine_prompt: "prompt, points", consistency_questions: "name, prompt", suggest_lore: "prompt, existing lore keywords, points", suggest_quick_replies: "prompt, existing quick-reply labels, points", find_contradictions: "prefix, prompt, suffix, lore entries" } as Record<CharacterDraftTask, string>)[draftTask]}<br />{language === "zh-CN" ? "不会发送 API Key、其他角色、聊天正文、persona、用户画像或长期记忆。" : "API keys, other characters, chat text, persona, profile summaries, and long-term memories are never sent."}</div>
+                  <div className="flex flex-wrap gap-2"><Button disabled={draftLoading} data-testid="run-character-draft" onClick={() => void requestCharacterDraft()}><Sparkles size={15} />{draftLoading ? (language === "zh-CN" ? "生成中" : "Generating") : (language === "zh-CN" ? "生成草案" : "Generate draft")}</Button>{draftLoading ? <Button variant="ghost" onClick={() => draftAbortRef.current?.abort()}>{language === "zh-CN" ? "取消" : "Cancel"}</Button> : null}</div>
+                  {draftResult ? <div className="space-y-3"><p className="text-xs font-medium text-amber-200">{language === "zh-CN" ? "AI 草案：可能不准确，请逐项审阅。" : "AI draft: may be inaccurate; review every item."}</p>{draftResult.items.map((item) => <article key={item.id} className="min-w-0 overflow-hidden rounded-lg border border-white/10 bg-ink-950/40 p-4"><h4 className="text-sm font-semibold text-slate-100">{item.title}</h4><div className="mt-3 grid min-w-0 gap-3 md:grid-cols-2"><div className="min-w-0"><p className="text-[11px] uppercase text-slate-500">{language === "zh-CN" ? "原内容" : "Current"}</p><pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs text-slate-400">{item.field === "prompt" ? form.prompt : item.field === "loreEntries" ? `${form.loreEntries.length} lore entries` : item.field === "quickReplies" ? `${form.quickReplies.length} quick replies` : language === "zh-CN" ? "不修改字段" : "No field change"}</pre></div><div className="min-w-0"><p className="text-[11px] uppercase text-slate-500">{language === "zh-CN" ? "建议内容" : "Suggested"}</p><pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs text-slate-200">{item.suggestion}</pre></div></div>{["prompt", "loreEntries", "quickReplies"].includes(item.field) ? <Button className="mt-3" variant="secondary" onClick={() => applyDraftItems([item.id])}>{language === "zh-CN" ? "应用此项" : "Apply item"}</Button> : null}</article>)}<div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={() => setDraftApplyAllConfirm(true)}>{language === "zh-CN" ? "全部应用" : "Apply all"}</Button><Button variant="ghost" onClick={() => setDraftResult(null)}>{language === "zh-CN" ? "放弃草案" : "Discard"}</Button></div></div> : null}
+                </section>
+              ) : null}
+
+              {isCreating && editorMode === "basic" && wizardStep === 3 ? (
+                <div className="flex flex-wrap justify-end gap-2 rounded-lg border border-white/10 bg-ink-950/30 p-3">
+                  <Button disabled={loading || !form.name.trim() || blockingQualityIssues.length > 0} data-testid="character-create-stay" onClick={() => void saveCharacter()}><Save size={15} />{language === "zh-CN" ? "创建并留在编辑" : "Create and stay"}</Button>
+                  <Button disabled={loading || !form.name.trim() || blockingQualityIssues.length > 0} data-testid="character-create-chat" onClick={() => void saveCharacter(true)}>{language === "zh-CN" ? "创建并立即聊天" : "Create and start chat"}<ChevronRight size={15} /></Button>
+                </div>
+              ) : null}
+
+              {justCreatedId && selected?.id === justCreatedId ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-400/15 bg-emerald-500/[0.06] p-3 text-sm text-emerald-100"><span>{language === "zh-CN" ? "角色已创建。你可以继续编辑或立即开始聊天。" : "Character created. Continue editing or start a chat now."}</span><Button variant="secondary" data-testid="character-start-chat" onClick={() => onPlay(justCreatedId)}>{language === "zh-CN" ? "立即开始聊天" : "Start chat"}</Button></div> : null}
+
               <div className="flex flex-wrap justify-end gap-3 pt-4 border-t border-white/5">
                 <Button
                   disabled={loading || !selected || hasUnsavedChanges}
@@ -2013,7 +2254,7 @@ export function CharactersPage({
                   {t("common.delete")}
                 </Button>
                 <Button
-                  disabled={loading || !form.name.trim() || !hasUnsavedChanges}
+                  disabled={loading || !form.name.trim() || !hasUnsavedChanges || blockingQualityIssues.length > 0}
                   data-testid="character-save"
                   onClick={() => void saveCharacter()}
                 >
@@ -2281,6 +2522,16 @@ export function CharactersPage({
           variant="danger"
           onCancel={() => setPendingEditorExit(null)}
           onConfirm={confirmEditorExit}
+        />
+      ) : null}
+      {draftApplyAllConfirm && draftResult ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={language === "zh-CN" ? "应用并保留撤销" : "Apply and keep undo"}
+          message={language === "zh-CN" ? "将所有可应用 AI 建议写入当前未保存草稿。正式角色仍需你主动保存。" : "Apply every actionable AI suggestion to the current unsaved draft. You must still save the character yourself."}
+          title={language === "zh-CN" ? "全部应用 AI 草案？" : "Apply all AI drafts?"}
+          onCancel={() => setDraftApplyAllConfirm(false)}
+          onConfirm={() => { applyDraftItems(draftResult.items.map((item) => item.id)); setDraftApplyAllConfirm(false); }}
         />
       ) : null}
       {expandedTextField ? (

@@ -119,6 +119,20 @@ describe("character private cards", () => {
     assert.equal("loreEntries" in update, false);
   });
 
+  it("updates public metadata in basic mode without replacing the encrypted envelope", () => {
+    const exported = createCharacterExportCard(baseCharacter, "private", "open-sesame");
+    const imported = importCharacterCard(exported);
+    const update = buildCharacterUpdateData(
+      { ...baseCharacter, loreEntries: imported.loreEntries },
+      { name: "Renamed private character", avatar: "https://example.test/avatar.png", tags: ["private", "edited"] }
+    );
+    assert.equal(update.name, "Renamed private character");
+    assert.equal(update.avatar, "https://example.test/avatar.png");
+    assert.deepEqual(update.tags, ["private", "edited"]);
+    assert.equal("loreEntries" in update, false);
+    assert.equal(resolveCharacterRecord({ ...baseCharacter, ...imported }, "open-sesame").prompt, baseCharacter.prompt);
+  });
+
   it("duplicates private character storage without exposing its prompt", () => {
     const exported = createCharacterExportCard(baseCharacter, "private", "open-sesame");
     const imported = importCharacterCard(exported);

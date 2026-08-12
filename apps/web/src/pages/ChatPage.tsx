@@ -43,6 +43,7 @@ import {
 } from "@local-roleplay/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
+import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
 import { api } from "../lib/api";
 import {
   buildChatTranscript,
@@ -3943,13 +3944,9 @@ export function ChatPage({
                       className={`custom-scrollbar min-h-0 flex-1 overscroll-auto scroll-smooth ${activeOpeningHtml ? "overflow-hidden" : "overflow-y-auto"}`}
                     >
                       {activeChat.messages.length === 0 && activeOpeningHtml ? (
-                        <iframe
-                          id="chat-opening-frame"
-                          title={t("characters.openingHtml")}
-                          srcDoc={activeOpeningHtml}
-                          sandbox="allow-scripts"
-                          className="w-full h-full border-0"
-                        />
+                        <div id="chat-opening-frame" aria-label={t("characters.openingHtml")} className="custom-scrollbar h-full overflow-y-auto bg-ink-950 p-4">
+                          <ScopedHtmlRenderer content={activeOpeningHtml} htmlCss={activeCharacterHtmlCss} />
+                        </div>
                       ) : (
                         <div
                             className="mx-auto max-w-3xl space-y-4 p-2 sm:space-y-6 sm:p-5"

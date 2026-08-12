@@ -112,7 +112,9 @@ const createFakeModelServer = () => {
     }
 
     let content = "Mobile assistant reply.";
-    if (joinedMessages.includes("read-only context assistant")) {
+    if (joinedMessages.includes("read-only drafting assistant for an original")) {
+      content = JSON.stringify({ items: [{ field: "prompt", title: "Mobile core draft", suggestion: "A structured mobile character draft." }] });
+    } else if (joinedMessages.includes("read-only context assistant")) {
       content = "Mobile agent draft: [DRAFT]Ask about the blue door hinge.[/DRAFT]";
     } else if (joinedMessages.includes("Generate a concise title for this local-first")) {
       content = '"Mobile Blue Door"';
@@ -567,6 +569,34 @@ try {
   assert.equal(unlockedPrivateCharacter.visibility, "private");
   assert.equal(unlockedPrivateCharacter.canViewPrompt, true);
   assert.equal(unlockedPrivateCharacter.prompt, "Reply as a local mobile character.");
+
+  const characterDraftCount = fakeModelServer.getChatCompletionRequests();
+  const characterDraft = await request("/api/characters/draft", {
+    method: "POST",
+    body: {
+      requestId: "mobile-character-draft",
+      task: "refine_prompt",
+      characterId: character.id,
+      accessPassword: "open-sesame",
+      draft: {
+        name: unlockedPrivateCharacter.name,
+        description: unlockedPrivateCharacter.description,
+        prefix: unlockedPrivateCharacter.prefix,
+        prompt: unlockedPrivateCharacter.prompt,
+        suffix: unlockedPrivateCharacter.suffix,
+        loreEntries: unlockedPrivateCharacter.loreEntries,
+        quickReplies: unlockedPrivateCharacter.quickReplies
+      }
+    }
+  });
+  assert.equal(characterDraft.task, "refine_prompt");
+  assert.equal(characterDraft.items[0]?.field, "prompt");
+  assert.equal(fakeModelServer.getChatCompletionRequests(), characterDraftCount + 1);
+  assert.equal((await request(`/api/characters/${character.id}/unlock`, { method: "POST", body: { password: "open-sesame" } })).prompt, "Reply as a local mobile character.");
+  const sentCharacterDraft = JSON.parse(fakeModelServer.getLastChatCompletionBody().messages[1].content);
+  assert.deepEqual(Object.keys(sentCharacterDraft), ["prompt", "brief"]);
+  const usageAfterCharacterDraft = await request("/api/usage/summary");
+  assert.equal(usageAfterCharacterDraft.recent.some((item) => item.requestId === "mobile-character-draft" && item.module === "agent" && item.status === "succeeded"), true);
 
   const publicCard = await request(`/api/characters/${character.id}/export`, {
     method: "POST",

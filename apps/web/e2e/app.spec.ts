@@ -3544,6 +3544,7 @@ test("character built-in css previews in the editor and styles only matching cha
     const visibleEditButtons = page.locator("button:visible").filter({ hasText: /编辑|Edit/ });
     await expect(visibleEditButtons).toHaveCount(1);
     await visibleEditButtons.first().click();
+    await page.getByRole("button", { name: /高级模式|Advanced/ }).click();
     await page.getByRole("button", { name: /内置\s*CSS|Built-in CSS/i }).click();
     await page.getByRole("textbox", { name: /内置\s*css|Built-in CSS/i }).fill(customCss);
     await page.getByTestId("expand-html-css-editor").click();
@@ -3570,7 +3571,7 @@ test("character built-in css previews in the editor and styles only matching cha
     await page.getByTestId("expanded-character-textarea").fill(expandedOpeningHtml);
     await page.getByRole("button", { name: "Close" }).click();
     await expect(
-      page.getByPlaceholder(/输入完整的 HTML 内容|Enter full HTML content/i)
+      page.getByPlaceholder(/输入开场 HTML|Enter opening HTML/i)
     ).toHaveValue(expandedOpeningHtml);
 
     await page
@@ -3683,6 +3684,7 @@ test("character management can create a character with markdown prompt fields", 
 
   await page.getByRole("button", { name: /^(新建|New)$/ }).click();
   await expect(page.getByRole("heading", { name: /创建角色|Create Character/ })).toBeVisible();
+  await page.getByRole("button", { name: /高级模式|Advanced/ }).click();
   const name = `E2E Character ${testInfo.project.name} ${Date.now()}`;
 
   try {
@@ -3917,6 +3919,99 @@ test("character editor protects unsaved changes before leaving", async ({
     if (characterId) {
       await request.delete(`/api/characters/${characterId}`).catch(() => {});
     }
+  }
+});
+
+test("character creation studio preserves advanced fields, checks quality, applies and undoes mocked AI drafts", async ({ page, request }, testInfo) => {
+  testInfo.setTimeout(90_000);
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const name = `Original Studio ${suffix}`;
+  let createdId = "";
+  let aiRequest: Record<string, unknown> | null = null;
+
+  await page.route("**/api/characters/draft", async (route) => {
+    aiRequest = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: {
+      requestId: aiRequest.requestId, task: aiRequest.task, title: "Core prompt draft",
+      notice: "AI-generated draft. Review it for accuracy before applying or saving.",
+      sentFieldCategories: ["name", "description", "brief"], createdAt: new Date().toISOString(),
+      items: [{ id: "studio-draft-1", field: "prompt", title: "Original core draft", suggestion: "AI suggested original core prompt." }]
+    } }) });
+  });
+
+  try {
+    await page.goto("/characters");
+    await page.getByRole("button", { name: /^(新建|New)$/ }).click();
+    await page.getByRole("button", { name: /基础模式|Basic/ }).click();
+    await expect(page.getByTestId("character-wizard")).toBeVisible();
+    await page.getByLabel(/名称|Name/).fill(name);
+    await page.getByLabel(/简介|Description/).fill("An original character created in the guided studio.");
+    await page.getByRole("button", { name: /下一步（可跳过）|Next \(optional\)/ }).click();
+    await page.locator('[data-character-field="prompt"] .roleplay-md-editor textarea').fill("Original user core prompt.");
+    await page.getByRole("button", { name: /切换高级编辑|Switch to advanced/ }).click();
+    const promptEditors = page.locator(".roleplay-md-editor textarea");
+    await expect(promptEditors.nth(1)).toHaveValue("Original user core prompt.");
+    await promptEditors.nth(0).fill("Advanced prefix must survive basic save.");
+    await promptEditors.nth(2).fill("Advanced suffix must survive basic save.");
+    await page.getByRole("button", { name: /开场 HTML|Opening HTML/i }).click();
+    await page.getByRole("textbox", { name: /^开场 HTML$|^Opening HTML$/i }).fill('<div>Safe opening<img src="http://insecure.invalid/tracker.png" onerror="window.__openingAttack=true"><script>window.__openingAttack=true</script></div>');
+    const openingPreview = page.getByTestId("opening-html-preview");
+    await expect(openingPreview).toContainText("Safe opening");
+    await expect(openingPreview.locator("script")).toHaveCount(0);
+    await expect(openingPreview.locator("img")).not.toHaveAttribute("src", /http:/);
+    expect(await page.evaluate(() => (window as Window & { __openingAttack?: boolean }).__openingAttack)).not.toBe(true);
+    await page.getByRole("button", { name: /^检查$|^Review$/ }).click();
+    await page.getByTestId("run-character-quality").click();
+    await expect(page.getByTestId("character-quality-panel")).toContainText(/估算|Estimated|≈/);
+    await expect(page.getByTestId("character-quality-panel")).toContainText(/未发现问题|No issues found/);
+
+    await page.getByRole("button", { name: /创作助手|Draft assistant/ }).click();
+    await page.getByTestId("run-character-draft").click();
+    await expect(page.getByText("AI suggested original core prompt.")).toBeVisible();
+    expect(aiRequest).not.toBeNull();
+    expect(JSON.stringify(aiRequest)).not.toContain("apiKey");
+    expect(JSON.stringify(aiRequest)).not.toContain("chat");
+    await page.getByRole("button", { name: /应用此项|Apply item/ }).click();
+    await page.getByRole("button", { name: /撤销上次草稿操作|Undo last draft action/ }).click();
+    await page.getByRole("button", { name: /基础模式|Basic/ }).click();
+    await expect(page.locator('[data-character-field="prompt"] .roleplay-md-editor textarea')).toHaveValue("Original user core prompt.");
+    await page.getByTestId("character-save").click();
+    await expect(page.getByRole("status")).toContainText(/角色已保存|Character saved/);
+
+    const characters = ((await (await request.get("/api/characters")).json()) as ApiDataResponse<E2ECharacter[]>).data ?? [];
+    createdId = characters.find((item) => item.name === name)?.id ?? "";
+    expect(createdId).toBeTruthy();
+    const saved = ((await (await request.get(`/api/characters/${createdId}`)).json()) as ApiDataResponse<E2ECharacter>).data!;
+    expect(saved.prompt).toBe("Original user core prompt.");
+    expect(saved.prefix).toBe("Advanced prefix must survive basic save.");
+    expect(saved.suffix).toBe("Advanced suffix must survive basic save.");
+
+    await page.getByLabel(/简介|Description/).fill("Updated from basic mode without touching advanced fields.");
+    await page.getByTestId("character-save").click();
+    await expect(page.getByRole("status")).toContainText(/角色已保存|Character saved/);
+    const savedAfterBasicUpdate = ((await (await request.get(`/api/characters/${createdId}`)).json()) as ApiDataResponse<E2ECharacter>).data!;
+    expect(savedAfterBasicUpdate.description).toBe("Updated from basic mode without touching advanced fields.");
+    expect(savedAfterBasicUpdate.prefix).toBe("Advanced prefix must survive basic save.");
+    expect(savedAfterBasicUpdate.suffix).toBe("Advanced suffix must survive basic save.");
+
+    const exported = ((await (await request.post(`/api/characters/${createdId}/export`, { data: { visibility: "public" } })).json()) as ApiDataResponse<Record<string, unknown>>).data!;
+    expect(JSON.stringify(exported)).not.toContain("editorMode");
+    expect(JSON.stringify(exported)).not.toContain("wizardStep");
+    expect(JSON.stringify(exported)).not.toContain("AI suggested original core prompt");
+    const importedCard = { ...exported, cardId: `roundtrip-${suffix}`, character: { ...(exported.character as Record<string, unknown>), name: `${name} Roundtrip` } };
+    const importedResponse = await request.post("/api/characters/import", { data: importedCard });
+    expect(importedResponse.ok()).toBeTruthy();
+    const imported = ((await importedResponse.json()) as ApiDataResponse<E2ECharacter>).data!;
+    expect(imported.prompt).toBe(savedAfterBasicUpdate.prompt);
+    expect(imported.prefix).toBe(savedAfterBasicUpdate.prefix);
+    expect(imported.suffix).toBe(savedAfterBasicUpdate.suffix);
+    await request.delete(`/api/characters/${imported.id}`);
+    await expect(page.getByTestId("character-start-chat")).toBeVisible();
+    await page.getByTestId("character-start-chat").click();
+    await expect(page).toHaveURL(/\/$/);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("star-companion:selected-chat"))).not.toBeNull();
+  } finally {
+    if (createdId) await request.delete(`/api/characters/${createdId}`);
   }
 });
 
@@ -5654,6 +5749,8 @@ test("private character imports keep export enabled before unlock and reveal pro
     await page.getByRole("button", { name: /输入密码查看|Unlock with Password/ }).click();
     await page.getByLabel(/密码|Password/).fill(password);
     await page.getByRole("button", { name: /查看内容|Reveal Content/ }).click();
+
+    await page.getByRole("button", { name: /高级模式|Advanced/ }).click();
 
     const promptEditors = page.locator(".roleplay-md-editor textarea");
     await expect(page.getByRole("button", { name: /^导出$|^Export$/ })).toBeEnabled();

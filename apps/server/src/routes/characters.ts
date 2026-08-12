@@ -7,6 +7,7 @@ import {
   characterBatchTagsSchema,
   characterCreateSchema,
   characterDuplicateSchema,
+  characterDraftSchema,
   characterExportSchema,
   characterImportSchema,
   characterPageQuerySchema,
@@ -25,6 +26,7 @@ import {
   reEncryptImportedCharacter
 } from "../services/characterCards.js";
 import { applyCharacterTagOperation } from "../services/characterTags.js";
+import { createCharacterDraft } from "../services/characterDraft.js";
 
 export const charactersRouter = Router();
 
@@ -56,6 +58,24 @@ charactersRouter.post(
     const character = await prisma.character.create({ data: body });
 
     response.status(201).json({ ok: true, data: serializeCharacter(character) });
+  })
+);
+
+charactersRouter.post(
+  "/draft",
+  asyncHandler(async (request, response) => {
+    const body = parseBody(characterDraftSchema, request.body);
+    if (body.characterId) {
+      const character = await prisma.character.findUnique({ where: { id: body.characterId } });
+      if (!character) throw new HttpError(404, "Character not found");
+      if (serializeCharacter(character).visibility === "private") {
+        if (!body.accessPassword) throw new HttpError(403, "Private character password is required for AI drafting");
+        assertCharacterUnlockPassword(character, body.accessPassword);
+      }
+    }
+    const controller = new AbortController();
+    request.once("aborted", () => controller.abort());
+    response.json({ ok: true, data: await createCharacterDraft(body, controller.signal) });
   })
 );
 
