@@ -175,4 +175,35 @@ describe("backup preflight contract", () => {
     assert.equal("key" in (analysis.backup.settings?.providers?.[0] ?? {}), false);
     assert.equal(JSON.stringify(analysis).includes("must-not-survive"), false);
   });
+
+  it("treats memory/profile revision identity as a composite key and surfaces content conflicts", () => {
+    const base = {
+      ...emptyCurrent(),
+      chats: [{ id: "chat-1", title: "Chat", characterId: null }],
+      memories: [{ id: "memory-1", chatId: "chat-1", title: "Memory", content: "Current" }],
+      memoryRevisions: [{
+        id: "revision-local", memoryId: "memory-1", chatId: "chat-1", revision: 1,
+        action: "baseline", actor: "restore", beforeSnapshot: null,
+        afterSnapshot: { title: "Memory", content: "Local revision", keywords: [], importance: 3, enabled: true, sourceMessageIds: [] },
+        sourceMessageIds: [], operationId: null, reasonCode: "baseline", createdAt: "2026-08-10T00:00:00.000Z"
+      }],
+      profileSummaryRevisions: [{
+        id: "profile-local", chatId: "chat-1", revision: 1, action: "baseline", actor: "restore",
+        summary: "Local profile", sourceMessageIds: [], createdAt: "2026-08-10T00:00:00.000Z"
+      }]
+    };
+    const current = backupImportSchema.parse(base);
+    const candidate = structuredClone(base);
+    candidate.mode = "merge";
+    candidate.memoryRevisions[0].id = "revision-peer";
+    candidate.memoryRevisions[0].afterSnapshot.content = "Peer revision";
+    candidate.profileSummaryRevisions[0].id = "profile-peer";
+    candidate.profileSummaryRevisions[0].summary = "Peer profile";
+    const analysis = analyzeBackupCandidate(candidate, current);
+
+    assert.ok(analysis.preview.conflicts.some((conflict) => conflict.key === "memoryRevisions:memory-1:1"));
+    assert.ok(analysis.preview.conflicts.some((conflict) => conflict.key === "profileSummaryRevisions:chat-1:1"));
+    assert.equal(JSON.stringify(analysis.preview).includes("Peer revision"), false);
+    assert.equal(JSON.stringify(analysis.preview).includes("Peer profile"), false);
+  });
 });

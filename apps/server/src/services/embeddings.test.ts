@@ -101,7 +101,7 @@ describe("embedding provider adapters", () => {
         inputs: ["invalid"],
         task: "document"
       }),
-      /invalid vector/
+      /unreadable response/
     );
   });
 });

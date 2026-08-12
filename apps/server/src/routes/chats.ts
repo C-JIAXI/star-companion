@@ -15,6 +15,11 @@ import {
   chatMemoryCreateSchema,
   chatMessageSearchQuerySchema,
   chatMemoryUpdateSchema,
+  memoryPurgeSchema,
+  memoryRestoreExecuteSchema,
+  memoryRevisionParamsSchema,
+  memoryUndoExecuteSchema,
+  profileSummaryRestoreExecuteSchema,
   chatUpdateSchema
 } from "../schemas.js";
 import { serializeChat, serializeChatMemory, serializeMessage } from "../serializers.js";
@@ -28,6 +33,22 @@ import {
 } from "../services/chatMemories.js";
 import { resolveModuleSettings } from "../services/moduleModels.js";
 import { getOrCreateSettings } from "./settings.js";
+import {
+  createManualMemory,
+  deleteManualMemory,
+  executeMemoryOperationUndo,
+  listMemoryOperations,
+  listMemoryRevisions,
+  listProfileSummaryRevisions,
+  previewSpecificMemoryOperationUndo,
+  previewMemoryRestore,
+  previewProfileSummaryRestore,
+  purgeMemoryHistory,
+  restoreMemoryRevision,
+  restoreProfileSummaryRevision,
+  updateManualMemory,
+  updateProfileSummaryInTransaction
+} from "../services/memoryHistory.js";
 
 export const chatsRouter = Router();
 
@@ -96,7 +117,25 @@ chatsRouter.post(
   "/",
   asyncHandler(async (request, response) => {
     const body = parseBody(chatCreateSchema, request.body);
-    const chat = await prisma.chat.create({ data: body });
+    const initialProfile = body.userProfileSummary.trim();
+    const chat = await prisma.$transaction(async (tx) => {
+      const created = await tx.chat.create({
+        data: { ...body, userProfileSummary: initialProfile, profileRevision: initialProfile ? 1 : 0 }
+      });
+      if (initialProfile) {
+        await tx.profileSummaryRevision.create({
+          data: {
+            chatId: created.id,
+            revision: 1,
+            action: "baseline",
+            actor: "user",
+            summary: initialProfile,
+            sourceMessageIds: []
+          }
+        });
+      }
+      return created;
+    });
 
     response.status(201).json({ ok: true, data: serializeChat(chat) });
   })
@@ -296,8 +335,8 @@ chatsRouter.post(
     const messagesToCopy = chat.messages.slice(0, targetIndex + 1);
     const now = new Date();
     const isCheckpoint = body.kind === "checkpoint";
-    const branch = await prisma.chat.create({
-      data: {
+    const branch = await prisma.$transaction(async (tx) => {
+      const created = await tx.chat.create({ data: {
         title: body.title ?? `${chat.title} - ${isCheckpoint ? "Checkpoint" : "Branch"}`,
         characterId: chat.characterId,
         parentChatId: chat.id,
@@ -311,14 +350,18 @@ chatsRouter.post(
         userAvatar: chat.userAvatar,
         userProfileSummary: chat.userProfileSummary,
         userProfileUpdatedAt: chat.userProfileUpdatedAt,
+        profileRevision: chat.userProfileSummary ? 1 : 0,
         createdAt: now,
         updatedAt: now
+      } });
+      if (chat.userProfileSummary) {
+        await tx.profileSummaryRevision.create({ data: {
+          chatId: created.id, revision: 1, action: "baseline", actor: "restore",
+          summary: chat.userProfileSummary, sourceMessageIds: [], createdAt: now
+        } });
       }
-    });
-
-    await prisma.message.createMany({
-      data: messagesToCopy.map((message) => ({
-        chatId: branch.id,
+      await tx.message.createMany({ data: messagesToCopy.map((message) => ({
+        chatId: created.id,
         role: message.role,
         characterId: message.characterId,
         content: message.content,
@@ -338,7 +381,8 @@ chatsRouter.post(
           message.memoryMatches === null ? Prisma.JsonNull : (message.memoryMatches as Prisma.InputJsonValue),
         createdAt: message.createdAt,
         updatedAt: message.updatedAt
-      }))
+      })) });
+      return created;
     });
 
     const branchWithMessages = await prisma.chat.findUniqueOrThrow({
@@ -449,7 +493,7 @@ chatsRouter.get(
 
     const memories = await prisma.chatMemory.findMany({
       where: { chatId },
-      orderBy: [{ enabled: "desc" }, { importance: "desc" }, { updatedAt: "desc" }]
+      orderBy: [{ deletedAt: "asc" }, { enabled: "desc" }, { importance: "desc" }, { updatedAt: "desc" }]
     });
 
     response.json({ ok: true, data: memories.map(serializeChatMemory) });
@@ -469,12 +513,8 @@ chatsRouter.post(
       throw new HttpError(404, "Chat not found");
     }
 
-    const createdMemory = await prisma.chatMemory.create({
-      data: {
-        ...body,
-        chatId
-      }
-    });
+    const { actor, ...memoryInput } = body;
+    const { memory: createdMemory } = await createManualMemory(chatId, memoryInput, actor);
     const settings = await getOrCreateSettings();
     await refreshChatMemoryEmbeddings({ chatId, settings });
     const memory = await prisma.chatMemory.findUniqueOrThrow({ where: { id: createdMemory.id } });
@@ -496,25 +536,7 @@ chatsRouter.put(
       throw new HttpError(404, "Memory not found");
     }
 
-    const embeddingSourceChanged =
-      Object.hasOwn(body, "title") ||
-      Object.hasOwn(body, "content") ||
-      Object.hasOwn(body, "keywords");
-    const updatedMemory = await prisma.chatMemory.update({
-      where: { id: memoryId },
-      data: {
-        ...body,
-        ...(embeddingSourceChanged
-          ? {
-              embedding: Prisma.JsonNull,
-              embeddingSource: null,
-              embeddingDimensions: null,
-              embeddingStatus: "stale",
-              embeddingUpdatedAt: null
-            }
-          : {})
-      }
-    });
+    const { memory: updatedMemory } = await updateManualMemory(chatId, memoryId, body);
     const settings = await getOrCreateSettings();
     if (updatedMemory.enabled) {
       await refreshChatMemoryEmbeddings({ chatId, settings });
@@ -537,10 +559,56 @@ chatsRouter.delete(
       throw new HttpError(404, "Memory not found");
     }
 
-    await prisma.chatMemory.delete({ where: { id: memoryId } });
+    await deleteManualMemory(chatId, memoryId);
     response.status(204).send();
   })
 );
+
+chatsRouter.get("/:id/memories/:memoryId/revisions", asyncHandler(async (request, response) => {
+  response.json({ ok: true, data: await listMemoryRevisions(requireParam(request, "id"), requireParam(request, "memoryId")) });
+}));
+
+chatsRouter.get("/:id/memories/:memoryId/revisions/:revision/restore-preview", asyncHandler(async (request, response) => {
+  const query = parseQuery(memoryRevisionParamsSchema, { revision: requireParam(request, "revision") });
+  response.json({ ok: true, data: await previewMemoryRestore(requireParam(request, "id"), requireParam(request, "memoryId"), query.revision) });
+}));
+
+chatsRouter.post("/:id/memories/:memoryId/restore", asyncHandler(async (request, response) => {
+  const body = parseBody(memoryRestoreExecuteSchema, request.body);
+  response.json({ ok: true, data: await restoreMemoryRevision(requireParam(request, "id"), requireParam(request, "memoryId"), body.revision, body.expectedCurrentRevision) });
+}));
+
+chatsRouter.post("/:id/memories/:memoryId/purge", asyncHandler(async (request, response) => {
+  parseBody(memoryPurgeSchema, request.body);
+  response.json({ ok: true, data: await purgeMemoryHistory(requireParam(request, "id"), requireParam(request, "memoryId")) });
+}));
+
+chatsRouter.get("/:id/memory-operations", asyncHandler(async (request, response) => {
+  response.json({ ok: true, data: await listMemoryOperations(requireParam(request, "id")) });
+}));
+
+chatsRouter.post("/:id/memory-operations/:operationId/undo-preview", asyncHandler(async (request, response) => {
+  response.json({ ok: true, data: await previewSpecificMemoryOperationUndo(requireParam(request, "id"), requireParam(request, "operationId")) });
+}));
+
+chatsRouter.post("/:id/memory-operations/:operationId/undo", asyncHandler(async (request, response) => {
+  const body = parseBody(memoryUndoExecuteSchema, request.body);
+  response.json({ ok: true, data: await executeMemoryOperationUndo(requireParam(request, "id"), requireParam(request, "operationId"), body.resolutions) });
+}));
+
+chatsRouter.get("/:id/profile-summary/revisions", asyncHandler(async (request, response) => {
+  response.json({ ok: true, data: await listProfileSummaryRevisions(requireParam(request, "id")) });
+}));
+
+chatsRouter.get("/:id/profile-summary/revisions/:revision/restore-preview", asyncHandler(async (request, response) => {
+  const query = parseQuery(memoryRevisionParamsSchema, { revision: requireParam(request, "revision") });
+  response.json({ ok: true, data: await previewProfileSummaryRestore(requireParam(request, "id"), query.revision) });
+}));
+
+chatsRouter.post("/:id/profile-summary/restore", asyncHandler(async (request, response) => {
+  const body = parseBody(profileSummaryRestoreExecuteSchema, request.body);
+  response.json({ ok: true, data: await restoreProfileSummaryRevision(requireParam(request, "id"), body.revision, body.expectedCurrentRevision) });
+}));
 
 chatsRouter.post(
   "/:id/memories/refresh",
@@ -558,7 +626,7 @@ chatsRouter.post(
     await updateChatMemoriesFromTurn({ chatId, settings });
     const memories = await prisma.chatMemory.findMany({
       where: { chatId },
-      orderBy: [{ enabled: "desc" }, { importance: "desc" }, { updatedAt: "desc" }]
+      orderBy: [{ deletedAt: "asc" }, { enabled: "desc" }, { importance: "desc" }, { updatedAt: "desc" }]
     });
 
     response.json({ ok: true, data: memories.map(serializeChatMemory) });
@@ -645,15 +713,21 @@ chatsRouter.put(
     const id = requireParam(request, "id");
     const body = parseBody(chatUpdateSchema, request.body);
 
-    const existing = await prisma.chat.findFirst({ where: { id, deletedAt: null }, select: { id: true } });
+    const existing = await prisma.chat.findFirst({ where: { id, deletedAt: null } });
     if (!existing) {
       throw new HttpError(404, "Chat not found");
     }
 
-    const chat = await prisma.chat.update({
-      where: { id: existing.id },
-      data: body,
-      include: { _count: { select: { messages: true } } }
+    const chat = await prisma.$transaction(async (tx) => {
+      const { userProfileSummary, ...ordinaryUpdates } = body;
+      if (typeof userProfileSummary === "string") {
+        await updateProfileSummaryInTransaction(tx, existing, userProfileSummary, "user", []);
+      }
+      return tx.chat.update({
+        where: { id: existing.id },
+        data: ordinaryUpdates,
+        include: { _count: { select: { messages: true } } }
+      });
     });
 
     response.json({ ok: true, data: serializeChat(chat, chat._count.messages) });

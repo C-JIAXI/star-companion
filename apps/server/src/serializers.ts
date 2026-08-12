@@ -1,4 +1,4 @@
-import type { Character, Chat, ChatMemory, Message, Prisma, UserSettings } from "@prisma/client";
+import type { Character, Chat, ChatMemory, MemoryOperation, MemoryRevision, Message, Prisma, ProfileSummaryRevision, UserSettings } from "@prisma/client";
 import { resolveCharacterRecord } from "./services/characterCards.js";
 
 interface ProviderModel {
@@ -7,6 +7,13 @@ interface ProviderModel {
   model: string;
   contextWindow?: number;
   capabilities?: AiModelCapability[];
+  pricing?: {
+    inputMicrosPerMillion: number;
+    outputMicrosPerMillion: number;
+    currency: "USD";
+    updatedAt: string;
+    source: "user" | "template";
+  };
 }
 
 type AiModelCapability =
@@ -114,7 +121,16 @@ const toProviderModels = (value: unknown): ProviderModel[] => {
               capability === "text_to_speech" ||
               capability === "image_generation"
           )
-        : undefined
+        : undefined,
+      pricing:
+        item.pricing && typeof item.pricing === "object" && !Array.isArray(item.pricing) &&
+        typeof (item.pricing as Record<string, unknown>).inputMicrosPerMillion === "number" &&
+        typeof (item.pricing as Record<string, unknown>).outputMicrosPerMillion === "number" &&
+        (item.pricing as Record<string, unknown>).currency === "USD" &&
+        typeof (item.pricing as Record<string, unknown>).updatedAt === "string" &&
+        ((item.pricing as Record<string, unknown>).source === "user" || (item.pricing as Record<string, unknown>).source === "template")
+          ? item.pricing as ProviderModel["pricing"]
+          : undefined
     }));
 };
 
@@ -173,6 +189,45 @@ const toModuleModelPreferences = (value: Prisma.JsonValue): ModuleModelPreferenc
   }
 
   return preferences;
+};
+
+const defaultModelReliability = { retry: { enabled: false, maxRetries: 0 }, fallback: {} };
+const toModelReliability = (value: Prisma.JsonValue) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return defaultModelReliability;
+  const raw = value as Record<string, unknown>;
+  const retry = raw.retry && typeof raw.retry === "object" && !Array.isArray(raw.retry)
+    ? raw.retry as Record<string, unknown>
+    : {};
+  const fallback = raw.fallback && typeof raw.fallback === "object" && !Array.isArray(raw.fallback)
+    ? raw.fallback
+    : {};
+  return {
+    retry: {
+      enabled: retry.enabled === true,
+      maxRetries: typeof retry.maxRetries === "number" ? Math.max(0, Math.min(2, Math.trunc(retry.maxRetries))) : 0
+    },
+    fallback
+  };
+};
+
+const defaultUsageBudgets = {
+  dailySoftMicros: null,
+  dailyHardMicros: null,
+  monthlySoftMicros: null,
+  monthlyHardMicros: null,
+  allowUnknownPricing: true
+};
+const toUsageBudgets = (value: Prisma.JsonValue) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return defaultUsageBudgets;
+  const raw = value as Record<string, unknown>;
+  const amount = (key: string) => typeof raw[key] === "number" && Number.isInteger(raw[key]) && (raw[key] as number) >= 0 ? raw[key] as number : null;
+  return {
+    dailySoftMicros: amount("dailySoftMicros"),
+    dailyHardMicros: amount("dailyHardMicros"),
+    monthlySoftMicros: amount("monthlySoftMicros"),
+    monthlyHardMicros: amount("monthlyHardMicros"),
+    allowUnknownPricing: raw.allowUnknownPricing !== false
+  };
 };
 
 const toUserPersonaPresets = (value: Prisma.JsonValue): UserPersonaPreset[] => {
@@ -402,6 +457,9 @@ export const serializeSettings = (settings: UserSettings) => ({
   activeProviderId: settings.activeProviderId ?? "",
   activeModelId: settings.activeModelId ?? "",
   moduleModelPreferences: toModuleModelPreferences(settings.moduleModelPreferences),
+  modelReliability: toModelReliability(settings.modelReliability),
+  usageBudgets: toUsageBudgets(settings.usageBudgets),
+  usageTimezone: settings.usageTimezone || "UTC",
   userPersonaPresets: toUserPersonaPresets(settings.userPersonaPresets),
   userProfileSummary: settings.userProfileSummary,
   autoSummarizeUser: settings.autoSummarizeUser,
@@ -481,6 +539,7 @@ export const serializeChat = (
   ...(includeUserAvatar ? { userAvatar: chat.userAvatar } : {}),
   userProfileSummary: chat.userProfileSummary,
   userProfileUpdatedAt: chat.userProfileUpdatedAt?.toISOString() ?? null,
+  profileRevision: chat.profileRevision,
   createdAt: toIso(chat.createdAt),
   updatedAt: toIso(chat.updatedAt)
 });
@@ -493,6 +552,10 @@ export const serializeChatMemory = (memory: ChatMemory) => ({
   keywords: toStringArray(memory.keywords),
   importance: memory.importance,
   enabled: memory.enabled,
+  deletedAt: memory.deletedAt?.toISOString() ?? null,
+  currentRevision: memory.currentRevision,
+  lastActor: memory.lastActor,
+  lastAction: memory.lastAction,
   sourceMessageIds: toStringArray(memory.sourceMessageIds),
   embeddingModel: memory.embeddingModel,
   embeddingSource: memory.embeddingSource,
@@ -502,6 +565,50 @@ export const serializeChatMemory = (memory: ChatMemory) => ({
   lastMatchedAt: memory.lastMatchedAt?.toISOString() ?? null,
   createdAt: toIso(memory.createdAt),
   updatedAt: toIso(memory.updatedAt)
+});
+
+export const serializeMemoryRevisionForBackup = (revision: MemoryRevision) => ({
+  id: revision.id,
+  memoryId: revision.memoryId,
+  chatId: revision.chatId,
+  revision: revision.revision,
+  action: revision.action,
+  actor: revision.actor,
+  beforeSnapshot: revision.beforeSnapshot,
+  afterSnapshot: revision.afterSnapshot,
+  sourceMessageIds: toStringArray(revision.sourceMessageIds),
+  operationId: revision.operationId,
+  reasonCode: revision.reasonCode,
+  createdAt: toIso(revision.createdAt)
+});
+
+export const serializeMemoryOperationForBackup = (operation: MemoryOperation) => ({
+  id: operation.id,
+  chatId: operation.chatId,
+  type: operation.type,
+  actor: operation.actor,
+  status: operation.status,
+  startedAt: toIso(operation.startedAt),
+  completedAt: operation.completedAt?.toISOString() ?? null,
+  created: operation.createdCount,
+  updated: operation.updatedCount,
+  disabled: operation.disabledCount,
+  unchanged: operation.unchangedCount,
+  sourceMessageIds: toStringArray(operation.sourceMessageIds),
+  errorCode: operation.errorCode,
+  undoneAt: operation.undoneAt?.toISOString() ?? null,
+  undoOperationId: operation.undoOperationId
+});
+
+export const serializeProfileSummaryRevisionForBackup = (revision: ProfileSummaryRevision) => ({
+  id: revision.id,
+  chatId: revision.chatId,
+  revision: revision.revision,
+  action: revision.action,
+  actor: revision.actor,
+  summary: revision.summary,
+  sourceMessageIds: toStringArray(revision.sourceMessageIds),
+  createdAt: toIso(revision.createdAt)
 });
 
 export const serializeMessage = (message: Message) => ({
@@ -515,6 +622,8 @@ export const serializeMessage = (message: Message) => ({
   variants: toStringArray(message.variants),
   activeVariantIndex: message.activeVariantIndex,
   tokenUsage: toTokenUsage(message.tokenUsage),
+  generationMetadata: message.generationMetadata ?? null,
+  variantMetadata: Array.isArray(message.variantMetadata) ? message.variantMetadata : [],
   promptBreakdown: toPromptBreakdown(message.promptBreakdown),
   loreMatches: toLoreMatches(message.loreMatches),
   memoryMatches: toMemoryMatches(message.memoryMatches),

@@ -16,6 +16,22 @@ const tokenUsageSchema = z.object({
   estimated: z.boolean().default(false)
 });
 
+const generationMetadataSchema = z.object({
+  providerId: z.string().min(1).max(240),
+  providerType: z.string().min(1).max(120),
+  modelId: z.string().min(1).max(240),
+  requestId: z.string().min(1).max(240),
+  attemptId: z.string().min(1).max(240),
+  usage: tokenUsageSchema.nullable(),
+  usageSource: z.enum(["provider", "estimated"]).nullable(),
+  inputPriceMicros: z.number().int().min(0).max(2_000_000_000).nullable(),
+  outputPriceMicros: z.number().int().min(0).max(2_000_000_000).nullable(),
+  estimatedCostMicros: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable(),
+  currency: z.literal("USD").nullable(),
+  usedFallback: z.boolean(),
+  incomplete: z.boolean()
+});
+
 const promptBreakdownSectionSchema = z.object({
   id: z.enum([
     "character",
@@ -377,7 +393,8 @@ export const chatMemoryCreateSchema = z.object({
   keywords: z.array(z.string().trim().min(1).max(40)).max(12).default([]),
   importance: z.number().int().min(1).max(5).default(3),
   enabled: z.boolean().default(true),
-  sourceMessageIds: z.array(idSchema).max(20).default([])
+  sourceMessageIds: z.array(idSchema).max(20).default([]),
+  actor: z.enum(["user", "agent_confirmed"]).default("user")
 });
 
 export const chatMemoryUpdateSchema = z
@@ -390,6 +407,35 @@ export const chatMemoryUpdateSchema = z
     sourceMessageIds: z.array(idSchema).max(20).optional()
   })
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");
+
+export const memoryRevisionParamsSchema = z.object({
+  revision: z.coerce.number().int().min(1)
+});
+
+export const memoryRestoreExecuteSchema = z.object({
+  revision: z.number().int().min(1),
+  expectedCurrentRevision: z.number().int().min(0),
+  confirm: z.literal("RESTORE_MEMORY_REVISION")
+});
+
+export const memoryPurgeSchema = z.object({
+  confirm: z.literal("PURGE_MEMORY_HISTORY")
+});
+
+export const memoryUndoExecuteSchema = z.object({
+  resolutions: z.array(z.object({
+    memoryId: idSchema,
+    expectedCurrentRevision: z.number().int().min(0),
+    action: z.enum(["skip", "restore"])
+  })).max(100).default([]),
+  confirm: z.literal("UNDO_MEMORY_OPERATION")
+});
+
+export const profileSummaryRestoreExecuteSchema = z.object({
+  revision: z.number().int().min(1),
+  expectedCurrentRevision: z.number().int().min(0),
+  confirm: z.literal("RESTORE_PROFILE_SUMMARY")
+});
 
 export const chatAgentDraftSchema = z.object({
   mode: z.enum(["scene_summary", "next_steps", "reply_drafts", "memory_lore_candidates", "continuity_check", "character_consistency"]),
@@ -412,6 +458,8 @@ export const messageCreateSchema = z.object({
   variants: z.array(z.string()).default([]),
   activeVariantIndex: z.number().int().min(0).default(0),
   tokenUsage: tokenUsageSchema.nullable().optional(),
+  generationMetadata: generationMetadataSchema.nullable().optional(),
+  variantMetadata: z.array(generationMetadataSchema.nullable()).max(100).default([]),
   promptBreakdown: promptBreakdownSchema.nullable().optional(),
   loreMatches: z.array(loreMatchSchema).nullable().optional(),
   memoryMatches: z.array(matchedMemorySchema).nullable().optional()
@@ -427,6 +475,8 @@ export const messageUpdateSchema = z
   variants: z.array(z.string()).optional(),
   activeVariantIndex: z.number().int().min(0).optional(),
   tokenUsage: tokenUsageSchema.nullable().optional(),
+  generationMetadata: generationMetadataSchema.nullable().optional(),
+  variantMetadata: z.array(generationMetadataSchema.nullable()).max(100).optional(),
   promptBreakdown: promptBreakdownSchema.nullable().optional(),
   loreMatches: z.array(loreMatchSchema).nullable().optional(),
   memoryMatches: z.array(matchedMemorySchema).nullable().optional()
@@ -451,7 +501,14 @@ const providerModelSchema = z.object({
     .array(z.enum(["text_generation", "text_embedding", "audio_transcription", "text_to_speech", "image_generation"]))
     .max(5)
     .transform((capabilities) => Array.from(new Set(capabilities)))
-    .optional()
+    .optional(),
+  pricing: z.object({
+    inputMicrosPerMillion: z.number().int().min(0).max(2_000_000_000),
+    outputMicrosPerMillion: z.number().int().min(0).max(2_000_000_000),
+    currency: z.literal("USD"),
+    updatedAt: z.string().datetime(),
+    source: z.enum(["user", "template"])
+  }).optional()
 });
 
 const providerProfileSchema = z.object({
@@ -479,6 +536,54 @@ export const moduleModelPreferencesSchema = z
     voice_speech: moduleModelPreferenceSchema.optional(),
     image_generation: moduleModelPreferenceSchema.optional()
   });
+
+const moduleFallbackSettingsSchema = z.object({
+  enabled: z.boolean().default(false),
+  allowAutomatic: z.boolean().optional(),
+  chain: z.array(moduleModelPreferenceSchema).max(3).default([])
+}).superRefine((value, context) => {
+  const seen = new Set<string>();
+  for (const [index, entry] of value.chain.entries()) {
+    const key = `${entry.providerId}\0${entry.modelId}`;
+    if (seen.has(key)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["chain", index], message: "Fallback models must be unique." });
+    }
+    seen.add(key);
+  }
+});
+
+export const modelReliabilitySchema = z.object({
+  retry: z.object({
+    enabled: z.boolean().default(false),
+    maxRetries: z.number().int().min(0).max(2).default(0)
+  }).default({ enabled: false, maxRetries: 0 }),
+  fallback: z.object({
+    chat: moduleFallbackSettingsSchema.optional(),
+    agent: moduleFallbackSettingsSchema.optional(),
+    memory: moduleFallbackSettingsSchema.optional(),
+    memory_embedding: moduleFallbackSettingsSchema.optional(),
+    user_profile: moduleFallbackSettingsSchema.optional(),
+    voice_transcription: moduleFallbackSettingsSchema.optional(),
+    voice_speech: moduleFallbackSettingsSchema.optional(),
+    image_generation: moduleFallbackSettingsSchema.optional()
+  }).default({})
+});
+
+const nullableBudgetMicrosSchema = z.number().int().min(0).max(2_000_000_000).nullable();
+export const usageBudgetsSchema = z.object({
+  dailySoftMicros: nullableBudgetMicrosSchema.default(null),
+  dailyHardMicros: nullableBudgetMicrosSchema.default(null),
+  monthlySoftMicros: nullableBudgetMicrosSchema.default(null),
+  monthlyHardMicros: nullableBudgetMicrosSchema.default(null),
+  allowUnknownPricing: z.boolean().default(true)
+}).superRefine((value, context) => {
+  if (value.dailySoftMicros !== null && value.dailyHardMicros !== null && value.dailySoftMicros > value.dailyHardMicros) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["dailySoftMicros"], message: "Daily soft budget cannot exceed the daily hard budget." });
+  }
+  if (value.monthlySoftMicros !== null && value.monthlyHardMicros !== null && value.monthlySoftMicros > value.monthlyHardMicros) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["monthlySoftMicros"], message: "Monthly soft budget cannot exceed the monthly hard budget." });
+  }
+});
 
 const userPersonaPresetSchema = z.object({
   id: z.string().trim().min(1).max(120),
@@ -514,6 +619,12 @@ export const settingsUpdateSchema = z.object({
   activeProviderId: z.string().default(""),
   activeModelId: z.string().default(""),
   moduleModelPreferences: moduleModelPreferencesSchema.optional(),
+  modelReliability: modelReliabilitySchema.optional(),
+  usageBudgets: usageBudgetsSchema.optional(),
+  usageTimezone: z.string().trim().min(1).max(100).optional().refine(
+    (value) => !value || (() => { try { new Intl.DateTimeFormat("en", { timeZone: value }); return true; } catch { return false; } })(),
+    "Usage timezone must be a valid IANA time zone."
+  ),
   userPersonaPresets: z.array(userPersonaPresetSchema).max(30).optional(),
   models: z
     .array(
@@ -539,26 +650,30 @@ export const generationRequestSchema = z.object({
   type: z.literal("generate"),
   requestId: z.string().min(1),
   chatId: idSchema,
-  content: z.string().trim().min(1)
+  content: z.string().trim().min(1),
+  overrideHardBudget: z.boolean().optional()
 });
 
 export const regenerateRequestSchema = z.object({
   type: z.literal("regenerate"),
   requestId: z.string().min(1),
   messageId: idSchema,
-  guidance: z.string().trim().min(1).max(1000).optional()
+  guidance: z.string().trim().min(1).max(1000).optional(),
+  overrideHardBudget: z.boolean().optional()
 });
 
 export const continueRequestSchema = z.object({
   type: z.literal("continue"),
   requestId: z.string().min(1),
-  messageId: idSchema
+  messageId: idSchema,
+  overrideHardBudget: z.boolean().optional()
 });
 
 export const resendRequestSchema = z.object({
   type: z.literal("resend"),
   requestId: z.string().min(1),
-  messageId: idSchema
+  messageId: idSchema,
+  overrideHardBudget: z.boolean().optional()
 });
 
 export const stopGenerationRequestSchema = z.object({
@@ -625,6 +740,7 @@ export const backupChatSchema = chatCreateSchema.extend({
   deletedAt: z.string().datetime().nullable().default(null),
   memoryUpdatedAt: z.string().datetime().nullable().optional(),
   userProfileUpdatedAt: z.string().datetime().nullable().optional(),
+  profileRevision: z.number().int().min(0).default(0),
   createdAt: backupDateSchema,
   updatedAt: backupDateSchema
 });
@@ -635,12 +751,51 @@ export const backupMessageSchema = messageCreateSchema.extend({
   updatedAt: backupDateSchema
 });
 
-export const backupMemorySchema = chatMemoryCreateSchema.extend({
+const memoryActorSchema = z.enum(["user", "automatic_memory", "agent_confirmed", "timeline_cleanup", "restore"]);
+const memoryActionSchema = z.enum(["baseline", "automatic_create", "automatic_update", "automatic_disable", "manual_create", "manual_edit", "manual_enable", "manual_disable", "manual_delete", "agent_confirmed_create", "timeline_disable", "restore", "undo_create", "undo_update", "undo_disable"]);
+const memorySnapshotSchema = z.object({
+  title: z.string().trim().min(1).max(80),
+  content: z.string().trim().min(1).max(1200),
+  keywords: z.array(z.string().trim().min(1).max(40)).max(12).default([]),
+  importance: z.number().int().min(1).max(5),
+  enabled: z.boolean(),
+  sourceMessageIds: z.array(idSchema).max(20).default([])
+});
+
+export const backupMemorySchema = chatMemoryCreateSchema.omit({ actor: true }).extend({
   id: idSchema.optional(),
   chatId: idSchema,
+  deletedAt: z.string().datetime().nullable().default(null),
+  currentRevision: z.number().int().min(0).default(0),
+  lastActor: memoryActorSchema.nullable().default(null),
+  lastAction: memoryActionSchema.nullable().default(null),
   lastMatchedAt: z.string().datetime().nullable().optional(),
   createdAt: backupDateSchema,
   updatedAt: backupDateSchema
+});
+
+export const backupMemoryRevisionSchema = z.object({
+  id: idSchema, memoryId: idSchema, chatId: idSchema, revision: z.number().int().min(1),
+  action: memoryActionSchema, actor: memoryActorSchema,
+  beforeSnapshot: memorySnapshotSchema.nullable(), afterSnapshot: memorySnapshotSchema.nullable(),
+  sourceMessageIds: z.array(idSchema).max(20).default([]), operationId: idSchema.nullable().default(null),
+  reasonCode: z.string().trim().min(1).max(120), createdAt: z.string().datetime()
+});
+
+export const backupMemoryOperationSchema = z.object({
+  id: idSchema, chatId: idSchema, type: z.enum(["automatic_maintenance", "operation_undo"]),
+  actor: memoryActorSchema, status: z.enum(["running", "succeeded", "partial", "failed"]),
+  startedAt: z.string().datetime(), completedAt: z.string().datetime().nullable(),
+  created: z.number().int().min(0), updated: z.number().int().min(0), disabled: z.number().int().min(0), unchanged: z.number().int().min(0),
+  sourceMessageIds: z.array(idSchema).max(20).default([]), errorCode: z.string().max(120).nullable(),
+  undoneAt: z.string().datetime().nullable(), undoOperationId: idSchema.nullable()
+});
+
+export const backupProfileSummaryRevisionSchema = z.object({
+  id: idSchema, chatId: idSchema, revision: z.number().int().min(1),
+  action: z.enum(["baseline", "automatic_update", "manual_edit", "manual_clear", "restore"]),
+  actor: z.enum(["user", "automatic_memory", "restore"]), summary: z.string().max(4000),
+  sourceMessageIds: z.array(idSchema).max(20).default([]), createdAt: z.string().datetime()
 });
 
 export const backupImportSchema = z.object({
@@ -651,7 +806,15 @@ export const backupImportSchema = z.object({
   chats: z.array(backupChatSchema).default([]),
   messages: z.array(backupMessageSchema).default([]),
   memories: z.array(backupMemorySchema).default([]),
+  memoryRevisions: z.array(backupMemoryRevisionSchema).default([]),
+  memoryOperations: z.array(backupMemoryOperationSchema).default([]),
+  profileSummaryRevisions: z.array(backupProfileSummaryRevisionSchema).default([]),
   mode: z.enum(["merge", "replace"]).default("merge")
+});
+
+export const generationStatusRequestSchema = z.object({
+  type: z.literal("status"),
+  requestId: z.string().min(1)
 });
 
 export const backupConflictResolutionSchema = z.object({
@@ -668,6 +831,9 @@ export const backupPreviewRequestSchema = z
     chats: z.unknown().optional(),
     messages: z.unknown().optional(),
     memories: z.unknown().optional(),
+    memoryRevisions: z.unknown().optional(),
+    memoryOperations: z.unknown().optional(),
+    profileSummaryRevisions: z.unknown().optional(),
     mode: z.enum(["merge", "replace"]).default("merge")
   })
   .passthrough();
@@ -684,7 +850,10 @@ export const chatArchiveImportSchema = z.object({
     chat: backupChatSchema,
     character: backupCharacterSchema.nullable(),
     messages: z.array(backupMessageSchema).max(10_000),
-    memories: z.array(backupMemorySchema).max(500)
+    memories: z.array(backupMemorySchema).max(500),
+    memoryRevisions: z.array(backupMemoryRevisionSchema).max(15_000).default([]),
+    memoryOperations: z.array(backupMemoryOperationSchema).max(10_000).default([]),
+    profileSummaryRevisions: z.array(backupProfileSummaryRevisionSchema).max(15_000).default([])
   }),
   title: z.string().trim().min(1).max(120).optional()
 });

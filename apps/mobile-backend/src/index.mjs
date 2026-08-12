@@ -1,7 +1,7 @@
 import cors from "cors";
 import express from "express";
 import { mkdir, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createRequire } from "node:module";
 import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
@@ -33,6 +33,10 @@ import {
   chatMemoryCreateSchema,
   chatMessageSearchQuerySchema,
   chatMemoryUpdateSchema,
+  memoryPurgeSchema,
+  memoryRestoreExecuteSchema,
+  memoryUndoExecuteSchema,
+  profileSummaryRestoreExecuteSchema,
   chatUpdateSchema,
   continueRequestSchema,
   imageGenerationSchema,
@@ -43,6 +47,7 @@ import {
   regenerateRequestSchema,
   resendRequestSchema,
   stopGenerationRequestSchema,
+  generationStatusRequestSchema,
   userProfileUpdateSchema,
   voiceSpeechSchema,
   voiceTranscriptionSchema,
@@ -57,12 +62,12 @@ import {
   isEncryptedApiKey
 } from "../server-dist/services/apiKeyVault.js";
 import {
-  completeChatCompletion,
+  completeChatCompletionDetailed,
   estimateTokenUsage,
   fetchAvailableModels,
-  streamChatCompletion,
-  testModelConnection
+  streamChatCompletion
 } from "../server-dist/services/completions.js";
+import { ModelCallError, normalizeModelError } from "../server-dist/services/modelErrors.js";
 import { generateEmbeddings } from "../server-dist/services/embeddings.js";
 import { buildRegenerationGuidanceMessage } from "../server-dist/services/regeneration.js";
 import { getAppInfo } from "../server-dist/services/appInfo.js";
@@ -285,7 +290,7 @@ const findMatchedLoreEntries = (character, promptFields, recentMessages) => {
 
   const contexts = buildLoreContexts(recentMessages);
   return entries
-    .filter((entry) => entry?.enabled !== false)
+    .filter((entry) => entry?.enabled !== false && !entry?.deletedAt)
     .filter((entry) => {
       if (entry.alwaysActive) return true;
       const triggerMode = normalizeLoreTriggerMode(entry.triggerMode);
@@ -530,15 +535,16 @@ const ensureMemoryEmbeddings = async (memories, settings, force = false) => {
   try {
     for (let start = 0; start < stale.length; start += EMBEDDING_BATCH_SIZE) {
       const batch = stale.slice(start, start + EMBEDDING_BATCH_SIZE);
-      const result = await generateEmbeddings({
-        settings: embeddingSettings,
+      const result = await executeMobileReliableEmbeddings({
+        rootSettings: settings,
         inputs: batch.map(toMemoryEmbeddingText),
-        task: "document"
+        task: "document",
+        chatId: batch[0]?.chatId ?? null
       });
       const embeddingUpdatedAt = new Date().toISOString();
       for (let index = 0; index < batch.length; index += 1) {
         const memory = batch[index];
-        const vector = result.vectors[index];
+        const vector = result.value.vectors[index];
         vectors.set(memory.id, vector);
         await store.updateMemory(memory.chatId, memory.id, {
           embedding: vector,
@@ -616,12 +622,14 @@ const rerankMemories = async (queryText, candidates, settings) => {
 
   try {
     const candidateIds = new Set(candidates.map((candidate) => candidate.id));
-    const raw = await completeChatCompletion({
-      settings: moduleSettings,
+    const raw = (await executeMobileReliableText({
+      rootSettings: settings,
+      module: "memory",
+      operation: "memory_rerank",
       messages: buildMemoryRerankMessages(queryText, candidates),
       maxTokens: 180,
       temperature: 0
-    });
+    })).content;
     const ids = parseRerankedIds(raw.trim(), candidateIds);
     const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
     const selected = ids.map((id) => byId.get(id)).filter(Boolean);
@@ -638,7 +646,7 @@ const recallChatMemories = async ({ chatId, query, recentMessages, settings }) =
   if (!queryText) return [];
 
   const queryTokens = new Set(tokenize(queryText));
-  const memories = store.listMemories(chatId).filter((memory) => memory.enabled !== false);
+  const memories = store.listMemories(chatId).filter((memory) => memory.enabled !== false && !memory.deletedAt);
   let embeddingIndex = null;
   try {
     const embeddingSettings = resolveModuleSettings(settings, "memory_embedding");
@@ -666,12 +674,13 @@ const recallChatMemories = async ({ chatId, query, recentMessages, settings }) =
   let queryVector = null;
   if (embeddingIndex) {
     try {
-      const result = await generateEmbeddings({
-        settings: embeddingIndex.settings,
+      const result = await executeMobileReliableEmbeddings({
+        rootSettings: settings,
         inputs: [queryText.slice(0, 6000)],
-        task: "query"
+        task: "query",
+        chatId
       });
-      queryVector = result.vectors[0]?.length === embeddingIndex.dimensions ? result.vectors[0] : null;
+      queryVector = result.value.vectors[0]?.length === embeddingIndex.dimensions ? result.value.vectors[0] : null;
     } catch {
       queryVector = null;
     }
@@ -751,31 +760,31 @@ const updateUserProfileFromChat = async ({ chatId, settings }) => {
   const chat = getActiveChat(chatId);
   if (!chat) return null;
 
-  const recentContents = store
+  const recentUserMessages = store
     .listMessages(chatId)
     .filter((message) => message.role === "user")
-    .slice(-RECENT_PROFILE_MESSAGE_LIMIT)
-    .map((message) => message.content.trim())
-    .filter(Boolean);
+    .slice(-RECENT_PROFILE_MESSAGE_LIMIT);
+  const recentContents = recentUserMessages.map((message) => message.content.trim()).filter(Boolean);
   if (recentContents.length === 0) return null;
 
   const summary = (
-    await completeChatCompletion({
-      settings: resolveModuleSettings(settings, "user_profile"),
+    await executeMobileReliableText({
+      rootSettings: settings,
+      module: "user_profile",
+      operation: "user_profile_summary",
+      chatId,
       messages: buildUserProfileSummaryMessages(chat.userProfileSummary ?? "", recentContents),
       maxTokens: 500,
       temperature: 0.2
     })
-  )
+  ).content
     .trim()
     .slice(0, MAX_PROFILE_LENGTH);
 
   if (!summary || summary === chat.userProfileSummary) return null;
 
-  return store.updateChat(chatId, {
-    userProfileSummary: summary,
-    userProfileUpdatedAt: new Date().toISOString()
-  });
+  const result = await store.updateProfileSummary(chatId, summary, "automatic_memory", recentUserMessages.map((message) => message.id), "automatic_update");
+  return result?.chat ?? null;
 };
 
 const buildChatMemoryMaintenanceMessages = (existingMemories, recentMessages) => [
@@ -876,79 +885,61 @@ const updateChatMemoriesFromTurn = async ({ chatId, settings, force = false }) =
   const recentMessages = store.listMessages(chatId).slice(-RECENT_MEMORY_MESSAGE_LIMIT);
   if (recentMessages.length === 0) return null;
 
-  const existingMemories = store.listMemories(chatId).slice(0, EXISTING_MEMORY_LIMIT);
-  const raw = await completeChatCompletion({
-    settings: resolveModuleSettings(settings, "memory"),
-    messages: buildChatMemoryMaintenanceMessages(existingMemories, recentMessages),
-    maxTokens: 1600,
-    temperature: 0.2
-  });
-  const actions = parseMemoryActions(raw.trim());
-  if (!actions) return null;
+  const existingMemories = store.listMemories(chatId).filter((memory) => !memory.deletedAt).slice(0, EXISTING_MEMORY_LIMIT);
   const existingIds = new Set(existingMemories.map((memory) => memory.id));
   const sourceMessageIds = recentMessages.map((message) => message.id);
-  let created = 0;
-  let updated = 0;
-  let disabled = 0;
-  const changedMemoryIds = [];
-
-  for (const action of actions.slice(0, 8)) {
-    if (action.type === "create") {
-      const memory = await store.createMemory({
-        chatId,
-        title: action.title,
-        content: action.content,
-        keywords: action.keywords,
-        importance: action.importance,
-        enabled: true,
-        sourceMessageIds
-      });
-      changedMemoryIds.push(memory.id);
-      created += 1;
-      continue;
+  const operation = await store.createMemoryOperation({ chatId, type: "automatic_maintenance", actor: "automatic_memory", status: "running", sourceMessageIds });
+  let actions;
+  try {
+    const raw = (await executeMobileReliableText({
+      rootSettings: settings, module: "memory", operation: "memory_maintenance", chatId,
+      messages: buildChatMemoryMaintenanceMessages(existingMemories, recentMessages), maxTokens: 1600, temperature: 0.2
+    })).content;
+    actions = parseMemoryActions(raw.trim());
+    if (!actions) {
+      const failedAt = new Date().toISOString();
+      await store.writeRecord("memoryOperation", { ...operation, status: "failed", completedAt: failedAt, errorCode: "invalid_model_output", updatedAt: failedAt }, true);
+      return null;
     }
-
-    if (!existingIds.has(action.id)) continue;
-    await store.updateMemory(
-      chatId,
-      action.id,
-      dropUndefined({
-        title: action.title,
-        content: action.content,
-        keywords: action.keywords,
-        importance: action.importance,
-        enabled: action.enabled,
-        sourceMessageIds,
-        ...(action.title || action.content || action.keywords
-          ? {
-              embedding: null,
-              embeddingSource: null,
-              embeddingDimensions: null,
-              embeddingStatus: "stale",
-              embeddingUpdatedAt: null
-            }
-          : {})
-      })
-    );
-    changedMemoryIds.push(action.id);
-    updated += 1;
-    if (action.enabled === false) disabled += 1;
+  } catch (error) {
+    const failedAt = new Date().toISOString();
+    await store.writeRecord("memoryOperation", { ...operation, status: "failed", completedAt: failedAt, errorCode: "maintenance_failed", updatedAt: failedAt }, true);
+    throw error;
   }
-
-  const updatedAt = new Date().toISOString();
-  await store.updateChat(chatId, { memoryUpdatedAt: updatedAt });
-  const changedMemories = changedMemoryIds
+  const result = await store.atomicWrite(async () => {
+    let created = 0;
+    let updated = 0;
+    let disabled = 0;
+    let unchanged = 0;
+    const changedMemoryIds = [];
+    const deduped = actions.slice(0, 8).filter((action, index, list) => action.type === "create" || list.findIndex((candidate) => candidate.type === "update" && candidate.id === action.id) === index);
+    for (const action of deduped) {
+      if (action.type === "create") {
+        const entry = await store.createAuditedMemoryInTransaction({ chatId, title: action.title, content: action.content, keywords: action.keywords, importance: action.importance, enabled: true, sourceMessageIds }, { actor: "automatic_memory", action: "automatic_create", reasonCode: "automatic_maintenance", operationId: operation.id });
+        changedMemoryIds.push(entry.memory.id); created += 1; continue;
+      }
+      if (!existingIds.has(action.id)) { unchanged += 1; continue; }
+      const current = store.getMemory(chatId, action.id);
+      const isDisable = action.enabled === false && current.enabled !== false;
+      const entry = await store.updateAuditedMemoryInTransaction(current, dropUndefined({ title: action.title, content: action.content, keywords: action.keywords, importance: action.importance, enabled: action.enabled, sourceMessageIds }), { actor: "automatic_memory", action: isDisable ? "automatic_disable" : "automatic_update", reasonCode: "automatic_maintenance", operationId: operation.id });
+      if (entry.changed) { changedMemoryIds.push(entry.memory.id); updated += 1; if (isDisable) disabled += 1; } else unchanged += 1;
+    }
+    const updatedAt = new Date().toISOString();
+    await store.writeRecord("chat", { ...store.getChat(chatId), memoryUpdatedAt: updatedAt, updatedAt });
+    await store.writeRecord("memoryOperation", { ...operation, status: unchanged && created + updated ? "partial" : "succeeded", completedAt: updatedAt, created, updated, disabled, unchanged, updatedAt });
+    await store.pruneMemoryOperations(chatId);
+    return { created, updated, disabled, unchanged, changedMemoryIds, updatedAt };
+  });
+  const changedMemories = result.changedMemoryIds
     .map((id) => store.getMemory(chatId, id))
-    .filter((memory) => memory?.enabled !== false);
+    .filter((memory) => memory?.enabled !== false && !memory?.deletedAt);
   if (changedMemories.length) {
     await ensureMemoryEmbeddings(changedMemories, settings);
   }
   return {
-    chatId,
-    created,
-    updated,
-    disabled,
-    memoryUpdatedAt: updatedAt
+    chatId, operationId: operation.id,
+    created: result.created, updated: result.updated, disabled: result.disabled,
+    memoryUpdatedAt: result.updatedAt
   };
 };
 
@@ -982,6 +973,13 @@ const serializeSettings = (settings) => ({
     settings.moduleModelPreferences && typeof settings.moduleModelPreferences === "object"
       ? settings.moduleModelPreferences
       : {},
+  modelReliability: settings.modelReliability && typeof settings.modelReliability === "object"
+    ? settings.modelReliability
+    : { retry: { enabled: false, maxRetries: 0 }, fallback: {} },
+  usageBudgets: settings.usageBudgets && typeof settings.usageBudgets === "object"
+    ? settings.usageBudgets
+    : { dailySoftMicros: null, dailyHardMicros: null, monthlySoftMicros: null, monthlyHardMicros: null, allowUnknownPricing: true },
+  usageTimezone: settings.usageTimezone || "UTC",
   userPersonaPresets: Array.isArray(settings.userPersonaPresets) ? settings.userPersonaPresets : [],
   userProfileSummary: settings.userProfileSummary ?? "",
   autoSummarizeUser: settings.autoSummarizeUser !== false,
@@ -1076,6 +1074,7 @@ const serializeChat = (
   ...(includeUserAvatar ? { userAvatar: chat.userAvatar ?? "" } : {}),
   userProfileSummary: chat.userProfileSummary ?? "",
   userProfileUpdatedAt: chat.userProfileUpdatedAt ?? null,
+  profileRevision: chat.profileRevision ?? 0,
   createdAt: chat.createdAt,
   updatedAt: chat.updatedAt
 });
@@ -1088,6 +1087,10 @@ const serializeMemory = (memory) => ({
   keywords: toStringArray(memory.keywords),
   importance: memory.importance ?? 3,
   enabled: memory.enabled !== false,
+  deletedAt: memory.deletedAt ?? null,
+  currentRevision: memory.currentRevision ?? 0,
+  lastActor: memory.lastActor ?? null,
+  lastAction: memory.lastAction ?? null,
   sourceMessageIds: toStringArray(memory.sourceMessageIds),
   embeddingModel: memory.embeddingModel ?? null,
   embeddingSource: memory.embeddingSource ?? null,
@@ -1110,6 +1113,8 @@ const serializeMessage = (message) => ({
   variants: toStringArray(message.variants),
   activeVariantIndex: message.activeVariantIndex ?? 0,
   tokenUsage: message.tokenUsage ?? null,
+  generationMetadata: message.generationMetadata ?? null,
+  variantMetadata: Array.isArray(message.variantMetadata) ? message.variantMetadata : [],
   promptBreakdown: message.promptBreakdown ?? null,
   loreMatches: Array.isArray(message.loreMatches) ? message.loreMatches : [],
   memoryMatches: Array.isArray(message.memoryMatches) ? message.memoryMatches : [],
@@ -1258,6 +1263,26 @@ const validateModuleModelPreferences = (providers, preferences, activeProviderId
   return null;
 };
 
+const validateModelReliabilitySettings = (providers, reliability) => {
+  const fallback = reliability?.fallback;
+  if (!fallback || typeof fallback !== "object" || Array.isArray(fallback)) return null;
+  for (const moduleId of Object.keys(moduleCapabilities)) {
+    const chain = fallback[moduleId]?.chain;
+    if (!Array.isArray(chain)) continue;
+    const seen = new Set();
+    for (const reference of chain.slice(0, 3)) {
+      const key = `${reference?.providerId}\0${reference?.modelId}`;
+      if (seen.has(key)) return `The ${moduleId} fallback chain contains a duplicate model.`;
+      seen.add(key);
+      const provider = providers.find((entry) => entry.id === reference?.providerId);
+      const model = provider?.models?.find((entry) => entry.id === reference?.modelId);
+      if (!provider || !model) return `The selected ${moduleId} fallback model no longer exists.`;
+      if (!supportsModule(provider, model, moduleId)) return `A selected fallback model does not support ${moduleId}.`;
+    }
+  }
+  return null;
+};
+
 const resolveModuleSettings = (settings, moduleId) => {
   const preference = settings.moduleModelPreferences?.[moduleId];
   if (!preference) {
@@ -1295,6 +1320,271 @@ const resolveModuleSettings = (settings, moduleId) => {
   };
 };
 
+const resolveModelReferenceSettings = (settings, moduleId, reference) => {
+  const provider = (settings.providers ?? []).find((entry) => entry.id === reference.providerId);
+  const model = provider?.models?.find((entry) => entry.id === reference.modelId);
+  if (!provider || !model) throw new Error(`The configured ${moduleId} fallback model no longer exists.`);
+  if (!supportsModule(provider, model, moduleId)) throw new Error(`The configured ${moduleId} fallback model does not support this feature.`);
+  return { ...settings, activeProvider: provider.provider, apiBaseUrl: provider.apiBaseUrl, apiKey: provider.key?.trim() ? provider.key : settings.apiKey, model: model.model, activeProviderId: provider.id, activeModelId: model.id };
+};
+
+const resolveAutomaticFallbackSettings = (settings, moduleId) => {
+  const config = settings.modelReliability?.fallback?.[moduleId];
+  if (config?.enabled !== true || (moduleId === "chat" && config.allowAutomatic !== true)) return [];
+  const primary = resolveModuleSettings(settings, moduleId);
+  const seen = new Set([`${primary.activeProviderId}\0${primary.activeModelId}`]);
+  return (Array.isArray(config.chain) ? config.chain : []).slice(0, 3).flatMap((reference) => {
+    const key = `${reference?.providerId}\0${reference?.modelId}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [resolveModelReferenceSettings(settings, moduleId, reference)];
+  });
+};
+
+const mobileModelIdentity = (settings) => {
+  const provider = (settings.providers ?? []).find((entry) => entry.id === settings.activeProviderId);
+  const model = provider?.models?.find((entry) => entry.id === settings.activeModelId);
+  return {
+    providerId: provider?.id ?? settings.activeProviderId ?? settings.activeProvider,
+    providerType: normalizeProviderKind(provider?.provider ?? settings.activeProvider),
+    modelId: model?.model ?? settings.model,
+    pricing: model?.pricing?.currency === "USD" ? model.pricing : null
+  };
+};
+
+const mobileRetryDelay = (attempt, retryAfterMs) => retryAfterMs ?? Math.min(30_000, Math.round(500 * 2 ** Math.max(0, attempt - 1) * (0.75 + Math.random() * 0.5)));
+const waitMobileRetry = (milliseconds, signal) => new Promise((resolve, reject) => {
+  if (signal?.aborted) return reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  const timer = setTimeout(resolve, milliseconds);
+  signal?.addEventListener("abort", () => { clearTimeout(timer); reject(signal.reason ?? new DOMException("Aborted", "AbortError")); }, { once: true });
+});
+
+const mobileEstimatedCost = (usage, pricing) =>
+  usage && pricing
+    ? Math.ceil(
+        (usage.promptTokens * pricing.inputMicrosPerMillion +
+          usage.completionTokens * pricing.outputMicrosPerMillion) /
+          1_000_000
+      )
+    : null;
+
+const mobileBudgetBlockedError = (identity, attemptNumber, diagnosticId) =>
+  new ModelCallError({
+    code: "budget_blocked",
+    retryable: false,
+    receivedOutputTokens: false,
+    provider: identity.providerType,
+    modelId: identity.modelId,
+    attempt: attemptNumber,
+    summary: "The local hard budget prevented this model call.",
+    diagnosticId
+  });
+
+const executeMobileReliableOperation = async ({
+  rootSettings = store.getSettings(),
+  module,
+  operation,
+  chatId = null,
+  messageId = null,
+  requestId = `req_${randomUUID()}`,
+  overrideHardBudget = false,
+  signal,
+  estimatedInputTokens = 0,
+  maxOutputTokens = 0,
+  specialTokensUnknown = false,
+  invoke
+}) => {
+  const claimed = await store.beginModelRequest({
+    requestId,
+    module,
+    operation,
+    chatId,
+    messageId,
+    overrideHardBudget
+  });
+  if (!claimed.created) {
+    throw new ModelCallError({
+      code: "invalid_request",
+      retryable: false,
+      receivedOutputTokens: false,
+      provider: rootSettings.activeProvider,
+      modelId: rootSettings.model,
+      attempt: 0,
+      summary: "This model request has already been submitted.",
+      diagnosticId: `mdl_${randomUUID().replaceAll("-", "").slice(0, 16)}`
+    });
+  }
+
+  const candidates = [
+    resolveModuleSettings(rootSettings, module),
+    ...resolveAutomaticFallbackSettings(rootSettings, module)
+  ];
+  const primaryIdentity = mobileModelIdentity(candidates[0]);
+  let attemptNumber = 0;
+  let lastError = null;
+
+  for (const [candidateIndex, settings] of candidates.entries()) {
+    const identity = mobileModelIdentity(settings);
+    const retry = settings.modelReliability?.retry;
+    const maxAttempts = retry?.enabled === true
+      ? 1 + Math.max(0, Math.min(2, Number(retry.maxRetries) || 0))
+      : 1;
+    for (let candidateAttempt = 1; candidateAttempt <= maxAttempts; candidateAttempt += 1) {
+      attemptNumber += 1;
+      const pricing = specialTokensUnknown ? null : identity.pricing;
+      const attempt = await store.reserveUsageAttempt({
+        settings,
+        requestId,
+        attemptNumber,
+        module,
+        chatId,
+        messageId,
+        providerId: identity.providerId,
+        providerType: identity.providerType,
+        modelId: identity.modelId,
+        promptTokens: estimatedInputTokens,
+        maxOutputTokens,
+        pricing,
+        specialTokensUnknown,
+        usedFallback: candidateIndex > 0,
+        fallbackFromProviderId: candidateIndex > 0 ? primaryIdentity.providerId : null,
+        fallbackFromModelId: candidateIndex > 0 ? primaryIdentity.modelId : null
+      });
+      if (attempt.status === "blocked") {
+        throw mobileBudgetBlockedError(identity, attemptNumber, attempt.diagnosticId);
+      }
+
+      try {
+        const result = await invoke(settings, signal);
+        const usage = result.usage ?? null;
+        const estimatedCostMicros = mobileEstimatedCost(usage, pricing);
+        const timestamp = new Date().toISOString();
+        await store.settleModelAttempt({
+          attemptId: attempt.id,
+          requestId,
+          attemptUpdates: {
+            status: "succeeded",
+            completedAt: timestamp,
+            promptTokens: usage?.promptTokens ?? null,
+            outputTokens: usage?.completionTokens ?? null,
+            totalTokens: usage?.totalTokens ?? null,
+            usageSource: usage ? (usage.estimated ? "estimated" : "provider") : null,
+            estimatedCostMicros,
+            reservedCostMicros: 0,
+            specialTokensUnknown
+          },
+          requestUpdates: { status: "succeeded", messageId, completedAt: timestamp }
+        });
+        return {
+          ...result,
+          requestId,
+          attemptId: attempt.id,
+          attemptNumber,
+          identity,
+          usedFallback: candidateIndex > 0,
+          pricing,
+          estimatedCostMicros,
+          specialTokensUnknown
+        };
+      } catch (caught) {
+        const error = normalizeModelError(caught, {
+          provider: identity.providerType,
+          modelId: identity.modelId,
+          attempt: attemptNumber,
+          cancelled: signal?.aborted
+        });
+        const canRetry = error.safe.retryable && candidateAttempt < maxAttempts && !signal?.aborted;
+        const canFallback = error.safe.retryable && candidateIndex < candidates.length - 1 && !signal?.aborted;
+        const final = !canRetry && !canFallback;
+        const timestamp = new Date().toISOString();
+        await store.settleModelAttempt({
+          attemptId: attempt.id,
+          requestId,
+          attemptUpdates: {
+            status: error.safe.code === "cancelled" ? "cancelled" : "failed",
+            completedAt: timestamp,
+            reservedCostMicros: 0,
+            errorCode: error.safe.code,
+            diagnosticId: error.safe.diagnosticId,
+            specialTokensUnknown
+          },
+          requestUpdates: final
+            ? {
+                status: error.safe.code === "cancelled" ? "cancelled" : "failed",
+                completedAt: timestamp,
+                errorCode: error.safe.code,
+                errorSummary: error.safe.summary,
+                diagnosticId: error.safe.diagnosticId
+              }
+            : { status: "queued", activeAttemptId: null }
+        });
+        lastError = error;
+        if (canRetry) {
+          try {
+            await waitMobileRetry(mobileRetryDelay(candidateAttempt, error.safe.retryAfterMs), signal);
+          } catch (waitError) {
+            const cancelled = normalizeModelError(waitError, {
+              provider: identity.providerType,
+              modelId: identity.modelId,
+              attempt: attemptNumber,
+              cancelled: signal?.aborted
+            });
+            await store.updateModelRequest(requestId, {
+              status: "cancelled",
+              activeAttemptId: null,
+              completedAt: new Date().toISOString(),
+              errorCode: cancelled.safe.code,
+              errorSummary: cancelled.safe.summary,
+              diagnosticId: cancelled.safe.diagnosticId
+            });
+            throw cancelled;
+          }
+          continue;
+        }
+        if (canFallback) break;
+        throw error;
+      }
+    }
+  }
+  throw lastError ?? new Error("Model request failed");
+};
+
+const executeMobileReliableText = async ({
+  rootSettings = store.getSettings(), module, operation, messages, chatId = null,
+  messageId = null, requestId, overrideHardBudget, signal, maxTokens, temperature
+}) => executeMobileReliableOperation({
+  rootSettings,
+  module,
+  operation,
+  chatId,
+  messageId,
+  requestId,
+  overrideHardBudget,
+  signal,
+  estimatedInputTokens: messages.reduce((total, message) => total + estimatePromptTokens(message.content), 0),
+  maxOutputTokens: maxTokens ?? resolveModuleSettings(rootSettings, module).maxTokens,
+  invoke: async (settings, attemptSignal) => ({
+    ...(await completeChatCompletionDetailed({ settings, messages, signal: attemptSignal, maxTokens, temperature }))
+  })
+});
+
+const executeMobileReliableEmbeddings = async ({ rootSettings = store.getSettings(), inputs, task, chatId = null }) => {
+  const promptTokens = inputs.reduce((total, input) => total + estimatePromptTokens(input), 0);
+  return executeMobileReliableOperation({
+    rootSettings,
+    module: "memory_embedding",
+    operation: task === "query" ? "memory_embedding_query" : "memory_embedding_index",
+    chatId,
+    estimatedInputTokens: promptTokens,
+    maxOutputTokens: 0,
+    specialTokensUnknown: true,
+    invoke: async (settings) => ({
+      value: await generateEmbeddings({ settings, inputs, task }),
+      usage: { promptTokens, completionTokens: 0, totalTokens: promptTokens, estimated: true }
+    })
+  });
+};
+
 const joinApiPath = (baseUrl, requestPath) =>
   `${baseUrl.replace(/\/+$/, "")}/${requestPath.replace(/^\/+/, "")}`;
 
@@ -1323,7 +1613,10 @@ const readModelError = async (response) => {
   }
 };
 
-const transcribeAudio = async ({ settings, audioBase64, mimeType, filename }) => {
+const mobileProviderSignal = (signal) =>
+  signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000);
+
+const transcribeAudio = async ({ settings, audioBase64, mimeType, filename, signal }) => {
   assertOpenAiCompatible(settings, "Voice transcription");
   const form = new FormData();
   form.set("model", settings.model);
@@ -1335,19 +1628,21 @@ const transcribeAudio = async ({ settings, audioBase64, mimeType, filename }) =>
   const response = await fetch(joinApiPath(settings.apiBaseUrl, "audio/transcriptions"), {
     method: "POST",
     headers: openAiHeaders(settings, ""),
-    body: form
+    body: form,
+    signal: mobileProviderSignal(signal)
   });
   if (!response.ok) throw new Error(await readModelError(response));
   const payload = await response.json();
   return { text: String(payload.text ?? "").trim(), model: settings.model, createdAt: new Date().toISOString() };
 };
 
-const createSpeechAudio = async ({ settings, text, voice, format }) => {
+const createSpeechAudio = async ({ settings, text, voice, format, signal }) => {
   assertOpenAiCompatible(settings, "Text to speech");
   const response = await fetch(joinApiPath(settings.apiBaseUrl, "audio/speech"), {
     method: "POST",
     headers: openAiHeaders(settings),
-    body: JSON.stringify({ model: settings.model, input: text, voice, response_format: format })
+    body: JSON.stringify({ model: settings.model, input: text, voice, response_format: format }),
+    signal: mobileProviderSignal(signal)
   });
   if (!response.ok) throw new Error(await readModelError(response));
   return {
@@ -1358,12 +1653,13 @@ const createSpeechAudio = async ({ settings, text, voice, format }) => {
   };
 };
 
-const generateImage = async ({ settings, prompt, size }) => {
+const generateImage = async ({ settings, prompt, size, signal }) => {
   assertOpenAiCompatible(settings, "Image generation");
   const response = await fetch(joinApiPath(settings.apiBaseUrl, "images/generations"), {
     method: "POST",
     headers: openAiHeaders(settings),
-    body: JSON.stringify({ model: settings.model, prompt, n: 1, size, response_format: "b64_json" })
+    body: JSON.stringify({ model: settings.model, prompt, n: 1, size, response_format: "b64_json" }),
+    signal: mobileProviderSignal(signal)
   });
   if (!response.ok) throw new Error(await readModelError(response));
   const payload = await response.json();
@@ -1600,16 +1896,19 @@ const createAgentDraft = async ({ chatId, mode, focus }) => {
     throw notFound("Chat not found");
   }
 
-  const settings = resolveModuleSettings(store.getSettings(), "agent");
+  const rootSettings = store.getSettings();
   const context = await getPromptContext({ chatId });
   const content = (
-    await completeChatCompletion({
-      settings,
+    await executeMobileReliableText({
+      rootSettings,
+      module: "agent",
+      operation: "agent_draft",
+      chatId,
       messages: buildAgentDraftMessages(context.messages, mode, focus),
-      maxTokens: Math.min(settings.maxTokens, 900),
-      temperature: Math.min(settings.temperature, 0.4)
+      maxTokens: Math.min(resolveModuleSettings(rootSettings, "agent").maxTokens, 900),
+      temperature: Math.min(resolveModuleSettings(rootSettings, "agent").temperature, 0.4)
     })
-  ).trim();
+  ).content.trim();
 
   if (!content) {
     throw new Error("Agent returned an empty draft.");
@@ -1622,7 +1921,8 @@ const createAgentDraft = async ({ chatId, mode, focus }) => {
     createdAt: new Date().toISOString(),
     actions: extractAgentActions(mode, content),
     matchedLoreEntries: context.matchedLoreEntries,
-    matchedMemoryEntries: context.matchedMemoryEntries
+    matchedMemoryEntries: context.matchedMemoryEntries,
+    sourceMessageIds: store.listMessages(chatId).filter((message) => message.contextIncluded !== false).slice(-20).map((message) => message.id)
   };
 };
 
@@ -1670,14 +1970,18 @@ const createTitleSuggestion = async (chatId) => {
     throw httpError(400, "A chat needs at least one included message before generating a title");
   }
 
-  const settings = resolveModuleSettings(store.getSettings(), "chat");
+  const rootSettings = store.getSettings();
+  const settings = resolveModuleSettings(rootSettings, "chat");
   const title = normalizeTitleSuggestion(
-    await completeChatCompletion({
-      settings,
+    (await executeMobileReliableText({
+      rootSettings,
+      module: "chat",
+      operation: "chat_title",
+      chatId,
       messages: buildTitleSuggestionMessages(messages),
       maxTokens: Math.min(settings.maxTokens, 80),
       temperature: Math.min(settings.temperature, 0.25)
-    })
+    })).content
   );
   if (!title) throw new Error("Model returned an empty title suggestion");
 
@@ -1718,17 +2022,21 @@ const createOpeningMessage = async (chatId) => {
     throw httpError(409, "Opening message can only be generated for an empty chat");
   }
 
-  const settings = resolveModuleSettings(store.getSettings(), "chat");
+  const rootSettings = store.getSettings();
+  const settings = resolveModuleSettings(rootSettings, "chat");
   const context = await getPromptContext({ chatId });
   const messages = [...context.messages, openingInstruction];
   const content = (
-    await completeChatCompletion({
-      settings,
+    await executeMobileReliableText({
+      rootSettings,
+      module: "chat",
+      operation: "chat_opening",
+      chatId,
       messages,
       maxTokens: Math.min(settings.maxTokens, 700),
       temperature: Math.min(settings.temperature, 0.7)
     })
-  ).trim();
+  ).content.trim();
 
   if (!content) {
     throw new Error("Model returned an empty opening message");
@@ -1767,11 +2075,15 @@ const exportChatArchive = (chatId) => {
     chat: serializeChat(chat, store.listMessages(chatId).length),
     character,
     messages: store.listMessages(chatId).map(serializeMessage),
-    memories: store.listMemories(chatId).map(serializeMemory)
+    memories: store.listMemories(chatId).map(serializeMemory),
+    memoryRevisions: store.listRawMemoryRevisions(chatId),
+    memoryOperations: store.listRawMemoryOperations(chatId),
+    profileSummaryRevisions: store.listRawProfileSummaryRevisions(chatId)
   };
 };
 
 const importChatArchive = async ({ archive, title }) => {
+  const importedAt = () => new Date().toISOString();
   let characterId = null;
   if (archive.character) {
     const existing = store.listCharacters().find((character) => character.cardId === archive.character.cardId);
@@ -1791,7 +2103,10 @@ const importChatArchive = async ({ archive, title }) => {
     autoMemoryEnabled: archive.chat.autoMemoryEnabled,
     userPersona: archive.chat.userPersona,
     userAvatar: archive.chat.userAvatar ?? "",
-    userProfileSummary: archive.chat.userProfileSummary
+    userProfileSummary: archive.chat.userProfileSummary,
+    profileRevision: archive.profileSummaryRevisions.length
+      ? archive.chat.profileRevision
+      : archive.chat.userProfileSummary ? 1 : 0
   });
   const messageIds = new Map();
   for (const source of archive.messages) {
@@ -1803,24 +2118,126 @@ const importChatArchive = async ({ archive, title }) => {
     });
     if (sourceId) messageIds.set(sourceId, message.id);
   }
-  for (const source of archive.memories) {
-    const { id: _sourceId, ...memoryInput } = source;
-    await store.createMemory({
-      ...memoryInput,
-      chatId: chat.id,
-      sourceMessageIds: (source.sourceMessageIds ?? []).map((id) => messageIds.get(id)).filter(Boolean)
-    });
-  }
+  const memoryIds = new Map();
+  const operationIds = new Map();
+  await store.atomicWrite(async () => {
+    for (const source of archive.memoryOperations) {
+      const id = randomUUID();
+      operationIds.set(source.id, id);
+      await store.writeRecord("memoryOperation", {
+        ...source,
+        id,
+        chatId: chat.id,
+        sourceMessageIds: (source.sourceMessageIds ?? []).map((sourceId) => messageIds.get(sourceId)).filter(Boolean),
+        undoOperationId: null,
+        createdAt: source.startedAt,
+        updatedAt: importedAt()
+      });
+    }
+    for (const source of archive.memoryOperations) {
+      if (!source.undoOperationId) continue;
+      const id = operationIds.get(source.id);
+      const undoOperationId = operationIds.get(source.undoOperationId);
+      if (!id || !undoOperationId) continue;
+      const operation = store.readRecord("memoryOperation", id);
+      if (operation) await store.writeRecord("memoryOperation", { ...operation, undoOperationId });
+    }
+    for (const source of archive.memories) {
+      const id = randomUUID();
+      memoryIds.set(source.id, id);
+      const mappedSources = (source.sourceMessageIds ?? []).map((sourceId) => messageIds.get(sourceId)).filter(Boolean);
+      await store.writeRecord("memory", {
+        ...source,
+        id,
+        chatId: chat.id,
+        sourceMessageIds: mappedSources,
+        embedding: null,
+        embeddingModel: null,
+        embeddingSource: null,
+        embeddingDimensions: null,
+        embeddingStatus: "stale",
+        embeddingUpdatedAt: null,
+        updatedAt: importedAt()
+      });
+    }
+    for (const source of archive.memoryRevisions) {
+      const memoryId = memoryIds.get(source.memoryId);
+      if (!memoryId) continue;
+      const mapSnapshot = (snapshot) => snapshot ? {
+        ...snapshot,
+        sourceMessageIds: (snapshot.sourceMessageIds ?? []).map((sourceId) => messageIds.get(sourceId)).filter(Boolean)
+      } : null;
+      await store.writeRecord("memoryRevision", {
+        ...source,
+        id: randomUUID(),
+        memoryId,
+        chatId: chat.id,
+        beforeSnapshot: mapSnapshot(source.beforeSnapshot),
+        afterSnapshot: mapSnapshot(source.afterSnapshot),
+        sourceMessageIds: (source.sourceMessageIds ?? []).map((sourceId) => messageIds.get(sourceId)).filter(Boolean),
+        operationId: source.operationId ? operationIds.get(source.operationId) ?? null : null,
+        updatedAt: importedAt()
+      });
+    }
+    for (const source of archive.profileSummaryRevisions) {
+      await store.writeRecord("profileSummaryRevision", {
+        ...source,
+        id: randomUUID(),
+        chatId: chat.id,
+        sourceMessageIds: (source.sourceMessageIds ?? []).map((sourceId) => messageIds.get(sourceId)).filter(Boolean),
+        updatedAt: importedAt()
+      });
+    }
+    for (const source of archive.memories) {
+      if (archive.memoryRevisions.some((revision) => revision.memoryId === source.id)) continue;
+      const memoryId = memoryIds.get(source.id);
+      const memory = memoryId ? store.getMemory(chat.id, memoryId) : null;
+      if (!memory) continue;
+      const baseline = { ...memory, currentRevision: 1, lastActor: "restore", lastAction: "baseline" };
+      await store.writeRecord("memory", baseline);
+      await store.writeRecord("memoryRevision", {
+        id: randomUUID(), memoryId: memory.id, chatId: chat.id, revision: 1,
+        action: "baseline", actor: "restore",
+        beforeSnapshot: memory.deletedAt ? store.memorySnapshot(baseline) : null,
+        afterSnapshot: memory.deletedAt ? null : store.memorySnapshot(baseline),
+        sourceMessageIds: baseline.sourceMessageIds ?? [], operationId: null,
+        reasonCode: "legacy_archive_baseline", createdAt: baseline.createdAt ?? importedAt(), updatedAt: importedAt()
+      });
+    }
+  });
+  const importedChat = store.getChat(chat.id);
   return {
-    ...serializeChat(chat, store.listMessages(chat.id).length),
+    ...serializeChat(importedChat, store.listMessages(chat.id).length),
     messages: store.listMessages(chat.id).map(serializeMessage),
     memories: store.listMemories(chat.id).map(serializeMemory)
   };
 };
 
 const app = express();
+let privacyPasscodeDigest = null;
+let closeMobileSocketsForPrivacy = () => undefined;
+const privacyDigest = (passcode) => createHash("sha256").update(passcode, "utf8").digest();
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "25mb" }));
+
+app.get("/api/privacy/status", (_request, response) => response.json({ ok: true, data: { locked: privacyPasscodeDigest !== null } }));
+app.post("/api/privacy/lock", (request, response) => {
+  const passcode = typeof request.body?.passcode === "string" ? request.body.passcode : "";
+  if (passcode.length < 4 || passcode.length > 128) return response.status(400).json({ ok: false, error: "Unlock code must contain 4 to 128 characters." });
+  privacyPasscodeDigest = privacyDigest(passcode);
+  closeMobileSocketsForPrivacy();
+  response.json({ ok: true, data: { locked: true } });
+});
+app.post("/api/privacy/unlock", (request, response) => {
+  const passcode = typeof request.body?.passcode === "string" ? request.body.passcode : "";
+  if (privacyPasscodeDigest && !timingSafeEqual(privacyPasscodeDigest, privacyDigest(passcode))) return response.status(401).json({ ok: false, error: "Incorrect unlock code." });
+  privacyPasscodeDigest = null;
+  response.json({ ok: true, data: { locked: false } });
+});
+app.use("/api", (_request, response, next) => {
+  if (privacyPasscodeDigest) return response.status(423).json({ ok: false, error: "App is locked." });
+  next();
+});
 
 app.get("/api/health", (_request, response) => {
   response.json({
@@ -2114,7 +2531,9 @@ app.post(
     const chatId = requireParam(request, "id");
     if (!getActiveChat(chatId)) throw notFound("Chat not found");
     const body = parseBody(chatMemoryCreateSchema, request.body);
-    const createdMemory = await store.createMemory({ ...body, chatId });
+    const { actor, ...memoryInput } = body;
+    const created = await store.createAuditedMemory({ ...memoryInput, chatId }, { actor, action: actor === "agent_confirmed" ? "agent_confirmed_create" : "manual_create", reasonCode: actor === "agent_confirmed" ? "agent_candidate_confirmed" : "user_created" });
+    const createdMemory = created.memory;
     await ensureMemoryEmbeddings([createdMemory], store.getSettings());
     response.status(201).json({
       ok: true,
@@ -2129,31 +2548,14 @@ app.put(
     const chatId = requireParam(request, "id");
     if (!getActiveChat(chatId)) throw notFound("Chat not found");
     const body = parseBody(chatMemoryUpdateSchema, request.body);
-    const embeddingSourceChanged =
-      hasOwn(body, "title") || hasOwn(body, "content") || hasOwn(body, "keywords");
-    const memory = await store.updateMemory(
-      chatId,
-      requireParam(request, "memoryId"),
-      {
-        ...body,
-        ...(embeddingSourceChanged
-          ? {
-              embedding: null,
-              embeddingSource: null,
-              embeddingDimensions: null,
-              embeddingStatus: "stale",
-              embeddingUpdatedAt: null
-            }
-          : {})
-      }
-    );
-    if (!memory) throw notFound("Memory not found");
-    if (memory.enabled !== false) {
-      await ensureMemoryEmbeddings([memory], store.getSettings());
+    const result = await store.updateAuditedMemory(chatId, requireParam(request, "memoryId"), body);
+    if (!result) throw notFound("Memory not found");
+    if (result.memory.enabled !== false) {
+      await ensureMemoryEmbeddings([result.memory], store.getSettings());
     }
     response.json({
       ok: true,
-      data: serializeMemory(store.getMemory(chatId, memory.id))
+      data: serializeMemory(store.getMemory(chatId, result.memory.id))
     });
   })
 );
@@ -2163,11 +2565,71 @@ app.delete(
   asyncHandler(async (request, response) => {
     const chatId = requireParam(request, "id");
     if (!getActiveChat(chatId)) throw notFound("Chat not found");
-    const deleted = await store.deleteMemory(chatId, requireParam(request, "memoryId"));
+    const deleted = await store.tombstoneMemory(chatId, requireParam(request, "memoryId"));
     if (!deleted) throw notFound("Memory not found");
     response.status(204).send();
   })
 );
+
+app.get("/api/chats/:id/memories/:memoryId/revisions", (request, response) => {
+  const data = store.listMemoryRevisions(requireParam(request, "id"), requireParam(request, "memoryId"));
+  if (!data) throw notFound("Memory not found");
+  response.json({ ok: true, data });
+});
+
+app.get("/api/chats/:id/memories/:memoryId/revisions/:revision/restore-preview", (request, response) => {
+  const data = store.previewMemoryRestore(requireParam(request, "id"), requireParam(request, "memoryId"), Number(requireParam(request, "revision")));
+  if (!data) throw notFound("Memory revision not found");
+  response.json({ ok: true, data });
+});
+
+app.post("/api/chats/:id/memories/:memoryId/restore", asyncHandler(async (request, response) => {
+  const body = parseBody(memoryRestoreExecuteSchema, request.body);
+  const data = await store.restoreMemory(requireParam(request, "id"), requireParam(request, "memoryId"), body.revision, body.expectedCurrentRevision);
+  if (!data) throw notFound("Memory revision not found");
+  response.json({ ok: true, data: { memory: serializeMemory(data.memory), revision: data.revision } });
+}));
+
+app.post("/api/chats/:id/memories/:memoryId/purge", asyncHandler(async (request, response) => {
+  parseBody(memoryPurgeSchema, request.body);
+  const purged = await store.purgeMemory(requireParam(request, "id"), requireParam(request, "memoryId"));
+  if (!purged) { const error = new Error("Only a deleted memory can be permanently purged."); error.status = 409; throw error; }
+  response.json({ ok: true, data: { purged: true } });
+}));
+
+app.get("/api/chats/:id/memory-operations", (request, response) => response.json({ ok: true, data: store.listMemoryOperations(requireParam(request, "id")) }));
+
+app.post("/api/chats/:id/memory-operations/:operationId/undo-preview", (request, response) => {
+  const data = store.previewMemoryOperationUndo(requireParam(request, "id"), requireParam(request, "operationId"));
+  if (!data) throw notFound("Memory operation not found");
+  response.json({ ok: true, data });
+});
+
+app.post("/api/chats/:id/memory-operations/:operationId/undo", asyncHandler(async (request, response) => {
+  const body = parseBody(memoryUndoExecuteSchema, request.body);
+  const data = await store.executeMemoryOperationUndo(requireParam(request, "id"), requireParam(request, "operationId"), body.resolutions);
+  if (!data) throw notFound("Memory operation not found");
+  response.json({ ok: true, data });
+}));
+
+app.get("/api/chats/:id/profile-summary/revisions", (request, response) => {
+  const data = store.listProfileSummaryRevisions(requireParam(request, "id"));
+  if (!data) throw notFound("Chat not found");
+  response.json({ ok: true, data });
+});
+
+app.get("/api/chats/:id/profile-summary/revisions/:revision/restore-preview", (request, response) => {
+  const data = store.previewProfileSummaryRestore(requireParam(request, "id"), Number(requireParam(request, "revision")));
+  if (!data) throw notFound("Profile summary revision not found");
+  response.json({ ok: true, data });
+});
+
+app.post("/api/chats/:id/profile-summary/restore", asyncHandler(async (request, response) => {
+  const body = parseBody(profileSummaryRestoreExecuteSchema, request.body);
+  const data = await store.restoreProfileSummary(requireParam(request, "id"), body.revision, body.expectedCurrentRevision);
+  if (!data) throw notFound("Profile summary revision not found");
+  response.json({ ok: true, data });
+}));
 
 app.post(
   "/api/chats/:id/memories/refresh",
@@ -2190,7 +2652,7 @@ app.post(
     if (!getActiveChat(chatId)) throw notFound("Chat not found");
     const enabledMemories = store
       .listMemories(chatId)
-      .filter((memory) => memory.enabled !== false);
+      .filter((memory) => memory.enabled !== false && !memory.deletedAt);
     if (enabledMemories.length === 0) {
       response.json({ ok: true, data: store.listMemories(chatId).map(serializeMemory) });
       return;
@@ -2242,7 +2704,8 @@ app.post(
       userPersona: chat.userPersona,
       userAvatar: chat.userAvatar ?? "",
       userProfileSummary: chat.userProfileSummary,
-      userProfileUpdatedAt: chat.userProfileUpdatedAt
+      userProfileUpdatedAt: chat.userProfileUpdatedAt,
+      profileBaselineActor: "restore"
     });
 
     for (const message of messages.slice(0, targetIndex + 1)) {
@@ -2415,7 +2878,9 @@ app.put(
     const id = requireParam(request, "id");
     if (!getActiveChat(id)) throw notFound("Chat not found");
     const body = parseBody(chatUpdateSchema, request.body);
-    const chat = await store.updateChat(id, body);
+    const { userProfileSummary, ...ordinaryUpdates } = body;
+    if (typeof userProfileSummary === "string") await store.updateProfileSummary(id, userProfileSummary, "user", []);
+    const chat = await store.updateChat(id, ordinaryUpdates);
     if (!chat) throw notFound("Chat not found");
     response.json({ ok: true, data: serializeChat(chat) });
   })
@@ -2496,13 +2961,25 @@ app.put(
 );
 
 app.delete(
+  "/api/messages/:id/timeline",
+  asyncHandler(async (request, response) => {
+    const id = requireParam(request, "id");
+    const existing = store.getMessage(id);
+    if (!existing || !getActiveChat(existing.chatId)) throw notFound("Message not found");
+    const result = await store.deleteMessageTimeline(id);
+    if (!result) throw notFound("Message not found");
+    response.json({ ok: true, data: result });
+  })
+);
+
+app.delete(
   "/api/messages/:id",
   asyncHandler(async (request, response) => {
     const id = requireParam(request, "id");
     const existing = store.getMessage(id);
     if (!existing || !getActiveChat(existing.chatId)) throw notFound("Message not found");
-    const message = await store.deleteMessage(id);
-    if (!message) throw notFound("Message not found");
+    const result = await store.deleteMessageTimeline(id);
+    if (!result) throw notFound("Message not found");
     response.status(204).send();
   })
 );
@@ -2519,6 +2996,9 @@ app.put(
     const moduleModelPreferences =
       body.moduleModelPreferences ?? existingSettings.moduleModelPreferences ?? {};
     const userPersonaPresets = body.userPersonaPresets ?? existingSettings.userPersonaPresets ?? [];
+    const modelReliability = body.modelReliability ?? existingSettings.modelReliability;
+    const usageBudgets = body.usageBudgets ?? existingSettings.usageBudgets;
+    const usageTimezone = body.usageTimezone ?? existingSettings.usageTimezone;
     const moduleModelError = validateModuleModelPreferences(
       body.providers,
       moduleModelPreferences,
@@ -2526,6 +3006,8 @@ app.put(
       body.activeModelId
     );
     if (moduleModelError) throw httpError(400, moduleModelError);
+    const reliabilityError = validateModelReliabilitySettings(body.providers, modelReliability);
+    if (reliabilityError) throw httpError(400, reliabilityError);
     const providers = mergeProviderProfiles(body.providers, existingSettings.providers);
     const activeProfile = body.providers.find((provider) => provider.id === body.activeProviderId);
     const storedActiveProfile = providers.find((provider) => provider.id === body.activeProviderId);
@@ -2539,6 +3021,9 @@ app.put(
       activeModelId: body.activeModelId,
       moduleModelPreferences,
       userPersonaPresets,
+      modelReliability,
+      usageBudgets,
+      usageTimezone,
       activeProvider: activeProfile?.provider ?? body.activeProvider,
       apiBaseUrl: activeProfile?.apiBaseUrl ?? body.apiBaseUrl,
       model: activeModel?.model ?? body.model,
@@ -2586,7 +3071,120 @@ app.put(
 );
 
 app.post("/api/settings/test", asyncHandler(async (_request, response) => {
-  response.json({ ok: true, data: await testModelConnection(store.getSettings()) });
+  const result = await executeMobileReliableText({
+    module: "chat",
+    operation: "connection_test",
+    messages: [{ role: "user", content: "Connection test" }],
+    maxTokens: 8,
+    temperature: 0
+  });
+  response.json({
+    ok: true,
+    data: {
+      reachable: true,
+      provider: result.identity.providerType,
+      model: result.identity.modelId,
+      requestId: result.requestId
+    }
+  });
+}));
+
+const mobileUsageBucket = (rows, keyOf, labelOf = keyOf) => {
+  const map = new Map();
+  for (const row of rows) {
+    const key = keyOf(row);
+    const item = map.get(key) ?? { key, label: labelOf(row), attempts: 0, succeeded: 0, failed: 0, retries: 0, fallbacks: 0, promptTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCostMicros: 0, unknownCostAttempts: 0 };
+    item.attempts += 1; item.succeeded += row.status === "succeeded" ? 1 : 0; item.failed += ["failed", "interrupted"].includes(row.status) ? 1 : 0;
+    item.retries += (row.attemptNumber ?? 1) > 1 ? 1 : 0; item.fallbacks += row.usedFallback ? 1 : 0;
+    item.promptTokens += row.promptTokens ?? 0; item.outputTokens += row.outputTokens ?? 0; item.totalTokens += row.totalTokens ?? 0;
+    item.estimatedCostMicros += row.estimatedCostMicros ?? 0; item.unknownCostAttempts += row.estimatedCostMicros == null ? 1 : 0;
+    map.set(key, item);
+  }
+  return [...map.values()];
+};
+
+app.get("/api/usage/summary", (request, response) => {
+  const settings = store.getSettings();
+  const now = new Date();
+  const from = typeof request.query.from === "string" ? new Date(request.query.from) : new Date(now.getTime() - 31 * 86_400_000);
+  const to = typeof request.query.to === "string" ? new Date(request.query.to) : new Date(now.getTime() + 1);
+  if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || to <= from || to.getTime() - from.getTime() > 370 * 86_400_000) {
+    throw httpError(400, "Usage range must be between 1 and 370 days.");
+  }
+  const moduleFilter = typeof request.query.module === "string" && Object.hasOwn(moduleCapabilities, request.query.module) ? request.query.module : null;
+  const providerFilter = typeof request.query.providerId === "string" && request.query.providerId ? request.query.providerId : null;
+  const modelFilter = typeof request.query.modelId === "string" && request.query.modelId ? request.query.modelId : null;
+  const chatFilter = typeof request.query.chatId === "string" && request.query.chatId ? request.query.chatId : null;
+  const allRows = store.listUsageAttempts();
+  const rows = allRows.filter((row) => {
+    const startedAt = new Date(row.startedAt).getTime();
+    return startedAt >= from.getTime() && startedAt < to.getTime() &&
+      (!moduleFilter || row.module === moduleFilter) &&
+      (!providerFilter || row.providerId === providerFilter) &&
+      (!modelFilter || row.modelId === modelFilter) &&
+      (!chatFilter || row.chatId === chatFilter);
+  });
+  const timezone = settings.usageTimezone || "UTC";
+  const dateParts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const part = (type) => dateParts.find((entry) => entry.type === type)?.value ?? "";
+  const day = `${part("year")}-${part("month")}-${part("day")}`; const month = day.slice(0, 7);
+  const todayRows = allRows.filter((row) => row.reservationDay === day); const monthRows = allRows.filter((row) => row.reservationMonth === month);
+  const sum = (values, key) => values.reduce((total, row) => total + (row[key] ?? 0), 0);
+  response.json({ ok: true, data: {
+    from: from.toISOString(), to: to.toISOString(),
+    todayCostMicros: sum(todayRows, "estimatedCostMicros"), monthCostMicros: sum(monthRows, "estimatedCostMicros"),
+    todayTokens: sum(todayRows, "totalTokens"), monthTokens: sum(monthRows, "totalTokens"),
+    unknownCostAttempts: rows.filter((row) => row.estimatedCostMicros == null).length,
+    budgets: settings.usageBudgets, timezone,
+    byModule: mobileUsageBucket(rows, (row) => row.module), byProvider: mobileUsageBucket(rows, (row) => row.providerId), byModel: mobileUsageBucket(rows, (row) => `${row.providerId}/${row.modelId}`),
+    byChat: mobileUsageBucket(rows.filter((row) => row.chatId), (row) => row.chatId, (row) => store.getChat(row.chatId)?.title ?? "Local chat"),
+    recent: rows.slice(0, 30).map((row) => ({ ...row, specialTokensUnknown: row.specialTokensUnknown === true, attemptId: row.id, chatTitle: row.chatId ? store.getChat(row.chatId)?.title ?? null : null }))
+  } });
+});
+
+app.post("/api/usage/preview", (request, response) => {
+  const moduleId = Object.hasOwn(moduleCapabilities, request.body?.module) ? request.body.module : "chat";
+  const settings = resolveModuleSettings(store.getSettings(), moduleId);
+  const provider = (settings.providers ?? []).find((entry) => entry.id === settings.activeProviderId);
+  const model = provider?.models?.find((entry) => entry.id === settings.activeModelId);
+  const pricing = model?.pricing;
+  const inputTokens = Number.isInteger(request.body?.inputTokens)
+    ? Math.max(0, Math.min(100_000_000, request.body.inputTokens))
+    : (Array.isArray(request.body?.texts) ? request.body.texts : []).reduce((total, text) => total + estimatePromptTokens(text), 0);
+  const maxOutputTokens = Number.isInteger(request.body?.maxOutputTokens) ? request.body.maxOutputTokens : settings.maxTokens;
+  const cost = pricing ? (output) => Math.ceil((inputTokens * pricing.inputMicrosPerMillion + output * pricing.outputMicrosPerMillion) / 1_000_000) : () => null;
+  const timezone = settings.usageTimezone || "UTC";
+  const dateParts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const part = (type) => dateParts.find((entry) => entry.type === type)?.value ?? "";
+  const day = `${part("year")}-${part("month")}-${part("day")}`;
+  const month = day.slice(0, 7);
+  const rows = store.listUsageAttempts();
+  const committed = (key, value) => rows
+    .filter((row) => row[key] === value)
+    .reduce((total, row) => total + (row.estimatedCostMicros ?? 0) + (row.reservedCostMicros ?? 0), 0);
+  const todayCostMicros = rows.filter((row) => row.reservationDay === day).reduce((total, row) => total + (row.estimatedCostMicros ?? 0), 0);
+  const monthCostMicros = rows.filter((row) => row.reservationMonth === month).reduce((total, row) => total + (row.estimatedCostMicros ?? 0), 0);
+  const todayCommitted = committed("reservationDay", day);
+  const monthCommitted = committed("reservationMonth", month);
+  const budgets = settings.usageBudgets ?? {};
+  const maximum = cost(maxOutputTokens);
+  const remaining = (limit, used) => Number.isSafeInteger(limit) ? Math.max(0, limit - used) : null;
+  response.json({ ok: true, data: {
+    providerId: settings.activeProviderId || settings.activeProvider, modelId: settings.model, inputTokens, maxOutputTokens,
+    minimumCostMicros: cost(0), maximumCostMicros: maximum, currency: pricing?.currency ?? null,
+    todayCostMicros, monthCostMicros,
+    dailySoftRemainingMicros: remaining(budgets.dailySoftMicros, todayCommitted), dailyHardRemainingMicros: remaining(budgets.dailyHardMicros, todayCommitted),
+    monthlySoftRemainingMicros: remaining(budgets.monthlySoftMicros, monthCommitted), monthlyHardRemainingMicros: remaining(budgets.monthlyHardMicros, monthCommitted),
+    unknownPricing: !pricing,
+    softWarning: maximum !== null && ((Number.isSafeInteger(budgets.dailySoftMicros) && todayCommitted + maximum > budgets.dailySoftMicros) || (Number.isSafeInteger(budgets.monthlySoftMicros) && monthCommitted + maximum > budgets.monthlySoftMicros)),
+    hardBlocked: (!pricing && budgets.allowUnknownPricing === false) || (maximum !== null && ((Number.isSafeInteger(budgets.dailyHardMicros) && todayCommitted + maximum > budgets.dailyHardMicros) || (Number.isSafeInteger(budgets.monthlyHardMicros) && monthCommitted + maximum > budgets.monthlyHardMicros))),
+    timezone
+  } });
+});
+
+app.delete("/api/usage/history", asyncHandler(async (request, response) => {
+  if (request.body?.confirm !== "DELETE_USAGE_HISTORY") throw httpError(400, "Explicit usage-history confirmation is required.");
+  response.json({ ok: true, data: await store.clearUsageHistory() });
 }));
 
 app.get("/api/settings/models", asyncHandler(async (_request, response) => {
@@ -2597,8 +3195,17 @@ app.post(
   "/api/media/voice/transcriptions",
   asyncHandler(async (request, response) => {
     const body = parseBody(voiceTranscriptionSchema, request.body);
-    const settings = resolveModuleSettings(store.getSettings(), "voice_transcription");
-    response.json({ ok: true, data: await transcribeAudio({ settings, ...body }) });
+    const rootSettings = store.getSettings();
+    const result = await executeMobileReliableOperation({
+      rootSettings,
+      module: "voice_transcription",
+      operation: "transcription",
+      estimatedInputTokens: 0,
+      maxOutputTokens: 0,
+      specialTokensUnknown: true,
+      invoke: async (settings, signal) => ({ value: await transcribeAudio({ settings, ...body, signal }) })
+    });
+    response.json({ ok: true, data: result.value });
   })
 );
 
@@ -2606,8 +3213,17 @@ app.post(
   "/api/media/voice/speech",
   asyncHandler(async (request, response) => {
     const body = parseBody(voiceSpeechSchema, request.body);
-    const settings = resolveModuleSettings(store.getSettings(), "voice_speech");
-    response.json({ ok: true, data: await createSpeechAudio({ settings, ...body }) });
+    const rootSettings = store.getSettings();
+    const result = await executeMobileReliableOperation({
+      rootSettings,
+      module: "voice_speech",
+      operation: "tts",
+      estimatedInputTokens: estimatePromptTokens(body.text),
+      maxOutputTokens: 0,
+      specialTokensUnknown: true,
+      invoke: async (settings, signal) => ({ value: await createSpeechAudio({ settings, ...body, signal }) })
+    });
+    response.json({ ok: true, data: result.value });
   })
 );
 
@@ -2615,8 +3231,17 @@ app.post(
   "/api/media/images/generations",
   asyncHandler(async (request, response) => {
     const body = parseBody(imageGenerationSchema, request.body);
-    const settings = resolveModuleSettings(store.getSettings(), "image_generation");
-    response.json({ ok: true, data: await generateImage({ settings, ...body }) });
+    const rootSettings = store.getSettings();
+    const result = await executeMobileReliableOperation({
+      rootSettings,
+      module: "image_generation",
+      operation: "image_generation",
+      estimatedInputTokens: estimatePromptTokens(body.prompt),
+      maxOutputTokens: 0,
+      specialTokensUnknown: true,
+      invoke: async (settings, signal) => ({ value: await generateImage({ settings, ...body, signal }) })
+    });
+    response.json({ ok: true, data: result.value });
   })
 );
 
@@ -2807,10 +3432,19 @@ app.post(
 );
 
 app.use((error, _request, response, _next) => {
+  if (error instanceof ModelCallError) {
+    const status = error.safe.code === "authentication" ? 401
+      : error.safe.code === "model_not_found" ? 404
+        : error.safe.code === "rate_limited" ? 429
+          : error.safe.code === "budget_blocked" ? 409
+            : ["invalid_request", "context_overflow", "unsupported_capability"].includes(error.safe.code) ? 400 : 502;
+    response.status(status).json({ ok: false, error: error.safe.summary, modelError: error.safe });
+    return;
+  }
   const status = Number.isInteger(error?.status) ? error.status : 500;
   response.status(status).json({
     ok: false,
-    error: error instanceof Error ? error.message : "Internal server error"
+    error: status < 500 && error instanceof Error ? error.message : "Internal server error"
   });
 });
 
@@ -2836,13 +3470,36 @@ const joinAssistantContinuation = (existing, continuation) => {
   return `${existing}${needsWordBoundary ? " " : ""}${continuation}`;
 };
 
+const claimMobileRequest = async (socket, { requestId, operation, chatId, messageId, overrideHardBudget }) => {
+  const claim = await store.beginModelRequest({ requestId, module: "chat", operation, chatId, messageId, overrideHardBudget });
+  if (!claim.created) {
+    sendJson(socket, { type: "generation_status", request: { ...claim.request, requestId: claim.request.id } });
+    return false;
+  }
+  if (controllers.has(requestId)) return false;
+  return true;
+};
+
+const sendSafeMobileError = async (socket, requestId, error, settings, receivedOutputTokens = false, cancelled = false) => {
+  const normalized = normalizeModelError(error, { provider: settings?.activeProvider ?? "", modelId: settings?.model ?? "", receivedOutputTokens, cancelled });
+  await store.updateModelRequest(requestId, {
+    status: normalized.safe.code === "cancelled" ? "cancelled" : normalized.safe.receivedOutputTokens ? "interrupted" : normalized.safe.code === "budget_blocked" ? "blocked" : "failed",
+    errorCode: normalized.safe.code,
+    errorSummary: normalized.safe.summary,
+    diagnosticId: normalized.safe.diagnosticId,
+    completedAt: new Date().toISOString()
+  });
+  sendJson(socket, { type: "error", requestId, error: normalized.safe.summary, modelError: normalized.safe });
+};
+
 const appendAssistantContinuation = async ({
   targetMessage,
   continuation,
   tokenUsage,
   promptBreakdown,
   loreMatches,
-  memoryMatches
+  memoryMatches,
+  generationMetadata
 }) => {
   const content = joinAssistantContinuation(targetMessage.content, continuation);
   const variants = toStringArray(targetMessage.variants);
@@ -2852,6 +3509,11 @@ const appendAssistantContinuation = async ({
   );
   if (variants.length === 0) variants.push(content);
   else variants[activeVariantIndex] = content;
+  const variantMetadata = Array.isArray(targetMessage.variantMetadata)
+    ? [...targetMessage.variantMetadata]
+    : [];
+  while (variantMetadata.length <= activeVariantIndex) variantMetadata.push(null);
+  if (generationMetadata) variantMetadata[activeVariantIndex] = generationMetadata;
 
   return store.updateMessage(targetMessage.id, {
     content,
@@ -2860,7 +3522,9 @@ const appendAssistantContinuation = async ({
     tokenUsage,
     promptBreakdown,
     loreMatches,
-    memoryMatches
+    memoryMatches,
+    generationMetadata,
+    variantMetadata
   });
 };
 
@@ -2916,31 +3580,116 @@ const createAssistantReply = async ({
   let content = "";
   let tokenUsage = null;
   let stopped = false;
-  try {
-    for await (const event of streamChatCompletion({
-      settings: resolveModuleSettings(store.getSettings(), "chat"),
-      messages: completionMessages,
-      signal: abortController.signal
-    })) {
-      if (event.type === "usage") {
-        tokenUsage = event.usage;
-        continue;
-      }
-      content += event.content;
-      sendJson(socket, { type: "token", requestId, content: event.content });
+  let terminalStreamError = null;
+  const rootSettings = store.getSettings();
+  const candidates = [resolveModuleSettings(rootSettings, "chat"), ...resolveAutomaticFallbackSettings(rootSettings, "chat")];
+  const primaryIdentity = mobileModelIdentity(candidates[0]);
+  const promptTokenEstimate = completionMessages.reduce((total, message) => total + estimatePromptTokens(message.content), 0);
+  let activeAttempt = null;
+  let activeIdentity = primaryIdentity;
+  let lastError = null;
+  let attemptNumber = 0;
+  generation: for (const [candidateIndex, settings] of candidates.entries()) {
+    const identity = mobileModelIdentity(settings);
+    if (candidateIndex > 0 && lastError) {
+      sendJson(socket, { type: "generation_fallback", requestId, fromProviderId: primaryIdentity.providerId, fromModelId: primaryIdentity.modelId, toProviderId: identity.providerId, toModelId: identity.modelId, reason: lastError.safe.code });
     }
-  } catch (error) {
-    if (abortController.signal.aborted) stopped = true;
-    else throw error;
+    const retry = settings.modelReliability?.retry;
+    const maxAttempts = retry?.enabled === true ? 1 + Math.max(0, Math.min(2, Number(retry.maxRetries) || 0)) : 1;
+    for (let candidateAttempt = 1; candidateAttempt <= maxAttempts; candidateAttempt += 1) {
+      attemptNumber += 1;
+      const attempt = await store.reserveUsageAttempt({
+        settings,
+        requestId,
+        attemptNumber,
+        module: "chat",
+        chatId,
+        messageId: targetMessageIdForLookup ?? null,
+        providerId: identity.providerId,
+        providerType: identity.providerType,
+        modelId: identity.modelId,
+        promptTokens: promptTokenEstimate,
+        maxOutputTokens: settings.maxTokens,
+        pricing: identity.pricing,
+        usedFallback: candidateIndex > 0,
+        fallbackFromProviderId: candidateIndex > 0 ? primaryIdentity.providerId : null,
+        fallbackFromModelId: candidateIndex > 0 ? primaryIdentity.modelId : null
+      });
+      if (attempt.status === "blocked") {
+        throw new ModelCallError({ code: "budget_blocked", retryable: false, receivedOutputTokens: false, provider: identity.providerType, modelId: identity.modelId, attempt: attemptNumber, summary: "The local hard budget prevented this model call.", diagnosticId: attempt.diagnosticId });
+      }
+      activeAttempt = attempt;
+      activeIdentity = identity;
+      try {
+        for await (const event of streamChatCompletion({ settings, messages: completionMessages, signal: abortController.signal })) {
+          if (event.type === "usage") {
+            tokenUsage = event.usage;
+            continue;
+          }
+          if (!content && event.content) await store.updateModelRequest(requestId, { status: "streaming", outputStarted: true });
+          content += event.content;
+          sendJson(socket, { type: "token", requestId, content: event.content });
+        }
+        break generation;
+      } catch (caught) {
+        const normalized = normalizeModelError(caught, { provider: identity.providerType, modelId: identity.modelId, attempt: attemptNumber, receivedOutputTokens: Boolean(content), cancelled: abortController.signal.aborted });
+        const partialUsage = content ? estimateTokenUsage(completionMessages, content) : null;
+        await store.updateUsageAttempt(attempt.id, {
+          status: normalized.safe.code === "cancelled" ? "cancelled" : content ? "interrupted" : "failed",
+          completedAt: new Date().toISOString(),
+          promptTokens: partialUsage?.promptTokens ?? null,
+          outputTokens: partialUsage?.completionTokens ?? null,
+          totalTokens: partialUsage?.totalTokens ?? null,
+          usageSource: partialUsage ? "estimated" : null,
+          estimatedCostMicros: partialUsage && identity.pricing ? Math.ceil((partialUsage.promptTokens * identity.pricing.inputMicrosPerMillion + partialUsage.completionTokens * identity.pricing.outputMicrosPerMillion) / 1_000_000) : null,
+          reservedCostMicros: 0,
+          errorCode: normalized.safe.code,
+          diagnosticId: normalized.safe.diagnosticId
+        });
+        if (abortController.signal.aborted) { stopped = true; break generation; }
+        if (content) { terminalStreamError = normalized; break generation; }
+        const canRetry = normalized.safe.retryable && candidateAttempt < maxAttempts;
+        const canFallback = normalized.safe.retryable && candidateIndex < candidates.length - 1;
+        if (!canRetry && !canFallback) throw normalized;
+        lastError = normalized;
+        if (canRetry) {
+          const milliseconds = mobileRetryDelay(candidateAttempt, normalized.safe.retryAfterMs);
+          sendJson(socket, { type: "generation_retrying", requestId, attempt: attemptNumber + 1, retryAfterMs: milliseconds, error: normalized.safe });
+          await waitMobileRetry(milliseconds, abortController.signal);
+        } else break;
+      }
+    }
   }
 
   const trimmed = content.trim();
   if (!trimmed) {
-    if (stopped) return { stopped };
+    if (stopped) {
+      if (activeAttempt) await store.updateUsageAttempt(activeAttempt.id, { status: "cancelled", completedAt: new Date().toISOString(), reservedCostMicros: 0, errorCode: "cancelled" });
+      await store.updateModelRequest(requestId, { status: "cancelled", completedAt: new Date().toISOString() });
+      return { stopped };
+    }
     throw new Error("Model returned an empty response");
   }
 
   tokenUsage ??= estimateTokenUsage(completionMessages, trimmed);
+  const estimatedCostMicros = activeIdentity.pricing
+    ? Math.ceil((tokenUsage.promptTokens * activeIdentity.pricing.inputMicrosPerMillion + tokenUsage.completionTokens * activeIdentity.pricing.outputMicrosPerMillion) / 1_000_000)
+    : null;
+  const metadata = activeAttempt ? {
+    providerId: activeIdentity.providerId,
+    providerType: activeIdentity.providerType,
+    modelId: activeIdentity.modelId,
+    requestId,
+    attemptId: activeAttempt.id,
+    usage: tokenUsage,
+    usageSource: tokenUsage.estimated ? "estimated" : "provider",
+    inputPriceMicros: activeIdentity.pricing?.inputMicrosPerMillion ?? null,
+    outputPriceMicros: activeIdentity.pricing?.outputMicrosPerMillion ?? null,
+    estimatedCostMicros,
+    currency: activeIdentity.pricing?.currency ?? null,
+    usedFallback: activeAttempt.usedFallback,
+    incomplete: stopped || Boolean(terminalStreamError)
+  } : null;
   const promptBreakdown = finalizePromptBreakdown(
     completionPromptBreakdown,
     tokenUsage.promptTokens,
@@ -2953,7 +3702,8 @@ const createAssistantReply = async ({
         tokenUsage,
         promptBreakdown,
         loreMatches: context.matchedLoreEntries,
-        memoryMatches: context.matchedMemoryEntries
+        memoryMatches: context.matchedMemoryEntries,
+        generationMetadata: metadata
       })
     : targetMessageId
     ? await store.updateMessage(targetMessageId, {
@@ -2964,6 +3714,8 @@ const createAssistantReply = async ({
         promptBreakdown,
         loreMatches: context.matchedLoreEntries,
         memoryMatches: context.matchedMemoryEntries
+        ,generationMetadata: metadata,
+        variantMetadata: metadata ? [...(Array.isArray(targetMessage.variantMetadata) ? targetMessage.variantMetadata : []), metadata] : (Array.isArray(targetMessage.variantMetadata) ? targetMessage.variantMetadata : [])
       })
     : await store.createMessage({
         chatId,
@@ -2976,9 +3728,40 @@ const createAssistantReply = async ({
         promptBreakdown,
         loreMatches: context.matchedLoreEntries,
         memoryMatches: context.matchedMemoryEntries
+        ,generationMetadata: metadata,
+        variantMetadata: metadata ? [metadata] : []
       });
 
+  const completedAt = new Date().toISOString();
+  const terminalStatus = stopped ? "cancelled" : terminalStreamError ? "interrupted" : "succeeded";
+  await store.settleModelAttempt({
+    attemptId: activeAttempt.id,
+    requestId,
+    attemptUpdates: {
+      status: terminalStatus,
+      completedAt,
+      messageId: message.id,
+      promptTokens: tokenUsage.promptTokens,
+      outputTokens: tokenUsage.completionTokens,
+      totalTokens: tokenUsage.totalTokens,
+      usageSource: tokenUsage.estimated ? "estimated" : "provider",
+      estimatedCostMicros,
+      reservedCostMicros: 0,
+      errorCode: terminalStreamError?.safe.code ?? (stopped ? "cancelled" : null),
+      diagnosticId: terminalStreamError?.safe.diagnosticId ?? null
+    },
+    requestUpdates: {
+      status: terminalStatus,
+      messageId: message.id,
+      completedAt,
+      errorCode: terminalStreamError?.safe.code ?? (stopped ? "cancelled" : null),
+      errorSummary: terminalStreamError?.safe.summary ?? null,
+      diagnosticId: terminalStreamError?.safe.diagnosticId ?? null
+    }
+  });
+
   sendJson(socket, { type: "assistant_message", requestId, message: serializeMessage(message) });
+  if (terminalStreamError) throw terminalStreamError;
   return { stopped };
 };
 
@@ -2990,6 +3773,7 @@ const handleGenerate = async (socket, raw) => {
   }
   const request = parsed.data;
   const abortController = new AbortController();
+  if (!await claimMobileRequest(socket, { requestId: request.requestId, operation: "generate", chatId: request.chatId, overrideHardBudget: request.overrideHardBudget })) return;
   controllers.set(request.requestId, abortController);
 
   try {
@@ -3044,11 +3828,8 @@ const handleGenerate = async (socket, raw) => {
     }
     sendJson(socket, { type: result.stopped ? "generation_stopped" : "generation_done", requestId: request.requestId });
   } catch (error) {
-    sendJson(socket, {
-      type: abortController.signal.aborted ? "generation_stopped" : "error",
-      requestId: request.requestId,
-      error: error instanceof Error ? error.message : "Generation failed"
-    });
+    if (abortController.signal.aborted) sendJson(socket, { type: "generation_stopped", requestId: request.requestId });
+    else await sendSafeMobileError(socket, request.requestId, error, store.getSettings());
   } finally {
     controllers.delete(request.requestId);
   }
@@ -3067,6 +3848,7 @@ const handleRegenerate = async (socket, raw) => {
     return;
   }
   const abortController = new AbortController();
+  if (!await claimMobileRequest(socket, { requestId: request.requestId, operation: "regenerate", messageId: target.id, chatId: target.chatId, overrideHardBudget: request.overrideHardBudget })) return;
   controllers.set(request.requestId, abortController);
   try {
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
@@ -3082,7 +3864,7 @@ const handleRegenerate = async (socket, raw) => {
     });
     sendJson(socket, { type: result.stopped ? "generation_stopped" : "generation_done", requestId: request.requestId });
   } catch (error) {
-    sendJson(socket, { type: "error", requestId: request.requestId, error: error.message });
+    await sendSafeMobileError(socket, request.requestId, error, store.getSettings(), false, abortController.signal.aborted);
   } finally {
     controllers.delete(request.requestId);
   }
@@ -3111,6 +3893,7 @@ const handleContinue = async (socket, raw) => {
   }
 
   const abortController = new AbortController();
+  if (!await claimMobileRequest(socket, { requestId: request.requestId, operation: "continue", messageId: target.id, chatId: target.chatId, overrideHardBudget: request.overrideHardBudget })) return;
   controllers.set(request.requestId, abortController);
   try {
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
@@ -3123,11 +3906,7 @@ const handleContinue = async (socket, raw) => {
     });
     sendJson(socket, { type: result.stopped ? "generation_stopped" : "generation_done", requestId: request.requestId });
   } catch (error) {
-    sendJson(socket, {
-      type: "error",
-      requestId: request.requestId,
-      error: error instanceof Error ? error.message : "Continue failed"
-    });
+    await sendSafeMobileError(socket, request.requestId, error, store.getSettings(), false, abortController.signal.aborted);
   } finally {
     controllers.delete(request.requestId);
   }
@@ -3146,6 +3925,7 @@ const handleResend = async (socket, raw) => {
     return;
   }
   const abortController = new AbortController();
+  if (!await claimMobileRequest(socket, { requestId: request.requestId, operation: "resend", messageId: target.id, chatId: target.chatId, overrideHardBudget: request.overrideHardBudget })) return;
   controllers.set(request.requestId, abortController);
   try {
     await store.deleteMessagesAfter(target);
@@ -3194,7 +3974,7 @@ const handleResend = async (socket, raw) => {
     }
     sendJson(socket, { type: result.stopped ? "generation_stopped" : "generation_done", requestId: request.requestId });
   } catch (error) {
-    sendJson(socket, { type: "error", requestId: request.requestId, error: error.message });
+    await sendSafeMobileError(socket, request.requestId, error, store.getSettings(), false, abortController.signal.aborted);
   } finally {
     controllers.delete(request.requestId);
   }
@@ -3209,6 +3989,14 @@ const handleStop = (socket, raw) => {
   controllers.get(parsed.data.requestId)?.abort();
 };
 
+const handleMobileStatus = (socket, raw) => {
+  const parsed = generationStatusRequestSchema.safeParse(raw);
+  if (!parsed.success) return sendJson(socket, { type: "error", error: "Invalid generation status request" });
+  const request = store.getModelRequest(parsed.data.requestId);
+  if (!request) return sendJson(socket, { type: "error", requestId: parsed.data.requestId, error: "Generation request not found" });
+  sendJson(socket, { type: "generation_status", request: { ...request, requestId: request.id } });
+};
+
 const startServer = async () => {
   await store.load();
   process.env.STAR_COMPANION_APP_VERSION = generatedBuildInfo.appVersion;
@@ -3219,8 +4007,12 @@ const startServer = async () => {
   await encryptLegacyProviderKeys();
   const httpServer = createServer(app);
   const wsServer = new WebSocketServer({ server: httpServer, path: "/ws" });
+  closeMobileSocketsForPrivacy = () => {
+    for (const client of wsServer.clients) client.close(4403, "App locked");
+  };
 
   wsServer.on("connection", (socket) => {
+    if (privacyPasscodeDigest) { socket.close(4403, "App locked"); return; }
     sendJson(socket, { type: "ready", app: APP_NAME });
     socket.on("message", (message) => {
       try {
@@ -3230,6 +4022,7 @@ const startServer = async () => {
         else if (parsed.type === "continue") void handleContinue(socket, parsed);
         else if (parsed.type === "resend") void handleResend(socket, parsed);
         else if (parsed.type === "stop") handleStop(socket, parsed);
+        else if (parsed.type === "status") handleMobileStatus(socket, parsed);
         else sendJson(socket, { type: "error", error: "Unknown WebSocket message type" });
       } catch {
         sendJson(socket, { type: "error", error: "Malformed WebSocket message" });

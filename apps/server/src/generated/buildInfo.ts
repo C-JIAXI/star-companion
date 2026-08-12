@@ -1,7 +1,7 @@
 // Generated from the root package.json and Prisma migration catalog. Do not edit.
 export const generatedBuildInfo = {
   "appVersion": "1.0.2",
-  "schemaVersion": "20260810000300_add_recovery_points",
-  "schemaChecksum": "79da8c3ba04b04175edacc2cc9ba1d82df737570839f85a97ad9917879684e6a",
+  "schemaVersion": "20260812000200_add_memory_history",
+  "schemaChecksum": "cbb38bc1946680ffc037ec9cfb7910d99685bd7282ac254690c6a51bb3ec46cf",
   "androidVersionCode": 1000002
 } as const;

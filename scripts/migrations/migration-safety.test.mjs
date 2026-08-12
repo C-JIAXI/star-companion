@@ -107,9 +107,14 @@ test("the bundled Prisma SQL catalog initializes a fresh desktop database determ
     appVersion: "1.0.2"
   });
   assert.equal(report.appliedMigrations.length > 20, true);
-  assert.equal(report.schemaVersion, "20260810000300_add_recovery_points");
+  assert.equal(report.schemaVersion, "20260812000200_add_memory_history");
   const db = open(databasePath);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='RecoveryPoint'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='ModelRequest'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='ModelUsageAttempt'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='MemoryRevision'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='MemoryOperation'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='ProfileSummaryRevision'").get().count, 1);
   db.close();
   fs.rmSync(root, { recursive: true, force: true });
 });

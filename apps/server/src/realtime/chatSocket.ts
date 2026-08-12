@@ -1,17 +1,22 @@
+import type { Prisma } from "@prisma/client";
 import type { RawData, WebSocket, WebSocketServer } from "ws";
 import { prisma } from "../db.js";
 import {
   continueRequestSchema,
   generationRequestSchema,
+  generationStatusRequestSchema,
   regenerateRequestSchema,
   resendRequestSchema,
   stopGenerationRequestSchema
 } from "../schemas.js";
 import { serializeMessage } from "../serializers.js";
 import { getOrCreateSettings } from "../routes/settings.js";
-import { estimateTokenUsage, streamChatCompletion, type TokenUsage } from "../services/completions.js";
+import { estimateTokenUsage, type TokenUsage } from "../services/completions.js";
 import { updateChatMemoriesFromTurn, type MatchedMemoryEntry } from "../services/chatMemories.js";
 import { GenerationControllerRegistry } from "../services/generationControllers.js";
+import { normalizeModelError } from "../services/modelErrors.js";
+import { beginModelRequest, completeModelRequest, failModelRequest, getModelRequest, linkModelRequestMessage } from "../services/modelUsage.js";
+import { executeReliableTextStream, generationMetadata, incompleteGenerationMetadata, type ReliableStreamEvent, type ReliableTextResult } from "../services/reliableModelCalls.js";
 import { buildRegenerationGuidanceMessage } from "../services/regeneration.js";
 import {
   getUserMessageResendTarget,
@@ -27,6 +32,7 @@ import {
   type PromptBreakdown
 } from "../services/promptBuilder.js";
 import { updateUserProfileFromChat } from "../services/userProfileMemory.js";
+import { isPrivacyLocked } from "../services/privacyLock.js";
 
 export const GENERATION_ERROR_PREFIX = "[GENERATION_FAILED] ";
 
@@ -44,6 +50,46 @@ const createErrorMessage = async (chatId: string, errorText: string) => {
 };
 
 const controllers = new GenerationControllerRegistry<WebSocket>();
+
+const serializeModelRequest = (request: NonNullable<Awaited<ReturnType<typeof getModelRequest>>>) => ({
+  requestId: request.id,
+  module: request.module,
+  operation: request.operation,
+  chatId: request.chatId,
+  messageId: request.messageId,
+  status: request.status,
+  activeAttemptId: request.activeAttemptId,
+  outputStarted: request.outputStarted,
+  error: request.errorCode && request.errorSummary && request.diagnosticId ? {
+    code: request.errorCode,
+    retryable: false,
+    receivedOutputTokens: request.outputStarted,
+    provider: "",
+    modelId: "",
+    attempt: 0,
+    summary: request.errorSummary,
+    diagnosticId: request.diagnosticId
+  } : null,
+  createdAt: request.createdAt.toISOString(),
+  startedAt: request.startedAt?.toISOString() ?? null,
+  completedAt: request.completedAt?.toISOString() ?? null,
+  updatedAt: request.updatedAt.toISOString()
+});
+
+const claimGenerationRequest = async (socket: WebSocket, input: {
+  requestId: string;
+  operation: string;
+  chatId?: string;
+  messageId?: string;
+  overrideHardBudget?: boolean;
+}) => {
+  const claimed = await beginModelRequest({ requestId: input.requestId, module: "chat", operation: input.operation, chatId: input.chatId, messageId: input.messageId, overrideHardBudget: input.overrideHardBudget });
+  if (!claimed.created) {
+    sendJson(socket, { type: "generation_status", request: serializeModelRequest(claimed.request) });
+    return false;
+  }
+  return true;
+};
 
 const sendJson = (socket: WebSocket, value: unknown) => {
   if (socket.readyState === socket.OPEN) {
@@ -150,13 +196,40 @@ const streamAssistantReply = async ({
   let assistantContent = "";
   let stopped = false;
   let tokenUsage: TokenUsage | null = null;
+  let reliableResult: ReliableTextResult | null = null;
+  let activeAttempt: Extract<ReliableStreamEvent, { type: "attempt" }> | null = null;
 
   try {
-    for await (const event of streamChatCompletion({
+    for await (const event of executeReliableTextStream({
       settings,
       messages: completionMessages,
-      signal: abortController.signal
+      context: {
+        requestId,
+        module: "chat",
+        operation: continuationTargetMessageId ? "continue" : targetMessageId ? "regenerate" : "generate",
+        chatId,
+        messageId: targetMessageId ?? continuationTargetMessageId,
+        signal: abortController.signal,
+        requestAlreadyClaimed: true
+      }
     })) {
+      if (event.type === "attempt") {
+        activeAttempt = event;
+        continue;
+      }
+      if (event.type === "retry") {
+        sendJson(socket, { type: "generation_retrying", requestId, attempt: event.attempt, retryAfterMs: event.retryAfterMs, error: event.error.safe });
+        continue;
+      }
+      if (event.type === "fallback") {
+        sendJson(socket, { type: "generation_fallback", requestId, fromProviderId: event.from.providerId, fromModelId: event.from.modelId, toProviderId: event.to.providerId, toModelId: event.to.modelId, reason: event.error.safe.code });
+        continue;
+      }
+      if (event.type === "complete") {
+        reliableResult = event.result;
+        tokenUsage = event.result.usage;
+        continue;
+      }
       if (event.type === "usage") {
         tokenUsage = event.usage;
         continue;
@@ -172,7 +245,35 @@ const streamAssistantReply = async ({
     if (abortController.signal.aborted) {
       stopped = true;
     } else {
-      throw error;
+      const normalized = normalizeModelError(error, {
+        provider: settings.activeProvider,
+        modelId: settings.model,
+        receivedOutputTokens: Boolean(assistantContent)
+      });
+      if (!assistantContent.trim()) throw normalized;
+      assistantContent = stripThinkingTags(assistantContent);
+      tokenUsage ??= estimateTokenUsage(completionMessages, assistantContent);
+      const promptBreakdown = finalizePromptBreakdown(completionPromptBreakdown, tokenUsage.promptTokens, tokenUsage.estimated);
+      const incompleteMetadata = activeAttempt
+        ? incompleteGenerationMetadata({
+            requestId,
+            attemptId: activeAttempt.attemptId,
+            providerId: activeAttempt.identity.providerId,
+            providerType: activeAttempt.identity.providerType,
+            modelId: activeAttempt.identity.modelId,
+            pricing: activeAttempt.identity.pricing,
+            usedFallback: activeAttempt.usedFallback,
+            usage: tokenUsage
+          })
+        : null;
+      const message = continuationTargetMessageId
+        ? await appendAssistantContinuation(continuationTargetMessageId, assistantContent, tokenUsage, promptBreakdown, context.matchedLoreEntries, context.matchedMemoryEntries, incompleteMetadata)
+        : targetMessageId
+          ? await updateAssistantVariant(targetMessageId, assistantContent, tokenUsage, promptBreakdown, context.matchedLoreEntries, context.matchedMemoryEntries, incompleteMetadata)
+          : await createAssistantMessage(chatId, characterId, assistantContent, tokenUsage, promptBreakdown, context.matchedLoreEntries, context.matchedMemoryEntries, incompleteMetadata);
+      await linkModelRequestMessage(requestId, message.id);
+      sendJson(socket, { type: "assistant_message", requestId, message: serializeMessage(message) });
+      throw normalized;
     }
   }
 
@@ -185,6 +286,20 @@ const streamAssistantReply = async ({
         tokenUsage.promptTokens,
         tokenUsage.estimated
       );
+      const stoppedMetadata = reliableResult
+        ? generationMetadata(reliableResult)
+        : activeAttempt
+          ? incompleteGenerationMetadata({
+              requestId,
+              attemptId: activeAttempt.attemptId,
+              providerId: activeAttempt.identity.providerId,
+              providerType: activeAttempt.identity.providerType,
+              modelId: activeAttempt.identity.modelId,
+              pricing: activeAttempt.identity.pricing,
+              usedFallback: activeAttempt.usedFallback,
+              usage: tokenUsage
+            })
+          : null;
       const message = continuationTargetMessageId
         ? await appendAssistantContinuation(
             continuationTargetMessageId,
@@ -192,7 +307,8 @@ const streamAssistantReply = async ({
             tokenUsage,
             promptBreakdown,
             context.matchedLoreEntries,
-            context.matchedMemoryEntries
+            context.matchedMemoryEntries,
+            stoppedMetadata
           )
         : targetMessageId
         ? await updateAssistantVariant(
@@ -201,7 +317,8 @@ const streamAssistantReply = async ({
             tokenUsage,
             promptBreakdown,
             context.matchedLoreEntries,
-            context.matchedMemoryEntries
+            context.matchedMemoryEntries,
+            stoppedMetadata
           )
         : await createAssistantMessage(
             chatId,
@@ -210,7 +327,8 @@ const streamAssistantReply = async ({
             tokenUsage,
             promptBreakdown,
             context.matchedLoreEntries,
-            context.matchedMemoryEntries
+            context.matchedMemoryEntries,
+            stoppedMetadata
           );
 
       await prisma.chat.update({
@@ -223,6 +341,7 @@ const streamAssistantReply = async ({
         requestId,
         message: serializeMessage(message)
       });
+      await linkModelRequestMessage(requestId, message.id);
     }
 
     return stopped;
@@ -252,7 +371,8 @@ const streamAssistantReply = async ({
         tokenUsage,
         promptBreakdown,
         context.matchedLoreEntries,
-        context.matchedMemoryEntries
+        context.matchedMemoryEntries,
+        reliableResult ? generationMetadata(reliableResult) : null
       )
     : targetMessageId
     ? await updateAssistantVariant(
@@ -261,7 +381,8 @@ const streamAssistantReply = async ({
         tokenUsage,
         promptBreakdown,
         context.matchedLoreEntries,
-        context.matchedMemoryEntries
+        context.matchedMemoryEntries,
+        reliableResult ? generationMetadata(reliableResult) : null
       )
     : await createAssistantMessage(
         chatId,
@@ -270,7 +391,8 @@ const streamAssistantReply = async ({
         tokenUsage,
         promptBreakdown,
         context.matchedLoreEntries,
-        context.matchedMemoryEntries
+        context.matchedMemoryEntries,
+        reliableResult ? generationMetadata(reliableResult) : null
       );
 
   await prisma.chat.update({
@@ -283,6 +405,7 @@ const streamAssistantReply = async ({
     requestId,
     message: serializeMessage(message)
   });
+  await completeModelRequest(requestId, message.id);
 
   return stopped;
 };
@@ -294,7 +417,8 @@ const createAssistantMessage = (
   tokenUsage: TokenUsage,
   promptBreakdown: PromptBreakdown,
   loreMatches: MatchedLoreEntry[],
-  memoryMatches: MatchedMemoryEntry[]
+  memoryMatches: MatchedMemoryEntry[],
+  metadata: Prisma.InputJsonValue | null = null
 ) =>
   prisma.message.create({
     data: {
@@ -307,7 +431,9 @@ const createAssistantMessage = (
       tokenUsage,
       promptBreakdown,
       loreMatches,
-      memoryMatches
+      memoryMatches,
+      generationMetadata: metadata ?? undefined,
+      variantMetadata: metadata ? [metadata] : []
     }
   });
 
@@ -326,7 +452,8 @@ const updateAssistantVariant = async (
   tokenUsage: TokenUsage,
   promptBreakdown: PromptBreakdown,
   loreMatches: MatchedLoreEntry[],
-  memoryMatches: MatchedMemoryEntry[]
+  memoryMatches: MatchedMemoryEntry[],
+  metadata: Prisma.InputJsonValue | null = null
 ) => {
   const targetMessage = await prisma.message.findFirst({
     where: { id: messageId, chat: { deletedAt: null } }
@@ -336,6 +463,7 @@ const updateAssistantVariant = async (
   }
 
   const variants = appendVariant(targetMessage.variants, content);
+  const existingMetadata = Array.isArray(targetMessage.variantMetadata) ? targetMessage.variantMetadata : [];
   return prisma.message.update({
     where: { id: messageId },
     data: {
@@ -345,7 +473,9 @@ const updateAssistantVariant = async (
       tokenUsage,
       promptBreakdown,
       loreMatches,
-      memoryMatches
+      memoryMatches,
+      generationMetadata: metadata ?? undefined,
+      variantMetadata: metadata ? [...existingMetadata, metadata] : existingMetadata
     }
   });
 };
@@ -356,7 +486,8 @@ const appendAssistantContinuation = async (
   tokenUsage: TokenUsage,
   promptBreakdown: PromptBreakdown,
   loreMatches: MatchedLoreEntry[],
-  memoryMatches: MatchedMemoryEntry[]
+  memoryMatches: MatchedMemoryEntry[],
+  metadata: Prisma.InputJsonValue | null = null
 ) => {
   const targetMessage = await prisma.message.findFirst({
     where: { id: messageId, chat: { deletedAt: null } }
@@ -373,6 +504,11 @@ const appendAssistantContinuation = async (
     Math.max(targetMessage.activeVariantIndex, 0),
     Math.max(variants.length - 1, 0)
   );
+  const existingMetadata: unknown[] = Array.isArray(targetMessage.variantMetadata)
+    ? [...targetMessage.variantMetadata]
+    : [];
+  while (existingMetadata.length <= activeVariantIndex) existingMetadata.push(null);
+  if (metadata) existingMetadata[activeVariantIndex] = metadata;
 
   if (variants.length === 0) {
     variants.push(content);
@@ -389,7 +525,9 @@ const appendAssistantContinuation = async (
       tokenUsage,
       promptBreakdown,
       loreMatches,
-      memoryMatches
+      memoryMatches,
+      generationMetadata: metadata ?? undefined,
+      variantMetadata: existingMetadata as Prisma.InputJsonValue
     }
   });
 };
@@ -403,7 +541,8 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
 
   const request = parsed.data;
   const abortController = new AbortController();
-  controllers.register(request.requestId, socket, abortController);
+  if (!await claimGenerationRequest(socket, { requestId: request.requestId, operation: "generate", chatId: request.chatId, overrideHardBudget: request.overrideHardBudget })) return;
+  if (!controllers.register(request.requestId, socket, abortController)) return;
 
   try {
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
@@ -485,8 +624,9 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
       requestId: request.requestId
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Generation failed";
-    sendJson(socket, { type: "error", requestId: request.requestId, error: message });
+    const normalized = normalizeModelError(error, { provider: "", modelId: "", cancelled: abortController.signal.aborted });
+    await failModelRequest(request.requestId, normalized);
+    sendJson(socket, { type: "error", requestId: request.requestId, error: normalized.safe.summary, modelError: normalized.safe });
   } finally {
     controllers.release(request.requestId, abortController);
   }
@@ -501,7 +641,8 @@ const handleRegenerate = async (socket: WebSocket, rawMessage: unknown) => {
 
   const request = parsed.data;
   const abortController = new AbortController();
-  controllers.register(request.requestId, socket, abortController);
+  if (!await claimGenerationRequest(socket, { requestId: request.requestId, operation: "regenerate", messageId: request.messageId, overrideHardBudget: request.overrideHardBudget })) return;
+  if (!controllers.register(request.requestId, socket, abortController)) return;
 
   try {
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
@@ -532,8 +673,9 @@ const handleRegenerate = async (socket: WebSocket, rawMessage: unknown) => {
       requestId: request.requestId
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Regeneration failed";
-    sendJson(socket, { type: "error", requestId: request.requestId, error: message });
+    const normalized = normalizeModelError(error, { provider: "", modelId: "", cancelled: abortController.signal.aborted });
+    await failModelRequest(request.requestId, normalized);
+    sendJson(socket, { type: "error", requestId: request.requestId, error: normalized.safe.summary, modelError: normalized.safe });
   } finally {
     controllers.release(request.requestId, abortController);
   }
@@ -548,7 +690,8 @@ const handleContinue = async (socket: WebSocket, rawMessage: unknown) => {
 
   const request = parsed.data;
   const abortController = new AbortController();
-  controllers.register(request.requestId, socket, abortController);
+  if (!await claimGenerationRequest(socket, { requestId: request.requestId, operation: "continue", messageId: request.messageId, overrideHardBudget: request.overrideHardBudget })) return;
+  if (!controllers.register(request.requestId, socket, abortController)) return;
 
   try {
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
@@ -584,8 +727,9 @@ const handleContinue = async (socket: WebSocket, rawMessage: unknown) => {
       requestId: request.requestId
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Continue failed";
-    sendJson(socket, { type: "error", requestId: request.requestId, error: message });
+    const normalized = normalizeModelError(error, { provider: "", modelId: "", cancelled: abortController.signal.aborted });
+    await failModelRequest(request.requestId, normalized);
+    sendJson(socket, { type: "error", requestId: request.requestId, error: normalized.safe.summary, modelError: normalized.safe });
   } finally {
     controllers.release(request.requestId, abortController);
   }
@@ -600,7 +744,8 @@ const handleResend = async (socket: WebSocket, rawMessage: unknown) => {
 
   const request = parsed.data;
   const abortController = new AbortController();
-  controllers.register(request.requestId, socket, abortController);
+  if (!await claimGenerationRequest(socket, { requestId: request.requestId, operation: "resend", messageId: request.messageId, overrideHardBudget: request.overrideHardBudget })) return;
+  if (!controllers.register(request.requestId, socket, abortController)) return;
 
   try {
     // Validate the selected chat model before the resend transaction removes the old timeline.
@@ -682,8 +827,9 @@ const handleResend = async (socket: WebSocket, rawMessage: unknown) => {
       requestId: request.requestId
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Resend failed";
-    sendJson(socket, { type: "error", requestId: request.requestId, error: message });
+    const normalized = normalizeModelError(error, { provider: "", modelId: "", cancelled: abortController.signal.aborted });
+    await failModelRequest(request.requestId, normalized);
+    sendJson(socket, { type: "error", requestId: request.requestId, error: normalized.safe.summary, modelError: normalized.safe });
   } finally {
     controllers.release(request.requestId, abortController);
   }
@@ -699,6 +845,20 @@ const handleStop = (socket: WebSocket, rawMessage: unknown) => {
   controllers.abortRequest(parsed.data.requestId);
 };
 
+const handleStatus = async (socket: WebSocket, rawMessage: unknown) => {
+  const parsed = generationStatusRequestSchema.safeParse(rawMessage);
+  if (!parsed.success) {
+    sendJson(socket, { type: "error", error: "Invalid generation status request" });
+    return;
+  }
+  const request = await getModelRequest(parsed.data.requestId);
+  if (!request) {
+    sendJson(socket, { type: "error", requestId: parsed.data.requestId, error: "Generation request not found" });
+    return;
+  }
+  sendJson(socket, { type: "generation_status", request: serializeModelRequest(request) });
+};
+
 const parseRawMessage = (message: RawData) => {
   const text = Array.isArray(message)
     ? Buffer.concat(message).toString("utf8")
@@ -711,6 +871,10 @@ const parseRawMessage = (message: RawData) => {
 
 export const attachChatSocket = (wsServer: WebSocketServer, appName: string) => {
   wsServer.on("connection", (socket) => {
+    if (isPrivacyLocked()) {
+      socket.close(4403, "App locked");
+      return;
+    }
     sendJson(socket, { type: "ready", app: appName });
 
     socket.on("message", (message) => {
@@ -740,6 +904,11 @@ export const attachChatSocket = (wsServer: WebSocketServer, appName: string) => 
 
         if (messageType === "stop") {
           handleStop(socket, parsed);
+          return;
+        }
+
+        if (messageType === "status") {
+          void handleStatus(socket, parsed);
           return;
         }
 

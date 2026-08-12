@@ -1,6 +1,7 @@
 import type { UserSettings } from "@prisma/client";
 import { decryptApiKey } from "./apiKeyVault.js";
 import { normalizeProviderKind } from "./moduleModels.js";
+import { createModelError, malformedModelResponse, modelErrorFromResponse, normalizeModelError } from "./modelErrors.js";
 
 export type EmbeddingTask = "query" | "document";
 
@@ -12,22 +13,6 @@ export type EmbeddingResult = {
 const joinApiPath = (baseUrl: string, path: string) =>
   `${baseUrl.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
 
-const readErrorMessage = async (response: Response) => {
-  const text = await response.text();
-  if (!text) {
-    return `Embedding API request failed with status ${response.status}`;
-  }
-
-  try {
-    const parsed = JSON.parse(text) as { error?: { message?: string } | string; message?: string };
-    if (typeof parsed.error === "string") {
-      return parsed.error;
-    }
-    return parsed.error?.message ?? parsed.message ?? `Embedding API request failed with status ${response.status}`;
-  } catch {
-    return text.slice(0, 400);
-  }
-};
 
 const validateVector = (value: unknown): number[] => {
   if (
@@ -36,7 +21,7 @@ const validateVector = (value: unknown): number[] => {
     value.length > 16_384 ||
     value.some((entry) => typeof entry !== "number" || !Number.isFinite(entry))
   ) {
-    throw new Error("Embedding API returned an invalid vector");
+    throw malformedModelResponse("embedding", "unknown");
   }
 
   return value as number[];
@@ -60,18 +45,19 @@ const generateOpenAiCompatibleEmbeddings = async (
       },
       body: JSON.stringify({ model: settings.model, input: inputs })
     });
-  } catch {
-    throw new Error("Unable to reach the configured embedding API");
+  } catch (error) {
+    throw normalizeModelError(error, { provider: "openai-compatible", modelId: settings.model });
   }
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+    throw await modelErrorFromResponse({ response, provider: "openai-compatible", modelId: settings.model });
   }
 
-  const payload = (await response.json()) as {
+  let payload: {
     model?: string;
     data?: Array<{ index?: number; embedding?: unknown }>;
   };
+  try { payload = await response.json() as typeof payload; } catch { throw malformedModelResponse("openai-compatible", settings.model); }
   const ordered = [...(payload.data ?? [])].sort((left, right) => (left.index ?? 0) - (right.index ?? 0));
   const vectors = ordered.map((entry) => validateVector(entry.embedding));
   if (vectors.length !== inputs.length) {
@@ -108,17 +94,18 @@ const generateGeminiEmbeddings = async (
         })
       }
     );
-  } catch {
-    throw new Error("Unable to reach the configured embedding API");
+  } catch (error) {
+    throw normalizeModelError(error, { provider: "google-gemini", modelId: settings.model });
   }
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+    throw await modelErrorFromResponse({ response, provider: "google-gemini", modelId: settings.model });
   }
 
-  const payload = (await response.json()) as {
+  let payload: {
     embeddings?: Array<{ values?: unknown }>;
   };
+  try { payload = await response.json() as typeof payload; } catch { throw malformedModelResponse("google-gemini", settings.model); }
   const vectors = (payload.embeddings ?? []).map((entry) => validateVector(entry.values));
   if (vectors.length !== inputs.length) {
     throw new Error("Embedding API returned an unexpected number of vectors");
@@ -142,7 +129,7 @@ export const generateEmbeddings = async ({
   }
 
   if (normalizeProviderKind(settings.activeProvider) === "anthropic") {
-    throw new Error("Anthropic does not provide a native text embedding endpoint");
+    throw createModelError({ code: "unsupported_capability", provider: "anthropic", modelId: settings.model });
   }
 
   if (normalizeProviderKind(settings.activeProvider) === "google-gemini") {

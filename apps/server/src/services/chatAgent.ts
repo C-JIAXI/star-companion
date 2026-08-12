@@ -1,7 +1,8 @@
 import { prisma } from "../db.js";
 import { randomUUID } from "node:crypto";
 import { HttpError } from "../lib/http.js";
-import { completeChatCompletion, type ChatCompletionMessage } from "./completions.js";
+import { type ChatCompletionMessage } from "./completions.js";
+import { executeReliableTextCompletion } from "./reliableModelCalls.js";
 import { buildPromptContext } from "./promptBuilder.js";
 import { getOrCreateSettings } from "../routes/settings.js";
 import { resolveModuleSettings } from "./moduleModels.js";
@@ -146,14 +147,16 @@ export const createChatAgentDraft = async ({
 
   const settings = resolveModuleSettings(await getOrCreateSettings(), "agent");
   const context = await buildPromptContext({ chatId, settings });
+  const sourceMessageIds = (await prisma.message.findMany({ where: { chatId, contextIncluded: true }, orderBy: { createdAt: "desc" }, take: 20, select: { id: true } })).map((message) => message.id);
   const messages = buildChatAgentDraftMessages(context.messages, mode, focus);
   const content = (
-    await completeChatCompletion({
+    (await executeReliableTextCompletion({
       settings,
       messages,
       maxTokens: Math.min(settings.maxTokens, 900),
-      temperature: Math.min(settings.temperature, 0.4)
-    })
+      temperature: Math.min(settings.temperature, 0.4),
+      context: { requestId: `agent_${randomUUID()}`, module: "agent", operation: mode, chatId }
+    })).content
   ).trim();
 
   if (!content) {
@@ -168,5 +171,6 @@ export const createChatAgentDraft = async ({
     actions: extractChatAgentActions(mode, content),
     matchedLoreEntries: context.matchedLoreEntries,
     matchedMemoryEntries: context.matchedMemoryEntries
+    ,sourceMessageIds
   };
 };

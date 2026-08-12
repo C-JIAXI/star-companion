@@ -29,6 +29,12 @@ model UserSettings {
   activeModelId          String?   @default("")
   /// Per-AI-module provider/model references, e.g. { chat: { providerId, modelId } }
   moduleModelPreferences Json?     @default("{}")
+  /// Retry policy and explicitly enabled per-module fallback chains. Never contains secrets.
+  modelReliability       Json?     @default("{}")
+  /// Local soft/hard spending guardrails, stored in integer micro-USD.
+  usageBudgets           Json?     @default("{}")
+  /// IANA time zone used for daily and monthly budget boundaries.
+  usageTimezone          String    @default("UTC")
   /// Reusable local persona/custom-config presets.
   userPersonaPresets     Json?     @default("[]")
   /// Local user profile memory summarised from user messages.
@@ -95,12 +101,18 @@ model Chat {
   userAvatar            String    @default("")
   userProfileSummary    String    @default("")
   userProfileUpdatedAt  DateTime?
+  /// Monotonic pointer to the latest chat-scoped profile summary revision.
+  profileRevision       Int       @default(0)
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
   character Character?   @relation(fields: [characterId], references: [id], onDelete: SetNull)
   messages  Message[]
   memories  ChatMemory[]
+  memoryOperations MemoryOperation[]
+  profileSummaryRevisions ProfileSummaryRevision[]
+  modelRequests ModelRequest[]
+  usageAttempts ModelUsageAttempt[]
 
   @@index([characterId])
   @@index([parentChatId])
@@ -115,6 +127,12 @@ model ChatMemory {
   keywords           Json      @default("[]")
   importance         Int       @default(3)
   enabled            Boolean   @default(true)
+  /// Soft deletion keeps the current tombstone auditable and recoverable.
+  deletedAt          DateTime?
+  /// Monotonic pointer; pruning old revisions never rewinds this value.
+  currentRevision    Int       @default(0)
+  lastActor          String?
+  lastAction         String?
   sourceMessageIds   Json      @default("[]")
   embedding          Json?
   embeddingModel     String?
@@ -127,10 +145,77 @@ model ChatMemory {
   updatedAt          DateTime  @updatedAt
 
   chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  revisions MemoryRevision[]
 
   @@index([chatId])
-  @@index([chatId, enabled])
+  @@index([chatId, deletedAt, enabled])
   @@index([chatId, updatedAt])
+}
+
+/// Immutable, content-minimal audit event for one ChatMemory state transition.
+/// Snapshots intentionally exclude embeddings, prompts, provider responses, persona, and profile text.
+model MemoryRevision {
+  id               String   @id @default(cuid())
+  memoryId         String
+  chatId           String
+  revision         Int
+  action           String
+  actor            String
+  beforeSnapshot   Json?
+  afterSnapshot    Json?
+  sourceMessageIds Json     @default("[]")
+  operationId      String?
+  reasonCode       String
+  createdAt        DateTime @default(now())
+
+  memory ChatMemory @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+
+  @@unique([memoryId, revision])
+  @@index([chatId, createdAt])
+  @@index([memoryId, createdAt])
+  @@index([operationId, createdAt])
+}
+
+/// Content-free summary for one automatic maintenance or undo batch.
+model MemoryOperation {
+  id               String   @id @default(cuid())
+  chatId           String
+  type             String
+  actor            String
+  status           String
+  startedAt        DateTime @default(now())
+  completedAt      DateTime?
+  createdCount     Int      @default(0)
+  updatedCount     Int      @default(0)
+  disabledCount    Int      @default(0)
+  unchangedCount   Int      @default(0)
+  sourceMessageIds Json     @default("[]")
+  errorCode        String?
+  undoneAt         DateTime?
+  undoOperationId  String?
+
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([chatId, startedAt])
+  @@index([status, startedAt])
+  @@index([undoOperationId])
+}
+
+/// Immutable history for the sensitive chat-scoped user profile summary.
+model ProfileSummaryRevision {
+  id               String   @id @default(cuid())
+  chatId           String
+  revision         Int
+  action           String
+  actor            String
+  summary          String
+  sourceMessageIds Json     @default("[]")
+  createdAt        DateTime @default(now())
+
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@unique([chatId, revision])
+  @@index([chatId, createdAt])
 }
 
 model Message {
@@ -147,6 +232,10 @@ model Message {
   variants           Json     @default("[]")
   activeVariantIndex Int      @default(0)
   tokenUsage         Json?
+  /// Content-free provider/model/cost summary for the active generated variant.
+  generationMetadata Json?
+  /// Variant-aligned content-free provider/model/usage summaries.
+  variantMetadata    Json      @default("[]")
   /// Token-only itemization of the prompt used to generate this assistant message.
   promptBreakdown    Json?
   loreMatches        Json?
@@ -156,11 +245,86 @@ model Message {
 
   chat      Chat       @relation(fields: [chatId], references: [id], onDelete: Cascade)
   character Character? @relation(fields: [characterId], references: [id], onDelete: SetNull)
+  modelRequests ModelRequest[]
+  usageAttempts ModelUsageAttempt[]
 
   @@index([chatId])
   @@index([chatId, createdAt])
   @@index([chatId, isBookmarked, createdAt])
   @@index([characterId])
+}
+
+/// Content-free lifecycle record used for reconnect recovery and application-level deduplication.
+model ModelRequest {
+  id                String   @id
+  module            String
+  operation         String
+  chatId            String?
+  messageId         String?
+  status            String   @default("queued")
+  activeAttemptId   String?
+  outputStarted     Boolean  @default(false)
+  errorCode         String?
+  errorSummary      String?
+  diagnosticId      String?
+  overrideHardBudget Boolean @default(false)
+  createdAt         DateTime @default(now())
+  startedAt         DateTime?
+  completedAt       DateTime?
+  updatedAt         DateTime @updatedAt
+
+  chat     Chat?    @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  message  Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  attempts ModelUsageAttempt[]
+
+  @@index([status, updatedAt])
+  @@index([chatId, createdAt])
+  @@index([module, createdAt])
+}
+
+/// One row per actual provider call. It never stores prompts, output text, or raw provider errors.
+model ModelUsageAttempt {
+  id                    String   @id
+  requestId             String
+  attemptNumber         Int
+  module                String
+  chatId                String?
+  messageId             String?
+  providerId            String
+  providerType          String
+  modelId               String
+  status                String   @default("running")
+  startedAt             DateTime @default(now())
+  completedAt           DateTime?
+  promptTokens          Int?
+  outputTokens          Int?
+  totalTokens           Int?
+  usageSource           String?
+  inputPriceMicros      Int?
+  outputPriceMicros     Int?
+  estimatedCostMicros   Int?
+  currency              String?
+  specialTokensUnknown  Boolean  @default(false)
+  usedFallback          Boolean  @default(false)
+  fallbackFromProviderId String?
+  fallbackFromModelId   String?
+  errorCode             String?
+  diagnosticId          String?
+  reservedCostMicros    Int      @default(0)
+  reservationDay        String?
+  reservationMonth      String?
+
+  request ModelRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  chat    Chat?        @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  message Message?     @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@unique([requestId, attemptNumber])
+  @@index([startedAt])
+  @@index([module, startedAt])
+  @@index([providerId, modelId, startedAt])
+  @@index([chatId, startedAt])
+  @@index([reservationDay, status])
+  @@index([reservationMonth, status])
 }
 
 /// Local, bounded safety snapshot created before destructive data protection operations.

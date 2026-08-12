@@ -13,11 +13,15 @@ import { messagesRouter } from "./routes/messages.js";
 import { mediaRouter } from "./routes/media.js";
 import { settingsRouter } from "./routes/settings.js";
 import { syncRouter } from "./routes/sync.js";
+import { usageRouter } from "./routes/usage.js";
 import { attachChatSocket } from "./realtime/chatSocket.js";
 import { getAppInfo } from "./services/appInfo.js";
+import { recoverInterruptedModelCalls } from "./services/modelUsage.js";
+import { isPrivacyLocked, lockPrivacy, unlockPrivacy } from "./services/privacyLock.js";
 
 const APP_NAME = "Star Companion";
 const app = express();
+let closeWebSocketsForPrivacy = () => undefined;
 
 app.use(
   cors({
@@ -59,6 +63,31 @@ app.get("/api/app/info", async (_request, response) => {
   response.json({ ok: true, data: info });
 });
 
+app.get("/api/privacy/status", (_request, response) => response.json({ ok: true, data: { locked: isPrivacyLocked() } }));
+app.post("/api/privacy/lock", (request, response) => {
+  if (!lockPrivacy(typeof request.body?.passcode === "string" ? request.body.passcode : "")) {
+    response.status(400).json({ ok: false, error: "Unlock code must contain 4 to 128 characters." });
+    return;
+  }
+  closeWebSocketsForPrivacy();
+  response.json({ ok: true, data: { locked: true } });
+});
+app.post("/api/privacy/unlock", (request, response) => {
+  if (!unlockPrivacy(typeof request.body?.passcode === "string" ? request.body.passcode : "")) {
+    response.status(401).json({ ok: false, error: "Incorrect unlock code." });
+    return;
+  }
+  response.json({ ok: true, data: { locked: false } });
+});
+
+app.use("/api", (_request, response, next) => {
+  if (isPrivacyLocked()) {
+    response.status(423).json({ ok: false, error: "App is locked." });
+    return;
+  }
+  next();
+});
+
 app.use("/api/characters", charactersRouter);
 app.use("/api/chats", chatsRouter);
 app.use("/api/messages", messagesRouter);
@@ -66,6 +95,7 @@ app.use("/api/media", mediaRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/backups", backupsRouter);
 app.use("/api/sync", syncRouter);
+app.use("/api/usage", usageRouter);
 
 if (serverConfig.webDistDir) {
   app.use(express.static(serverConfig.webDistDir));
@@ -78,10 +108,14 @@ app.use(errorMiddleware);
 
 const httpServer = createServer(app);
 const wsServer = new WebSocketServer({ server: httpServer, path: "/ws" });
+closeWebSocketsForPrivacy = () => {
+  for (const client of wsServer.clients) client.close(4403, "App locked");
+};
 attachChatSocket(wsServer, APP_NAME);
 
 const start = async () => {
   await connectDatabase();
+  await recoverInterruptedModelCalls();
 
   httpServer.listen(serverConfig.port, () => {
     console.log(`${APP_NAME} server listening on http://localhost:${serverConfig.port}`);
@@ -104,7 +138,11 @@ process.on("SIGTERM", () => {
 });
 
 void start().catch(async (error: unknown) => {
-  console.error(error);
+  const code =
+    error && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code
+      : "SERVER_START_FAILED";
+  console.error(`${APP_NAME} failed to start`, code);
   await disconnectDatabase();
   process.exit(1);
 });

@@ -169,7 +169,7 @@ const createFakeModelServer = () => {
 
 const runSocketRequest = (input) =>
   new Promise((resolve, reject) => {
-    const requestId = `mobile-smoke-${Date.now()}`;
+    const requestId = input.requestId ?? `mobile-smoke-${Date.now()}`;
     const events = [];
     const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
     const timeout = setTimeout(() => {
@@ -201,6 +201,24 @@ const runSocketRequest = (input) =>
       clearTimeout(timeout);
       reject(error);
     });
+  });
+
+const querySocketRequestStatus = (requestId) =>
+  new Promise((resolve, reject) => {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const timeout = setTimeout(() => {
+      socket.close();
+      reject(new Error("Timed out waiting for mobile generation status"));
+    }, 5_000);
+    socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "status", requestId })));
+    socket.addEventListener("message", (raw) => {
+      const event = JSON.parse(String(raw.data));
+      if (event.type !== "generation_status" || event.request?.requestId !== requestId) return;
+      clearTimeout(timeout);
+      socket.close();
+      resolve(event.request);
+    });
+    socket.addEventListener("error", reject);
   });
 
 const runGeneration = (chatId, content) => runSocketRequest({ type: "generate", chatId, content });
@@ -325,7 +343,11 @@ try {
         apiBaseUrl: `http://127.0.0.1:${modelPort}`,
         key: "mobile-provider-key",
         models: [
-          { id: "mobile-chat", label: "Chat", model: "fake-mobile-model", contextWindow: 128000, capabilities: ["text_generation"] },
+          {
+            id: "mobile-chat", label: "Chat", model: "fake-mobile-model", contextWindow: 128000,
+            capabilities: ["text_generation"],
+            pricing: { inputMicrosPerMillion: 2_000_000, outputMicrosPerMillion: 6_000_000, currency: "USD", updatedAt: "2026-08-12T00:00:00.000Z", source: "user" }
+          },
           { id: "mobile-embedding", label: "Embedding", model: "fake-mobile-embedding", capabilities: ["text_embedding"] },
           { id: "mobile-stt", label: "Transcription", model: "fake-mobile-transcribe", capabilities: ["audio_transcription"] },
           { id: "mobile-tts", label: "Speech", model: "fake-mobile-tts", capabilities: ["text_to_speech"] },
@@ -713,13 +735,54 @@ try {
   assert.equal(chatAfterGeneration.messages.length, 2);
   assert.equal(chatAfterGeneration.memories.length, 1);
   assert.match(chatAfterGeneration.memories[0].content, /blue door/i);
+  assert.ok(memoryUpdatedEvent.summary.operationId);
+  const automaticOperations = await request(`/api/chats/${chat.id}/memory-operations`);
+  assert.equal(automaticOperations[0]?.id, memoryUpdatedEvent.summary.operationId);
+  assert.equal(automaticOperations[0]?.status, "succeeded");
+  const automaticRevisions = await request(`/api/chats/${chat.id}/memories/${chatAfterGeneration.memories[0].id}/revisions`);
+  assert.equal(automaticRevisions[0]?.action, "automatic_create");
+  assert.equal(automaticRevisions[0]?.operationId, memoryUpdatedEvent.summary.operationId);
+  assert.equal(automaticRevisions[0]?.sourceMessageIds.length, 2);
+  assert.ok(automaticRevisions[0]?.sources.every((source) => source.available));
+  assert.equal("embedding" in automaticRevisions[0].afterSnapshot, false);
+  const profileHistory = await request(`/api/chats/${chat.id}/profile-summary/revisions`);
+  assert.equal(profileHistory[0]?.action, "automatic_update");
+  assert.equal(profileHistory[0]?.sourceMessageIds.length, 1);
+  const manuallyProfiledChat = await request(`/api/chats/${chat.id}`, {
+    method: "PUT",
+    body: { userProfileSummary: "Manual mobile profile revision." }
+  });
+  const profileRestorePreview = await request(`/api/chats/${chat.id}/profile-summary/revisions/1/restore-preview`);
+  assert.equal(profileRestorePreview.expectedCurrentRevision, manuallyProfiledChat.profileRevision);
+  const profileRestore = await request(`/api/chats/${chat.id}/profile-summary/restore`, {
+    method: "POST",
+    body: { revision: 1, expectedCurrentRevision: profileRestorePreview.expectedCurrentRevision, confirm: "RESTORE_PROFILE_SUMMARY" }
+  });
+  assert.equal(profileRestore.revision.action, "restore");
+  assert.match(profileRestore.chat.userProfileSummary, /blue doors/i);
+  const undoPreview = await request(`/api/chats/${chat.id}/memory-operations/${memoryUpdatedEvent.summary.operationId}/undo-preview`, { method: "POST" });
+  assert.equal(undoPreview.items[0]?.effect, "retire_created");
+  const undoResult = await request(`/api/chats/${chat.id}/memory-operations/${memoryUpdatedEvent.summary.operationId}/undo`, {
+    method: "POST",
+    body: {
+      confirm: "UNDO_MEMORY_OPERATION",
+      resolutions: undoPreview.items.map((item) => ({ memoryId: item.memoryId, expectedCurrentRevision: item.currentRevision, action: "restore" }))
+    }
+  });
+  assert.equal(undoResult.retired, 1);
+  const undoneMemories = await request(`/api/chats/${chat.id}/memories`);
+  assert.ok(undoneMemories.find((memory) => memory.id === chatAfterGeneration.memories[0].id)?.deletedAt);
+  const restoreAutomaticPreview = await request(`/api/chats/${chat.id}/memories/${chatAfterGeneration.memories[0].id}/revisions/1/restore-preview`);
+  await request(`/api/chats/${chat.id}/memories/${chatAfterGeneration.memories[0].id}/restore`, {
+    method: "POST",
+    body: { revision: 1, expectedCurrentRevision: restoreAutomaticPreview.expectedCurrentRevision, confirm: "RESTORE_MEMORY_REVISION" }
+  });
   assert.ok(chatAfterGeneration.messages[1]?.promptBreakdown?.promptTokens > 0);
   assert.ok(
     chatAfterGeneration.messages[1]?.promptBreakdown?.sections.some(
       (section) => section.id === "user_persona"
     )
   );
-
   const excludedUserMessage = await request(`/api/messages/${chatAfterGeneration.messages[0].id}`, {
     method: "PUT",
     body: { contextIncluded: false, isBookmarked: true }
@@ -751,6 +814,32 @@ try {
       (section) => section.id === "generation_instruction"
     )
   );
+  assert.equal(continuedMessage?.generationMetadata?.modelId, "fake-mobile-model-2");
+  assert.equal(continuedMessage?.generationMetadata?.usageSource, "provider");
+  assert.equal(continuedMessage?.generationMetadata?.estimatedCostMicros, 40);
+  assert.equal(continuedMessage?.generationMetadata?.incomplete, false);
+  const continuedRequestId = continuedMessage.generationMetadata.requestId;
+  const continuedRequestStatus = await querySocketRequestStatus(continuedRequestId);
+  assert.equal(continuedRequestStatus.status, "succeeded");
+  assert.equal(continuedRequestStatus.messageId, lastAssistantMessage.id);
+  const providerCallsBeforeStatus = fakeModelServer.getChatCompletionRequests();
+  assert.equal((await querySocketRequestStatus(continuedRequestId)).status, "succeeded");
+  assert.equal(fakeModelServer.getChatCompletionRequests(), providerCallsBeforeStatus);
+  const usageSummary = await request(`/api/usage/summary?${new URLSearchParams({ chatId: chat.id }).toString()}`);
+  const continuedAttempt = usageSummary.recent.find((attempt) => attempt.requestId === continuedRequestId);
+  assert.equal(continuedAttempt.status, "succeeded");
+  assert.equal(continuedAttempt.usageSource, "provider");
+  assert.equal(continuedAttempt.estimatedCostMicros, 40);
+  assert.equal(continuedAttempt.chatTitle, chat.title);
+  assert.ok(usageSummary.byChat.some((bucket) => bucket.key === chat.id && bucket.label === chat.title));
+  const usagePreview = await request("/api/usage/preview", {
+    method: "POST",
+    body: { module: "chat", inputTokens: 8, maxOutputTokens: 4 }
+  });
+  assert.equal(usagePreview.minimumCostMicros, 16);
+  assert.equal(usagePreview.maximumCostMicros, 40);
+  assert.equal(usagePreview.unknownPricing, false);
+  assert.ok(usagePreview.todayCostMicros >= 40);
   const chatAfterContinuation = await request(`/api/chats/${chat.id}`);
   assert.equal(chatAfterContinuation.messages.length, 2);
   assert.equal(chatAfterContinuation.messages[1]?.content, "Mobile assistant reply. Mobile assistant reply.");
@@ -793,14 +882,13 @@ try {
     method: "POST"
   });
   assert.ok(memoryRefresh.length >= 1);
-  assert.equal(memoryRefresh[0].embeddingModel, "openai-compatible:fake-mobile-embedding");
-  assert.ok(memoryRefresh[0].embeddingUpdatedAt);
 
   const reindexedMemories = await request(`/api/chats/${chat.id}/memories/reindex`, {
     method: "POST"
   });
   assert.ok(reindexedMemories.length >= 1);
-  assert.equal(reindexedMemories[0]?.embeddingStatus, "ready");
+  assert.ok(reindexedMemories.filter((memory) => !memory.deletedAt && memory.enabled).every((memory) => memory.embeddingStatus === "ready"));
+  assert.ok(reindexedMemories.filter((memory) => !memory.deletedAt && memory.enabled).every((memory) => memory.embeddingModel === "openai-compatible:fake-mobile-embedding" && memory.embeddingUpdatedAt));
 
   const semanticMemory = await request(`/api/chats/${chat.id}/memories`, {
     method: "POST",
@@ -813,6 +901,37 @@ try {
     }
   });
   assert.ok(semanticMemory.embeddingUpdatedAt);
+
+  const editedSemanticMemory = await request(`/api/chats/${chat.id}/memories/${semanticMemory.id}`, {
+    method: "PUT",
+    body: { content: "They vowed to meet beside the harbor after the winter festival." }
+  });
+  const semanticHistory = await request(`/api/chats/${chat.id}/memories/${semanticMemory.id}/revisions`);
+  assert.equal(semanticHistory[0]?.action, "manual_edit");
+  const semanticRestorePreview = await request(`/api/chats/${chat.id}/memories/${semanticMemory.id}/revisions/1/restore-preview`);
+  assert.equal(semanticRestorePreview.expectedCurrentRevision, editedSemanticMemory.currentRevision);
+  const restoredSemanticMemory = await request(`/api/chats/${chat.id}/memories/${semanticMemory.id}/restore`, {
+    method: "POST",
+    body: { revision: 1, expectedCurrentRevision: semanticRestorePreview.expectedCurrentRevision, confirm: "RESTORE_MEMORY_REVISION" }
+  });
+  assert.equal(restoredSemanticMemory.revision.action, "restore");
+  assert.equal(restoredSemanticMemory.memory.embeddingStatus, "stale");
+
+  const timelineSource = await request("/api/messages", {
+    method: "POST",
+    body: { chatId: chat.id, role: "user", content: "Temporary source for audited timeline cleanup." }
+  });
+  const timelineMemory = await request(`/api/chats/${chat.id}/memories`, {
+    method: "POST",
+    body: { title: "Timeline-bound memory", content: "Must be disabled when its source timeline is removed.", sourceMessageIds: [timelineSource.id] }
+  });
+  const timelineCleanup = await request(`/api/messages/${timelineSource.id}/timeline`, { method: "DELETE" });
+  assert.equal(timelineCleanup.deletedCount, 1);
+  assert.equal(timelineCleanup.disabledMemoryCount, 1);
+  const timelineHistory = await request(`/api/chats/${chat.id}/memories/${timelineMemory.id}/revisions`);
+  assert.equal(timelineHistory[0]?.actor, "timeline_cleanup");
+  assert.equal(timelineHistory[0]?.action, "timeline_disable");
+  assert.equal(timelineHistory[0]?.sources[0]?.available, false);
 
   const semanticRecallEvents = await runGeneration(
     chat.id,
@@ -873,6 +992,13 @@ try {
   assert.equal(importedArchive.isArchived, false);
   assert.equal(importedArchive.folder, "Mobile renamed folder");
   assert.equal(importedArchive.userAvatar, "data:image/png;base64,YQ==");
+  assert.equal(chatArchive.memoryRevisions.length > 0, true);
+  assert.equal(chatArchive.memoryOperations.length > 0, true);
+  assert.equal(chatArchive.profileSummaryRevisions.length > 0, true);
+  const importedArchiveBackup = await request("/api/backups/export");
+  assert.ok(importedArchiveBackup.memoryRevisions.some((revision) => revision.chatId === importedArchive.id));
+  assert.ok(importedArchiveBackup.memoryOperations.some((operation) => operation.chatId === importedArchive.id));
+  assert.ok(importedArchiveBackup.profileSummaryRevisions.some((revision) => revision.chatId === importedArchive.id));
   assert.ok(
     importedArchive.messages.find((message) => message.role === "assistant")?.promptBreakdown
       ?.promptTokens > 0
@@ -969,6 +1095,9 @@ try {
   assert.equal(backup.chats[0]?.folder, "Mobile renamed folder");
   assert.equal(backup.chats[0]?.userAvatar, "data:image/png;base64,YQ==");
   assert.equal(backup.messages.length, 6);
+  assert.ok(backup.messages.some((message) => message.generationMetadata?.estimatedCostMicros === 40));
+  assert.equal("usageAttempts" in backup, false);
+  assert.equal("modelRequests" in backup, false);
   assert.ok(
     backup.messages.find((message) => message.role === "assistant")?.promptBreakdown
       ?.promptTokens > 0
@@ -977,6 +1106,22 @@ try {
   assert.equal(backup.settings.providers[0]?.hasKey, true);
   assert.ok(backup.memories.length >= 1);
   assert.equal("embedding" in backup.memories[0], false);
+  assert.ok(backup.memoryRevisions.length >= 1);
+  assert.ok(backup.memoryOperations.length >= 1);
+  assert.ok(backup.profileSummaryRevisions.length >= 1);
+  assert.equal("embedding" in backup.memoryRevisions[0].afterSnapshot, false);
+
+  assert.equal((await request("/api/privacy/status")).locked, false);
+  assert.equal((await request("/api/privacy/lock", { method: "POST", body: { passcode: "2468" } })).locked, true);
+  const lockedProfileResponse = await fetch(`http://127.0.0.1:${port}/api/chats/${chat.id}/profile-summary/revisions`);
+  assert.equal(lockedProfileResponse.status, 423);
+  assert.doesNotMatch(await lockedProfileResponse.text(), /blue doors|user likes/i);
+  const failedUnlockResponse = await fetch(`http://127.0.0.1:${port}/api/privacy/unlock`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ passcode: "wrong" })
+  });
+  assert.equal(failedUnlockResponse.status, 401);
+  assert.doesNotMatch(await failedUnlockResponse.text(), /blue doors|user likes/i);
+  assert.equal((await request("/api/privacy/unlock", { method: "POST", body: { passcode: "2468" } })).locked, false);
 
   const recoveryBeforePreview = await request("/api/backups/recovery-points");
   const replacePreview = await request("/api/backups/preview", {
@@ -1023,6 +1168,29 @@ try {
   );
   assert.ok(mobileRestore.safetyRecoveryPointId);
   assert.equal((await request(`/api/characters/${character.id}`)).name, character.name);
+  const restoredMobileBackup = await request("/api/backups/export");
+  assert.deepEqual(restoredMobileBackup.memoryRevisions, backup.memoryRevisions);
+  assert.deepEqual(restoredMobileBackup.memoryOperations, backup.memoryOperations);
+  assert.deepEqual(restoredMobileBackup.profileSummaryRevisions, backup.profileSummaryRevisions);
+
+  const legacyChatId = "mobile-legacy-chat";
+  const legacyMemoryId = "mobile-legacy-memory";
+  const legacyBackup = {
+    schemaVersion: 1,
+    mode: "merge",
+    chats: [{ id: legacyChatId, title: "Legacy baseline", characterId: null, userProfileSummary: "" }],
+    messages: [],
+    memories: [{ id: legacyMemoryId, chatId: legacyChatId, title: "Legacy memory", content: "Legacy current state", keywords: [], importance: 3, enabled: true, sourceMessageIds: [] }]
+  };
+  const legacyPreview = await request("/api/backups/preview", { method: "POST", body: legacyBackup });
+  await request("/api/backups/import", { method: "POST", body: { ...legacyBackup, previewId: legacyPreview.previewId, conflictResolutions: [] } });
+  const legacyHistory = await request(`/api/chats/${legacyChatId}/memories/${legacyMemoryId}/revisions`);
+  assert.equal(legacyHistory.length, 1);
+  assert.equal(legacyHistory[0].action, "baseline");
+  const repeatLegacyPreview = await request("/api/backups/preview", { method: "POST", body: legacyBackup });
+  await request("/api/backups/import", { method: "POST", body: { ...legacyBackup, previewId: repeatLegacyPreview.previewId, conflictResolutions: repeatLegacyPreview.conflicts.map((conflict) => ({ key: conflict.key, action: "use_incoming" })) } });
+  assert.equal((await request(`/api/chats/${legacyChatId}/memories/${legacyMemoryId}/revisions`)).length, 1);
+  await permanentlyDeleteChat(legacyChatId);
 
   const exportedText = await request("/api/exports/text", {
     method: "POST",

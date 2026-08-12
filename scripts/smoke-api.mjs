@@ -132,7 +132,7 @@ const permanentlyDeleteChat = async (baseUrl, chatId) => {
 
 const runSocketRequest = (baseUrl, input) =>
   new Promise((resolve, reject) => {
-    const requestId = `smoke-ws-${Date.now()}`;
+    const requestId = input.requestId ?? `smoke-ws-${Date.now()}`;
     const events = [];
     const socket = new WebSocket(`${baseUrl.replace(/^http/, "ws")}/ws`);
     const timeout = setTimeout(() => {
@@ -149,7 +149,7 @@ const runSocketRequest = (baseUrl, input) =>
       if (event.type === "error" && event.requestId === requestId) {
         clearTimeout(timeout);
         socket.close();
-        reject(new Error(event.error));
+        reject(new Error(`${event.error} (${event.modelError?.code ?? "unknown"}; ${event.modelError?.diagnosticId ?? "no-diagnostic"}; events=${events.map((item) => item.type).join(",")})`));
       }
       if (
         (event.type === "generation_done" || event.type === "generation_stopped") &&
@@ -164,6 +164,24 @@ const runSocketRequest = (baseUrl, input) =>
       clearTimeout(timeout);
       reject(error);
     });
+  });
+
+const querySocketRequestStatus = (baseUrl, requestId) =>
+  new Promise((resolve, reject) => {
+    const socket = new WebSocket(`${baseUrl.replace(/^http/, "ws")}/ws`);
+    const timeout = setTimeout(() => {
+      socket.close();
+      reject(new Error("Timed out waiting for generation status"));
+    }, 5_000);
+    socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "status", requestId })));
+    socket.addEventListener("message", (message) => {
+      const event = JSON.parse(message.data.toString());
+      if (event.type !== "generation_status" || event.request?.requestId !== requestId) return;
+      clearTimeout(timeout);
+      socket.close();
+      resolve(event.request);
+    });
+    socket.addEventListener("error", reject);
   });
 
 const readJsonBody = (request) =>
@@ -487,7 +505,14 @@ const main = async () => {
                 "audio_transcription",
                 "text_to_speech",
                 "image_generation"
-              ]
+              ],
+              pricing: {
+                inputMicrosPerMillion: 2_000_000,
+                outputMicrosPerMillion: 6_000_000,
+                currency: "USD",
+                updatedAt: "2026-08-12T00:00:00.000Z",
+                source: "user"
+              }
             }
           ]
         }
@@ -1098,13 +1123,38 @@ const main = async () => {
     );
     assert.equal(updatedMemory.enabled, false);
     assert.equal(updatedMemory.importance, 5);
+    const memoryHistory = await requestData(
+      baseUrl,
+      `/api/chats/${createdChat.id}/memories/${createdMemory.id}/revisions`
+    );
+    assert.deepEqual(memoryHistory.map((revision) => revision.action), ["manual_disable", "manual_create"]);
+    assert.equal(memoryHistory[0].revision, 2);
+    assert.equal("embedding" in memoryHistory[0].afterSnapshot, false);
+    const restorePreview = await requestData(
+      baseUrl,
+      `/api/chats/${createdChat.id}/memories/${createdMemory.id}/revisions/1/restore-preview`
+    );
+    const restoredMemory = await requestData(
+      baseUrl,
+      `/api/chats/${createdChat.id}/memories/${createdMemory.id}/restore`,
+      {
+        method: "POST",
+        body: {
+          revision: 1,
+          expectedCurrentRevision: restorePreview.expectedCurrentRevision,
+          confirm: "RESTORE_MEMORY_REVISION"
+        }
+      }
+    );
+    assert.equal(restoredMemory.revision.action, "restore");
+    assert.equal(restoredMemory.memory.embeddingStatus, "stale");
     const disabledReindexResult = await requestData(
       baseUrl,
       `/api/chats/${createdChat.id}/memories/reindex`,
       { method: "POST" }
     );
     assert.equal(disabledReindexResult.length, 1);
-    assert.equal(disabledReindexResult[0]?.enabled, false);
+    assert.equal(disabledReindexResult[0]?.enabled, true);
 
     const userMessage = await requestData(baseUrl, "/api/messages", {
       method: "POST",
@@ -1211,6 +1261,37 @@ const main = async () => {
         (section) => section.id === "generation_instruction"
       )
     );
+    assert.equal(continuedMessage?.generationMetadata?.modelId, "fake-agent-model");
+    assert.equal(continuedMessage?.generationMetadata?.usageSource, "provider");
+    assert.equal(continuedMessage?.generationMetadata?.estimatedCostMicros, 40);
+    assert.equal(continuedMessage?.generationMetadata?.incomplete, false);
+    assert.equal(continuedMessage?.variantMetadata?.[0], null);
+    assert.equal(continuedMessage?.variantMetadata?.[1]?.attemptId, continuedMessage?.generationMetadata?.attemptId);
+
+    const continuedRequestId = continuedMessage.generationMetadata.requestId;
+    const continuedRequestStatus = await querySocketRequestStatus(baseUrl, continuedRequestId);
+    assert.equal(continuedRequestStatus.status, "succeeded");
+    assert.equal(continuedRequestStatus.messageId, assistantMessage.id);
+    const providerCallsBeforeDuplicate = fakeModelServer.getChatCompletionRequests();
+    const duplicateStatus = await querySocketRequestStatus(baseUrl, continuedRequestId);
+    assert.equal(duplicateStatus.status, "succeeded");
+    assert.equal(fakeModelServer.getChatCompletionRequests(), providerCallsBeforeDuplicate);
+
+    const usageSummary = await requestData(baseUrl, `/api/usage/summary?${new URLSearchParams({ chatId: createdChat.id }).toString()}`);
+    const continuedAttempt = usageSummary.recent.find((attempt) => attempt.requestId === continuedRequestId);
+    assert.equal(continuedAttempt.status, "succeeded");
+    assert.equal(continuedAttempt.usageSource, "provider");
+    assert.equal(continuedAttempt.estimatedCostMicros, 40);
+    assert.equal(continuedAttempt.chatTitle, createdChat.title);
+    assert.ok(usageSummary.byChat.some((bucket) => bucket.key === createdChat.id && bucket.label === createdChat.title));
+    const usagePreview = await requestData(baseUrl, "/api/usage/preview", {
+      method: "POST",
+      body: { module: "chat", inputTokens: 8, maxOutputTokens: 4 }
+    });
+    assert.equal(usagePreview.minimumCostMicros, 16);
+    assert.equal(usagePreview.maximumCostMicros, 40);
+    assert.equal(usagePreview.unknownPricing, false);
+    assert.ok(usagePreview.todayCostMicros >= 40);
 
     const listedMessages = await requestData(
       baseUrl,
@@ -1313,6 +1394,9 @@ const main = async () => {
     assert.equal(chatArchive.messages[0]?.contextIncluded, false);
     assert.equal(chatArchive.messages[0]?.isBookmarked, true);
     assert.equal(chatArchive.memories.length, 1);
+    assert.equal(chatArchive.memoryRevisions.length, 3);
+    assert.ok(Array.isArray(chatArchive.memoryOperations));
+    assert.ok(Array.isArray(chatArchive.profileSummaryRevisions));
     assert.equal(chatArchive.chat.isArchived, true);
     assert.equal(chatArchive.chat.userAvatar, "data:image/png;base64,YQ==");
     const importedArchive = await requestData(baseUrl, "/api/chats/import-archive", {
@@ -1326,6 +1410,8 @@ const main = async () => {
     assert.equal(importedArchive.messages[0]?.contextIncluded, false);
     assert.equal(importedArchive.messages[0]?.isBookmarked, true);
     assert.equal(importedArchive.memories.length, 1);
+    const importedHistory = await requestData(baseUrl, `/api/chats/${importedArchive.id}/memories/${importedArchive.memories[0].id}/revisions`);
+    assert.equal(importedHistory.length, chatArchive.memoryRevisions.length);
     assert.equal(importedArchive.isArchived, false);
     assert.equal(importedArchive.userAvatar, "data:image/png;base64,YQ==");
     await permanentlyDeleteChat(baseUrl, importedArchive.id);
@@ -1434,7 +1520,16 @@ const main = async () => {
     assert.equal(exportedBackup.chats[0]?.isArchived, true);
     assert.equal(exportedBackup.chats[0]?.userAvatar, "data:image/png;base64,YQ==");
     assert.equal(exportedBackup.messages.length, 2);
+    const exportedGeneratedMessage = exportedBackup.messages.find((message) => message.id === assistantMessage.id);
+    assert.equal(exportedGeneratedMessage?.generationMetadata?.estimatedCostMicros, 40);
+    assert.equal(exportedGeneratedMessage?.variantMetadata?.[0], null);
+    assert.equal("usageAttempts" in exportedBackup, false);
+    assert.equal("modelRequests" in exportedBackup, false);
     assert.equal(exportedBackup.memories.length, 1);
+    assert.equal(exportedBackup.memoryRevisions.length, 3);
+    assert.ok(Array.isArray(exportedBackup.memoryOperations));
+    assert.ok(Array.isArray(exportedBackup.profileSummaryRevisions));
+    assert.ok(exportedBackup.memoryRevisions.every((revision) => !revision.afterSnapshot || !("embedding" in revision.afterSnapshot)));
     assert.equal(
       exportedBackup.characters.find((character) => character.id === createdCharacter.id)?.isFavorite,
       true
@@ -1451,6 +1546,17 @@ const main = async () => {
         typeof exportedPrivateBackupCharacter.loreEntries === "object" &&
         "__privateCharacter" in exportedPrivateBackupCharacter.loreEntries
     );
+
+    log("Verifying session privacy lock API isolation");
+    assert.equal((await requestData(baseUrl, "/api/privacy/status")).locked, false);
+    assert.equal((await requestData(baseUrl, "/api/privacy/lock", { method: "POST", body: { passcode: "2468" } })).locked, true);
+    const lockedHistory = await request(baseUrl, `/api/chats/${createdChat.id}/memories/${createdMemory.id}/revisions`, { expectedStatus: 423 });
+    assert.equal(lockedHistory.ok, false, "locked history response must be denied");
+    assert.doesNotMatch(JSON.stringify(lockedHistory), /smoke path|nominal/i);
+    const wrongUnlock = await request(baseUrl, "/api/privacy/unlock", { method: "POST", expectedStatus: 401, body: { passcode: "wrong" } });
+    assert.equal(wrongUnlock.ok, false, "wrong unlock response must be denied");
+    assert.doesNotMatch(JSON.stringify(wrongUnlock), /smoke path|nominal/i);
+    assert.equal((await requestData(baseUrl, "/api/privacy/unlock", { method: "POST", body: { passcode: "2468" } })).locked, false);
 
     const recoveryPointsBeforePreview = await requestData(baseUrl, "/api/backups/recovery-points");
     const replacePreview = await requestData(baseUrl, "/api/backups/preview", {
@@ -1587,10 +1693,13 @@ const main = async () => {
         ...conflictBackup,
         mode: "merge",
         previewId: conflictPreview.previewId,
-        conflictResolutions: [{ key: `characters:${createdCharacter.id}`, action: "use_incoming" }]
+        conflictResolutions: conflictPreview.conflicts.map((conflict) => ({
+          key: conflict.key,
+          action: "use_incoming"
+        }))
       }
     });
-    assert.equal(resolvedConflictSummary.updated, 1);
+    assert.ok(resolvedConflictSummary.updated >= 1);
     assert.ok(resolvedConflictSummary.recoveryPointId);
     assert.equal((await requestData(baseUrl, `/api/characters/${createdCharacter.id}`)).name, "Incoming Conflict Name");
 
@@ -1604,6 +1713,29 @@ const main = async () => {
       exportedBackup.characters.find((character) => character.id === createdCharacter.id)?.name
     );
     assert.ok(restoreResult.safetyRecoveryPointId);
+    const restoredBackup = await requestData(baseUrl, "/api/backups/export");
+    assert.deepEqual(restoredBackup.memoryRevisions, exportedBackup.memoryRevisions);
+    assert.deepEqual(restoredBackup.memoryOperations, exportedBackup.memoryOperations);
+    assert.deepEqual(restoredBackup.profileSummaryRevisions, exportedBackup.profileSummaryRevisions);
+
+    const legacyChatId = `legacy-chat-${runId}`;
+    const legacyMemoryId = `legacy-memory-${runId}`;
+    const legacyBackup = {
+      schemaVersion: 1,
+      mode: "merge",
+      chats: [{ id: legacyChatId, title: "Legacy baseline", characterId: null, userProfileSummary: "" }],
+      messages: [],
+      memories: [{ id: legacyMemoryId, chatId: legacyChatId, title: "Legacy memory", content: "Legacy current state", keywords: [], importance: 3, enabled: true, sourceMessageIds: [] }]
+    };
+    const legacyPreview = await requestData(baseUrl, "/api/backups/preview", { method: "POST", body: legacyBackup });
+    await requestData(baseUrl, "/api/backups/import", { method: "POST", body: { ...legacyBackup, previewId: legacyPreview.previewId, conflictResolutions: [] } });
+    const legacyHistory = await requestData(baseUrl, `/api/chats/${legacyChatId}/memories/${legacyMemoryId}/revisions`);
+    assert.equal(legacyHistory.length, 1);
+    assert.equal(legacyHistory[0].action, "baseline");
+    const repeatLegacyPreview = await requestData(baseUrl, "/api/backups/preview", { method: "POST", body: legacyBackup });
+    await requestData(baseUrl, "/api/backups/import", { method: "POST", body: { ...legacyBackup, previewId: repeatLegacyPreview.previewId, conflictResolutions: repeatLegacyPreview.conflicts.map((conflict) => ({ key: conflict.key, action: "use_incoming" })) } });
+    assert.equal((await requestData(baseUrl, `/api/chats/${legacyChatId}/memories/${legacyMemoryId}/revisions`)).length, 1);
+    await permanentlyDeleteChat(baseUrl, legacyChatId);
 
     const beforeFailedRestore = await requestData(baseUrl, "/api/backups/export");
     const corruptionDb = new DatabaseSync(tempDbPath);
@@ -1784,6 +1916,19 @@ const main = async () => {
     assert.ok(finalBackup.settings);
 
     log("Smoke API checks passed");
+  } catch (error) {
+    if (error instanceof Error && error.stack) console.error(error.stack);
+    console.error(`[smoke-api] isolated server diagnostics\n${server?.output() ?? "server not started"}`);
+    try {
+      const diagnosticDb = new DatabaseSync(tempDbPath, { readOnly: true });
+      const lifecycle = diagnosticDb.prepare('SELECT id, module, operation, status, activeAttemptId, outputStarted, errorCode, messageId FROM "ModelRequest" ORDER BY createdAt DESC LIMIT 8').all();
+      const attempts = diagnosticDb.prepare('SELECT id, requestId, attemptNumber, module, status, errorCode, messageId, reservedCostMicros FROM "ModelUsageAttempt" ORDER BY startedAt DESC LIMIT 12').all();
+      diagnosticDb.close();
+      console.error(`[smoke-api] lifecycle diagnostics\n${JSON.stringify({ lifecycle, attempts }, null, 2)}`);
+    } catch (diagnosticError) {
+      console.error(`[smoke-api] lifecycle diagnostics unavailable: ${diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)}`);
+    }
+    throw error;
   } finally {
     await stopProcess(server?.child);
     fakeModelServer?.close();

@@ -16,6 +16,13 @@ type ProviderModel = {
   model: string;
   contextWindow?: number;
   capabilities?: AiModelCapability[];
+  pricing?: {
+    inputMicrosPerMillion: number;
+    outputMicrosPerMillion: number;
+    currency: "USD";
+    updatedAt: string;
+    source: "user" | "template";
+  };
 };
 
 type ProviderProfile = {
@@ -85,7 +92,13 @@ const toProviderProfiles = (value: Prisma.JsonValue): ProviderProfile[] => {
                   (capability): capability is AiModelCapability =>
                     typeof capability === "string" && validCapabilities.has(capability as AiModelCapability)
                 )
-              : undefined
+              : undefined,
+            pricing: isRecord(model.pricing) &&
+              typeof model.pricing.inputMicrosPerMillion === "number" &&
+              typeof model.pricing.outputMicrosPerMillion === "number" &&
+              model.pricing.currency === "USD"
+                ? model.pricing as ProviderModel["pricing"]
+                : undefined
           }))
         : []
     }));
@@ -156,6 +169,70 @@ export const resolveModuleSettings = (
     activeProviderId: provider.id,
     activeModelId: model.id
   };
+};
+
+export const resolveModelReferenceSettings = (
+  settings: UserSettings,
+  moduleId: AiModuleId,
+  reference: { providerId: string; modelId: string }
+) => {
+  const providers = toProviderProfiles(settings.providers);
+  const provider = providers.find((entry) => entry.id === reference.providerId);
+  const model = provider?.models.find((entry) => entry.id === reference.modelId);
+  if (!provider || !model) {
+    throw new Error(`The configured ${moduleId} fallback model no longer exists.`);
+  }
+  if (!supportsModule(provider, model, moduleId)) {
+    throw new Error(`The configured ${moduleId} fallback model does not support this feature.`);
+  }
+  return {
+    ...settings,
+    activeProvider: provider.provider,
+    apiBaseUrl: provider.apiBaseUrl,
+    apiKey: provider.key?.trim() ? provider.key : settings.apiKey,
+    model: model.model,
+    activeProviderId: provider.id,
+    activeModelId: model.id
+  };
+};
+
+export const resolveAutomaticFallbackSettings = (settings: UserSettings, moduleId: AiModuleId) => {
+  if (!isRecord(settings.modelReliability) || !isRecord(settings.modelReliability.fallback)) return [];
+  const moduleFallback = settings.modelReliability.fallback[moduleId];
+  if (!isRecord(moduleFallback) || moduleFallback.enabled !== true) return [];
+  if (moduleId === "chat" && moduleFallback.allowAutomatic !== true) return [];
+  const chain = Array.isArray(moduleFallback.chain) ? moduleFallback.chain : [];
+  const primary = resolveModuleSettings(settings, moduleId);
+  const seen = new Set([`${primary.activeProviderId}\0${primary.activeModelId}`]);
+  const candidates: UserSettings[] = [];
+  for (const raw of chain.slice(0, 3)) {
+    if (!isRecord(raw) || typeof raw.providerId !== "string" || typeof raw.modelId !== "string") continue;
+    const key = `${raw.providerId}\0${raw.modelId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(resolveModelReferenceSettings(settings, moduleId, { providerId: raw.providerId, modelId: raw.modelId }));
+  }
+  return candidates;
+};
+
+export const validateModelReliabilitySettings = (providers: ProviderProfile[], reliability: unknown) => {
+  if (!isRecord(reliability) || !isRecord(reliability.fallback)) return null;
+  for (const moduleId of Object.keys(moduleCapabilities) as AiModuleId[]) {
+    const config = reliability.fallback[moduleId];
+    if (!isRecord(config) || !Array.isArray(config.chain)) continue;
+    const seen = new Set<string>();
+    for (const reference of config.chain) {
+      if (!isRecord(reference) || typeof reference.providerId !== "string" || typeof reference.modelId !== "string") continue;
+      const key = `${reference.providerId}\0${reference.modelId}`;
+      if (seen.has(key)) return `The ${moduleId} fallback chain contains a duplicate model.`;
+      seen.add(key);
+      const provider = providers.find((entry) => entry.id === reference.providerId);
+      const model = provider?.models.find((entry) => entry.id === reference.modelId);
+      if (!provider || !model) return `The selected ${moduleId} fallback model no longer exists.`;
+      if (!supportsModule(provider, model, moduleId)) return `A selected fallback model does not support ${moduleId}.`;
+    }
+  }
+  return null;
 };
 
 export const normalizeProviderKind = (provider: string) => {

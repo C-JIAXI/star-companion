@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { prisma } from "../db.js";
 import { HttpError } from "../lib/http.js";
 import { getOrCreateSettings } from "../routes/settings.js";
-import { completeChatCompletion, type ChatCompletionMessage } from "./completions.js";
+import { type ChatCompletionMessage } from "./completions.js";
+import { executeReliableTextCompletion } from "./reliableModelCalls.js";
 import { resolveModuleSettings } from "./moduleModels.js";
 
 const MAX_TITLE_LENGTH = 80;
@@ -59,12 +61,13 @@ export const createChatTitleSuggestion = async (chatId: string) => {
   const settings = resolveModuleSettings(await getOrCreateSettings(), "chat");
   const messages = buildChatTitleSuggestionMessages(chat.messages);
   const title = normalizeChatTitleSuggestion(
-    await completeChatCompletion({
+    (await executeReliableTextCompletion({
       settings,
       messages,
       maxTokens: Math.min(settings.maxTokens, 80),
-      temperature: Math.min(settings.temperature, 0.25)
-    })
+      temperature: Math.min(settings.temperature, 0.25),
+      context: { requestId: `title_${randomUUID()}`, module: "chat", operation: "title", chatId }
+    })).content
   );
 
   if (!title) {

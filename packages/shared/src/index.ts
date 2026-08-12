@@ -17,6 +17,16 @@ export interface ProviderModel {
   contextWindow?: number;
   /** Explicit model capabilities. When omitted, clients use a conservative ID-based classification. */
   capabilities?: AiModelCapability[];
+  /** Optional user/template supplied USD prices in integer micro-dollars per million tokens. */
+  pricing?: ModelPricingDTO;
+}
+
+export interface ModelPricingDTO {
+  inputMicrosPerMillion: number;
+  outputMicrosPerMillion: number;
+  currency: "USD";
+  updatedAt: string;
+  source: "user" | "template";
 }
 
 export interface ProviderProfile {
@@ -44,6 +54,9 @@ export interface UserSettingsDTO {
   activeProviderId: string;
   activeModelId: string;
   moduleModelPreferences: ModuleModelPreferencesDTO;
+  modelReliability: ModelReliabilitySettingsDTO;
+  usageBudgets: UsageBudgetSettingsDTO;
+  usageTimezone: string;
   userPersonaPresets: UserPersonaPresetDTO[];
   userProfileSummary: string;
   autoSummarizeUser: boolean;
@@ -280,6 +293,184 @@ export interface ModuleModelPreferenceDTO {
 
 export type ModuleModelPreferencesDTO = Partial<Record<AiModuleId, ModuleModelPreferenceDTO>>;
 
+export interface ModuleFallbackSettingsDTO {
+  enabled: boolean;
+  /** Chat requires this additional consent because model changes can change character performance. */
+  allowAutomatic?: boolean;
+  chain: ModuleModelPreferenceDTO[];
+}
+
+export interface ModelReliabilitySettingsDTO {
+  retry: {
+    enabled: boolean;
+    /** Additional provider attempts after the first one; v1 maximum is 2 (3 total attempts). */
+    maxRetries: number;
+  };
+  fallback: Partial<Record<AiModuleId, ModuleFallbackSettingsDTO>>;
+}
+
+export interface UsageBudgetSettingsDTO {
+  dailySoftMicros: number | null;
+  dailyHardMicros: number | null;
+  monthlySoftMicros: number | null;
+  monthlyHardMicros: number | null;
+  allowUnknownPricing: boolean;
+}
+
+export type ModelErrorCode =
+  | "authentication"
+  | "model_not_found"
+  | "unsupported_capability"
+  | "rate_limited"
+  | "quota_exceeded"
+  | "context_overflow"
+  | "invalid_request"
+  | "safety_blocked"
+  | "timeout"
+  | "connection_failed"
+  | "provider_unavailable"
+  | "malformed_response"
+  | "stream_interrupted"
+  | "cancelled"
+  | "budget_blocked"
+  | "unknown";
+
+export interface ModelErrorDTO {
+  code: ModelErrorCode;
+  retryable: boolean;
+  receivedOutputTokens: boolean;
+  retryAfterMs?: number;
+  provider: string;
+  modelId: string;
+  attempt: number;
+  summary: string;
+  diagnosticId: string;
+}
+
+export type ModelRequestStatus =
+  | "queued"
+  | "running"
+  | "streaming"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "interrupted"
+  | "blocked";
+
+export type UsageAttemptStatus = "succeeded" | "failed" | "cancelled" | "interrupted" | "blocked";
+export type UsageSource = "provider" | "estimated";
+
+export interface GenerationMetadataDTO {
+  providerId: string;
+  providerType: string;
+  modelId: string;
+  requestId: string;
+  attemptId: string;
+  usage: TokenUsageDTO | null;
+  usageSource: UsageSource | null;
+  inputPriceMicros: number | null;
+  outputPriceMicros: number | null;
+  estimatedCostMicros: number | null;
+  currency: "USD" | null;
+  usedFallback: boolean;
+  incomplete: boolean;
+}
+
+export interface ModelRequestDTO {
+  requestId: string;
+  module: AiModuleId;
+  operation: string;
+  chatId: string | null;
+  messageId: string | null;
+  status: ModelRequestStatus;
+  activeAttemptId: string | null;
+  outputStarted: boolean;
+  error: ModelErrorDTO | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  updatedAt: string;
+}
+
+export interface UsageAttemptDTO {
+  attemptId: string;
+  requestId: string;
+  attemptNumber: number;
+  module: AiModuleId;
+  chatId: string | null;
+  chatTitle: string | null;
+  messageId: string | null;
+  providerId: string;
+  providerType: string;
+  modelId: string;
+  startedAt: string;
+  completedAt: string | null;
+  status: UsageAttemptStatus;
+  promptTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  usageSource: UsageSource | null;
+  inputPriceMicros: number | null;
+  outputPriceMicros: number | null;
+  estimatedCostMicros: number | null;
+  currency: "USD" | null;
+  specialTokensUnknown: boolean;
+  usedFallback: boolean;
+  errorCode: ModelErrorCode | null;
+}
+
+export interface UsageAggregateBucketDTO {
+  key: string;
+  label: string;
+  attempts: number;
+  succeeded: number;
+  failed: number;
+  retries: number;
+  fallbacks: number;
+  promptTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedCostMicros: number;
+  unknownCostAttempts: number;
+}
+
+export interface UsageSummaryDTO {
+  from: string;
+  to: string;
+  todayCostMicros: number;
+  monthCostMicros: number;
+  todayTokens: number;
+  monthTokens: number;
+  unknownCostAttempts: number;
+  budgets: UsageBudgetSettingsDTO;
+  timezone: string;
+  byModule: UsageAggregateBucketDTO[];
+  byProvider: UsageAggregateBucketDTO[];
+  byModel: UsageAggregateBucketDTO[];
+  byChat: UsageAggregateBucketDTO[];
+  recent: UsageAttemptDTO[];
+}
+
+export interface CostPreviewDTO {
+  providerId: string;
+  modelId: string;
+  inputTokens: number;
+  maxOutputTokens: number;
+  minimumCostMicros: number | null;
+  maximumCostMicros: number | null;
+  currency: "USD" | null;
+  todayCostMicros: number;
+  monthCostMicros: number;
+  dailySoftRemainingMicros: number | null;
+  dailyHardRemainingMicros: number | null;
+  monthlySoftRemainingMicros: number | null;
+  monthlyHardRemainingMicros: number | null;
+  unknownPricing: boolean;
+  softWarning: boolean;
+  hardBlocked: boolean;
+  timezone: string;
+}
+
 export interface UserPersonaPresetDTO {
   id: string;
   name: string;
@@ -453,6 +644,7 @@ export interface ChatDTO {
   userAvatar?: string;
   userProfileSummary: string;
   userProfileUpdatedAt: string | null;
+  profileRevision: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -571,6 +763,8 @@ export interface MessageDTO {
   variants: string[];
   activeVariantIndex: number;
   tokenUsage: TokenUsageDTO | null;
+  generationMetadata: GenerationMetadataDTO | null;
+  variantMetadata: Array<GenerationMetadataDTO | null>;
   promptBreakdown: PromptBreakdownDTO | null;
   loreMatches: MatchedLoreEntryDTO[];
   memoryMatches: MatchedMemoryDTO[];
@@ -611,6 +805,10 @@ export interface ChatMemoryDTO {
   keywords: string[];
   importance: number;
   enabled: boolean;
+  deletedAt: string | null;
+  currentRevision: number;
+  lastActor: MemoryActor | null;
+  lastAction: MemoryAction | null;
   sourceMessageIds: string[];
   embeddingModel?: string | null;
   embeddingSource?: string | null;
@@ -622,6 +820,150 @@ export interface ChatMemoryDTO {
   updatedAt: string;
 }
 
+export type MemoryActor = "user" | "automatic_memory" | "agent_confirmed" | "timeline_cleanup" | "restore";
+
+export type MemoryAction =
+  | "baseline"
+  | "automatic_create"
+  | "automatic_update"
+  | "automatic_disable"
+  | "manual_create"
+  | "manual_edit"
+  | "manual_enable"
+  | "manual_disable"
+  | "manual_delete"
+  | "agent_confirmed_create"
+  | "timeline_disable"
+  | "restore"
+  | "undo_create"
+  | "undo_update"
+  | "undo_disable";
+
+export interface MemorySnapshotDTO {
+  title: string;
+  content: string;
+  keywords: string[];
+  importance: number;
+  enabled: boolean;
+  sourceMessageIds: string[];
+}
+
+export interface MemorySourceReferenceDTO {
+  messageId: string;
+  available: boolean;
+}
+
+export interface MemoryRevisionDTO {
+  id: string;
+  memoryId: string;
+  chatId: string;
+  revision: number;
+  action: MemoryAction;
+  actor: MemoryActor;
+  beforeSnapshot: MemorySnapshotDTO | null;
+  afterSnapshot: MemorySnapshotDTO | null;
+  sourceMessageIds: string[];
+  sources: MemorySourceReferenceDTO[];
+  operationId: string | null;
+  reasonCode: string;
+  isCurrent: boolean;
+  createdAt: string;
+}
+
+export type MemoryOperationStatus = "running" | "succeeded" | "partial" | "failed";
+export type MemoryOperationType = "automatic_maintenance" | "operation_undo";
+
+export interface MemoryOperationDTO {
+  id: string;
+  chatId: string;
+  type: MemoryOperationType;
+  actor: MemoryActor;
+  status: MemoryOperationStatus;
+  startedAt: string;
+  completedAt: string | null;
+  created: number;
+  updated: number;
+  disabled: number;
+  unchanged: number;
+  sourceMessageIds: string[];
+  sources: MemorySourceReferenceDTO[];
+  errorCode: string | null;
+  undoneAt: string | null;
+  undoOperationId: string | null;
+}
+
+export interface MemoryRestorePreviewDTO {
+  memoryId: string;
+  revision: number;
+  expectedCurrentRevision: number;
+  current: MemorySnapshotDTO | null;
+  restored: MemorySnapshotDTO;
+  sources: MemorySourceReferenceDTO[];
+}
+
+export interface MemoryRestoreResultDTO {
+  memory: ChatMemoryDTO;
+  revision: MemoryRevisionDTO;
+}
+
+export type MemoryUndoConflictAction = "skip" | "restore";
+
+export interface MemoryUndoPreviewItemDTO {
+  memoryId: string;
+  operationRevision: number;
+  currentRevision: number;
+  effect: "retire_created" | "restore_updated" | "restore_disabled";
+  conflict: boolean;
+  current: MemorySnapshotDTO | null;
+  restored: MemorySnapshotDTO | null;
+}
+
+export interface MemoryUndoPreviewDTO {
+  operation: MemoryOperationDTO;
+  items: MemoryUndoPreviewItemDTO[];
+  conflicts: number;
+  canExecute: boolean;
+}
+
+export interface MemoryUndoResolutionDTO {
+  memoryId: string;
+  expectedCurrentRevision: number;
+  action: MemoryUndoConflictAction;
+}
+
+export interface MemoryUndoResultDTO {
+  operationId: string;
+  undoOperationId: string;
+  restored: number;
+  retired: number;
+  skippedConflicts: number;
+}
+
+export type ProfileSummaryActor = "user" | "automatic_memory" | "restore";
+export type ProfileSummaryAction = "baseline" | "automatic_update" | "manual_edit" | "manual_clear" | "restore";
+
+export interface ProfileSummaryRevisionDTO {
+  id: string;
+  chatId: string;
+  revision: number;
+  action: ProfileSummaryAction;
+  actor: ProfileSummaryActor;
+  summary: string;
+  sourceMessageIds: string[];
+  sources: MemorySourceReferenceDTO[];
+  isCurrent: boolean;
+  createdAt: string;
+}
+
+export interface ProfileSummaryRestorePreviewDTO {
+  chatId: string;
+  revision: number;
+  expectedCurrentRevision: number;
+  currentSummary: string;
+  restoredSummary: string;
+  sources: MemorySourceReferenceDTO[];
+}
+
 export interface ChatMemoryInput {
   title: string;
   content: string;
@@ -629,6 +971,7 @@ export interface ChatMemoryInput {
   importance?: number;
   enabled?: boolean;
   sourceMessageIds?: string[];
+  actor?: "user" | "agent_confirmed";
 }
 
 export interface MatchedMemoryDTO {
@@ -652,6 +995,7 @@ export interface MatchedMemoryDTO {
 
 export interface ChatMemoryUpdateSummaryDTO {
   chatId: string;
+  operationId: string | null;
   created: number;
   updated: number;
   disabled: number;
@@ -689,6 +1033,7 @@ export interface ChatAgentDraftDTO {
   actions: ChatAgentActionDTO[];
   matchedLoreEntries: MatchedLoreEntryDTO[];
   matchedMemoryEntries: MatchedMemoryDTO[];
+  sourceMessageIds: string[];
 }
 
 export interface ChatTitleSuggestionDTO {
@@ -761,7 +1106,7 @@ export interface BackupImportSummaryDTO {
   completedAt: string;
 }
 
-export type BackupEntityType = "settings" | "characters" | "chats" | "messages" | "memories";
+export type BackupEntityType = "settings" | "characters" | "chats" | "messages" | "memories" | "memoryRevisions" | "memoryOperations" | "profileSummaryRevisions";
 export type BackupConflictAction = "keep_existing" | "use_incoming" | "skip";
 
 export interface BackupImpactCountsDTO {
@@ -810,6 +1155,9 @@ export interface RecoveryPointSummaryDTO {
   chats: number;
   messages: number;
   memories: number;
+  memoryRevisions?: number;
+  memoryOperations?: number;
+  profileSummaryRevisions?: number;
 }
 
 export interface RecoveryPointDTO {
@@ -857,6 +1205,9 @@ export interface ChatArchiveDTO {
   character: BackupCharacterDTO | null;
   messages: MessageDTO[];
   memories: ChatMemoryDTO[];
+  memoryRevisions?: MemoryRevisionDTO[];
+  memoryOperations?: MemoryOperationDTO[];
+  profileSummaryRevisions?: ProfileSummaryRevisionDTO[];
 }
 
 export interface ChatArchiveImportDTO {
@@ -901,25 +1252,33 @@ export type GenerationClientMessage =
       requestId: string;
       chatId: string;
       content: string;
+      overrideHardBudget?: boolean;
     }
   | {
       type: "regenerate";
       requestId: string;
       messageId: string;
       guidance?: string;
+      overrideHardBudget?: boolean;
     }
   | {
       type: "continue";
       requestId: string;
       messageId: string;
+      overrideHardBudget?: boolean;
     }
   | {
       type: "resend";
       requestId: string;
       messageId: string;
+      overrideHardBudget?: boolean;
     }
   | {
       type: "stop";
+      requestId: string;
+    }
+  | {
+      type: "status";
       requestId: string;
     };
 
@@ -931,6 +1290,10 @@ export type GenerationServerMessage =
   | {
       type: "generation_started";
       requestId: string;
+    }
+  | {
+      type: "generation_status";
+      request: ModelRequestDTO;
     }
   | {
       type: "user_message";
@@ -990,7 +1353,24 @@ export type GenerationServerMessage =
       requestId: string;
     }
   | {
+      type: "generation_retrying";
+      requestId: string;
+      attempt: number;
+      retryAfterMs: number;
+      error: ModelErrorDTO;
+    }
+  | {
+      type: "generation_fallback";
+      requestId: string;
+      fromProviderId: string;
+      fromModelId: string;
+      toProviderId: string;
+      toModelId: string;
+      reason: ModelErrorCode;
+    }
+  | {
       type: "error";
       requestId?: string;
       error: string;
+      modelError?: ModelErrorDTO;
     };

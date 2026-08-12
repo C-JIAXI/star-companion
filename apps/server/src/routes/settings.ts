@@ -2,13 +2,15 @@ import { Router } from "express";
 import type { Prisma, UserSettings } from "@prisma/client";
 import { prisma } from "../db.js";
 import { asyncHandler, parseBody } from "../lib/http.js";
-import { fetchAvailableModels, testModelConnection } from "../services/completions.js";
+import { fetchAvailableModels } from "../services/completions.js";
 import { settingsUpdateSchema, userProfileUpdateSchema } from "../schemas.js";
 import { serializeSettings } from "../serializers.js";
 import { encryptApiKey, hasStoredApiKey, isEncryptedApiKey } from "../services/apiKeyVault.js";
-import { validateModuleModelPreferences } from "../services/moduleModels.js";
+import { validateModelReliabilitySettings, validateModuleModelPreferences } from "../services/moduleModels.js";
 import { getConfiguredMemoryEmbeddingSource } from "../services/chatMemories.js";
 import { HttpError } from "../lib/http.js";
+import { randomUUID } from "node:crypto";
+import { executeReliableTextCompletion } from "../services/reliableModelCalls.js";
 
 export const settingsRouter = Router();
 
@@ -218,7 +220,15 @@ settingsRouter.post(
   "/test",
   asyncHandler(async (_request, response) => {
     const settings = await getOrCreateSettings();
-    const result = await testModelConnection(settings);
+    const call = await executeReliableTextCompletion({
+      settings,
+      messages: [{ role: "user", content: "Connection test" }],
+      maxTokens: Math.min(Math.max(settings.maxTokens, 1), 16),
+      temperature: 0,
+      context: { requestId: `connection_${randomUUID()}`, module: "chat", operation: "connection_test" }
+    });
+    if (!call.content.trim()) throw new HttpError(502, "Model connection test returned an empty response");
+    const result = { reachable: true, model: call.modelId, checkedAt: new Date().toISOString() };
 
     response.json({
       ok: true,
@@ -301,6 +311,9 @@ settingsRouter.put(
     const moduleModelPreferences =
       body.moduleModelPreferences ?? existingSettings.moduleModelPreferences;
     const userPersonaPresets = body.userPersonaPresets ?? existingSettings.userPersonaPresets;
+    const modelReliability = body.modelReliability ?? existingSettings.modelReliability;
+    const usageBudgets = body.usageBudgets ?? existingSettings.usageBudgets;
+    const usageTimezone = body.usageTimezone ?? existingSettings.usageTimezone;
 
     const moduleModelError = validateModuleModelPreferences(
       body.providers,
@@ -310,6 +323,10 @@ settingsRouter.put(
     );
     if (moduleModelError) {
       throw new HttpError(400, moduleModelError);
+    }
+    const reliabilityError = validateModelReliabilitySettings(body.providers, modelReliability);
+    if (reliabilityError) {
+      throw new HttpError(400, reliabilityError);
     }
 
     const storedProviders = mergeProviderProfiles(
@@ -335,6 +352,9 @@ settingsRouter.put(
       activeModelId: body.activeModelId,
       moduleModelPreferences: moduleModelPreferences as Prisma.JsonObject,
       userPersonaPresets: userPersonaPresets as Prisma.JsonArray,
+      modelReliability: modelReliability as unknown as Prisma.JsonObject,
+      usageBudgets: usageBudgets as unknown as Prisma.JsonObject,
+      usageTimezone,
       activeProvider: resolvedProvider,
       apiBaseUrl: resolvedBaseUrl,
       model: resolvedModel,

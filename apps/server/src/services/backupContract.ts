@@ -4,7 +4,10 @@ import {
   backupCharacterSchema,
   backupChatSchema,
   backupMemorySchema,
+  backupMemoryOperationSchema,
+  backupMemoryRevisionSchema,
   backupMessageSchema,
+  backupProfileSummaryRevisionSchema,
   backupSettingsSchema
 } from "../schemas.js";
 import type { backupImportSchema } from "../schemas.js";
@@ -14,7 +17,10 @@ export const backupEntityTypes = [
   "characters",
   "chats",
   "messages",
-  "memories"
+  "memories",
+  "memoryRevisions",
+  "memoryOperations",
+  "profileSummaryRevisions"
 ] as const;
 
 export type BackupEntityType = (typeof backupEntityTypes)[number];
@@ -65,6 +71,9 @@ export type BackupCandidate = {
   chats?: unknown;
   messages?: unknown;
   memories?: unknown;
+  memoryRevisions?: unknown;
+  memoryOperations?: unknown;
+  profileSummaryRevisions?: unknown;
   mode: BackupMode;
 };
 
@@ -87,6 +96,9 @@ export type BackupAnalysis = {
     chats: Array<AnalyzedRecord<ParsedBackup["chats"][number]>>;
     messages: Array<AnalyzedRecord<ParsedBackup["messages"][number]>>;
     memories: Array<AnalyzedRecord<ParsedBackup["memories"][number]>>;
+    memoryRevisions: Array<AnalyzedRecord<ParsedBackup["memoryRevisions"][number]>>;
+    memoryOperations: Array<AnalyzedRecord<ParsedBackup["memoryOperations"][number]>>;
+    profileSummaryRevisions: Array<AnalyzedRecord<ParsedBackup["profileSummaryRevisions"][number]>>;
   };
 };
 
@@ -220,7 +232,10 @@ export const analyzeBackupCandidate = (
     characters: new Set<number>(),
     chats: new Set<number>(),
     messages: new Set<number>(),
-    memories: new Set<number>()
+    memories: new Set<number>(),
+    memoryRevisions: new Set<number>(),
+    memoryOperations: new Set<number>(),
+    profileSummaryRevisions: new Set<number>()
   };
 
   const schemaVersion = candidate.schemaVersion === 1 ? 1 : null;
@@ -267,15 +282,20 @@ export const analyzeBackupCandidate = (
   const chats = parseCollection(candidate, "chats", backupChatSchema, issues, invalidIndexes);
   const messages = parseCollection(candidate, "messages", backupMessageSchema, issues, invalidIndexes);
   const memories = parseCollection(candidate, "memories", backupMemorySchema, issues, invalidIndexes);
+  const memoryRevisions = parseCollection(candidate, "memoryRevisions", backupMemoryRevisionSchema, issues, invalidIndexes);
+  const memoryOperations = parseCollection(candidate, "memoryOperations", backupMemoryOperationSchema, issues, invalidIndexes);
+  const profileSummaryRevisions = parseCollection(candidate, "profileSummaryRevisions", backupProfileSummaryRevisionSchema, issues, invalidIndexes);
 
   duplicateIds(characters, "characters", issues, invalidIndexes);
   duplicateIds(chats, "chats", issues, invalidIndexes);
   duplicateIds(messages, "messages", issues, invalidIndexes);
   duplicateIds(memories, "memories", issues, invalidIndexes);
+  duplicateIds(memoryRevisions, "memoryRevisions", issues, invalidIndexes);
+  duplicateIds(memoryOperations, "memoryOperations", issues, invalidIndexes);
+  duplicateIds(profileSummaryRevisions, "profileSummaryRevisions", issues, invalidIndexes);
 
   const characterIds = new Set([...collectIds(current.characters), ...collectIds(characters)]);
   const chatIds = new Set([...collectIds(current.chats), ...collectIds(chats)]);
-  const messageIds = new Set([...collectIds(current.messages), ...collectIds(messages)]);
   const messagesById = new Map(
     [...current.messages, ...messages].flatMap((message) => (message.id ? [[message.id, message] as const] : []))
   );
@@ -315,8 +335,59 @@ export const analyzeBackupCandidate = (
     }
     for (const sourceMessageId of memory.sourceMessageIds) {
       const source = messagesById.get(sourceMessageId);
-      if (!messageIds.has(sourceMessageId) || source?.chatId !== memory.chatId) {
+      if (source && source.chatId !== memory.chatId) {
         addIssue(issues, invalidIndexes, "memories", index, "missing_reference", `Memory record ${index + 1} has an invalid source message reference.`);
+        break;
+      }
+    }
+  });
+
+  const memoryIds = new Set([...collectIds(current.memories), ...collectIds(memories)]);
+  const operationIds = new Set([...collectIds(current.memoryOperations), ...collectIds(memoryOperations)]);
+  const revisionKeys = new Map<string, number>();
+  memoryRevisions.forEach((revision, index) => {
+    if (!memoryIds.has(revision.memoryId) || !chatIds.has(revision.chatId)) {
+      addIssue(issues, invalidIndexes, "memoryRevisions", index, "missing_reference", `Memory revision ${index + 1} refers to unavailable memory data.`);
+    }
+    const memory = [...current.memories, ...memories].find((item) => item.id === revision.memoryId);
+    if (memory && memory.chatId !== revision.chatId) {
+      addIssue(issues, invalidIndexes, "memoryRevisions", index, "missing_reference", `Memory revision ${index + 1} does not belong to its memory chat.`);
+    }
+    if (revision.operationId && !operationIds.has(revision.operationId)) {
+      addIssue(issues, invalidIndexes, "memoryRevisions", index, "missing_reference", `Memory revision ${index + 1} refers to an unavailable operation.`);
+    }
+    for (const sourceMessageId of revision.sourceMessageIds) {
+      const source = messagesById.get(sourceMessageId);
+      if (source && source.chatId !== revision.chatId) {
+        addIssue(issues, invalidIndexes, "memoryRevisions", index, "missing_reference", `Memory revision ${index + 1} has a source from another chat.`);
+        break;
+      }
+    }
+    const revisionKey = `${revision.memoryId}:${revision.revision}`;
+    if (revisionKeys.has(revisionKey)) {
+      addIssue(issues, invalidIndexes, "memoryRevisions", index, "duplicate_id", `Memory revision ${index + 1} repeats a memory revision number.`);
+    } else revisionKeys.set(revisionKey, index);
+  });
+  memoryOperations.forEach((operation, index) => {
+    if (!chatIds.has(operation.chatId)) addIssue(issues, invalidIndexes, "memoryOperations", index, "missing_reference", `Memory operation ${index + 1} refers to an unavailable chat.`);
+    for (const sourceMessageId of operation.sourceMessageIds) {
+      const source = messagesById.get(sourceMessageId);
+      if (source && source.chatId !== operation.chatId) {
+        addIssue(issues, invalidIndexes, "memoryOperations", index, "missing_reference", `Memory operation ${index + 1} has a source from another chat.`);
+        break;
+      }
+    }
+  });
+  const profileKeys = new Set<string>();
+  profileSummaryRevisions.forEach((revision, index) => {
+    if (!chatIds.has(revision.chatId)) addIssue(issues, invalidIndexes, "profileSummaryRevisions", index, "missing_reference", `Profile revision ${index + 1} refers to an unavailable chat.`);
+    const key = `${revision.chatId}:${revision.revision}`;
+    if (profileKeys.has(key)) addIssue(issues, invalidIndexes, "profileSummaryRevisions", index, "duplicate_id", `Profile revision ${index + 1} repeats a chat revision number.`);
+    else profileKeys.add(key);
+    for (const sourceMessageId of revision.sourceMessageIds) {
+      const source = messagesById.get(sourceMessageId);
+      if (source && source.chatId !== revision.chatId) {
+        addIssue(issues, invalidIndexes, "profileSummaryRevisions", index, "missing_reference", `Profile revision ${index + 1} has a source from another chat.`);
         break;
       }
     }
@@ -330,12 +401,15 @@ export const analyzeBackupCandidate = (
     chats,
     messages,
     memories,
+    memoryRevisions,
+    memoryOperations,
+    profileSummaryRevisions,
     mode: candidate.mode
   };
 
   const byEntity = Object.fromEntries(backupEntityTypes.map((entity) => [entity, emptyCounts()])) as Record<BackupEntityType, BackupImpactCounts>;
   byEntity.settings.invalid = issues.some((issue) => issue.entity === "settings") ? 1 : 0;
-  for (const entity of ["characters", "chats", "messages", "memories"] as const) {
+  for (const entity of ["characters", "chats", "messages", "memories", "memoryRevisions", "memoryOperations", "profileSummaryRevisions"] as const) {
     byEntity[entity].invalid = invalidIndexes[entity].size + issues.filter(
       (issue) => issue.entity === entity && issue.index === null
     ).length;
@@ -365,7 +439,16 @@ export const analyzeBackupCandidate = (
     characters: new Map(current.characters.flatMap((value) => (value.id ? [[value.id, value] as const] : []))),
     chats: new Map(current.chats.flatMap((value) => (value.id ? [[value.id, value] as const] : []))),
     messages: new Map(current.messages.flatMap((value) => (value.id ? [[value.id, value] as const] : []))),
-    memories: new Map(current.memories.flatMap((value) => (value.id ? [[value.id, value] as const] : [])))
+    memories: new Map(current.memories.flatMap((value) => (value.id ? [[value.id, value] as const] : []))),
+    memoryRevisions: new Map(current.memoryRevisions.map((value) => {
+      const id = `${value.memoryId}:${value.revision}`;
+      return [id, { ...value, id }] as const;
+    })),
+    memoryOperations: new Map(current.memoryOperations.map((value) => [value.id, value] as const)),
+    profileSummaryRevisions: new Map(current.profileSummaryRevisions.map((value) => {
+      const id = `${value.chatId}:${value.revision}`;
+      return [id, { ...value, id }] as const;
+    }))
   };
 
   let settingsRecord: BackupAnalysis["records"]["settings"] = null;
@@ -390,14 +473,21 @@ export const analyzeBackupCandidate = (
     characters: characters.map((value, index) => analyzeRecord("characters", value, index, currentMaps.characters)),
     chats: chats.map((value, index) => analyzeRecord("chats", value, index, currentMaps.chats)),
     messages: messages.map((value, index) => analyzeRecord("messages", value, index, currentMaps.messages)),
-    memories: memories.map((value, index) => analyzeRecord("memories", value, index, currentMaps.memories))
+    memories: memories.map((value, index) => analyzeRecord("memories", value, index, currentMaps.memories)),
+    memoryRevisions: memoryRevisions.map((value, index) => ({ ...analyzeRecord("memoryRevisions", { ...value, id: `${value.memoryId}:${value.revision}` }, index, currentMaps.memoryRevisions), value })),
+    memoryOperations: memoryOperations.map((value, index) => analyzeRecord("memoryOperations", value, index, currentMaps.memoryOperations)),
+    profileSummaryRevisions: profileSummaryRevisions.map((value, index) => ({ ...analyzeRecord("profileSummaryRevisions", { ...value, id: `${value.chatId}:${value.revision}` }, index, currentMaps.profileSummaryRevisions), value }))
   };
 
   if (candidate.mode === "replace") {
-    for (const entity of ["characters", "chats", "messages", "memories"] as const) {
+    for (const entity of ["characters", "chats", "messages", "memories", "memoryOperations"] as const) {
       const incomingIds = collectIds(backup[entity]);
       byEntity[entity].deleted = current[entity].filter((value) => value.id && !incomingIds.has(value.id)).length;
     }
+    const incomingMemoryRevisionKeys = new Set(memoryRevisions.map((value) => `${value.memoryId}:${value.revision}`));
+    byEntity.memoryRevisions.deleted = current.memoryRevisions.filter((value) => !incomingMemoryRevisionKeys.has(`${value.memoryId}:${value.revision}`)).length;
+    const incomingProfileRevisionKeys = new Set(profileSummaryRevisions.map((value) => `${value.chatId}:${value.revision}`));
+    byEntity.profileSummaryRevisions.deleted = current.profileSummaryRevisions.filter((value) => !incomingProfileRevisionKeys.has(`${value.chatId}:${value.revision}`)).length;
   }
 
   const counts = backupEntityTypes.reduce((total, entity) => {
@@ -414,6 +504,9 @@ export const analyzeBackupCandidate = (
     chats: collectIds(chats),
     messages: collectIds(messages),
     memories: collectIds(memories)
+    ,memoryRevisions: new Set(memoryRevisions.map((value) => `${value.memoryId}:${value.revision}`))
+    ,memoryOperations: collectIds(memoryOperations)
+    ,profileSummaryRevisions: new Set(profileSummaryRevisions.map((value) => `${value.chatId}:${value.revision}`))
   };
   const fingerprintCurrent = candidate.mode === "replace"
     ? current
@@ -422,7 +515,10 @@ export const analyzeBackupCandidate = (
         characters: current.characters.filter((value) => value.id && fingerprintIds.characters.has(value.id)),
         chats: current.chats.filter((value) => value.id && fingerprintIds.chats.has(value.id)),
         messages: current.messages.filter((value) => value.id && fingerprintIds.messages.has(value.id)),
-        memories: current.memories.filter((value) => value.id && fingerprintIds.memories.has(value.id))
+        memories: current.memories.filter((value) => value.id && fingerprintIds.memories.has(value.id)),
+        memoryRevisions: current.memoryRevisions.filter((value) => fingerprintIds.memoryRevisions.has(`${value.memoryId}:${value.revision}`)),
+        memoryOperations: current.memoryOperations.filter((value) => fingerprintIds.memoryOperations.has(value.id)),
+        profileSummaryRevisions: current.profileSummaryRevisions.filter((value) => fingerprintIds.profileSummaryRevisions.has(`${value.chatId}:${value.revision}`))
       };
   const previewId = createHash("sha256")
     .update(JSON.stringify(canonicalize({ backup, current: fingerprintCurrent, mode: candidate.mode, issues })))

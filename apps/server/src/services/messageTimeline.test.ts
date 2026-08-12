@@ -97,6 +97,10 @@ describe("message timeline operations", () => {
       prisma.chat.findUniqueOrThrow({ where: { id: chat.id } })
     ]);
     assert.equal(disabledMemory.enabled, false);
+    const timelineRevision = await prisma.memoryRevision.findFirstOrThrow({ where: { memoryId: retiredMemory.id }, orderBy: { revision: "desc" } });
+    assert.equal(timelineRevision.actor, "timeline_cleanup");
+    assert.equal(timelineRevision.action, "timeline_disable");
+    assert.equal(timelineRevision.afterSnapshot && typeof timelineRevision.afterSnapshot === "object" && !Array.isArray(timelineRevision.afterSnapshot) ? timelineRevision.afterSnapshot.enabled : null, false);
     assert.equal(enabledMemory.enabled, true);
     assert.equal(updatedChat.memoryUpdatedAt, null);
   });

@@ -340,6 +340,110 @@ test("direct routes render their workspace headers", async ({ page }) => {
   await expect(page.getByRole("heading", { name: /模型设置|Model Settings/ })).toBeVisible();
 });
 
+test("usage and reliability panel hides all details behind the session privacy lock", async ({ page }) => {
+  const now = new Date().toISOString();
+  const settings = {
+    id: "usage-settings-e2e",
+    activeProvider: "openai-compatible",
+    apiBaseUrl: "https://example.invalid/v1",
+    model: "priced-model",
+    temperature: 0.8,
+    maxTokens: 800,
+    topP: 1,
+    language: "en",
+    providers: [{
+      id: "provider-local",
+      label: "Local provider",
+      provider: "openai-compatible",
+      apiBaseUrl: "https://example.invalid/v1",
+      hasKey: true,
+      models: [{
+        id: "model-local",
+        label: "Priced model",
+        model: "priced-model",
+        capabilities: ["text_generation"],
+        pricing: { inputMicrosPerMillion: 2_000_000, outputMicrosPerMillion: 6_000_000, currency: "USD", updatedAt: now, source: "user" }
+      }]
+    }],
+    activeProviderId: "provider-local",
+    activeModelId: "model-local",
+    moduleModelPreferences: {},
+    modelReliability: { retry: { enabled: false, maxRetries: 0 }, fallback: {} },
+    usageBudgets: { dailySoftMicros: null, dailyHardMicros: 5_000_000, monthlySoftMicros: null, monthlyHardMicros: null, allowUnknownPricing: true },
+    usageTimezone: "UTC",
+    userPersonaPresets: [],
+    userProfileSummary: "",
+    autoSummarizeUser: false,
+    showMessageAvatars: true,
+    showMessageTimestamps: false,
+    ttsVoice: "alloy",
+    ttsPlaybackRate: 1,
+    ttsAutoPlay: false,
+    userProfileUpdatedAt: null,
+    createdAt: now,
+    updatedAt: now,
+    hasApiKey: true
+  };
+  let clearRequested = false;
+  await page.route("**/api/settings", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: settings }) }));
+  await page.route("**/api/usage/summary**", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ ok: true, data: {
+      from: now, to: now, todayCostMicros: 125_000, monthCostMicros: 500_000,
+      todayTokens: 30, monthTokens: 120, unknownCostAttempts: 1,
+      budgets: settings.usageBudgets, timezone: "UTC",
+      byModule: [{ key: "chat", label: "chat", attempts: 2, succeeded: 1, failed: 1, retries: 1, fallbacks: 0, promptTokens: 20, outputTokens: 10, totalTokens: 30, estimatedCostMicros: 125_000, unknownCostAttempts: 1 }],
+      byProvider: [], byModel: [],
+      byChat: [{ key: "chat-private", label: "Private Chat Title", attempts: 1, succeeded: 1, failed: 0, retries: 0, fallbacks: 0, promptTokens: 8, outputTokens: 4, totalTokens: 12, estimatedCostMicros: 40, unknownCostAttempts: 0 }],
+      recent: [{ attemptId: "attempt-e2e", requestId: "request-e2e", attemptNumber: 2, module: "chat", chatId: "chat-private", chatTitle: "Private Chat Title", messageId: null, providerId: "provider-local", providerType: "openai-compatible", modelId: "priced-model", startedAt: now, completedAt: now, status: "succeeded", promptTokens: 8, outputTokens: 4, totalTokens: 12, usageSource: "provider", inputPriceMicros: 2_000_000, outputPriceMicros: 6_000_000, estimatedCostMicros: 40, currency: "USD", specialTokensUnknown: false, usedFallback: false, errorCode: null }]
+    } })
+  }));
+  await page.route("**/api/usage/history", async (route) => {
+    clearRequested = true;
+    expect(route.request().method()).toBe("DELETE");
+    expect(route.request().postDataJSON()).toEqual({ confirm: "DELETE_USAGE_HISTORY" });
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: { attempts: 2, requests: 2 } }) });
+  });
+
+  await page.goto("/settings?section=usage");
+  await page.getByTestId("settings-section-usage").click();
+  const panel = page.getByTestId("usage-budget-panel");
+  await expect(panel).toContainText("$0.1250");
+  await expect(panel).toContainText("Unknown-cost calls");
+  await expect(panel).toContainText("Succeeded / failed");
+  await expect(panel).toContainText("1 / 1");
+  await expect(panel).toContainText("Retries / fallbacks");
+  await expect(panel).toContainText("Daily hard budget / left");
+  await expect(panel).toContainText("$5.00 / $4.88");
+  await expect(panel).toContainText("Private Chat Title");
+  await expect(panel).toContainText("Enable safe automatic retries");
+  await expect(panel).toContainText("I consent to automatic chat model switching");
+
+  await panel.getByRole("button", { name: "Private Chat Title" }).first().click();
+  await expect.poll(() => page.url()).toMatch(/\/$/);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("star-companion:selected-chat"))).toBe("chat-private");
+  await page.goto("/settings?section=usage");
+  await page.getByTestId("settings-section-usage").click();
+
+  await panel.getByRole("button", { name: "Clear usage history" }).click();
+  await expect(page.getByText("This deletes only local call and cost history.")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  expect(clearRequested).toBe(false);
+
+  await page.getByTestId("privacy-lock-passcode").fill("2468");
+  await page.getByTestId("privacy-lock-confirm").fill("2468");
+  await page.getByTestId("privacy-lock-action").click();
+  await expect(page.getByTestId("privacy-lock-screen")).toBeVisible();
+  await expect(page.getByTestId("usage-budget-panel")).toHaveCount(0);
+  await expect(page.getByText("Private Chat Title")).toHaveCount(0);
+  await page.getByTestId("privacy-unlock-input").fill("wrong");
+  await page.getByTestId("privacy-unlock-submit").click();
+  await expect(page.getByRole("alert")).toContainText("Incorrect unlock code");
+  await page.getByTestId("privacy-unlock-input").fill("2468");
+  await page.getByTestId("privacy-unlock-submit").click();
+  await expect(page.getByTestId("usage-budget-panel")).toBeVisible();
+});
+
 test("about and updates shows safe migration state and uses a mocked desktop updater", async ({ page }) => {
   await page.addInitScript(() => {
     let state: DesktopUpdateState = {
@@ -1698,7 +1802,7 @@ test("guided regeneration sends one-time feedback and keeps the previous variant
   }
 });
 
-test("a dropped generation connection restores the draft and can reconnect", async ({
+test("a dropped generation connection reconnects by request id without resubmitting", async ({
   page,
   request
 }, testInfo) => {
@@ -1747,6 +1851,8 @@ test("a dropped generation connection restores the draft and can reconnect", asy
           const state = window as unknown as {
             __reconnectSocketCount: number;
             __reconnectSocketReady: boolean;
+            __generationSubmitCount: number;
+            __generationStatusCount: number;
           };
           state.__reconnectSocketCount += 1;
           window.setTimeout(() => {
@@ -1758,7 +1864,34 @@ test("a dropped generation connection restores the draft and can reconnect", asy
 
         send(data: string) {
           const request = JSON.parse(data) as { type: string; requestId: string };
+          const state = window as unknown as {
+            __generationSubmitCount: number;
+            __generationStatusCount: number;
+          };
+          if (request.type === "status") {
+            state.__generationStatusCount += 1;
+            window.setTimeout(() => this.onmessage?.(new MessageEvent("message", { data: JSON.stringify({
+              type: "generation_status",
+              request: {
+                requestId: request.requestId,
+                module: "chat",
+                operation: "generate",
+                chatId: selectedChatId,
+                messageId: null,
+                status: "running",
+                activeAttemptId: "attempt-reconnect-e2e",
+                outputStarted: false,
+                error: null,
+                createdAt: new Date().toISOString(),
+                startedAt: new Date().toISOString(),
+                completedAt: null,
+                updatedAt: new Date().toISOString()
+              }
+            }) })), 0);
+            return;
+          }
           if (request.type !== "generate") return;
+          state.__generationSubmitCount += 1;
           (window as unknown as { __droppedGenerationRequest: unknown }).__droppedGenerationRequest =
             request;
           window.setTimeout(() => {
@@ -1776,6 +1909,8 @@ test("a dropped generation connection restores the draft and can reconnect", asy
         WebSocket: MockWebSocket,
         __reconnectSocketCount: 0,
         __reconnectSocketReady: false,
+        __generationSubmitCount: 0,
+        __generationStatusCount: 0,
         __droppedGenerationRequest: null
       });
     }, chatId!);
@@ -1795,8 +1930,8 @@ test("a dropped generation connection restores the draft and can reconnect", asy
     await page.locator('[data-chat-action="send"]').click();
 
     await expect(page.getByTestId("chat-connection-status")).toBeVisible();
-    await expect(composer).toHaveValue(draft);
-    await expect(page.locator('[data-chat-action="stop"]')).toHaveCount(0);
+    await expect(composer).toHaveValue("");
+    await expect(page.locator('[data-chat-action="stop"]')).toBeVisible();
 
     await page.locator('[data-chat-action="reconnect"]').click();
     await expect(page.getByTestId("chat-connection-status")).toHaveCount(0);
@@ -1807,6 +1942,10 @@ test("a dropped generation connection restores the draft and can reconnect", asy
         )
       )
       .toBeGreaterThanOrEqual(2);
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __generationStatusCount: number }).__generationStatusCount))
+      .toBeGreaterThanOrEqual(1);
+    expect(await page.evaluate(() => (window as unknown as { __generationSubmitCount: number }).__generationSubmitCount)).toBe(1);
   } finally {
     if (chatId) await permanentlyDeleteChatViaApi(request, chatId);
     if (characterId) await request.delete(`/api/characters/${characterId}`);
@@ -5119,7 +5258,7 @@ test("long-term memory delete confirm stays centered above the memory dialog", a
 
     const memoryDialog = page.getByRole("dialog").filter({ hasText: memoryTitle });
     await expect(memoryDialog).toBeVisible();
-    await expect(memoryDialog.getByText(memoryTitle)).toBeVisible();
+    await expect(memoryDialog.getByRole("paragraph").filter({ hasText: memoryTitle })).toBeVisible();
     await expect(memoryDialog.getByTestId("memory-index-summary")).toHaveAttribute(
       "data-memory-index-state",
       "unconfigured"
@@ -5150,6 +5289,91 @@ test("long-term memory delete confirm stays centered above the memory dialog", a
     expect(geometry.centerDeltaX).toBeLessThan(12);
     expect(geometry.centerDeltaY).toBeLessThan(12);
     expect(geometry.isTopDialog).toBeTruthy();
+  } finally {
+    await permanentlyDeleteChatViaApi(request, chat.id);
+    await request.delete(`/api/characters/${character.id}`);
+  }
+});
+
+test("memory history previews diffs, jumps across pages, restores tombstones, and confirms permanent purge", async ({ page, request }, testInfo) => {
+  testInfo.setTimeout(60_000);
+  const suffix = Date.now();
+  const characterResponse = await request.post("/api/characters", { data: { name: `Audit Character ${suffix}`, prefix: "Stay concise.", prompt: "Audit memory history.", suffix: "Reply directly." } });
+  const character = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data!;
+  const chatResponse = await request.post("/api/chats", { data: { title: `Audit Chat ${suffix}`, characterId: character.id } });
+  const chat = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data!;
+  try {
+    const sourceIds: string[] = [];
+    for (let index = 0; index < 65; index += 1) {
+      const response = await request.post("/api/messages", { data: { chatId: chat.id, role: "user", content: index === 3 ? "Historical source needle" : `Audit message ${index}` } });
+      sourceIds.push(((await response.json()) as ApiDataResponse<{ id: string }>).data!.id);
+    }
+    const createResponse = await request.post(`/api/chats/${chat.id}/memories`, { data: { title: "Audited memory", content: "Original remembered detail", keywords: ["original"], importance: 3, enabled: true, sourceMessageIds: [sourceIds[3]] } });
+    const memory = ((await createResponse.json()) as ApiDataResponse<{ id: string; currentRevision: number }>).data!;
+    await request.put(`/api/chats/${chat.id}/memories/${memory.id}`, { data: { content: "Edited remembered detail", keywords: ["edited"], importance: 4 } });
+
+    await page.goto("/");
+    await openChatHistoryAndSelect(page, `Audit Chat ${suffix}`);
+    await page.locator("#chat-settings-trigger").click();
+    await page.getByRole("button", { name: /^(记忆|Memory)$/ }).nth(1).click();
+    const auditPanel = page.getByTestId("memory-audit-panel");
+    await auditPanel.getByRole("button", { name: "Audited memory" }).click();
+    await expect(page.getByTestId("memory-revision-2")).toBeVisible();
+    await page.getByTestId("memory-revision-2").getByRole("button").first().click();
+    await expect(page.getByTestId("memory-revision-2")).toContainText(/内容|Content/);
+    await page.getByTestId("memory-revision-1").getByRole("button").first().click();
+    await page.getByTestId("memory-revision-1").locator("button").filter({ has: page.locator("svg.lucide-external-link") }).click();
+    await expect(page.getByTestId("chat-message-viewport").getByText("Historical source needle")).toBeVisible();
+
+    const historyResponse = await request.get(`/api/chats/${chat.id}/memories/${memory.id}/revisions`);
+    const history = ((await historyResponse.json()) as ApiDataResponse<Array<{ revision: number }>>).data!;
+    const currentResponse = await request.get(`/api/chats/${chat.id}/memories`);
+    const current = ((await currentResponse.json()) as ApiDataResponse<Array<{ id: string; currentRevision: number }>>).data!.find((item) => item.id === memory.id)!;
+    await request.delete(`/api/chats/${chat.id}/memories/${memory.id}`);
+    const restoreResponse = await request.post(`/api/chats/${chat.id}/memories/${memory.id}/restore`, { data: { revision: history.at(-1)!.revision, expectedCurrentRevision: current.currentRevision + 1, confirm: "RESTORE_MEMORY_REVISION" } });
+    expect(restoreResponse.ok()).toBeTruthy();
+    await request.delete(`/api/chats/${chat.id}/memories/${memory.id}`);
+
+    await page.reload();
+    await openChatHistoryAndSelect(page, `Audit Chat ${suffix}`);
+    await page.locator("#chat-settings-trigger").click();
+    await page.getByRole("button", { name: /^(记忆|Memory)$/ }).nth(1).click();
+    await expect(page.getByText(/已删除|Deleted/, { exact: true }).first()).toBeVisible();
+    await page.getByRole("button", { name: /永久清除历史|Permanently purge history/ }).click();
+    await expect(page.getByRole("dialog").filter({ hasText: /永久清除记忆历史|Permanently purge memory history/ })).toBeVisible();
+    const purgeDialog = page.getByRole("dialog").filter({ hasText: /永久清除记忆历史|Permanently purge memory history/ });
+    await purgeDialog.locator("[data-dialog-cancel='true']").click();
+    const stillThere = await request.get(`/api/chats/${chat.id}/memories/${memory.id}/revisions`);
+    expect(stillThere.ok()).toBeTruthy();
+  } finally {
+    await permanentlyDeleteChatViaApi(request, chat.id);
+    await request.delete(`/api/characters/${character.id}`);
+  }
+});
+
+test("chat profile summary history shows diffs and requires restore confirmation", async ({ page, request }) => {
+  const suffix = Date.now();
+  const characterResponse = await request.post("/api/characters", { data: { name: `Profile Character ${suffix}`, prompt: "Profile history fixture." } });
+  const character = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data!;
+  const chatResponse = await request.post("/api/chats", { data: { title: `Profile Chat ${suffix}`, characterId: character.id } });
+  const chat = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data!;
+  try {
+    await request.put(`/api/chats/${chat.id}`, { data: { userProfileSummary: "First profile version" } });
+    await request.put(`/api/chats/${chat.id}`, { data: { userProfileSummary: "Second profile version" } });
+    await page.goto("/");
+    await openChatHistoryAndSelect(page, `Profile Chat ${suffix}`);
+    await page.locator("#chat-settings-trigger").click();
+    await page.getByRole("button", { name: /用户信息摘要|Profile Summary/ }).click();
+    const panel = page.getByTestId("profile-history-panel");
+    await expect(panel).toContainText("Second profile version");
+    await expect(panel).toContainText("First profile version");
+    await panel.getByRole("button", { name: /恢复|Restore/ }).last().click();
+    const confirm = page.getByRole("dialog").filter({ hasText: /恢复画像摘要|Restore profile summary/ });
+    await expect(confirm).toContainText("Second profile version");
+    await expect(confirm).toContainText("First profile version");
+    await confirm.locator("[data-dialog-cancel='true']").click();
+    const current = await request.get(`/api/chats/${chat.id}`);
+    expect(((await current.json()) as ApiDataResponse<{ userProfileSummary: string }>).data?.userProfileSummary).toBe("Second profile version");
   } finally {
     await permanentlyDeleteChatViaApi(request, chat.id);
     await request.delete(`/api/characters/${character.id}`);

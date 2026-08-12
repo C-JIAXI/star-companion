@@ -52,8 +52,22 @@ import type {
   LanSyncRequestDTO,
   LanSyncSummaryDTO,
   ModuleModelPreferencesDTO,
+  ModelReliabilitySettingsDTO,
+  UsageBudgetSettingsDTO,
+  UsageSummaryDTO,
+  CostPreviewDTO,
   MatchedLoreEntryDTO,
   MatchedMemoryDTO,
+  MemoryOperationDTO,
+  MemoryRestorePreviewDTO,
+  MemoryRestoreResultDTO,
+  MemoryRevisionDTO,
+  MemorySnapshotDTO,
+  MemoryUndoPreviewDTO,
+  MemoryUndoResolutionDTO,
+  MemoryUndoResultDTO,
+  ProfileSummaryRestorePreviewDTO,
+  ProfileSummaryRevisionDTO,
   MessageDTO,
   MessageRole,
   PromptBreakdownDTO,
@@ -142,6 +156,9 @@ export type SettingsInput = {
   activeProviderId: string;
   activeModelId: string;
   moduleModelPreferences?: ModuleModelPreferencesDTO;
+  modelReliability?: ModelReliabilitySettingsDTO;
+  usageBudgets?: UsageBudgetSettingsDTO;
+  usageTimezone?: string;
   userPersonaPresets?: UserPersonaPresetDTO[];
   autoSummarizeUser?: boolean;
   showMessageAvatars?: boolean;
@@ -153,6 +170,10 @@ export type SettingsInput = {
 };
 
 export type {
+  ModelReliabilitySettingsDTO,
+  UsageBudgetSettingsDTO,
+  UsageSummaryDTO,
+  CostPreviewDTO,
   CharacterCardDTO,
   CharacterBatchTagsRequestDTO,
   CharacterBatchTagsResultDTO,
@@ -208,6 +229,16 @@ export type {
   ModuleModelPreferencesDTO,
   MatchedLoreEntryDTO,
   MatchedMemoryDTO,
+  MemoryOperationDTO,
+  MemoryRestorePreviewDTO,
+  MemoryRestoreResultDTO,
+  MemoryRevisionDTO,
+  MemorySnapshotDTO,
+  MemoryUndoPreviewDTO,
+  MemoryUndoResolutionDTO,
+  MemoryUndoResultDTO,
+  ProfileSummaryRestorePreviewDTO,
+  ProfileSummaryRevisionDTO,
   MessageDTO,
   MessageRole,
   PromptBreakdownDTO,

@@ -8,7 +8,10 @@ import {
   serializeCharacterForBackup,
   serializeChat,
   serializeChatMemory,
+  serializeMemoryOperationForBackup,
+  serializeMemoryRevisionForBackup,
   serializeMessage,
+  serializeProfileSummaryRevisionForBackup,
   serializeSettings
 } from "../serializers.js";
 import {
@@ -30,6 +33,9 @@ type ExportedBackup = {
   chats: unknown[];
   messages: unknown[];
   memories: unknown[];
+  memoryRevisions: unknown[];
+  memoryOperations: unknown[];
+  profileSummaryRevisions: unknown[];
 };
 
 const RECOVERY_POINT_LIMIT = 10;
@@ -42,6 +48,24 @@ const importedDates = (value: { createdAt?: string; updatedAt?: string }) => ({
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const stableJson = (value: unknown) => JSON.stringify(value);
+
+const memorySnapshotForImport = (memory: {
+  title: string;
+  content: string;
+  keywords: Prisma.JsonValue;
+  importance: number;
+  enabled: boolean;
+  sourceMessageIds: Prisma.JsonValue;
+}) => ({
+  title: memory.title,
+  content: memory.content,
+  keywords: Array.isArray(memory.keywords) ? memory.keywords : [],
+  importance: memory.importance,
+  enabled: memory.enabled,
+  sourceMessageIds: Array.isArray(memory.sourceMessageIds) ? memory.sourceMessageIds : []
+});
 
 const getProviderKeys = (settings: UserSettings | null) => {
   const keys = new Map<string, unknown>();
@@ -65,12 +89,15 @@ const preserveProviderKeys = (incoming: unknown, existing: UserSettings | null) 
 };
 
 const readExportedBackup = async (client: DbClient): Promise<ExportedBackup> => {
-  const [settings, characters, chats, messages, memories] = await Promise.all([
+  const [settings, characters, chats, messages, memories, memoryRevisions, memoryOperations, profileSummaryRevisions] = await Promise.all([
     client.userSettings.findFirst({ orderBy: { createdAt: "asc" } }),
     client.character.findMany({ orderBy: { updatedAt: "desc" } }),
     client.chat.findMany({ orderBy: { updatedAt: "desc" } }),
     client.message.findMany({ orderBy: { createdAt: "asc" } }),
-    client.chatMemory.findMany({ orderBy: { updatedAt: "desc" } })
+    client.chatMemory.findMany({ orderBy: { updatedAt: "desc" } }),
+    client.memoryRevision.findMany({ orderBy: { createdAt: "asc" } }),
+    client.memoryOperation.findMany({ orderBy: { startedAt: "asc" } }),
+    client.profileSummaryRevision.findMany({ orderBy: { createdAt: "asc" } })
   ]);
 
   return {
@@ -80,7 +107,10 @@ const readExportedBackup = async (client: DbClient): Promise<ExportedBackup> => 
     characters: characters.map(serializeCharacterForBackup),
     chats: chats.map((chat) => serializeChat(chat)),
     messages: messages.map(serializeMessage),
-    memories: memories.map(serializeChatMemory)
+    memories: memories.map(serializeChatMemory),
+    memoryRevisions: memoryRevisions.map(serializeMemoryRevisionForBackup),
+    memoryOperations: memoryOperations.map(serializeMemoryOperationForBackup),
+    profileSummaryRevisions: profileSummaryRevisions.map(serializeProfileSummaryRevisionForBackup)
   } as const;
 };
 
@@ -94,7 +124,10 @@ const recoverySummary = (backup: ParsedBackup) => ({
   characters: backup.characters.length,
   chats: backup.chats.length,
   messages: backup.messages.length,
-  memories: backup.memories.length
+  memories: backup.memories.length,
+  memoryRevisions: backup.memoryRevisions.length,
+  memoryOperations: backup.memoryOperations.length,
+  profileSummaryRevisions: backup.profileSummaryRevisions.length
 });
 
 const pruneRecoveryPoints = async (tx: Prisma.TransactionClient) => {
@@ -265,6 +298,7 @@ const applyBackup = async (
       userAvatar: chat.userAvatar,
       userProfileSummary: chat.userProfileSummary,
       userProfileUpdatedAt: chat.userProfileUpdatedAt ? new Date(chat.userProfileUpdatedAt) : null,
+      profileRevision: chat.profileRevision,
       ...importedDates(chat)
     };
     if (chat.id) {
@@ -287,6 +321,8 @@ const applyBackup = async (
       variants: message.variants,
       activeVariantIndex: message.activeVariantIndex,
       tokenUsage: message.tokenUsage ?? undefined,
+      generationMetadata: message.generationMetadata ?? undefined,
+      variantMetadata: message.variantMetadata,
       promptBreakdown: message.promptBreakdown ?? undefined,
       loreMatches: message.loreMatches ?? undefined,
       memoryMatches: message.memoryMatches ?? undefined,
@@ -309,6 +345,10 @@ const applyBackup = async (
       keywords: memory.keywords,
       importance: memory.importance,
       enabled: memory.enabled,
+      deletedAt: memory.deletedAt ? new Date(memory.deletedAt) : null,
+      currentRevision: memory.currentRevision,
+      lastActor: memory.lastActor,
+      lastAction: memory.lastAction,
       sourceMessageIds: memory.sourceMessageIds,
       embedding: Prisma.DbNull,
       embeddingModel: null,
@@ -326,6 +366,147 @@ const applyBackup = async (
     }
   }
 
+  for (const record of records.memoryOperations) {
+    if (!shouldApplyRecord(record, backup.mode, resolutions)) continue;
+    const operation = record.value;
+    await tx.memoryOperation.upsert({ where: { id: operation.id }, update: {
+      chatId: operation.chatId, type: operation.type, actor: operation.actor, status: operation.status,
+      startedAt: new Date(operation.startedAt), completedAt: operation.completedAt ? new Date(operation.completedAt) : null,
+      createdCount: operation.created, updatedCount: operation.updated, disabledCount: operation.disabled, unchangedCount: operation.unchanged,
+      sourceMessageIds: operation.sourceMessageIds, errorCode: operation.errorCode,
+      undoneAt: operation.undoneAt ? new Date(operation.undoneAt) : null, undoOperationId: operation.undoOperationId
+    }, create: {
+      id: operation.id, chatId: operation.chatId, type: operation.type, actor: operation.actor, status: operation.status,
+      startedAt: new Date(operation.startedAt), completedAt: operation.completedAt ? new Date(operation.completedAt) : null,
+      createdCount: operation.created, updatedCount: operation.updated, disabledCount: operation.disabled, unchangedCount: operation.unchanged,
+      sourceMessageIds: operation.sourceMessageIds, errorCode: operation.errorCode,
+      undoneAt: operation.undoneAt ? new Date(operation.undoneAt) : null, undoOperationId: operation.undoOperationId
+    } });
+  }
+
+  for (const record of records.memoryRevisions) {
+    if (!shouldApplyRecord(record, backup.mode, resolutions)) continue;
+    const revision = record.value;
+    const data = {
+      chatId: revision.chatId, action: revision.action, actor: revision.actor,
+      beforeSnapshot: revision.beforeSnapshot === null ? Prisma.JsonNull : revision.beforeSnapshot,
+      afterSnapshot: revision.afterSnapshot === null ? Prisma.JsonNull : revision.afterSnapshot,
+      sourceMessageIds: revision.sourceMessageIds, operationId: revision.operationId,
+      reasonCode: revision.reasonCode, createdAt: new Date(revision.createdAt)
+    };
+    await tx.memoryRevision.upsert({
+      where: { memoryId_revision: { memoryId: revision.memoryId, revision: revision.revision } },
+      update: data,
+      create: { id: revision.id, memoryId: revision.memoryId, revision: revision.revision, ...data }
+    });
+  }
+
+  for (const record of records.profileSummaryRevisions) {
+    if (!shouldApplyRecord(record, backup.mode, resolutions)) continue;
+    const revision = record.value;
+    const data = { action: revision.action, actor: revision.actor, summary: revision.summary, sourceMessageIds: revision.sourceMessageIds, createdAt: new Date(revision.createdAt) };
+    await tx.profileSummaryRevision.upsert({
+      where: { chatId_revision: { chatId: revision.chatId, revision: revision.revision } },
+      update: data,
+      create: { id: revision.id, chatId: revision.chatId, revision: revision.revision, ...data }
+    });
+  }
+
+  // Conflict choices are independent records in the preview. Re-align imported
+  // current-state pointers so choosing a memory/chat without its matching history
+  // can never leave a dangling or misleading revision pointer.
+  for (const record of records.memories) {
+    if (!shouldApplyRecord(record, backup.mode, resolutions) || !record.value.id) continue;
+    const memory = await tx.chatMemory.findUniqueOrThrow({ where: { id: record.value.id } });
+    const snapshot = memorySnapshotForImport(memory);
+    const revisions = await tx.memoryRevision.findMany({
+      where: { memoryId: memory.id },
+      orderBy: { revision: "desc" },
+      select: { revision: true, afterSnapshot: true }
+    });
+    const latestRevision = revisions[0]?.revision ?? 0;
+    const matching = revisions.find((revision) => revision.revision === latestRevision && (memory.deletedAt
+      ? revision.afterSnapshot === null
+      : stableJson(revision.afterSnapshot) === stableJson(snapshot)));
+    if (matching) {
+      if (memory.currentRevision !== matching.revision) {
+        await tx.chatMemory.update({ where: { id: memory.id }, data: { currentRevision: matching.revision } });
+      }
+      continue;
+    }
+    const nextRevision = latestRevision + 1;
+    await tx.chatMemory.update({
+      where: { id: memory.id },
+      data: { currentRevision: nextRevision, lastActor: "restore", lastAction: "baseline" }
+    });
+    await tx.memoryRevision.create({
+      data: {
+        memoryId: memory.id,
+        chatId: memory.chatId,
+        revision: nextRevision,
+        action: "baseline",
+        actor: "restore",
+        beforeSnapshot: memory.deletedAt ? snapshot as Prisma.InputJsonValue : Prisma.JsonNull,
+        afterSnapshot: memory.deletedAt ? Prisma.JsonNull : snapshot as Prisma.InputJsonValue,
+        sourceMessageIds: snapshot.sourceMessageIds as Prisma.InputJsonValue,
+        reasonCode: "import_current_state_baseline",
+        createdAt: memory.updatedAt
+      }
+    });
+  }
+
+  for (const record of records.chats) {
+    if (!shouldApplyRecord(record, backup.mode, resolutions) || !record.value.id) continue;
+    const chat = await tx.chat.findUniqueOrThrow({ where: { id: record.value.id } });
+    const revisions = await tx.profileSummaryRevision.findMany({
+      where: { chatId: chat.id },
+      orderBy: { revision: "desc" },
+      select: { revision: true, summary: true }
+    });
+    const latestRevision = revisions[0]?.revision ?? 0;
+    const matching = revisions.find((revision) => revision.revision === latestRevision && revision.summary === chat.userProfileSummary);
+    if (matching) {
+      if (chat.profileRevision !== matching.revision) {
+        await tx.chat.update({ where: { id: chat.id }, data: { profileRevision: matching.revision } });
+      }
+      continue;
+    }
+    if (!chat.userProfileSummary && revisions.length === 0) {
+      if (chat.profileRevision !== 0) await tx.chat.update({ where: { id: chat.id }, data: { profileRevision: 0 } });
+      continue;
+    }
+    const nextRevision = latestRevision + 1;
+    await tx.chat.update({ where: { id: chat.id }, data: { profileRevision: nextRevision } });
+    await tx.profileSummaryRevision.create({ data: {
+      chatId: chat.id,
+      revision: nextRevision,
+      action: "baseline",
+      actor: "restore",
+      summary: chat.userProfileSummary,
+      sourceMessageIds: [],
+      createdAt: chat.userProfileUpdatedAt ?? chat.updatedAt
+    } });
+  }
+
+  const importedHistoryMemoryIds = new Set(backup.memoryRevisions.map((revision) => revision.memoryId));
+  for (const record of records.memories) {
+    if (!shouldApplyRecord(record, backup.mode, resolutions) || !record.value.id || importedHistoryMemoryIds.has(record.value.id)) continue;
+    const memory = await tx.chatMemory.findUniqueOrThrow({ where: { id: record.value.id } });
+    if (memory.currentRevision > 0) continue;
+    const snapshot = { title: memory.title, content: memory.content, keywords: Array.isArray(memory.keywords) ? memory.keywords : [], importance: memory.importance, enabled: memory.enabled, sourceMessageIds: Array.isArray(memory.sourceMessageIds) ? memory.sourceMessageIds : [] };
+    await tx.chatMemory.update({ where: { id: memory.id }, data: { currentRevision: 1, lastActor: "restore", lastAction: "baseline" } });
+    await tx.memoryRevision.create({ data: { id: `baseline:${memory.id}`, memoryId: memory.id, chatId: memory.chatId, revision: 1, action: "baseline", actor: "restore", beforeSnapshot: Prisma.JsonNull, afterSnapshot: snapshot as Prisma.InputJsonValue, sourceMessageIds: snapshot.sourceMessageIds as Prisma.InputJsonValue, reasonCode: "legacy_backup_baseline", createdAt: memory.createdAt } });
+  }
+
+  const importedProfileChatIds = new Set(backup.profileSummaryRevisions.map((revision) => revision.chatId));
+  for (const record of records.chats) {
+    if (!shouldApplyRecord(record, backup.mode, resolutions) || !record.value.id || importedProfileChatIds.has(record.value.id) || !record.value.userProfileSummary) continue;
+    const chat = await tx.chat.findUniqueOrThrow({ where: { id: record.value.id } });
+    if (chat.profileRevision > 0) continue;
+    await tx.chat.update({ where: { id: chat.id }, data: { profileRevision: 1 } });
+    await tx.profileSummaryRevision.create({ data: { id: `baseline:${chat.id}`, chatId: chat.id, revision: 1, action: "baseline", actor: "restore", summary: chat.userProfileSummary, sourceMessageIds: [], createdAt: chat.userProfileUpdatedAt ?? chat.createdAt } });
+  }
+
   let added = 0;
   let updated = 0;
   let skipped = 0;
@@ -335,7 +516,10 @@ const applyBackup = async (
     ...records.characters,
     ...records.chats,
     ...records.messages,
-    ...records.memories
+    ...records.memories,
+    ...records.memoryRevisions,
+    ...records.memoryOperations,
+    ...records.profileSummaryRevisions
   ]) {
     if (record.status === "added") added += 1;
     else if (record.status === "skipped") skipped += 1;

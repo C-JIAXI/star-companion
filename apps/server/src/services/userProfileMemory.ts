@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
 import type { Chat, UserSettings } from "@prisma/client";
 import { prisma } from "../db.js";
-import { completeChatCompletion, type ChatCompletionMessage } from "./completions.js";
+import { type ChatCompletionMessage } from "./completions.js";
+import { executeReliableTextCompletion } from "./reliableModelCalls.js";
 import { resolveModuleSettings } from "./moduleModels.js";
+import { updateProfileSummaryInTransaction } from "./memoryHistory.js";
 
 const MAX_PROFILE_LENGTH = 1800;
 const RECENT_USER_MESSAGE_LIMIT = 16;
@@ -70,23 +73,27 @@ export const updateUserProfileFromChat = async ({
   }
 
   const summary = trimUserProfileSummary(
-    await completeChatCompletion({
+    (await executeReliableTextCompletion({
       settings: resolveModuleSettings(settings, "user_profile"),
       messages: buildUserProfileSummaryMessages(chat.userProfileSummary, recentContents),
       maxTokens: 500,
-      temperature: 0.2
-    })
+      temperature: 0.2,
+      context: { requestId: `profile_${randomUUID()}`, module: "user_profile", operation: "summarize", chatId }
+    })).content
   );
 
   if (!summary || summary === chat.userProfileSummary) {
     return null;
   }
 
-  return prisma.chat.update({
-    where: { id: chatId },
-    data: {
-      userProfileSummary: summary,
-      userProfileUpdatedAt: new Date()
-    }
-  });
+  const sourceMessageIds = userMessages.map((message) => message.id);
+  const result = await prisma.$transaction((tx) => updateProfileSummaryInTransaction(
+    tx,
+    chat,
+    summary,
+    "automatic_memory",
+    sourceMessageIds,
+    "automatic_update"
+  ));
+  return result?.chat ?? null;
 };

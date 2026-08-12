@@ -7,6 +7,7 @@ import {
   streamChatCompletion,
   testModelConnection
 } from "./completions.js";
+import { ModelCallError } from "./modelErrors.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -155,6 +156,53 @@ describe("model provider adapters", () => {
     );
 
     assert.deepEqual(result.models, ["gemini-2.5-flash", "text-embedding-004"]);
+  });
+
+  it("classifies provider errors embedded in successful SSE responses", async () => {
+    const fixtures = [
+      {
+        provider: "openai-compatible",
+        event: 'data: {"error":{"code":"invalid_api_key","message":"secret prompt"}}\n\n',
+        expected: "authentication"
+      },
+      {
+        provider: "anthropic",
+        event: 'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"private"}}\n\n',
+        expected: "provider_unavailable"
+      },
+      {
+        provider: "google-gemini",
+        event: 'data: {"promptFeedback":{"blockReason":"SAFETY"}}\n\n',
+        expected: "safety_blocked"
+      }
+    ] as const;
+    for (const fixture of fixtures) {
+      globalThis.fetch = (async () => new Response(fixture.event, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" }
+      })) as typeof fetch;
+      await assert.rejects(async () => {
+        for await (const _event of streamChatCompletion({
+          settings: createSettings({ activeProvider: fixture.provider }),
+          messages: [{ role: "user", content: "test" }],
+          signal: new AbortController().signal
+        })) { /* consume */ }
+      }, (error: unknown) => error instanceof ModelCallError && error.safe.code === fixture.expected && !error.safe.summary.includes("private"));
+    }
+  });
+
+  it("rejects malformed SSE as a safe non-retryable response error", async () => {
+    globalThis.fetch = (async () => new Response("data: {not-json}\n\n", {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" }
+    })) as typeof fetch;
+    await assert.rejects(async () => {
+      for await (const _event of streamChatCompletion({
+        settings: createSettings({ activeProvider: "openai-compatible" }),
+        messages: [{ role: "user", content: "test" }],
+        signal: new AbortController().signal
+      })) { /* consume */ }
+    }, (error: unknown) => error instanceof ModelCallError && error.safe.code === "malformed_response" && !error.safe.retryable);
   });
 
   it("tests model connectivity with a real chat completion request", async () => {

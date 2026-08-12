@@ -181,7 +181,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "聊天设置",
-              body: "右上角设置菜单可查看上下文预算，并调整记忆轮数、长期记忆、聊天背景、用户设定、用户画像摘要和当前模型。Persona 预设可同时保存聊天内显示名、可选本地头像与三段用户配置；未上传头像时会生成稳定占位图，但只有前置词、提示词和后置词会进入模型上下文。每个模型可在供应商设置中填写上下文窗口；预算面板会估算下一轮输入与预留回复空间并提示风险，但不会自动裁剪剧情。长期记忆可单独指定向量模型，使用语义与关键词混合召回；面板会汇总就绪、待刷新和失败状态。“整理记忆”调用文本模型更新内容，“重建索引”只重算向量；未配置或接口失败时会自动退回关键词。"
+              body: "右上角设置菜单可查看上下文预算，并调整记忆轮数、长期记忆、聊天背景、用户设定、用户画像摘要和当前模型。Persona 预设可同时保存聊天内显示名、可选本地头像与三段用户配置；未上传头像时会生成稳定占位图，但只有前置词、提示词和后置词会进入模型上下文。每个模型可在供应商设置中填写上下文窗口；预算面板会估算下一轮输入与预留回复空间并提示风险，但不会自动裁剪剧情。长期记忆可单独指定向量模型，使用语义与关键词混合召回；面板会汇总就绪、待刷新和失败状态。“整理记忆”调用文本模型更新内容，“重建索引”只重算向量；未配置或接口失败时会自动退回关键词。每次内容或状态变化都会形成不可变版本，可查看字段差异和来源、恢复旧版本，或在冲突预检后事务撤销一次完整整理。"
             },
             {
               title: "剧情路径",
@@ -270,6 +270,18 @@ const getDocsCopy = (language: string): DocsCopy => {
               body: "在设置页选择模型即可切换聊天使用的模型，聊天页也支持快速切换。"
             },
             {
+              title: "可靠性与备用模型",
+              body: "模型错误会转换为不包含响应正文的安全错误码。自动重试默认关闭，只处理网络、超时、限流和临时不可用；每个模型候选最多两次重试，并且首个 token 输出后不再重试或换模型。备用链必须逐模块显式设置，聊天自动切换还需要单独同意。"
+            },
+            {
+              title: "使用量、费用与预算",
+              body: "使用量面板记录每次实际调用的模型、状态、token 和价格快照，并按模块、供应商、模型及聊天汇总。金额是本机根据供应商返回或估算 token 计算的 USD 参考值，不是供应商账单；无法可靠计价会显示“费用未知”，不会按零费用处理。软预算只提醒，硬预算由后端在每次调用前执行。"
+            },
+            {
+              title: "会话隐私锁",
+              body: "可为当前应用会话设置轻量解锁码。锁定后整个工作区会卸载，费用明细和聊天关联不留在页面中。解锁码只在当前进程内存中保存，刷新或重启会解除此会话锁。"
+            },
+            {
               title: "语言与头像",
               body: "支持中文和英文界面，也可以控制聊天消息头像是否显示。"
             }
@@ -284,7 +296,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           items: [
             {
               title: "导出范围",
-              body: "完整备份包含角色、角色收藏状态、聊天和消息；设置会导出模型服务和参数，但不会导出 API Key。角色收藏属于本地偏好，不会写入可分享的角色卡文件。"
+              body: "完整备份包含角色、角色收藏状态、聊天、消息、长期记忆当前状态、记忆版本/操作批次和 chat 用户画像历史；单聊天 JSON 归档也携带该聊天的这些历史。消息会保留实际模型、token、估算费用和完成状态等生成摘要。设置会导出模型服务和参数，但不会导出 API Key。全局调用账本、预算占用和恢复点只保留在本机，不进入备份或局域网同步。角色收藏属于本地偏好，不会写入可分享的角色卡文件。"
             },
             {
               title: "合并导入",
@@ -303,7 +315,7 @@ const getDocsCopy = (language: string): DocsCopy => {
               body: "拉取和推送都先生成差异预览。合并冲突必须明确选择本机、对端或跳过；替换仍需危险确认。桌面和移动后端使用同一契约，载荷永不包含 API Key。"
             }
           ],
-          note: "恢复点最多保留 10 个，并清理超过 30 天的旧记录；恢复失败时当前数据保持不变。"
+          note: "恢复点最多保留 10 个并清理超过 30 天的旧记录；每条记忆最多保留 30 个版本，每个聊天最多保留 100 次记忆操作。恢复失败时当前数据保持不变。旧 schemaVersion 1 只有当前状态时会建立明确基线，不伪造过去事件。"
         },
         {
           id: "updates",
@@ -457,7 +469,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Chat settings",
-            body: "The top-right menu shows the context budget and controls memory turns, long-term memory, chat background, user notes, profile summary, and the active model. Persona presets can retain a chat display name, an optional local avatar, and the three prompt sections; a stable placeholder is generated when no avatar is uploaded, while only prefix, prompt, and suffix enter model context. Each model can store a context-window limit; the budget estimates the next prompt and reserved response space without silently trimming story history. Settings can also assign a separate memory embedding model for hybrid semantic and keyword retrieval. The memory panel summarizes ready, stale, and failed vectors; organizing memory updates content with the text model, while rebuilding the index only recalculates embeddings."
+            body: "The top-right menu shows the context budget and controls memory turns, long-term memory, chat background, user notes, profile summary, and the active model. Persona presets can retain a chat display name, an optional local avatar, and the three prompt sections; a stable placeholder is generated when no avatar is uploaded, while only prefix, prompt, and suffix enter model context. Each model can store a context-window limit; the budget estimates the next prompt and reserved response space without silently trimming story history. Settings can also assign a separate memory embedding model for hybrid semantic and keyword retrieval. The memory panel summarizes ready, stale, and failed vectors; organizing memory updates content with the text model, while rebuilding the index only recalculates embeddings. Every content/status change creates an immutable revision with field diffs and source links; users can restore an old revision or transactionally undo a complete maintenance run after conflict preflight."
           },
           {
             title: "AI title draft",
@@ -572,6 +584,18 @@ const getDocsCopy = (language: string): DocsCopy => {
             body: "Choose a model in Settings to switch what chat uses. The chat page also supports quick model switching."
           },
           {
+            title: "Reliability and fallbacks",
+            body: "Provider failures are converted to safe error codes without response bodies. Automatic retries are off by default and only cover connection, timeout, rate-limit, and temporary availability failures. Each model candidate permits at most two retries, and no retry or model switch occurs after the first output token. Fallback chains must be enabled per module, with separate consent for automatic chat switching."
+          },
+          {
+            title: "Usage, cost, and budgets",
+            body: "The usage panel records the actual model, status, tokens, and price snapshot for every real call, with module, provider, model, and chat summaries. USD amounts are local estimates based on provider-reported or estimated tokens, not a provider bill. Unreliably priced work is marked cost unknown rather than zero. Soft budgets warn; hard budgets are enforced by the backend before every call."
+          },
+          {
+            title: "Session privacy lock",
+            body: "A lightweight unlock code can protect the current app session. Locking unmounts the entire workspace, blocks protected HTTP APIs, and closes or rejects WebSockets so memory/profile history and cost/chat associations are not left accessible. The code is kept only in process memory, so restarting the backend clears this session lock."
+          },
+          {
             title: "Language and avatars",
             body: "Switch between Chinese and English, and choose whether message avatars are shown."
           }
@@ -586,7 +610,7 @@ const getDocsCopy = (language: string): DocsCopy => {
         items: [
           {
             title: "Export contents",
-            body: "Full backups include characters, local favorite state, chats, and messages. Settings export model services and parameters, but not the API key. Favorite state is not written into shareable character card files."
+            body: "Full backups include characters, local favorite state, chats, messages, current long-term memories, immutable memory revisions/operations, and chat profile-summary history. Per-chat JSON archives carry the same chat-scoped history. Messages retain generation summaries such as actual model, tokens, estimated cost, and completion state. Settings export model services and parameters, but not API keys. The global call ledger, active budget reservations, and recovery points remain local and do not enter backups or LAN sync. Favorite state is not written into shareable character card files."
           },
           {
             title: "Merge import",
@@ -605,7 +629,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             body: "Pull and push both generate a difference preview first. Merge conflicts require an explicit local, peer, or skip choice; replace keeps a separate danger confirmation. Desktop and mobile use the same contract, and API keys never enter the payload."
           }
         ],
-        note: "At most 10 recovery points are retained, and points older than 30 days are cleaned up. A failed restore leaves current data unchanged."
+        note: "At most 10 recovery points are retained, and points older than 30 days are cleaned up. Each memory retains at most 30 revisions and each chat at most 100 memory operations. A failed restore leaves current data unchanged. Old schemaVersion 1 current states receive an explicit baseline rather than invented history."
       },
       {
         id: "updates",

@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { HttpError } from "../lib/http.js";
+import { updateMemoryInTransaction } from "./memoryHistory.js";
 
 const listTimelineMessageIdsFrom = async (
   transaction: Prisma.TransactionClient,
@@ -29,23 +30,17 @@ const disableMemoriesFromTimeline = async (
   removedMessageIds: string[]
 ) => {
   const removedIds = new Set(removedMessageIds);
-  const memories = await transaction.chatMemory.findMany({
-    where: { chatId, enabled: true },
-    select: { id: true, sourceMessageIds: true }
-  });
-  const memoryIds = memories
-    .filter((memory) => toStringArray(memory.sourceMessageIds).some((id) => removedIds.has(id)))
-    .map((memory) => memory.id);
-
-  if (memoryIds.length === 0) {
-    return 0;
+  const memories = await transaction.chatMemory.findMany({ where: { chatId, enabled: true, deletedAt: null } });
+  const affected = memories.filter((memory) => toStringArray(memory.sourceMessageIds).some((id) => removedIds.has(id)));
+  for (const memory of affected) {
+    await updateMemoryInTransaction(transaction, memory, { enabled: false }, {
+      actor: "timeline_cleanup",
+      action: "timeline_disable",
+      reasonCode: "source_timeline_deleted",
+      allowMissingSources: true
+    });
   }
-
-  const disabled = await transaction.chatMemory.updateMany({
-    where: { id: { in: memoryIds }, enabled: true },
-    data: { enabled: false }
-  });
-  return disabled.count;
+  return affected.length;
 };
 
 export const deleteMessageTimeline = (messageId: string) =>

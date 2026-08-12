@@ -1,5 +1,6 @@
 import {
   LoaderCircle,
+  LockKeyhole,
   Menu,
   MessageSquarePlus,
   MessageSquareText,
@@ -116,7 +117,7 @@ const sectionFromLocation = () => {
 };
 
 export function App() {
-  const { activeSection, setActiveSection, setLanguage, setShowMessageAvatars } = useAppStore();
+  const { activeSection, setActiveSection, setLanguage, setShowMessageAvatars, isPrivacyLocked, unlockPrivacy } = useAppStore();
   const { t, language } = useI18n();
   const appName = t("app.name");
   const active = sectionMeta[activeSection];
@@ -128,8 +129,23 @@ export function App() {
   const [pendingNavigation, setPendingNavigation] = useState<AppSection | null>(null);
   const [globalSearchRequest, setGlobalSearchRequest] = useState(0);
   const [upgradeNotice, setUpgradeNotice] = useState<{ previous: string | null; count: number } | null>(null);
+  const [unlockPasscode, setUnlockPasscode] = useState("");
+  const [unlockError, setUnlockError] = useState<string | null>(null);
+  const [privacyStatusReady, setPrivacyStatusReady] = useState(false);
 
   useMobileViewport();
+
+  useEffect(() => {
+    void api.privacy.status()
+      .then(({ locked }) => useAppStore.getState().setPrivacyLocked(locked))
+      .finally(() => setPrivacyStatusReady(true));
+  }, []);
+
+  useEffect(() => {
+    const handleBackendLock = () => useAppStore.getState().setPrivacyLocked(true);
+    window.addEventListener("star-companion:privacy-locked", handleBackendLock);
+    return () => window.removeEventListener("star-companion:privacy-locked", handleBackendLock);
+  }, []);
 
   useEffect(() => {
     document.title = `${t(active.titleKey)} | ${appName}`;
@@ -287,6 +303,62 @@ export function App() {
     },
     [createChatForCharacter, t]
   );
+
+  if (!privacyStatusReady) {
+    return (
+      <main className="grid h-dvh place-items-center bg-ink-950 text-ink-50" data-testid="privacy-status-loading">
+        <LoaderCircle className="animate-spin text-ember-300" size={24} />
+      </main>
+    );
+  }
+
+  if (isPrivacyLocked) {
+    return (
+      <main className="grid h-dvh place-items-center bg-ink-950 p-4 text-ink-50" data-testid="privacy-lock-screen">
+        <form
+          className="w-full max-w-sm rounded-xl border border-white/10 bg-ink-900 p-6 shadow-2xl"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void unlockPrivacy(unlockPasscode).then((unlocked) => {
+            if (unlocked) {
+              setUnlockPasscode("");
+              setUnlockError(null);
+            } else {
+              setUnlockError(language === "zh-CN" ? "解锁码不正确。" : "Incorrect unlock code.");
+            }
+            });
+          }}
+        >
+          <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-ember-500/10 text-ember-300">
+            <LockKeyhole size={22} />
+          </div>
+          <h1 className="mt-4 text-center text-lg font-semibold">
+            {language === "zh-CN" ? "应用已锁定" : "App locked"}
+          </h1>
+          <p className="mt-2 text-center text-sm leading-6 text-slate-400">
+            {language === "zh-CN"
+              ? "聊天关联、使用量和费用明细已从界面卸载。输入本次会话的解锁码继续。"
+              : "Chat links, usage, and cost details are unmounted. Enter this session's unlock code to continue."}
+          </p>
+          <input
+            autoFocus
+            className="mt-5 min-h-11 w-full rounded-md border border-white/10 bg-ink-950 px-3 text-sm outline-none focus:border-ember-400"
+            data-testid="privacy-unlock-input"
+            maxLength={128}
+            minLength={4}
+            placeholder={language === "zh-CN" ? "解锁码" : "Unlock code"}
+            type="password"
+            value={unlockPasscode}
+            onChange={(event) => setUnlockPasscode(event.target.value)}
+          />
+          {unlockError ? <p className="mt-2 text-sm text-rose-300" role="alert">{unlockError}</p> : null}
+          <button className="mt-4 min-h-11 w-full rounded-md bg-ember-500 px-4 text-sm font-semibold text-ink-950 hover:bg-ember-400" data-testid="privacy-unlock-submit" type="submit">
+            {language === "zh-CN" ? "解锁" : "Unlock"}
+          </button>
+        </form>
+      </main>
+    );
+  }
 
   return (
     <div className="h-dvh bg-ink-950 text-ink-50 selection:bg-ember-400/25 safe-area-top safe-area-bottom transition-[height] duration-200">

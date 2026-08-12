@@ -173,14 +173,16 @@ function VariantSwitcher({
 
 function TokenInfo({
   usage,
+  metadata,
   formatter
 }: {
   usage: TokenUsageDTO | null;
+  metadata: MessageDTO["generationMetadata"];
   formatter: TokenUsageFormatter;
 }) {
   return (
-    <p className="text-xs font-medium text-slate-500" data-chat-token-info="">
-      {formatter(usage)}
+    <p className="text-xs font-medium text-slate-500" data-chat-token-info="" title={metadata ? `${metadata.providerId}/${metadata.modelId} · ${metadata.estimatedCostMicros == null ? "Cost unknown" : `Estimated $${(metadata.estimatedCostMicros / 1_000_000).toFixed(4)}`}` : undefined}>
+      {formatter(usage)}{metadata ? ` · ${metadata.modelId} · ${metadata.estimatedCostMicros == null ? "cost unknown" : `est. $${(metadata.estimatedCostMicros / 1_000_000).toFixed(4)}`}${metadata.usedFallback ? " · fallback" : ""}${metadata.incomplete ? " · incomplete" : ""}` : " · historical generation data unavailable"}
     </p>
   );
 }
@@ -494,7 +496,7 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
           <div className="flex min-w-0 flex-col gap-2 text-xs">
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <TokenInfo usage={message.tokenUsage} formatter={tokenUsageFormatter} />
+                <TokenInfo usage={message.tokenUsage} metadata={message.generationMetadata} formatter={tokenUsageFormatter} />
                 {showTimestamp ? <MessageTimestamp createdAt={message.createdAt} language={language} /> : null}
                 {message.contextIncluded === false ? (
                   <span

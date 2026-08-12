@@ -47,12 +47,15 @@ The mobile backend currently covers the core local API surface:
 - settings, including local API key encryption
 - characters CRUD, public/private import/export, private-card unlock, batch fetch/delete
 - chats CRUD, archive, recoverable Trash, restore, and separately confirmed permanent deletion
-- messages CRUD
-- chat memories CRUD
-- backup import/export with read-only preflight and bounded local recovery points
+- messages CRUD, including transactional timeline cleanup that writes audited memory-disable revisions
+- chat memories CRUD plus immutable revisions, source references, restore/purge, bounded maintenance operations, conflict-aware transactional undo, and per-chat profile-summary history
+- backup import/export with read-only preflight and bounded local recovery points; memory revisions, operations, and profile history travel with current records
 - two-phase LAN sync preview/execute through the same backup envelope, with explicit conflict resolution
 - WebSocket generation through the same model-provider proxy helpers
+- provider-neutral safe errors, stable request IDs, explicit cancellation, reconnectable status, bounded transient retries, and explicit per-module fallback chains
+- a device-local request/attempt usage ledger with atomic budget reservation/settlement, price snapshots, usage summaries, and backend-enforced daily/monthly hard budgets
 - application, schema, platform, build, commit, and migration-state reporting
+- the same process-memory session privacy lock contract as desktop: protected HTTP APIs return 423 and active/new WebSockets are closed/rejected while locked
 
 Private character-card export/unlock is implemented in the mobile backend with
 the same AES-256-GCM envelope and password verifier protocol as the desktop
@@ -86,9 +89,42 @@ preview. A different record with the same ID is a conflict and cannot be
 silently overwritten: the user chooses local, peer, or skip before execution.
 Replace mode keeps a separate danger confirmation. Before an import overwrites
 or deletes data, the embedded backend creates a local recovery point containing
-characters, chats, messages, memories, and non-key settings. Recovery points
+characters, chats, messages, memories, memory revisions/operations, chat-profile
+history, and non-key settings. Recovery points
 are capped at 10 and older-than-30-day entries are pruned; restore uses an
 atomic SQLite transaction and creates a pre-restore safety point.
+
+Message-level generation summaries (actual provider/model, token usage, local
+cost estimate, fallback state, and incomplete state) use the existing
+schemaVersion 1 backup envelope and follow messages through LAN sync. The global
+request/attempt ledger, active budget reservations, recovery points, and API
+keys remain device-local and never enter backup or sync payloads.
+
+Memory history is bounded to 30 revisions per memory and 100 operations per
+chat. Snapshots keep only the memory fields needed for diff/restore and source
+message IDs; they do not copy embeddings, prompts, model responses, API keys,
+personas, or profile summaries. Deleted memories remain tombstones outside
+prompt and retrieval until restored or separately purged. Old schemaVersion 1
+payloads without history receive one explicit baseline for the imported current
+state rather than invented past events.
+
+The embedded backend applies the same reliability boundary as desktop to chat,
+Agent, memory maintenance, memory embeddings, user-profile summaries,
+connection tests, transcription, speech, and image generation. Each real
+provider attempt is recorded separately. Only transient connection, timeout,
+rate-limit, and temporary availability failures are eligible for bounded
+retry/fallback, and no automatic retry or model switch occurs after streaming
+has produced output. Interrupted partial text is persisted as incomplete. On
+startup, unfinished requests are marked interrupted and their budget
+reservations are released atomically.
+
+Usage and cost values are local estimates, not provider billing records. Price
+snapshots use user-configured micro-USD rates per million tokens; provider token
+counts are preferred and local estimates are labeled. Work that cannot be
+priced reliably remains `unknown`, never zero. The mobile and desktop APIs share
+the same summary/filter/preview/delete contract and the same explicit
+one-request hard-budget override. Deleting local usage history requires
+confirmation and cannot change a provider bill.
 
 Schema upgrades use a separate database-level safety layer. Before changing an
 existing WASM SQLite file, the backend runs `PRAGMA integrity_check`, verifies

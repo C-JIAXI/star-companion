@@ -4,6 +4,7 @@ import { resolveWebSocketUrl } from "./appBackend";
 type UseWebSocketOptions = {
   onMessage?: (message: Record<string, unknown>) => void;
   onError?: (error: string) => void;
+  onOpen?: () => void;
   reconnectInterval?: number;
   maxReconnectAttempts?: number;
 };
@@ -28,8 +29,10 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
   const allowReconnectRef = useRef(true);
   const onMessageRef = useRef(onMessage);
   const onErrorRef = useRef(onError);
+  const onOpenRef = useRef(options.onOpen);
   onMessageRef.current = onMessage;
   onErrorRef.current = onError;
+  onOpenRef.current = options.onOpen;
 
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,14 +67,22 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       setError(null);
       setConnectionState("connected");
       reconnectAttemptsRef.current = 0;
+      onOpenRef.current?.();
     };
 
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       if (socketRef.current !== socket) {
         return;
       }
 
       setIsConnected(false);
+
+      if (event.code === 4403) {
+        allowReconnectRef.current = false;
+        setConnectionState("disconnected");
+        window.dispatchEvent(new CustomEvent("star-companion:privacy-locked"));
+        return;
+      }
 
       if (!allowReconnectRef.current) {
         return;

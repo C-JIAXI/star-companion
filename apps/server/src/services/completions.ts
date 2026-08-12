@@ -1,5 +1,11 @@
 import type { UserSettings } from "@prisma/client";
 import { decryptApiKey } from "./apiKeyVault.js";
+import {
+  malformedModelResponse,
+  modelErrorFromPayload,
+  modelErrorFromResponse,
+  normalizeModelError
+} from "./modelErrors.js";
 
 export type ChatCompletionMessage = {
   role: "system" | "user" | "assistant";
@@ -13,7 +19,7 @@ export type TokenUsage = {
   estimated: boolean;
 };
 
-type ChatCompletionStreamEvent =
+export type ChatCompletionStreamEvent =
   | {
       type: "token";
       content: string;
@@ -22,6 +28,11 @@ type ChatCompletionStreamEvent =
       type: "usage";
       usage: TokenUsage;
     };
+
+export type ChatCompletionResult = {
+  content: string;
+  usage: TokenUsage | null;
+};
 
 type ConnectionTestResult = {
   reachable: true;
@@ -35,12 +46,12 @@ type AvailableModelsResult = {
   checkedAt: string;
 };
 
-type ProviderKind = "openai-compatible" | "anthropic" | "google-gemini";
+export type ProviderKind = "openai-compatible" | "anthropic" | "google-gemini";
 
 const joinApiPath = (baseUrl: string, path: string) =>
   `${baseUrl.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
 
-const normalizeProvider = (provider: string): ProviderKind => {
+export const normalizeProvider = (provider: string): ProviderKind => {
   const normalized = provider.trim().toLowerCase();
 
   if (["anthropic", "claude", "claude-native"].includes(normalized)) {
@@ -76,26 +87,20 @@ const authHeaders = (settings: UserSettings, provider = normalizeProvider(settin
   return headers;
 };
 
-const readErrorMessage = async (response: Response) => {
-  const text = await response.text();
-  if (!text) {
-    return `Model API request failed with status ${response.status}`;
-  }
+const responseError = (response: Response, settings: UserSettings) => modelErrorFromResponse({
+  response,
+  provider: normalizeProvider(settings.activeProvider),
+  modelId: settings.model
+});
 
-  try {
-    const parsed = JSON.parse(text) as { error?: { message?: string } | string; message?: string };
-    if (typeof parsed.error === "string") {
-      return parsed.error;
-    }
-    return parsed.error?.message ?? parsed.message ?? `Model API request failed with status ${response.status}`;
-  } catch {
-    return text.slice(0, 400);
-  }
-};
+const MODEL_CALL_TIMEOUT_MS = 120_000;
+const callSignal = (signal?: AbortSignal) => signal
+  ? AbortSignal.any([signal, AbortSignal.timeout(MODEL_CALL_TIMEOUT_MS)])
+  : AbortSignal.timeout(MODEL_CALL_TIMEOUT_MS);
 
 async function* readSseJson(response: Response) {
   if (!response.body) {
-    throw new Error("Model API did not return a response stream");
+    throw new SyntaxError("Missing response stream");
   }
 
   const reader = response.body.getReader();
@@ -112,7 +117,11 @@ async function* readSseJson(response: Response) {
       return null;
     }
 
-    return JSON.parse(data) as Record<string, unknown>;
+    try {
+      return JSON.parse(data) as Record<string, unknown>;
+    } catch {
+      throw new SyntaxError("Malformed SSE event");
+    }
   };
 
   while (true) {
@@ -371,12 +380,12 @@ export const fetchAvailableModels = async (settings: UserSettings): Promise<Avai
       method: "GET",
       headers: authHeaders(settings, provider)
     });
-  } catch {
-    throw new Error("Unable to reach the configured model API");
+  } catch (error) {
+    throw normalizeModelError(error, { provider, modelId: settings.model });
   }
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+    throw await responseError(response, settings);
   }
 
   const payload = (await response.json()) as {
@@ -414,22 +423,20 @@ async function* streamOpenAiChatCompletion({
     response = await fetch(joinApiPath(settings.apiBaseUrl, "chat/completions"), {
       method: "POST",
       headers: authHeaders(settings),
-      signal,
+      signal: callSignal(signal),
       body: JSON.stringify(openAiRequestBody({ settings, messages, stream: true }))
     });
   } catch (error) {
-    if (signal.aborted) {
-      throw error;
-    }
-    throw new Error("Unable to reach the configured model API");
+    throw normalizeModelError(error, { provider: "openai-compatible", modelId: settings.model, cancelled: signal.aborted });
   }
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+    throw await responseError(response, settings);
   }
 
-  for await (const parsed of readSseJson(response)) {
+  try { for await (const parsed of readSseJson(response)) {
     const typed = parsed as {
+      error?: unknown;
       choices?: Array<{ delta?: { content?: string }; text?: string }>;
       usage?: {
         prompt_tokens?: number;
@@ -437,6 +444,9 @@ async function* streamOpenAiChatCompletion({
         total_tokens?: number;
       } | null;
     };
+    if (typed.error) {
+      throw modelErrorFromPayload({ body: typed.error, provider: "openai-compatible", modelId: settings.model });
+    }
     const usage = parseUsage(typed.usage);
     if (usage) {
       yield { type: "usage", usage } satisfies ChatCompletionStreamEvent;
@@ -446,6 +456,10 @@ async function* streamOpenAiChatCompletion({
     if (token) {
       yield { type: "token", content: token } satisfies ChatCompletionStreamEvent;
     }
+  } } catch (error) {
+    throw error instanceof SyntaxError
+      ? malformedModelResponse("openai-compatible", settings.model)
+      : normalizeModelError(error, { provider: "openai-compatible", modelId: settings.model, cancelled: signal.aborted });
   }
 }
 
@@ -463,25 +477,25 @@ async function* streamAnthropicChatCompletion({
     response = await fetch(joinApiPath(settings.apiBaseUrl, "messages"), {
       method: "POST",
       headers: authHeaders(settings, "anthropic"),
-      signal,
+      signal: callSignal(signal),
       body: JSON.stringify(toAnthropicPayload({ settings, messages, stream: true }))
     });
   } catch (error) {
-    if (signal.aborted) {
-      throw error;
-    }
-    throw new Error("Unable to reach the configured model API");
+    throw normalizeModelError(error, { provider: "anthropic", modelId: settings.model, cancelled: signal.aborted });
   }
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+    throw await responseError(response, settings);
   }
 
   let promptTokens = 0;
   let completionTokens = 0;
 
-  for await (const parsed of readSseJson(response)) {
+  try { for await (const parsed of readSseJson(response)) {
     const type = parsed.type;
+    if (type === "error" || parsed.error) {
+      throw modelErrorFromPayload({ body: parsed.error ?? parsed, provider: "anthropic", modelId: settings.model });
+    }
 
     if (type === "message_start") {
       const usage = (parsed.message as { usage?: { input_tokens?: number } } | undefined)?.usage;
@@ -499,6 +513,10 @@ async function* streamAnthropicChatCompletion({
       const usage = parsed.usage as { output_tokens?: number } | undefined;
       completionTokens = usage?.output_tokens ?? completionTokens;
     }
+  } } catch (error) {
+    throw error instanceof SyntaxError
+      ? malformedModelResponse("anthropic", settings.model)
+      : normalizeModelError(error, { provider: "anthropic", modelId: settings.model, cancelled: signal.aborted });
   }
 
   if (promptTokens || completionTokens) {
@@ -533,29 +551,33 @@ async function* streamGeminiChatCompletion({
       {
         method: "POST",
         headers: authHeaders(settings, "google-gemini"),
-        signal,
+        signal: callSignal(signal),
         body: JSON.stringify(toGeminiPayload({ settings, messages }))
       }
     );
   } catch (error) {
-    if (signal.aborted) {
-      throw error;
-    }
-    throw new Error("Unable to reach the configured model API");
+    throw normalizeModelError(error, { provider: "google-gemini", modelId: settings.model, cancelled: signal.aborted });
   }
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+    throw await responseError(response, settings);
   }
 
   let usage: TokenUsage | null = null;
-  for await (const parsed of readSseJson(response)) {
+  try { for await (const parsed of readSseJson(response)) {
+    if (parsed.error || parsed.promptFeedback) {
+      throw modelErrorFromPayload({ body: parsed.error ?? parsed.promptFeedback, provider: "google-gemini", modelId: settings.model });
+    }
     const token = parseGeminiText(parsed);
     if (token) {
       yield { type: "token", content: token } satisfies ChatCompletionStreamEvent;
     }
 
     usage = parseGeminiUsage(parsed.usageMetadata) ?? usage;
+  } } catch (error) {
+    throw error instanceof SyntaxError
+      ? malformedModelResponse("google-gemini", settings.model)
+      : normalizeModelError(error, { provider: "google-gemini", modelId: settings.model, cancelled: signal.aborted });
   }
 
   if (usage) {
@@ -605,7 +627,7 @@ const completeOpenAiChatCompletion = async ({
     response = await fetch(joinApiPath(settings.apiBaseUrl, "chat/completions"), {
       method: "POST",
       headers: authHeaders(settings),
-      signal,
+      signal: callSignal(signal),
       body: JSON.stringify(
         openAiRequestBody({
           settings,
@@ -617,25 +639,23 @@ const completeOpenAiChatCompletion = async ({
       )
     });
   } catch (error) {
-    if (signal?.aborted) {
-      throw error;
-    }
-    throw new Error("Unable to reach the configured model API");
+    throw normalizeModelError(error, { provider: "openai-compatible", modelId: settings.model, cancelled: signal?.aborted });
   }
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+    throw await responseError(response, settings);
   }
 
-  const payload = (await response.json()) as {
+  let payload: {
     choices?: Array<{ message?: { content?: string }; text?: string }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null;
   };
+  try { payload = await response.json() as typeof payload; } catch { throw malformedModelResponse("openai-compatible", settings.model); }
 
-  return (
-    payload.choices?.[0]?.message?.content ??
-    payload.choices?.[0]?.text ??
-    ""
-  ).trim();
+  return {
+    content: (payload.choices?.[0]?.message?.content ?? payload.choices?.[0]?.text ?? "").trim(),
+    usage: parseUsage(payload.usage)
+  } satisfies ChatCompletionResult;
 };
 
 const completeAnthropicChatCompletion = async ({
@@ -656,7 +676,7 @@ const completeAnthropicChatCompletion = async ({
     response = await fetch(joinApiPath(settings.apiBaseUrl, "messages"), {
       method: "POST",
       headers: authHeaders(settings, "anthropic"),
-      signal,
+      signal: callSignal(signal),
       body: JSON.stringify(
         toAnthropicPayload({
           settings,
@@ -668,21 +688,30 @@ const completeAnthropicChatCompletion = async ({
       )
     });
   } catch (error) {
-    if (signal?.aborted) {
-      throw error;
-    }
-    throw new Error("Unable to reach the configured model API");
+    throw normalizeModelError(error, { provider: "anthropic", modelId: settings.model, cancelled: signal?.aborted });
   }
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+    throw await responseError(response, settings);
   }
 
-  const payload = (await response.json()) as {
+  let payload: {
     content?: Array<{ type?: string; text?: string }>;
+    usage?: { input_tokens?: number; output_tokens?: number };
   };
+  try { payload = await response.json() as typeof payload; } catch { throw malformedModelResponse("anthropic", settings.model); }
 
-  return (payload.content ?? []).map((part) => part.text ?? "").join("").trim();
+  const promptTokens = payload.usage?.input_tokens ?? 0;
+  const completionTokens = payload.usage?.output_tokens ?? 0;
+  return {
+    content: (payload.content ?? []).map((part) => part.text ?? "").join("").trim(),
+    usage: payload.usage ? {
+      promptTokens,
+      completionTokens,
+      totalTokens: promptTokens + completionTokens,
+      estimated: false
+    } : null
+  } satisfies ChatCompletionResult;
 };
 
 const completeGeminiChatCompletion = async ({
@@ -708,7 +737,7 @@ const completeGeminiChatCompletion = async ({
       {
         method: "POST",
         headers: authHeaders(settings, "google-gemini"),
-        signal,
+        signal: callSignal(signal),
         body: JSON.stringify(
           toGeminiPayload({
             settings,
@@ -720,20 +749,20 @@ const completeGeminiChatCompletion = async ({
       }
     );
   } catch (error) {
-    if (signal?.aborted) {
-      throw error;
-    }
-    throw new Error("Unable to reach the configured model API");
+    throw normalizeModelError(error, { provider: "google-gemini", modelId: settings.model, cancelled: signal?.aborted });
   }
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+    throw await responseError(response, settings);
   }
 
-  return parseGeminiText(await response.json()).trim();
+  try {
+    const payload = await response.json() as { usageMetadata?: unknown };
+    return { content: parseGeminiText(payload).trim(), usage: parseGeminiUsage(payload.usageMetadata) } satisfies ChatCompletionResult;
+  } catch { throw malformedModelResponse("google-gemini", settings.model); }
 };
 
-export const completeChatCompletion = async (input: {
+export const completeChatCompletionDetailed = async (input: {
   settings: UserSettings;
   messages: ChatCompletionMessage[];
   signal?: AbortSignal;
@@ -752,6 +781,9 @@ export const completeChatCompletion = async (input: {
 
   return completeOpenAiChatCompletion(input);
 };
+
+export const completeChatCompletion = async (input: Parameters<typeof completeChatCompletionDetailed>[0]) =>
+  (await completeChatCompletionDetailed(input)).content;
 
 const estimateTokens = (text: string) => {
   const compact = text.trim();

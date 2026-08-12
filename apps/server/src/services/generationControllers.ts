@@ -5,8 +5,9 @@ export class GenerationControllerRegistry<TSocket extends object> {
   >();
 
   register(requestId: string, socket: TSocket, controller: AbortController) {
-    this.entries.get(requestId)?.controller.abort();
+    if (this.entries.has(requestId)) return false;
     this.entries.set(requestId, { controller, socket });
+    return true;
   }
 
   release(requestId: string, controller?: AbortController) {
@@ -24,13 +25,8 @@ export class GenerationControllerRegistry<TSocket extends object> {
   }
 
   abortSocket(socket: TSocket) {
-    let aborted = 0;
-    for (const [requestId, entry] of this.entries) {
-      if (entry.socket !== socket) continue;
-      entry.controller.abort();
-      this.entries.delete(requestId);
-      aborted += 1;
-    }
-    return aborted;
+    // A browser refresh or temporary WebSocket loss must not resubmit or cancel a paid call.
+    // The request remains addressable by requestId and may be explicitly stopped after reconnect.
+    return [...this.entries.values()].filter((entry) => entry.socket === socket).length;
   }
 }

@@ -1,13 +1,14 @@
+import { randomUUID } from "node:crypto";
 import { prisma } from "../db.js";
 import { HttpError } from "../lib/http.js";
 import { serializeMessage } from "../serializers.js";
 import { getOrCreateSettings } from "../routes/settings.js";
 import {
-  completeChatCompletion,
   estimateTokenUsage,
   type ChatCompletionMessage
 } from "./completions.js";
 import { resolveModuleSettings } from "./moduleModels.js";
+import { executeReliableTextCompletion, generationMetadata } from "./reliableModelCalls.js";
 import {
   appendPromptBreakdownInstruction,
   buildPromptContext,
@@ -48,14 +49,14 @@ export const createChatOpeningMessage = async (chatId: string) => {
   const settings = resolveModuleSettings(await getOrCreateSettings(), "chat");
   const context = await buildPromptContext({ chatId, settings });
   const messages = [...context.messages, openingInstruction];
-  const content = (
-    await completeChatCompletion({
+  const result = await executeReliableTextCompletion({
       settings,
       messages,
       maxTokens: Math.min(settings.maxTokens, 700),
-      temperature: Math.min(settings.temperature, 0.7)
-    })
-  ).trim();
+      temperature: Math.min(settings.temperature, 0.7),
+      context: { requestId: `opening_${randomUUID()}`, module: "chat", operation: "opening", chatId }
+    });
+  const content = result.content.trim();
 
   if (!content) {
     throw new Error("Model returned an empty opening message");
@@ -79,6 +80,8 @@ export const createChatOpeningMessage = async (chatId: string) => {
       promptBreakdown,
       loreMatches: context.matchedLoreEntries,
       memoryMatches: context.matchedMemoryEntries
+      ,generationMetadata: generationMetadata(result),
+      variantMetadata: [generationMetadata(result)]
     }
   });
 

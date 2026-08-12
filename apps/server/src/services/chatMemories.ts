@@ -1,8 +1,11 @@
-import { Prisma, type ChatMemory, type Message, type UserSettings } from "@prisma/client";
+import { randomUUID } from "node:crypto";
+import type { Prisma, ChatMemory, Message, UserSettings } from "@prisma/client";
 import { prisma } from "../db.js";
-import { completeChatCompletion, type ChatCompletionMessage } from "./completions.js";
-import { generateEmbeddings } from "./embeddings.js";
+import { type ChatCompletionMessage } from "./completions.js";
+import { executeReliableTextCompletion } from "./reliableModelCalls.js";
+import { generateReliableEmbeddings as generateEmbeddings } from "./reliableEmbeddings.js";
 import { resolveModuleSettings } from "./moduleModels.js";
+import { createMemoryInTransaction, pruneMemoryOperations, updateMemoryInTransaction } from "./memoryHistory.js";
 
 const KEYWORD_CANDIDATE_LIMIT = 12;
 const RERANKED_MEMORY_LIMIT = 5;
@@ -264,7 +267,7 @@ export const refreshChatMemoryEmbeddings = async ({
   }
   const refresh = (async () => {
     const memories = await prisma.chatMemory.findMany({
-      where: { chatId, enabled: true },
+      where: { chatId, enabled: true, deletedAt: null },
       orderBy: { updatedAt: "desc" }
     });
     return ensureMemoryEmbeddings(memories, settings, force);
@@ -383,12 +386,13 @@ const rerankMemories = async (
 
   try {
     const candidateIds = new Set(candidates.map((candidate) => candidate.id));
-    const raw = await completeChatCompletion({
+    const raw = (await executeReliableTextCompletion({
       settings: moduleSettings,
       messages: buildMemoryRerankMessages(queryText, candidates),
       maxTokens: 180,
-      temperature: 0
-    });
+      temperature: 0,
+      context: { requestId: `memory_rerank_${randomUUID()}`, module: "memory", operation: "rerank" }
+    })).content;
     const ids = parseRerankedIds(raw.trim(), candidateIds);
     const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
     const selected = ids.map((id) => byId.get(id)).filter((item): item is MatchedMemoryEntry => Boolean(item));
@@ -421,7 +425,7 @@ export const recallChatMemories = async ({
   }
 
   const memories = await prisma.chatMemory.findMany({
-    where: { chatId, enabled: true },
+    where: { chatId, enabled: true, deletedAt: null },
     orderBy: [{ importance: "desc" }, { updatedAt: "desc" }]
   });
   const queryTokens = new Set(tokenize(queryText));
@@ -575,6 +579,7 @@ type MemoryAction =
 
 export type MemoryMaintenanceSummary = {
   chatId: string;
+  operationId: string | null;
   created: number;
   updated: number;
   disabled: number;
@@ -671,7 +676,7 @@ export const updateChatMemoriesFromTurn = async ({
       take: RECENT_MESSAGE_LIMIT
     }),
     prisma.chatMemory.findMany({
-      where: { chatId },
+      where: { chatId, deletedAt: null },
       orderBy: { updatedAt: "desc" },
       take: EXISTING_MEMORY_LIMIT
     })
@@ -681,86 +686,83 @@ export const updateChatMemoriesFromTurn = async ({
     return null;
   }
 
-  const raw = await completeChatCompletion({
-    settings: resolveModuleSettings(settings, "memory"),
-    messages: buildChatMemoryMaintenanceMessages(existingMemories, recentMessages),
-    maxTokens: 1600,
-    temperature: 0.2
-  });
-  const actions = parseMemoryActions(raw.trim());
-  if (!actions) {
-    return null;
-  }
-  const existingIds = new Set(existingMemories.map((memory) => memory.id));
   const sourceMessageIds = recentMessages.map((message) => message.id);
-  let created = 0;
-  let updated = 0;
-  let disabled = 0;
-  const changedMemoryIds: string[] = [];
-
-  for (const action of actions.slice(0, 8)) {
-    if (action.type === "create") {
-      const memory = await prisma.chatMemory.create({
-        data: {
-          chatId,
-          title: action.title,
-          content: action.content,
-          keywords: action.keywords ?? [],
-          importance: action.importance ?? 3,
-          enabled: true,
-          sourceMessageIds
-        }
-      });
-      changedMemoryIds.push(memory.id);
-      created += 1;
-      continue;
+  const operation = await prisma.memoryOperation.create({ data: { chatId, type: "automatic_maintenance", actor: "automatic_memory", status: "running", sourceMessageIds } });
+  let actions: MemoryAction[];
+  try {
+    const raw = (await executeReliableTextCompletion({
+      settings: resolveModuleSettings(settings, "memory"),
+      messages: buildChatMemoryMaintenanceMessages(existingMemories, recentMessages),
+      maxTokens: 1600,
+      temperature: 0.2,
+      context: { requestId: `memory_${randomUUID()}`, module: "memory", operation: "maintenance", chatId }
+    })).content;
+    const parsed = parseMemoryActions(raw.trim());
+    if (!parsed) {
+      await prisma.memoryOperation.update({ where: { id: operation.id }, data: { status: "failed", completedAt: new Date(), errorCode: "invalid_model_output" } });
+      return null;
     }
-
-    if (!existingIds.has(action.id)) {
-      continue;
-    }
-
-    await prisma.chatMemory.update({
-      where: { id: action.id },
-      data: {
-        ...(action.title ? { title: action.title } : {}),
-        ...(action.content ? { content: action.content } : {}),
-        ...(action.keywords ? { keywords: action.keywords } : {}),
-        ...(action.importance ? { importance: action.importance } : {}),
-        ...(typeof action.enabled === "boolean" ? { enabled: action.enabled } : {}),
-        sourceMessageIds,
-        ...(action.title || action.content || action.keywords
-          ? {
-              embedding: Prisma.JsonNull,
-              embeddingSource: null,
-              embeddingDimensions: null,
-              embeddingStatus: "stale",
-              embeddingUpdatedAt: null
-            }
-          : {})
-      }
-    });
-    changedMemoryIds.push(action.id);
-    updated += 1;
-    if (action.enabled === false) {
-      disabled += 1;
-    }
+    actions = parsed;
+  } catch (error) {
+    await prisma.memoryOperation.update({ where: { id: operation.id }, data: { status: "failed", completedAt: new Date(), errorCode: "maintenance_failed" } });
+    throw error;
   }
 
-  const updatedChat = await prisma.chat.update({
-    where: { id: chatId },
-    data: { memoryUpdatedAt: new Date() }
-  });
+  const existingIds = new Set(existingMemories.map((memory) => memory.id));
+  const deduped = actions.slice(0, 8).filter((action, index, list) => action.type === "create" || list.findIndex((candidate) => candidate.type === "update" && candidate.id === action.id) === index);
+  let counts: { created: number; updated: number; disabled: number; unchanged: number; completedAt: Date };
+  try {
+    counts = await prisma.$transaction(async (tx) => {
+      let created = 0;
+      let updated = 0;
+      let disabled = 0;
+      let unchanged = 0;
+      for (const action of deduped) {
+        if (action.type === "create") {
+          await createMemoryInTransaction(tx, { chatId, title: action.title, content: action.content, keywords: action.keywords ?? [], importance: action.importance ?? 3, enabled: true, sourceMessageIds }, { actor: "automatic_memory", action: "automatic_create", operationId: operation.id, reasonCode: "automatic_maintenance" });
+          created += 1;
+          continue;
+        }
+        if (!existingIds.has(action.id)) {
+          unchanged += 1;
+          continue;
+        }
+        const current = await tx.chatMemory.findUniqueOrThrow({ where: { id: action.id } });
+        const isDisable = action.enabled === false && current.enabled;
+        const result = await updateMemoryInTransaction(tx, current, {
+          ...(action.title ? { title: action.title } : {}),
+          ...(action.content ? { content: action.content } : {}),
+          ...(action.keywords ? { keywords: action.keywords } : {}),
+          ...(action.importance ? { importance: action.importance } : {}),
+          ...(typeof action.enabled === "boolean" ? { enabled: action.enabled } : {}),
+          sourceMessageIds
+        }, { actor: "automatic_memory", action: isDisable ? "automatic_disable" : "automatic_update", operationId: operation.id, reasonCode: "automatic_maintenance" });
+        if (result.changed) {
+          updated += 1;
+          if (isDisable) disabled += 1;
+        } else unchanged += 1;
+      }
+      const completedAt = new Date();
+      await tx.chat.update({ where: { id: chatId }, data: { memoryUpdatedAt: completedAt } });
+      await tx.memoryOperation.update({ where: { id: operation.id }, data: { status: unchanged && created + updated ? "partial" : "succeeded", completedAt, createdCount: created, updatedCount: updated, disabledCount: disabled, unchangedCount: unchanged } });
+      await pruneMemoryOperations(tx, chatId);
+      return { created, updated, disabled, unchanged, completedAt };
+    });
+  } catch (error) {
+    await prisma.memoryOperation.update({ where: { id: operation.id }, data: { status: "failed", completedAt: new Date(), errorCode: "transaction_failed" } });
+    throw error;
+  }
 
-  if (changedMemoryIds.length > 0) {
+  if (counts.created + counts.updated > 0) {
     await refreshChatMemoryEmbeddings({ chatId, settings });
   }
 
   return {
     chatId,
-    created,
-    updated,
-    disabled,
-    memoryUpdatedAt: updatedChat.memoryUpdatedAt?.toISOString() ?? null
+    operationId: operation.id,
+    created: counts.created,
+    updated: counts.updated,
+    disabled: counts.disabled,
+    memoryUpdatedAt: counts.completedAt.toISOString()
   } satisfies MemoryMaintenanceSummary;
 };

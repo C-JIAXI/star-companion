@@ -62,6 +62,8 @@ messagesRouter.post(
     const data: Prisma.MessageUncheckedCreateInput = {
       ...body,
       tokenUsage: normalizeTokenUsage(body.tokenUsage),
+      generationMetadata: normalizeJsonObject(body.generationMetadata),
+      variantMetadata: body.variantMetadata as Prisma.InputJsonValue,
       promptBreakdown: normalizeJsonObject(body.promptBreakdown),
       loreMatches: normalizeJsonArray(body.loreMatches),
       memoryMatches: normalizeJsonArray(body.memoryMatches)
@@ -108,6 +110,8 @@ messagesRouter.put(
     const data: Prisma.MessageUncheckedUpdateInput = {
       ...body,
       tokenUsage: normalizeTokenUsage(body.tokenUsage),
+      generationMetadata: normalizeJsonObject(body.generationMetadata),
+      variantMetadata: body.variantMetadata as Prisma.InputJsonValue | undefined,
       promptBreakdown: normalizeJsonObject(body.promptBreakdown),
       loreMatches: normalizeJsonArray(body.loreMatches),
       memoryMatches: normalizeJsonArray(body.memoryMatches)
@@ -141,20 +145,7 @@ messagesRouter.delete(
   "/:id",
   asyncHandler(async (request, response) => {
     const id = requireParam(request, "id");
-    const existing = await prisma.message.findFirst({
-      where: { id, chat: { deletedAt: null } },
-      select: { id: true }
-    });
-    if (!existing) {
-      throw new HttpError(404, "Message not found");
-    }
-    const message = await prisma.message.delete({ where: { id } });
-
-    await prisma.chat.update({
-      where: { id: message.chatId },
-      data: { updatedAt: new Date() }
-    });
-
+    await deleteMessageTimeline(id);
     response.status(204).send();
   })
 );

@@ -31,6 +31,15 @@ import type {
   CharacterSortMode,
   ChatMemoryDTO,
   ChatMemoryInput,
+  MemoryOperationDTO,
+  MemoryRestorePreviewDTO,
+  MemoryRestoreResultDTO,
+  MemoryRevisionDTO,
+  MemoryUndoPreviewDTO,
+  MemoryUndoResolutionDTO,
+  MemoryUndoResultDTO,
+  ProfileSummaryRestorePreviewDTO,
+  ProfileSummaryRevisionDTO,
   ChatDTO,
   ChatInput,
   ChatTitleSuggestionDTO,
@@ -53,6 +62,8 @@ import type {
   RecoveryPointRestoreResultDTO,
   AppInfoDTO,
   SettingsInput
+  ,UsageSummaryDTO
+  ,CostPreviewDTO
 } from "../types";
 import { resolveApiUrl } from "./appBackend";
 
@@ -136,6 +147,11 @@ const request = async <T>(path: string, options: RequestOptions = {}): Promise<T
 };
 
 export const api = {
+  privacy: {
+    status: () => request<{ locked: boolean }>("/api/privacy/status"),
+    lock: (passcode: string) => request<{ locked: boolean }>("/api/privacy/lock", { method: "POST", body: { passcode } }),
+    unlock: (passcode: string) => request<{ locked: boolean }>("/api/privacy/unlock", { method: "POST", body: { passcode } })
+  },
   app: {
     info: () => request<AppInfoDTO>("/api/app/info")
   },
@@ -299,7 +315,25 @@ export const api = {
       refresh: (chatId: string) =>
         request<ChatMemoryDTO[]>(`/api/chats/${chatId}/memories/refresh`, { method: "POST" }),
       reindex: (chatId: string) =>
-        request<ChatMemoryDTO[]>(`/api/chats/${chatId}/memories/reindex`, { method: "POST" })
+        request<ChatMemoryDTO[]>(`/api/chats/${chatId}/memories/reindex`, { method: "POST" }),
+      revisions: (chatId: string, memoryId: string) =>
+        request<MemoryRevisionDTO[]>(`/api/chats/${chatId}/memories/${memoryId}/revisions`),
+      restorePreview: (chatId: string, memoryId: string, revision: number) =>
+        request<MemoryRestorePreviewDTO>(`/api/chats/${chatId}/memories/${memoryId}/revisions/${revision}/restore-preview`),
+      restore: (chatId: string, memoryId: string, revision: number, expectedCurrentRevision: number) =>
+        request<MemoryRestoreResultDTO>(`/api/chats/${chatId}/memories/${memoryId}/restore`, { method: "POST", body: { revision, expectedCurrentRevision, confirm: "RESTORE_MEMORY_REVISION" } }),
+      purge: (chatId: string, memoryId: string) =>
+        request<{ purged: boolean }>(`/api/chats/${chatId}/memories/${memoryId}/purge`, { method: "POST", body: { confirm: "PURGE_MEMORY_HISTORY" } })
+    }
+    ,memoryOperations: {
+      list: (chatId: string) => request<MemoryOperationDTO[]>(`/api/chats/${chatId}/memory-operations`),
+      undoPreview: (chatId: string, operationId: string) => request<MemoryUndoPreviewDTO>(`/api/chats/${chatId}/memory-operations/${operationId}/undo-preview`, { method: "POST" }),
+      undo: (chatId: string, operationId: string, resolutions: MemoryUndoResolutionDTO[]) => request<MemoryUndoResultDTO>(`/api/chats/${chatId}/memory-operations/${operationId}/undo`, { method: "POST", body: { resolutions, confirm: "UNDO_MEMORY_OPERATION" } })
+    }
+    ,profileSummaryHistory: {
+      list: (chatId: string) => request<ProfileSummaryRevisionDTO[]>(`/api/chats/${chatId}/profile-summary/revisions`),
+      restorePreview: (chatId: string, revision: number) => request<ProfileSummaryRestorePreviewDTO>(`/api/chats/${chatId}/profile-summary/revisions/${revision}/restore-preview`),
+      restore: (chatId: string, revision: number, expectedCurrentRevision: number) => request<{ chat: ChatDTO; revision: ProfileSummaryRevisionDTO }>(`/api/chats/${chatId}/profile-summary/restore`, { method: "POST", body: { revision, expectedCurrentRevision, confirm: "RESTORE_PROFILE_SUMMARY" } })
     }
   },
   messages: {
@@ -380,6 +414,11 @@ export const api = {
       request<RecoveryPointRestoreResultDTO>(`/api/backups/recovery-points/${id}/restore`, {
         method: "POST"
       })
+  },
+  usage: {
+    summary: (from?: string, to?: string) => request<UsageSummaryDTO>(`/api/usage/summary${from || to ? `?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) })}` : ""}`),
+    preview: (input: { module: string; texts?: string[]; inputTokens?: number; maxOutputTokens?: number }) => request<CostPreviewDTO>("/api/usage/preview", { method: "POST", body: input }),
+    clear: () => request<{ attempts: number; requests: number }>("/api/usage/history", { method: "DELETE", body: { confirm: "DELETE_USAGE_HISTORY" } })
   },
   sync: {
     info: () => request<LanSyncInfoDTO>("/api/sync/info"),

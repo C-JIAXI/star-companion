@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { Prisma } from "@prisma/client";
 import { ZodError, type ZodType } from "zod";
+import { ModelCallError } from "../services/modelErrors.js";
 
 export class HttpError extends Error {
   constructor(
@@ -78,6 +79,17 @@ export const errorMiddleware = (
     return;
   }
 
+  if (error instanceof ModelCallError) {
+    const status = error.safe.code === "authentication" ? 401
+      : error.safe.code === "model_not_found" ? 404
+        : error.safe.code === "rate_limited" ? 429
+          : error.safe.code === "budget_blocked" ? 409
+            : error.safe.code === "invalid_request" || error.safe.code === "context_overflow" || error.safe.code === "unsupported_capability" ? 400
+              : 502;
+    response.status(status).json({ ok: false, error: error.safe.summary, modelError: error.safe });
+    return;
+  }
+
   if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
     response.status(404).json({ ok: false, error: "Record not found" });
     return;
@@ -88,6 +100,7 @@ export const errorMiddleware = (
     return;
   }
 
-  const message = error instanceof Error ? error.message : "Unknown server error";
-  response.status(500).json({ ok: false, error: message });
+  // Unexpected errors are intentionally opaque: the original value may hold
+  // provider bodies, prompts, encrypted configuration details, or local paths.
+  response.status(500).json({ ok: false, error: "Internal server error" });
 };

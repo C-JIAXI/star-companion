@@ -37,6 +37,8 @@ import {
   parseUserCustomConfig,
   serializeUserCustomConfig,
   type AiModuleId,
+  type ModelErrorDTO,
+  type ModelRequestDTO,
   type UserCustomConfigDTO
 } from "@local-roleplay/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -60,9 +62,17 @@ import type {
   ChatAgentActionDTO,
   ChatAgentMode,
   ChatMemoryDTO,
+  MemoryOperationDTO,
+  MemoryRestorePreviewDTO,
+  MemoryRevisionDTO,
+  MemoryUndoPreviewDTO,
+  MemoryUndoResolutionDTO,
+  ProfileSummaryRevisionDTO,
+  ProfileSummaryRestorePreviewDTO,
   ChatMessageSearchDTO,
   ChatDTO,
   ChatTitleSuggestionDTO,
+  CostPreviewDTO,
   ChatWithMessagesDTO,
   GenerationClientMessage,
   GenerationServerMessage,
@@ -94,10 +104,13 @@ import {
 import { MarkdownEditor } from "../components/MarkdownEditor";
 import { DebugPromptDrawer } from "../components/DebugPromptDrawer";
 import { ChatStoryNavigator } from "../components/ChatStoryNavigator";
+import { MemoryAuditPanel } from "../components/MemoryAuditPanel";
+import { ProfileHistoryPanel } from "../components/ProfileHistoryPanel";
 
 const MESSAGES_PER_PAGE = 30;
 const CHAT_DRAFT_STORAGE_PREFIX = "star-companion:chat-draft:";
 const CHAT_QUEUE_STORAGE_PREFIX = "star-companion:chat-queue:";
+const ACTIVE_REQUEST_STORAGE_KEY = "star-companion:active-model-request";
 const MAX_QUEUED_MESSAGES = 10;
 const GENERATION_ERROR_PREFIX = "[GENERATION_FAILED] ";
 const MAX_CHAT_BACKGROUND_FILE_SIZE = 2 * 1024 * 1024;
@@ -266,6 +279,26 @@ const saveStoredChatQueue = (chatId: string, messages: QueuedChatMessage[]) => {
   }
 };
 
+type StoredActiveRequest = { requestId: string; chatId: string };
+const readStoredActiveRequest = (): StoredActiveRequest | null => {
+  try {
+    const value = JSON.parse(window.sessionStorage.getItem(ACTIVE_REQUEST_STORAGE_KEY) ?? "null");
+    return value && typeof value.requestId === "string" && typeof value.chatId === "string"
+      ? { requestId: value.requestId, chatId: value.chatId }
+      : null;
+  } catch {
+    return null;
+  }
+};
+const saveStoredActiveRequest = (value: StoredActiveRequest | null) => {
+  try {
+    if (value) window.sessionStorage.setItem(ACTIVE_REQUEST_STORAGE_KEY, JSON.stringify(value));
+    else window.sessionStorage.removeItem(ACTIVE_REQUEST_STORAGE_KEY);
+  } catch {
+    // Request recovery is best-effort when session storage is unavailable.
+  }
+};
+
 const hasCompatibleModuleModel = (
   settings: PublicUserSettingsDTO,
   moduleId: AiModuleId
@@ -300,6 +333,8 @@ export function ChatPage({
   const [characters, setCharacters] = useState<CharacterDTO[]>([]);
   const [activeChat, setActiveChat] = useState<ChatWithMessagesDTO | null>(null);
   const [draft, setDraft] = useState("");
+  const [costPreview, setCostPreview] = useState<CostPreviewDTO | null>(null);
+  const [costPreviewExpanded, setCostPreviewExpanded] = useState(false);
   const [queuedMessages, setQueuedMessages] = useState<QueuedChatMessage[]>([]);
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingCharacterId, setStreamingCharacterId] = useState<string | null>(null);
@@ -308,16 +343,32 @@ export function ChatPage({
     memory: number;
   } | null>(null);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [modelError, setModelError] = useState<ModelErrorDTO | null>(null);
+  const [retryDeadline, setRetryDeadline] = useState<number | null>(null);
+  const [retrySeconds, setRetrySeconds] = useState(0);
+  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
+  const [pendingBudgetOverride, setPendingBudgetOverride] = useState<ModelRequestDTO | null>(null);
   const [generationChatId, setGenerationChatId] = useState<string | null>(null);
   const [editingMessage, setEditingMessage] = useState<MessageDTO | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [memorySettingsOpen, setMemorySettingsOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState("12");
   const [chatMemories, setChatMemories] = useState<ChatMemoryDTO[]>([]);
+  const [memoryOperations, setMemoryOperations] = useState<MemoryOperationDTO[]>([]);
+  const [memoryRevisions, setMemoryRevisions] = useState<MemoryRevisionDTO[]>([]);
+  const [selectedMemoryHistoryId, setSelectedMemoryHistoryId] = useState<string | null>(null);
+  const [memoryRestorePreview, setMemoryRestorePreview] = useState<MemoryRestorePreviewDTO | null>(null);
+  const [memoryUndoPreview, setMemoryUndoPreview] = useState<MemoryUndoPreviewDTO | null>(null);
+  const [memoryUndoResolutions, setMemoryUndoResolutions] = useState<Map<string, "skip" | "restore">>(new Map());
+  const [memoryUndoConfirmOpen, setMemoryUndoConfirmOpen] = useState(false);
+  const [profileRevisions, setProfileRevisions] = useState<ProfileSummaryRevisionDTO[]>([]);
+  const [pendingProfileRestore, setPendingProfileRestore] = useState<ProfileSummaryRevisionDTO | null>(null);
+  const [profileRestorePreview, setProfileRestorePreview] = useState<ProfileSummaryRestorePreviewDTO | null>(null);
   const [autoMemoryEnabled, setAutoMemoryEnabled] = useState(true);
   const [editingMemory, setEditingMemory] = useState<ChatMemoryDTO | "new" | null>(null);
   const [memoryForm, setMemoryForm] = useState(emptyMemoryForm);
   const [pendingDeleteMemory, setPendingDeleteMemory] = useState<ChatMemoryDTO | null>(null);
+  const [pendingPurgeMemory, setPendingPurgeMemory] = useState<ChatMemoryDTO | null>(null);
   const memorySettingsRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -426,6 +477,7 @@ export function ChatPage({
   const [messagePage, setMessagePage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [latestMemoryOperationId, setLatestMemoryOperationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const streamingBufferRef = useRef("");
@@ -439,6 +491,7 @@ export function ChatPage({
     chatId: string;
     content: string;
   } | null>(null);
+  const lastGenerationPayloadRef = useRef<Exclude<GenerationClientMessage, { type: "stop" | "status" }> | null>(null);
   const previousConnectionRef = useRef(false);
   const refreshChatAfterReconnectRef = useRef<string | null>(null);
   const draftTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -451,6 +504,7 @@ export function ChatPage({
   const hasMessagesRef = useRef(false);
   const autoTitleChatIdsRef = useRef(new Set<string>());
   const tRef = useRef(t);
+  const activeRequestRef = useRef<StoredActiveRequest | null>(readStoredActiveRequest());
   tRef.current = t;
 
   const autoResizeDraftTextArea = () => {
@@ -614,10 +668,61 @@ export function ChatPage({
           });
         }
         setActiveRequestId(msg.requestId);
+        setRetryDeadline(null);
+        setModelError(null);
         setStreamingContent("");
         setStreamingCharacterId(null);
         setStreamingContextCounts(null);
         streamingBufferRef.current = "";
+        return;
+      }
+
+      if (msg.type === "generation_retrying") {
+        setModelError(msg.error);
+        setRetryDeadline(Date.now() + msg.retryAfterMs);
+        setRetrySeconds(Math.max(1, Math.ceil(msg.retryAfterMs / 1000)));
+        return;
+      }
+
+      if (msg.type === "generation_fallback") {
+        setRetryDeadline(null);
+        setRetrySeconds(0);
+        setFallbackNotice(
+          `${msg.fromProviderId}/${msg.fromModelId} → ${msg.toProviderId}/${msg.toModelId} (${msg.reason})`
+        );
+        return;
+      }
+
+      if (msg.type === "generation_status") {
+        const request = msg.request as ModelRequestDTO;
+        const terminal = ["succeeded", "failed", "cancelled", "interrupted", "blocked"].includes(request.status);
+        if (!terminal) {
+          setActiveRequestId(request.requestId);
+          setGenerationChatId(request.chatId);
+          setLoading(true);
+          setStatus(language === "zh-CN" ? "正在恢复模型请求状态…" : "Restoring model request status…");
+          return;
+        }
+        saveStoredActiveRequest(null);
+        activeRequestRef.current = null;
+        lastGenerationPayloadRef.current = null;
+        setActiveRequestId(null);
+        setGenerationChatId(null);
+        setLoading(false);
+        setRetryDeadline(null);
+        if (request.error) {
+          setModelError(request.error);
+          setError(request.error.summary);
+        }
+        if (request.status === "blocked" && request.error?.code === "budget_blocked") {
+          setPendingBudgetOverride(request);
+        }
+        if (request.chatId) {
+          void api.chats.get(request.chatId).then((chat) => {
+            if (draftChatIdRef.current === request.chatId) setActiveChat(chat);
+            onMessageHandlersRef.current.chatsChanged();
+          });
+        }
         return;
       }
 
@@ -643,6 +748,7 @@ export function ChatPage({
             disabled: msg.summary.disabled
           })
         );
+        setLatestMemoryOperationId(msg.summary.operationId);
         if (showMemoryDialog) {
           void loadChatMemories();
         }
@@ -677,6 +783,12 @@ export function ChatPage({
         setStreamingContextCounts(null);
         streamingBufferRef.current = "";
         setLoading(false);
+        setRetryDeadline(null);
+        setRetrySeconds(0);
+        setModelError(null);
+        saveStoredActiveRequest(null);
+        activeRequestRef.current = null;
+        lastGenerationPayloadRef.current = null;
         handlers.chatsChanged();
         if (
           shouldDispatchQueue &&
@@ -696,6 +808,10 @@ export function ChatPage({
           resendRequestRef.current = null;
         }
         setError(msg.error);
+        setModelError(msg.modelError ?? null);
+        if (msg.modelError?.code === "budget_blocked" && msg.requestId) {
+          sendWs({ type: "status", requestId: msg.requestId });
+        }
         interruptForQueueRef.current = false;
         setActiveRequestId(null);
         setGenerationChatId(null);
@@ -704,6 +820,10 @@ export function ChatPage({
         setStreamingContextCounts(null);
         streamingBufferRef.current = "";
         setLoading(false);
+        setRetryDeadline(null);
+        setRetrySeconds(0);
+        saveStoredActiveRequest(null);
+        activeRequestRef.current = null;
         return;
       }
     }
@@ -750,6 +870,11 @@ export function ChatPage({
     previousConnectionRef.current = isConnected;
 
     if (!wasConnected && isConnected) {
+      const active = activeRequestRef.current;
+      if (active) {
+        sendWs({ type: "status", requestId: active.requestId });
+        return;
+      }
       const chatId = refreshChatAfterReconnectRef.current;
       if (!chatId) return;
       refreshChatAfterReconnectRef.current = null;
@@ -774,28 +899,16 @@ export function ChatPage({
 
     if (!wasConnected || isConnected || !activeRequestId) return;
 
-    const pendingDraft = pendingGenerationDraftRef.current;
-    if (pendingDraft?.requestId === activeRequestId) {
-      if (draftChatIdRef.current === pendingDraft.chatId) {
-        setDraft((current) => current || pendingDraft.content);
-      } else {
-        saveStoredChatDraft(pendingDraft.chatId, pendingDraft.content);
-      }
-      pendingGenerationDraftRef.current = null;
-    }
-
     refreshChatAfterReconnectRef.current = generationChatId ?? draftChatIdRef.current;
     resendRequestRef.current = null;
     interruptForQueueRef.current = false;
     streamingBufferRef.current = "";
-    setActiveRequestId(null);
-    setGenerationChatId(null);
     setStreamingContent("");
     setStreamingCharacterId(null);
     setStreamingContextCounts(null);
-    setLoading(false);
-    setError(t("chat.connectionLostDuringGeneration"));
-  }, [activeRequestId, generationChatId, isConnected, onChatsChanged, t]);
+    setLoading(true);
+    setStatus(language === "zh-CN" ? "连接中断；模型请求仍在后端运行，重连后将查询状态。" : "Connection lost; the model request continues on the backend and will be queried after reconnecting.");
+  }, [activeRequestId, generationChatId, isConnected, language, onChatsChanged, sendWs, t]);
 
   const characterMap = useMemo(
     () => new Map(characters.map((character) => [character.id, character])),
@@ -932,7 +1045,19 @@ export function ChatPage({
         ? "bg-amber-500/15 text-amber-300"
         : contextBudget?.status === "exceeded"
           ? "bg-rose-500/15 text-rose-300"
-          : "bg-white/10 text-slate-400";
+      : "bg-white/10 text-slate-400";
+
+  useEffect(() => {
+    if (!activeChat || !draft.trim() || !contextBudget) { setCostPreview(null); return; }
+    const timer = window.setTimeout(() => {
+      void api.usage.preview({
+        module: "chat",
+        inputTokens: contextBudget.promptEstimate,
+        maxOutputTokens: contextBudget.responseReserve
+      }).then(setCostPreview).catch(() => setCostPreview(null));
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [activeChat, draft, contextBudget]);
 
   const formatContextTokens = (value: number) =>
     value.toLocaleString(language === "zh-CN" ? "zh-CN" : "en-US");
@@ -1650,6 +1775,18 @@ export function ChatPage({
     userProfileSummary: settings.userProfileSummary ?? ""
   });
 
+  useEffect(() => {
+    if (!retryDeadline) return;
+    const update = () => {
+      const seconds = Math.max(0, Math.ceil((retryDeadline - Date.now()) / 1000));
+      setRetrySeconds(seconds);
+      if (seconds === 0) setRetryDeadline(null);
+    };
+    update();
+    const timer = window.setInterval(update, 250);
+    return () => window.clearInterval(timer);
+  }, [retryDeadline]);
+
   const refreshPersonaPresets = async () => {
     const settings = await api.settings.get();
     setUserPersonaPresets(settings.userPersonaPresets ?? []);
@@ -1835,6 +1972,42 @@ export function ChatPage({
     setMemorySettingsOpen(false);
   };
 
+  const loadProfileHistory = async () => {
+    if (!activeChat) return;
+    try { setProfileRevisions(await api.chats.profileSummaryHistory.list(activeChat.id)); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : t("chat.failedLoad")); }
+  };
+
+  useEffect(() => {
+    if (showUserProfileDialog && activeChat) void loadProfileHistory();
+  }, [showUserProfileDialog, activeChat?.id]);
+
+  const previewProfileRestore = async (revision: ProfileSummaryRevisionDTO) => {
+    if (!activeChat) return;
+    try {
+      const preview = await api.chats.profileSummaryHistory.restorePreview(activeChat.id, revision.revision);
+      setPendingProfileRestore(revision);
+      setProfileRestorePreview(preview);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdateMemory"));
+    }
+  };
+
+  const executeProfileRestore = async () => {
+    if (!activeChat || !pendingProfileRestore || !profileRestorePreview) return;
+    setLoading(true);
+    try {
+      const result = await api.chats.profileSummaryHistory.restore(activeChat.id, pendingProfileRestore.revision, profileRestorePreview.expectedCurrentRevision);
+      setActiveChat((current) => current ? { ...current, userProfileSummary: result.chat.userProfileSummary, userProfileUpdatedAt: result.chat.userProfileUpdatedAt, profileRevision: result.chat.profileRevision } : current);
+      setEditingProfileDraft(result.chat.userProfileSummary);
+      setPendingProfileRestore(null);
+      setProfileRestorePreview(null);
+      await loadProfileHistory();
+      setStatus(language === "zh-CN" ? "画像摘要已恢复为新版本。" : "Profile summary restored as a new revision.");
+    } catch (caught) { setError(caught instanceof Error ? caught.message : t("chat.failedUpdateMemory")); }
+    finally { setLoading(false); }
+  };
+
   const closeModelDialog = () => {
     setShowModelDialog(false);
   };
@@ -1845,8 +2018,9 @@ export function ChatPage({
     }
 
     try {
-      const memories = await api.chats.memories.list(activeChat.id);
+      const [memories, operations] = await Promise.all([api.chats.memories.list(activeChat.id), api.chats.memoryOperations.list(activeChat.id)]);
       setChatMemories(memories);
+      setMemoryOperations(operations);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedLoadMemories"));
     }
@@ -1882,6 +2056,85 @@ export function ChatPage({
     setShowBackgroundDialog(false);
     setBackgroundDraft("");
     setBackgroundInputValue("");
+  };
+
+  const loadMemoryRevisions = async (memory: ChatMemoryDTO) => {
+    if (!activeChat) return;
+    setSelectedMemoryHistoryId(memory.id);
+    try { setMemoryRevisions(await api.chats.memories.revisions(activeChat.id, memory.id)); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : t("chat.failedLoadMemories")); }
+  };
+
+  const jumpToMemorySource = async (messageId: string) => {
+    if (!activeChat) return;
+    try {
+      const chat = await api.chats.get(activeChat.id);
+      const index = chat.messages.findIndex((message) => message.id === messageId);
+      if (index < 0) { setStatus(language === "zh-CN" ? "来源消息已删除。" : "The source message was deleted."); return; }
+      setShowMemoryDialog(false);
+      jumpToMessage(chat.messages[index], index);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : t("chat.failedLoad")); }
+  };
+
+  const previewMemoryRestore = async (revision: MemoryRevisionDTO) => {
+    if (!activeChat) return;
+    try { setMemoryRestorePreview(await api.chats.memories.restorePreview(activeChat.id, revision.memoryId, revision.revision)); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : t("chat.failedSaveMemory")); }
+  };
+
+  const executeMemoryRestore = async () => {
+    if (!activeChat || !memoryRestorePreview) return;
+    setLoading(true);
+    try {
+      const result = await api.chats.memories.restore(activeChat.id, memoryRestorePreview.memoryId, memoryRestorePreview.revision, memoryRestorePreview.expectedCurrentRevision);
+      setChatMemories((current) => current.map((memory) => memory.id === result.memory.id ? result.memory : memory));
+      setMemoryRestorePreview(null);
+      await loadMemoryRevisions(result.memory);
+      setStatus(language === "zh-CN" ? "已恢复历史版本并创建新的修订。" : "The historical version was restored as a new revision.");
+    } catch (caught) { setError(caught instanceof Error ? caught.message : t("chat.failedSaveMemory")); }
+    finally { setLoading(false); }
+  };
+
+  const previewMemoryUndo = async (operation: MemoryOperationDTO) => {
+    if (!activeChat) return;
+    try {
+      const preview = await api.chats.memoryOperations.undoPreview(activeChat.id, operation.id);
+      setMemoryUndoPreview(preview);
+      setMemoryUndoResolutions(new Map(preview.items.filter((item) => item.conflict).map((item) => [item.memoryId, "skip" as const])));
+    } catch (caught) { setError(caught instanceof Error ? caught.message : t("chat.failedRefreshMemory")); }
+  };
+
+  const executeMemoryUndo = async () => {
+    if (!activeChat || !memoryUndoPreview) return;
+    setLoading(true);
+    try {
+      const resolutions: MemoryUndoResolutionDTO[] = memoryUndoPreview.items.map((item) => ({ memoryId: item.memoryId, expectedCurrentRevision: item.currentRevision, action: item.conflict ? memoryUndoResolutions.get(item.memoryId) ?? "skip" : "restore" }));
+      const result = await api.chats.memoryOperations.undo(activeChat.id, memoryUndoPreview.operation.id, resolutions);
+      setMemoryUndoPreview(null);
+      setMemoryUndoConfirmOpen(false);
+      await loadChatMemories();
+      setStatus(language === "zh-CN" ? `已恢复 ${result.restored + result.retired} 条，跳过 ${result.skippedConflicts} 个冲突。` : `Restored ${result.restored + result.retired}; skipped ${result.skippedConflicts} conflicts.`);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : t("chat.failedRefreshMemory")); }
+    finally { setLoading(false); }
+  };
+
+  const purgeMemoryHistory = async () => {
+    if (!activeChat || !pendingPurgeMemory) return;
+    setLoading(true);
+    try {
+      await api.chats.memories.purge(activeChat.id, pendingPurgeMemory.id);
+      if (selectedMemoryHistoryId === pendingPurgeMemory.id) {
+        setSelectedMemoryHistoryId(null);
+        setMemoryRevisions([]);
+      }
+      setPendingPurgeMemory(null);
+      await loadChatMemories();
+      setStatus(language === "zh-CN" ? "该记忆的墓碑与版本历史已永久清除。" : "The memory tombstone and its version history were permanently purged.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedDeleteMemory"));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const openAgentPanel = () => {
@@ -1973,7 +2226,9 @@ export function ChatPage({
           title: action.title,
           content: action.content,
           keywords: action.keywords ?? [],
-          importance: 3
+          importance: 3,
+          sourceMessageIds: agentDraft?.sourceMessageIds ?? [],
+          actor: "agent_confirmed"
         });
         setChatMemories((current) => [memory, ...current]);
       } else {
@@ -1985,7 +2240,8 @@ export function ChatPage({
             priority: 0, scope: "prompt", triggerMode: "both", alwaysActive: false, enabled: true
           }]
         });
-        setStatus(language === "zh-CN" ? `已添加到 ${updated.name} 的角色 lore。` : `Added to ${updated.name}'s character lore.`);
+        const sourceCount = agentDraft?.sourceMessageIds.length ?? 0;
+        setStatus(language === "zh-CN" ? `已确认新增角色 lore「${action.title}」；角色：${updated.name}；聊天：${activeChat.title}；来源消息：${sourceCount} 条。` : `Confirmed new character lore “${action.title}”; character: ${updated.name}; chat: ${activeChat.title}; source messages: ${sourceCount}.`);
       }
       setAgentDraft((current) => current ? { ...current, actions: current.actions.filter((item) => item.id !== action.id) } : current);
       if (action.kind === "memory_candidate") setStatus(language === "zh-CN" ? "长期记忆已保存。" : "Long-term memory saved.");
@@ -2182,9 +2438,7 @@ export function ChatPage({
     setStatus(null);
     try {
       await api.chats.memories.remove(activeChat.id, pendingDeleteMemory.id);
-      setChatMemories((current) =>
-        current.filter((memory) => memory.id !== pendingDeleteMemory.id)
-      );
+      await loadChatMemories();
       setPendingDeleteMemory(null);
       setStatus(t("chat.memoryDeleted"));
     } catch (caught) {
@@ -2380,6 +2634,9 @@ export function ChatPage({
         chatId,
         content: normalizedContent
       };
+      lastGenerationPayloadRef.current = payload;
+      activeRequestRef.current = { requestId, chatId };
+      saveStoredActiveRequest(activeRequestRef.current);
       setActiveRequestId(requestId);
       setGenerationChatId(chatId);
       setStreamingContent("");
@@ -2403,6 +2660,9 @@ export function ChatPage({
       }
     } catch (caught) {
       pendingGenerationDraftRef.current = null;
+      lastGenerationPayloadRef.current = null;
+      activeRequestRef.current = null;
+      saveStoredActiveRequest(null);
       if (draftChatIdRef.current === chatId) {
         setDraft((current) => current || normalizedContent);
       } else {
@@ -2415,6 +2675,35 @@ export function ChatPage({
       setStreamingContextCounts(null);
     } finally {
       // Loading ends when the WebSocket sends generation_done, generation_stopped, or error.
+    }
+  };
+
+  const authorizeBudgetOverride = () => {
+    const previous = lastGenerationPayloadRef.current;
+    const chatId = pendingBudgetOverride?.chatId ?? activeChat?.id;
+    if (!previous || !chatId || !isConnected) {
+      setPendingBudgetOverride(null);
+      setError(language === "zh-CN" ? "页面刷新后无法重放原请求；请重新执行该操作并再次授权。" : "The original request cannot be replayed after a refresh. Run the action again and authorize it then.");
+      return;
+    }
+    const requestId = generateId();
+    const payload = { ...previous, requestId, overrideHardBudget: true } as Exclude<GenerationClientMessage, { type: "stop" | "status" }>;
+    setPendingBudgetOverride(null);
+    setModelError(null);
+    setError(null);
+    setLoading(true);
+    setActiveRequestId(requestId);
+    setGenerationChatId(chatId);
+    lastGenerationPayloadRef.current = payload;
+    activeRequestRef.current = { requestId, chatId };
+    saveStoredActiveRequest(activeRequestRef.current);
+    if (!sendWs(payload)) {
+      setLoading(false);
+      setActiveRequestId(null);
+      setGenerationChatId(null);
+      activeRequestRef.current = null;
+      saveStoredActiveRequest(null);
+      setError(t("chat.websocketFailed"));
     }
   };
 
@@ -2592,6 +2881,9 @@ export function ChatPage({
         messageId: message.id,
         ...(guidance?.trim() ? { guidance: guidance.trim() } : {})
       };
+      lastGenerationPayloadRef.current = payload;
+      activeRequestRef.current = { requestId, chatId: message.chatId };
+      saveStoredActiveRequest(activeRequestRef.current);
       setActiveRequestId(requestId);
       setGenerationChatId(message.chatId);
       setStreamingContent("");
@@ -2679,6 +2971,9 @@ export function ChatPage({
         requestId,
         messageId: message.id
       };
+      lastGenerationPayloadRef.current = payload;
+      activeRequestRef.current = { requestId, chatId: message.chatId };
+      saveStoredActiveRequest(activeRequestRef.current);
       setActiveRequestId(requestId);
       setGenerationChatId(message.chatId);
       setStreamingContent("");
@@ -3117,6 +3412,9 @@ export function ChatPage({
         requestId,
         messageId: message.id
       };
+      lastGenerationPayloadRef.current = payload;
+      activeRequestRef.current = { requestId, chatId: message.chatId };
+      saveStoredActiveRequest(activeRequestRef.current);
       resendRequestRef.current = { requestId, messageId: message.id };
       setActiveRequestId(requestId);
       setGenerationChatId(message.chatId);
@@ -3601,6 +3899,42 @@ export function ChatPage({
                   <div className="flex min-h-0 flex-1 flex-col">
                     <ErrorNotice message={error} />
                     <SuccessNotice message={status} />
+                    {latestMemoryOperationId ? (
+                      <div className="mx-2 mt-2 flex justify-end sm:mx-5">
+                        <button
+                          className="text-xs font-semibold text-ember-200 underline"
+                          data-testid="memory-update-view-changes"
+                          type="button"
+                          onClick={() => {
+                            setLatestMemoryOperationId(null);
+                            openMemoryDialog();
+                          }}
+                        >
+                          {language === "zh-CN" ? "查看这次记忆变化" : "View this memory update"}
+                        </button>
+                      </div>
+                    ) : null}
+                    {retryDeadline ? (
+                      <div className="mx-2 mt-2 flex items-center justify-between gap-3 rounded-md border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 sm:mx-5" data-testid="generation-retry-countdown">
+                        <span>{language === "zh-CN" ? `临时故障，将在约 ${retrySeconds} 秒后重试（第 ${modelError?.attempt ?? 1} 次调用已结束）。` : `Temporary failure. Retrying in about ${retrySeconds}s (attempt ${modelError?.attempt ?? 1} finished).`}</span>
+                        <button className="shrink-0 font-semibold underline" type="button" onClick={stopGeneration}>{language === "zh-CN" ? "立即取消" : "Cancel now"}</button>
+                      </div>
+                    ) : null}
+                    {fallbackNotice ? (
+                      <div className="mx-2 mt-2 flex items-start justify-between gap-3 rounded-md border border-sky-400/20 bg-sky-500/10 px-3 py-2 text-xs text-sky-100 sm:mx-5" data-testid="generation-fallback-notice">
+                        <span>{language === "zh-CN" ? `已按你的备用链配置切换模型：${fallbackNotice}。费用可能不同。` : `Switched according to your fallback chain: ${fallbackNotice}. Cost may differ.`}</span>
+                        <button aria-label={language === "zh-CN" ? "关闭提示" : "Dismiss"} className="shrink-0" type="button" onClick={() => setFallbackNotice(null)}><X size={14} /></button>
+                      </div>
+                    ) : null}
+                    {modelError && !retryDeadline ? (
+                      <div className="mx-2 mt-2 flex flex-wrap items-center gap-2 rounded-md border border-white/10 bg-ink-950/70 px-3 py-2 text-xs text-slate-300 sm:mx-5" data-testid="generation-model-error">
+                        <span className="font-semibold text-slate-100">{modelError.code}</span>
+                        <span>{language === "zh-CN" ? `诊断标识 ${modelError.diagnosticId}` : `Diagnostic ${modelError.diagnosticId}`}</span>
+                        {modelError.receivedOutputTokens ? <span className="text-amber-200">{language === "zh-CN" ? "未完成回复已保留；可继续或重新生成。" : "The incomplete reply was kept; continue it or regenerate."}</span> : null}
+                        {modelError.code === "authentication" || modelError.code === "model_not_found" || modelError.code === "unsupported_capability" ? <button className="font-semibold text-ember-200 underline" type="button" onClick={() => navigateToSection("settings", "provider")}>{language === "zh-CN" ? "检查模型设置" : "Check model settings"}</button> : null}
+                        {modelError.code === "context_overflow" ? <span>{language === "zh-CN" ? "请缩短本轮输入或降低保留轮数；应用不会自动删除历史。" : "Shorten this input or lower retained turns; the app will not delete history automatically."}</span> : null}
+                      </div>
+                    ) : null}
 
                     <div
                       id="chat-message-viewport"
@@ -4185,6 +4519,24 @@ export function ChatPage({
                             </Button>
                           )}
                         </div>
+                        {costPreview ? (
+                          <div className={`mt-1 rounded-md px-2 py-1 text-[11px] ${costPreview.hardBlocked ? "bg-rose-500/10 text-rose-200" : costPreview.softWarning || costPreview.unknownPricing ? "bg-amber-500/10 text-amber-200" : "bg-white/[0.03] text-slate-400"}`} data-testid="chat-cost-preview">
+                            <button className="flex w-full items-center justify-between gap-2 text-left" type="button" onClick={() => setCostPreviewExpanded((value) => !value)}>
+                              <span className="truncate">{costPreview.modelId} · {costPreview.unknownPricing ? (language === "zh-CN" ? "费用未知" : "Cost unknown") : `${language === "zh-CN" ? "估算" : "Estimated"} $${(costPreview.minimumCostMicros! / 1_000_000).toFixed(4)}–$${(costPreview.maximumCostMicros! / 1_000_000).toFixed(4)}`}</span>
+                              <ChevronDown className={costPreviewExpanded ? "rotate-180" : ""} size={13} />
+                            </button>
+                            {costPreviewExpanded ? <div className="mt-2 grid gap-1 border-t border-white/10 pt-2 sm:grid-cols-2">
+                              <span>{language === "zh-CN" ? "预计输入" : "Estimated input"}: {costPreview.inputTokens.toLocaleString()} tokens</span>
+                              <span>{language === "zh-CN" ? "最大输出" : "Maximum output"}: {costPreview.maxOutputTokens.toLocaleString()} tokens</span>
+                              <span>{language === "zh-CN" ? "今日已记录" : "Recorded today"}: ${(costPreview.todayCostMicros / 1_000_000).toFixed(4)}</span>
+                              <span>{language === "zh-CN" ? "本月已记录" : "Recorded this month"}: ${(costPreview.monthCostMicros / 1_000_000).toFixed(4)}</span>
+                              <span>{language === "zh-CN" ? "每日软/硬预算剩余" : "Daily soft/hard remaining"}: {costPreview.dailySoftRemainingMicros == null ? "—" : `$${(costPreview.dailySoftRemainingMicros / 1_000_000).toFixed(4)}`} / {costPreview.dailyHardRemainingMicros == null ? "—" : `$${(costPreview.dailyHardRemainingMicros / 1_000_000).toFixed(4)}`}</span>
+                              <span>{language === "zh-CN" ? "每月软/硬预算剩余" : "Monthly soft/hard remaining"}: {costPreview.monthlySoftRemainingMicros == null ? "—" : `$${(costPreview.monthlySoftRemainingMicros / 1_000_000).toFixed(4)}`} / {costPreview.monthlyHardRemainingMicros == null ? "—" : `$${(costPreview.monthlyHardRemainingMicros / 1_000_000).toFixed(4)}`}</span>
+                              <span className="sm:col-span-2">{language === "zh-CN" ? "结算时区" : "Settlement timezone"}: {costPreview.timezone}</span>
+                              {costPreview.hardBlocked ? <span className="sm:col-span-2">{language === "zh-CN" ? "硬预算将由后端阻止。可降低 maxTokens、选择更低价模型、调整预算或为本次请求授权。" : "The backend will block this hard-budget overrun. Lower maxTokens, choose a cheaper model, edit budgets, or authorize this request once."}</span> : null}
+                            </div> : null}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -4423,6 +4775,16 @@ export function ChatPage({
           </section>
         </div>
       ) : null}
+      {pendingBudgetOverride ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={language === "zh-CN" ? "仅本次授权" : "Authorize this request only"}
+          message={language === "zh-CN" ? "本地硬预算阻止了这次调用。再次确认后，只会为新建的这一条 requestId 绕过本地硬预算；不会修改长期预算，也不能影响其他应用或供应商账单。" : "The local hard budget blocked this call. Confirming creates one new requestId that bypasses only the local hard budget for this call. It does not change your ongoing budgets or any provider bill outside this app."}
+          title={language === "zh-CN" ? "确认一次性超额授权" : "Confirm one-time budget override"}
+          onCancel={() => setPendingBudgetOverride(null)}
+          onConfirm={authorizeBudgetOverride}
+        />
+      ) : null}
       {pendingCheckpointMessage ? (
         <Modal
           title={t("chat.saveCheckpoint")}
@@ -4562,6 +4924,18 @@ export function ChatPage({
           variant="danger"
           onCancel={() => setPendingDeleteMemory(null)}
           onConfirm={() => void deleteLongTermMemory()}
+        />
+      ) : null}
+      {pendingPurgeMemory ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={language === "zh-CN" ? "永久清除" : "Permanently purge"}
+          loading={loading}
+          message={language === "zh-CN" ? "这会永久删除所选记忆的墓碑和全部版本历史。聊天消息、角色 lore 与用户画像不会改变，且此操作无法撤销。" : "This permanently deletes only the selected memory tombstone and all of its revisions. Chat messages, character lore, and the profile summary are unchanged. This cannot be undone."}
+          title={language === "zh-CN" ? "永久清除记忆历史" : "Permanently purge memory history"}
+          variant="danger"
+          onCancel={() => setPendingPurgeMemory(null)}
+          onConfirm={() => void purgeMemoryHistory()}
         />
       ) : null}
       {pendingAgentAction ? (
@@ -5019,6 +5393,7 @@ export function ChatPage({
               value={editingProfileDraft}
               onChange={(nextValue) => setEditingProfileDraft(nextValue)}
             />
+            <ProfileHistoryPanel language={language} revisions={profileRevisions} loading={loading} onSource={(messageId) => void jumpToMemorySource(messageId)} onRestore={(revision) => void previewProfileRestore(revision)} />
             <div className="flex justify-end gap-3">
               <Button
                 className="!min-h-[36px]"
@@ -5425,6 +5800,26 @@ export function ChatPage({
           </div>
         </Modal>
       ) : null}
+      {pendingProfileRestore && profileRestorePreview ? (
+        <ConfirmDialog
+          title={language === "zh-CN" ? "恢复画像摘要" : "Restore profile summary"}
+          message={
+            <span className="block space-y-3">
+              <span className="block">{language === "zh-CN" ? "预检显示以下摘要变更。确认后会创建新的恢复版本，已有历史不会被重写。" : "Preflight shows the summary change below. Confirming creates a new restore revision without rewriting history."}</span>
+              <span className="grid gap-2 sm:grid-cols-2">
+                <span className="max-h-28 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-rose-500/[0.08] p-2 text-sm text-rose-200">{profileRestorePreview.currentSummary || (language === "zh-CN" ? "（已清空）" : "(cleared)")}</span>
+                <span className="max-h-28 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-emerald-500/[0.08] p-2 text-sm text-emerald-200">{profileRestorePreview.restoredSummary || (language === "zh-CN" ? "（将清空）" : "(will be cleared)")}</span>
+              </span>
+            </span>
+          }
+          confirmLabel={language === "zh-CN" ? "确认恢复" : "Confirm restore"}
+          cancelLabel={t("common.cancel")}
+          loading={loading}
+          variant="danger"
+          onCancel={() => { setPendingProfileRestore(null); setProfileRestorePreview(null); }}
+          onConfirm={() => void executeProfileRestore()}
+        />
+      ) : null}
       {showMemoryDialog ? (
         <Modal title={t("chat.memorySettings")} onClose={closeMemoryDialog}>
           <div className="space-y-6">
@@ -5666,7 +6061,9 @@ export function ChatPage({
                     <div
                       key={memory.id}
                       className={`rounded-lg border p-3 ${
-                        memory.enabled
+                        memory.deletedAt
+                          ? "border-rose-500/20 bg-rose-500/[0.035]"
+                          : memory.enabled
                           ? "border-white/10 bg-white/[0.03]"
                           : "border-white/5 bg-white/[0.015] opacity-70"
                       }`}
@@ -5681,13 +6078,24 @@ export function ChatPage({
                               {t("chat.memoryImportance")} {memory.importance}
                             </span>
                             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                              memory.enabled
+                              memory.deletedAt
+                                ? "bg-rose-500/15 text-rose-300"
+                                : memory.enabled
                                 ? "bg-ember-500/15 text-ember-300"
                                 : "bg-white/10 text-slate-400"
                             }`}>
-                              {memory.enabled ? t("common.enabled") : t("common.disabled")}
+                              {memory.deletedAt ? (language === "zh-CN" ? "已删除" : "Deleted") : memory.enabled ? t("common.enabled") : t("common.disabled")}
                             </span>
-                            {memory.enabled ? (
+                            <span className="rounded-full bg-white/5 px-2 py-0.5 text-xs font-medium text-slate-400">
+                              {language === "zh-CN" ? "最近：" : "Last: "}{({
+                                user: language === "zh-CN" ? "用户编辑" : "User edit",
+                                automatic_memory: language === "zh-CN" ? "自动整理" : "Automatic maintenance",
+                                agent_confirmed: language === "zh-CN" ? "Agent 确认" : "Agent confirmed",
+                                timeline_cleanup: language === "zh-CN" ? "时间线清理" : "Timeline cleanup",
+                                restore: language === "zh-CN" ? "历史恢复" : "History restore"
+                              } as Record<string, string>)[memory.lastActor ?? ""] ?? memory.lastActor ?? (language === "zh-CN" ? "历史基线" : "History baseline")}
+                            </span>
+                            {memory.enabled && !memory.deletedAt ? (
                               <span
                                 className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                                   memory.embeddingStatus === "ready"
@@ -5729,6 +6137,18 @@ export function ChatPage({
                           ) : null}
                         </div>
                         <div className="flex shrink-0 items-center gap-1">
+                          {memory.deletedAt ? (
+                            <button
+                              aria-label={language === "zh-CN" ? "永久清除历史" : "Permanently purge history"}
+                              className="grid h-8 w-8 place-items-center rounded-lg text-rose-400 transition-colors hover:bg-rose-500/15"
+                              title={language === "zh-CN" ? "永久清除历史" : "Permanently purge history"}
+                              type="button"
+                              onClick={() => setPendingPurgeMemory(memory)}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          ) : (
+                            <>
                           <button
                             aria-label={t(
                               memory.enabled ? "chat.disableMemory" : "chat.enableMemory"
@@ -5759,15 +6179,64 @@ export function ChatPage({
                           >
                             <Trash2 size={14} />
                           </button>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
+              <MemoryAuditPanel
+                language={language}
+                memories={chatMemories}
+                operations={memoryOperations}
+                revisions={memoryRevisions}
+                selectedMemoryId={selectedMemoryHistoryId}
+                undoPreview={memoryUndoPreview}
+                loading={loading}
+                onSelectMemory={(memory) => void loadMemoryRevisions(memory)}
+                onSource={(messageId) => void jumpToMemorySource(messageId)}
+                onRestore={(revision) => void previewMemoryRestore(revision)}
+                onPreviewUndo={(operation) => void previewMemoryUndo(operation)}
+                onResolveConflict={(memoryId, action) => setMemoryUndoResolutions((current) => new Map(current).set(memoryId, action))}
+                onExecuteUndo={() => setMemoryUndoConfirmOpen(true)}
+              />
             </div>
           </div>
         </Modal>
+      ) : null}
+      {memoryRestorePreview ? (
+        <ConfirmDialog
+          title={language === "zh-CN" ? "恢复记忆版本" : "Restore memory version"}
+          message={
+            <span className="block space-y-3">
+              <span className="block">{language === "zh-CN" ? "预检显示恢复后的字段影响。确认后会创建新的恢复修订；旧历史保持不变，向量索引标记为待刷新。" : "Preflight shows the field impact. Confirming creates a new restore revision; history stays unchanged and the vector index becomes stale."}</span>
+              <span className="grid gap-2 text-left text-xs sm:grid-cols-2">
+                <span className="rounded-md bg-rose-500/[0.08] p-2 text-rose-200"><b className="block pb-1">{language === "zh-CN" ? "当前" : "Current"}</b>{memoryRestorePreview.current ? `${memoryRestorePreview.current.title}\n${memoryRestorePreview.current.content}` : (language === "zh-CN" ? "（已删除）" : "(deleted)")}</span>
+                <span className="rounded-md bg-emerald-500/[0.08] p-2 text-emerald-200"><b className="block pb-1">{language === "zh-CN" ? "恢复为" : "Restore to"}</b>{`${memoryRestorePreview.restored.title}\n${memoryRestorePreview.restored.content}`}</span>
+              </span>
+            </span>
+          }
+          confirmLabel={language === "zh-CN" ? "确认恢复" : "Confirm restore"}
+          cancelLabel={t("common.cancel")}
+          variant="danger"
+          loading={loading}
+          onCancel={() => setMemoryRestorePreview(null)}
+          onConfirm={() => void executeMemoryRestore()}
+        />
+      ) : null}
+      {memoryUndoConfirmOpen && memoryUndoPreview ? (
+        <ConfirmDialog
+          title={language === "zh-CN" ? "确认撤销记忆整理" : "Confirm memory maintenance undo"}
+          message={language === "zh-CN" ? `将按预检选择恢复或退役 ${memoryUndoPreview.items.length} 条记忆；冲突项默认跳过。聊天消息、角色 lore 和用户画像不会改变。` : `The preflight choices will restore or retire ${memoryUndoPreview.items.length} memories. Conflicts are skipped by default. Chat messages, character lore, and the profile summary are unchanged.`}
+          confirmLabel={language === "zh-CN" ? "确认撤销" : "Confirm undo"}
+          cancelLabel={t("common.cancel")}
+          variant="danger"
+          loading={loading}
+          onCancel={() => setMemoryUndoConfirmOpen(false)}
+          onConfirm={() => void executeMemoryUndo()}
+        />
       ) : null}
       {showReadinessDialog ? (
         <Modal

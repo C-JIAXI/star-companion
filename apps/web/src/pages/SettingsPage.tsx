@@ -9,6 +9,7 @@ import {
   Download,
   FileUp,
   History,
+  LockKeyhole,
   Plus,
   RefreshCw,
   Save,
@@ -41,7 +42,8 @@ import type {
   ProviderProfile,
   PublicUserSettingsDTO,
   RecoveryPointDTO,
-  SettingsInput
+  SettingsInput,
+  UsageSummaryDTO
 } from "../types";
 import {
   Button,
@@ -68,6 +70,9 @@ const defaultForm: SettingsInput = {
   activeProviderId: "",
   activeModelId: "",
   moduleModelPreferences: {},
+  modelReliability: { retry: { enabled: false, maxRetries: 0 }, fallback: {} },
+  usageBudgets: { dailySoftMicros: null, dailyHardMicros: null, monthlySoftMicros: null, monthlyHardMicros: null, allowUnknownPricing: true },
+  usageTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   userPersonaPresets: [],
   showMessageAvatars: true,
   showMessageTimestamps: false,
@@ -541,7 +546,7 @@ const getPageCopy = (language: AppLanguage) =>
         noPendingChanges: "No pending changes"
       };
 
-type SettingsSection = "runtime" | "providers" | "backup" | "about";
+type SettingsSection = "runtime" | "providers" | "usage" | "backup" | "about";
 type SettingsSetupFocus = "provider" | "api-key" | "model";
 type SettingsModuleFocus = `module-${AiModuleId}`;
 type SettingsFocus = SettingsSetupFocus | SettingsModuleFocus;
@@ -569,7 +574,7 @@ const readSettingsLocation = () => {
     .find((value) => value === focus);
 
   return {
-    section: section === "providers" || section === "backup" || section === "about" ? section : "runtime",
+    section: section === "providers" || section === "usage" || section === "backup" || section === "about" ? section : "runtime",
     focus:
       focus === "provider" || focus === "api-key" || focus === "model"
         ? focus
@@ -672,6 +677,11 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const [syncResolutions, setSyncResolutions] = useState<Record<string, BackupConflictAction>>({});
   const [confirmingSync, setConfirmingSync] = useState(false);
   const [recoveryPoints, setRecoveryPoints] = useState<RecoveryPointDTO[]>([]);
+  const [usageSummary, setUsageSummary] = useState<UsageSummaryDTO | null>(null);
+  const [confirmingUsageClear, setConfirmingUsageClear] = useState(false);
+  const [privacyPasscode, setPrivacyPasscode] = useState("");
+  const [privacyPasscodeConfirm, setPrivacyPasscodeConfirm] = useState("");
+  const [privacyLockError, setPrivacyLockError] = useState<string | null>(null);
   const [pendingRestorePoint, setPendingRestorePoint] = useState<RecoveryPointDTO | null>(null);
   const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
   const [expandedProviderId, setExpandedProviderId] = useState<string | null>(null);
@@ -691,6 +701,27 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const setupGuideRef = useRef<HTMLElement>(null);
   const focusedModuleRowRef = useRef<HTMLDivElement>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
+  const usageTotals = useMemo(
+    () => (usageSummary?.byModule ?? []).reduce(
+      (totals, row) => ({
+        succeeded: totals.succeeded + row.succeeded,
+        failed: totals.failed + row.failed,
+        retries: totals.retries + row.retries,
+        fallbacks: totals.fallbacks + row.fallbacks
+      }),
+      { succeeded: 0, failed: 0, retries: 0, fallbacks: 0 }
+    ),
+    [usageSummary]
+  );
+
+  const openUsageChat = useCallback((chatId: string) => {
+    try {
+      window.localStorage.setItem("star-companion:selected-chat", chatId);
+    } catch {
+      // The chat remains reachable through history when browser storage is unavailable.
+    }
+    window.location.assign("/");
+  }, []);
 
   const applyLoadedSettings = useCallback(
     (settings: PublicUserSettingsDTO) => {
@@ -707,6 +738,9 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         activeProviderId: settings.activeProviderId ?? "",
         activeModelId: settings.activeModelId ?? "",
         moduleModelPreferences: settings.moduleModelPreferences ?? {},
+        modelReliability: settings.modelReliability ?? { retry: { enabled: false, maxRetries: 0 }, fallback: {} },
+        usageBudgets: settings.usageBudgets ?? { dailySoftMicros: null, dailyHardMicros: null, monthlySoftMicros: null, monthlyHardMicros: null, allowUnknownPricing: true },
+        usageTimezone: settings.usageTimezone || "UTC",
         userPersonaPresets: settings.userPersonaPresets ?? [],
         showMessageAvatars: settings.showMessageAvatars,
         showMessageTimestamps: settings.showMessageTimestamps,
@@ -751,6 +785,12 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   useEffect(() => {
     void loadRecoveryPoints();
   }, [loadRecoveryPoints]);
+
+  const loadUsageSummary = useCallback(async () => {
+    try { setUsageSummary(await api.usage.summary()); } catch { setUsageSummary(null); }
+  }, []);
+
+  useEffect(() => { void loadUsageSummary(); }, [loadUsageSummary]);
 
   const loadSyncInfo = useCallback(async () => {
     setSyncInfoLoading(true);
@@ -980,6 +1020,9 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         activeProviderId: settings.activeProviderId ?? "",
         activeModelId: settings.activeModelId ?? "",
         moduleModelPreferences: settings.moduleModelPreferences ?? {},
+        modelReliability: settings.modelReliability ?? { retry: { enabled: false, maxRetries: 0 }, fallback: {} },
+        usageBudgets: settings.usageBudgets ?? { dailySoftMicros: null, dailyHardMicros: null, monthlySoftMicros: null, monthlyHardMicros: null, allowUnknownPricing: true },
+        usageTimezone: settings.usageTimezone || "UTC",
         userPersonaPresets: settings.userPersonaPresets ?? [],
         autoSummarizeUser: settings.autoSummarizeUser,
         showMessageAvatars: settings.showMessageAvatars,
@@ -1544,6 +1587,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
           {([
             ["runtime", copy.runtimeTitle],
             ["providers", copy.providersTitle],
+            ["usage", language === "zh-CN" ? "使用量与预算" : "Usage & budgets"],
             ["backup", copy.backupTitle],
             ["about", copy.aboutTitle]
           ] as const).map(([section, label]) => {
@@ -2312,6 +2356,25 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                                           </label>
                                         ))}
                                       </div>
+                                      <details className="min-w-full rounded-md border border-white/5 bg-black/10 px-2 py-1 text-xs">
+                                        <summary className="cursor-pointer text-slate-400">{language === "zh-CN" ? "价格（每百万 Token，USD）" : "Pricing (per million tokens, USD)"}</summary>
+                                        <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                                          <TextInput aria-label={language === "zh-CN" ? "输入 Token 单价" : "Input token price"} inputMode="decimal" placeholder={language === "zh-CN" ? "输入价格" : "Input price"} value={model.pricing ? String(model.pricing.inputMicrosPerMillion / 1_000_000) : ""} onChange={(event) => {
+                                            const value = event.target.value.trim();
+                                            if (!value) { updateModel(provider.id, model.id, { pricing: undefined }); return; }
+                                            const micros = Math.max(0, Math.round(Number(value) * 1_000_000));
+                                            if (Number.isFinite(micros)) updateModel(provider.id, model.id, { pricing: { inputMicrosPerMillion: micros, outputMicrosPerMillion: model.pricing?.outputMicrosPerMillion ?? 0, currency: "USD", updatedAt: new Date().toISOString(), source: "user" } });
+                                          }} />
+                                          <TextInput aria-label={language === "zh-CN" ? "输出 Token 单价" : "Output token price"} inputMode="decimal" placeholder={language === "zh-CN" ? "输出价格" : "Output price"} value={model.pricing ? String(model.pricing.outputMicrosPerMillion / 1_000_000) : ""} onChange={(event) => {
+                                            const value = event.target.value.trim();
+                                            if (!value) { updateModel(provider.id, model.id, { pricing: undefined }); return; }
+                                            const micros = Math.max(0, Math.round(Number(value) * 1_000_000));
+                                            if (Number.isFinite(micros)) updateModel(provider.id, model.id, { pricing: { inputMicrosPerMillion: model.pricing?.inputMicrosPerMillion ?? 0, outputMicrosPerMillion: micros, currency: "USD", updatedAt: new Date().toISOString(), source: "user" } });
+                                          }} />
+                                          <Button variant="ghost" onClick={() => updateModel(provider.id, model.id, { pricing: undefined })}>{language === "zh-CN" ? "清除" : "Clear"}</Button>
+                                        </div>
+                                        <p className="mt-2 text-slate-500">{model.pricing ? `${model.pricing.source} · ${new Date(model.pricing.updatedAt).toLocaleDateString()}` : (language === "zh-CN" ? "费用未知；不会按模型 ID 猜测。" : "Cost unknown; model IDs are never used to guess prices.")}</p>
+                                      </details>
                                       {!manageMode ? (
                                       <Button
                                         className="!min-h-[28px] !w-7 !p-0 opacity-0 transition-opacity group-hover:opacity-100"
@@ -2715,6 +2778,141 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         </Panel>
       ) : null}
 
+      {activeSection === "usage" ? (
+        <Panel className={settingsPanelClassName} title={language === "zh-CN" ? "使用量与预算" : "Usage & budgets"}>
+          <div className="space-y-6" data-testid="usage-budget-panel">
+            <p className="text-sm leading-6 text-slate-400">
+              {language === "zh-CN"
+                ? "这里显示本机后端记录的调用与估算费用。它不是供应商账单；清除本地历史也不会影响供应商侧账单。"
+                : "This shows calls and estimated cost recorded by the local backend. It is not a provider bill, and deleting it does not affect provider billing."}
+            </p>
+            <div className={`space-y-3 rounded-lg p-4 ${settingsSurfaceClassName}`} data-testid="privacy-lock-controls">
+              <SettingsSectionHeading
+                title={language === "zh-CN" ? "会话隐私锁" : "Session privacy lock"}
+                description={language === "zh-CN"
+                  ? "锁定后，整个工作区会卸载，受保护 API 返回锁定状态，WebSocket 会关闭；长期记忆/画像历史、使用量明细和聊天关联不会留在页面或继续流出。解锁码仅保存在后端进程内，重启后端会解除此轻量锁。"
+                  : "Locking unmounts the workspace, blocks protected APIs, and closes WebSockets so memory/profile history, usage details, and chat links cannot remain rendered or continue streaming. The code lives only in the backend process; restarting it clears this lightweight lock."}
+              />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <TextInput data-testid="privacy-lock-passcode" maxLength={128} minLength={4} placeholder={language === "zh-CN" ? "至少 4 位解锁码" : "Unlock code, at least 4 characters"} type="password" value={privacyPasscode} onChange={(event) => setPrivacyPasscode(event.target.value)} />
+                <TextInput data-testid="privacy-lock-confirm" maxLength={128} minLength={4} placeholder={language === "zh-CN" ? "再次输入" : "Repeat unlock code"} type="password" value={privacyPasscodeConfirm} onChange={(event) => setPrivacyPasscodeConfirm(event.target.value)} />
+              </div>
+              {privacyLockError ? <p className="text-sm text-rose-300" role="alert">{privacyLockError}</p> : null}
+              <Button
+                data-testid="privacy-lock-action"
+                disabled={privacyPasscode.length < 4 || privacyPasscode !== privacyPasscodeConfirm}
+                onClick={() => {
+                  if (privacyPasscode !== privacyPasscodeConfirm) {
+                    setPrivacyLockError(language === "zh-CN" ? "请输入两次相同且至少 4 位的解锁码。" : "Enter the same unlock code twice, using at least 4 characters.");
+                    return;
+                  }
+                  void useAppStore.getState().lockPrivacy(privacyPasscode).then((locked) => {
+                    if (!locked) { setPrivacyLockError(language === "zh-CN" ? "无法启用隐私锁。" : "Could not enable the privacy lock."); return; }
+                    setPrivacyPasscode("");
+                    setPrivacyPasscodeConfirm("");
+                    setPrivacyLockError(null);
+                  });
+                }}
+              >
+                <LockKeyhole size={16} />
+                {language === "zh-CN" ? "立即锁定并隐藏明细" : "Lock now and hide details"}
+              </Button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <SummaryCard label={language === "zh-CN" ? "今日费用" : "Today cost"} value={usageSummary ? `$${(usageSummary.todayCostMicros / 1_000_000).toFixed(4)}` : "—"} />
+              <SummaryCard label={language === "zh-CN" ? "本月费用" : "Month cost"} value={usageSummary ? `$${(usageSummary.monthCostMicros / 1_000_000).toFixed(4)}` : "—"} />
+              <SummaryCard label={language === "zh-CN" ? "本月 Token" : "Month tokens"} value={usageSummary ? usageSummary.monthTokens.toLocaleString() : "—"} />
+              <SummaryCard label={language === "zh-CN" ? "费用未知调用" : "Unknown-cost calls"} value={usageSummary ? String(usageSummary.unknownCostAttempts) : "—"} />
+              <SummaryCard label={language === "zh-CN" ? "成功 / 失败" : "Succeeded / failed"} value={usageSummary ? `${usageTotals.succeeded} / ${usageTotals.failed}` : "—"} />
+              <SummaryCard label={language === "zh-CN" ? "重试 / 备用切换" : "Retries / fallbacks"} value={usageSummary ? `${usageTotals.retries} / ${usageTotals.fallbacks}` : "—"} />
+              <SummaryCard
+                label={language === "zh-CN" ? "每日硬预算 / 剩余" : "Daily hard budget / left"}
+                value={usageSummary?.budgets.dailyHardMicros == null
+                  ? (language === "zh-CN" ? "未启用" : "Off")
+                  : `$${(usageSummary.budgets.dailyHardMicros / 1_000_000).toFixed(2)} / $${(Math.max(0, usageSummary.budgets.dailyHardMicros - usageSummary.todayCostMicros) / 1_000_000).toFixed(2)}`}
+              />
+              <SummaryCard
+                label={language === "zh-CN" ? "每月硬预算 / 剩余" : "Monthly hard budget / left"}
+                value={usageSummary?.budgets.monthlyHardMicros == null
+                  ? (language === "zh-CN" ? "未启用" : "Off")
+                  : `$${(usageSummary.budgets.monthlyHardMicros / 1_000_000).toFixed(2)} / $${(Math.max(0, usageSummary.budgets.monthlyHardMicros - usageSummary.monthCostMicros) / 1_000_000).toFixed(2)}`}
+              />
+            </div>
+
+            <div className={`space-y-4 rounded-lg p-4 ${settingsSurfaceClassName}`}>
+              <SettingsSectionHeading
+                title={language === "zh-CN" ? "可靠性" : "Reliability"}
+                description={language === "zh-CN" ? "重试默认关闭；仅网络、超时、限流或临时不可用错误会重试；每个模型候选最多两次重试、三次实际调用。" : "Retries are off by default and only cover connection, timeout, rate-limit, or temporary availability errors; each model candidate allows at most two retries and three provider calls."}
+              />
+              <label className="flex min-h-11 items-center justify-between gap-3 text-sm text-slate-300">
+                <span>{language === "zh-CN" ? "启用安全自动重试" : "Enable safe automatic retries"}</span>
+                <input type="checkbox" checked={form.modelReliability?.retry.enabled ?? false} onChange={(event) => setForm((current) => ({ ...current, modelReliability: { ...(current.modelReliability ?? { retry: { enabled: false, maxRetries: 0 }, fallback: {} }), retry: { ...(current.modelReliability?.retry ?? { enabled: false, maxRetries: 0 }), enabled: event.target.checked } } }))} />
+              </label>
+              <Field label={language === "zh-CN" ? "最大重试次数" : "Maximum retries"}>
+                <select className={selectClassName} value={form.modelReliability?.retry.maxRetries ?? 0} onChange={(event) => setForm((current) => ({ ...current, modelReliability: { ...(current.modelReliability ?? { retry: { enabled: false, maxRetries: 0 }, fallback: {} }), retry: { ...(current.modelReliability?.retry ?? { enabled: false, maxRetries: 0 }), maxRetries: Number(event.target.value) } } }))}>
+                  <option value={0}>0</option><option value={1}>1</option><option value={2}>2</option>
+                </select>
+              </Field>
+            </div>
+
+            <div className={`space-y-4 rounded-lg p-4 ${settingsSurfaceClassName}`}>
+              <SettingsSectionHeading title={language === "zh-CN" ? "备用模型链" : "Fallback model chains"} description={language === "zh-CN" ? "必须逐模块显式启用。只会在限流、超时、连接失败或供应商临时不可用，且尚未输出任何 token 时串行切换；费用可能不同。" : "Enable explicitly per module. Switching is serial and limited to rate limits, timeouts, connection failures, or temporary provider unavailability before any output token. Cost may differ."} />
+              <div className="space-y-3">
+                {moduleModelRows.map((row) => {
+                  const config = form.modelReliability?.fallback[row.id] ?? { enabled: false, allowAutomatic: false, chain: [] };
+                  const available = form.providers.flatMap((provider) => provider.models.filter((model) => modelSupportsAiModule(provider.provider, model, row.id)).map((model) => ({ provider, model, key: `${provider.id}\0${model.id}` })));
+                  return <div key={row.id} className="rounded-md border border-white/5 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3"><span className="text-sm font-medium text-slate-200">{language === "zh-CN" ? row.zh : row.en}</span><label className="flex items-center gap-2 text-xs text-slate-400"><input type="checkbox" checked={config.enabled} onChange={(event) => setForm((current) => ({ ...current, modelReliability: { ...(current.modelReliability ?? defaultForm.modelReliability!), fallback: { ...(current.modelReliability?.fallback ?? {}), [row.id]: { ...config, enabled: event.target.checked } } } }))} />{language === "zh-CN" ? "启用备用链" : "Enable fallback"}</label></div>
+                    {row.id === "chat" ? <label className="mt-2 flex items-center gap-2 text-xs text-amber-200"><input type="checkbox" checked={config.allowAutomatic ?? false} onChange={(event) => setForm((current) => ({ ...current, modelReliability: { ...(current.modelReliability ?? defaultForm.modelReliability!), fallback: { ...(current.modelReliability?.fallback ?? {}), chat: { ...config, allowAutomatic: event.target.checked } } } }))} />{language === "zh-CN" ? "我同意聊天可自动换模型（角色表现可能改变）" : "I consent to automatic chat model switching (character performance may change)"}</label> : null}
+                    <div className="mt-3 grid gap-2 sm:grid-cols-3">{[0,1,2].map((index) => <select key={index} className={selectClassName} value={config.chain[index] ? `${config.chain[index]!.providerId}\0${config.chain[index]!.modelId}` : ""} onChange={(event) => {
+                      const chain = [...config.chain];
+                      if (!event.target.value) chain.splice(index, 1); else { const [providerId, modelId] = event.target.value.split("\0"); chain[index] = { providerId, modelId }; }
+                      setForm((current) => ({ ...current, modelReliability: { ...(current.modelReliability ?? defaultForm.modelReliability!), fallback: { ...(current.modelReliability?.fallback ?? {}), [row.id]: { ...config, chain: chain.filter(Boolean).slice(0,3) } } } }));
+                    }}><option value="">{language === "zh-CN" ? `候选 ${index + 1}` : `Candidate ${index + 1}`}</option>{available.map(({ provider, model, key }) => <option key={key} value={key}>{provider.label} / {model.label}</option>)}</select>)}</div>
+                  </div>;
+                })}
+              </div>
+            </div>
+
+            <div className={`space-y-4 rounded-lg p-4 ${settingsSurfaceClassName}`}>
+              <SettingsSectionHeading title={language === "zh-CN" ? "本地预算护栏" : "Local budget guardrails"} description={language === "zh-CN" ? "金额使用 USD。软预算只警告，硬预算由后端在请求前强制执行。留空表示关闭。" : "Amounts use USD. Soft budgets warn; hard budgets are enforced by the backend before calls. Blank means off."} />
+              <div className="grid gap-4 sm:grid-cols-2">
+                {([
+                  ["dailySoftMicros", language === "zh-CN" ? "每日软预算" : "Daily soft budget"],
+                  ["dailyHardMicros", language === "zh-CN" ? "每日硬预算" : "Daily hard budget"],
+                  ["monthlySoftMicros", language === "zh-CN" ? "每月软预算" : "Monthly soft budget"],
+                  ["monthlyHardMicros", language === "zh-CN" ? "每月硬预算" : "Monthly hard budget"]
+                ] as const).map(([key, label]) => <Field key={key} label={label}><TextInput inputMode="decimal" placeholder="USD" value={form.usageBudgets?.[key] == null ? "" : String((form.usageBudgets[key]! / 1_000_000))} onChange={(event) => { const value = event.target.value.trim(); const micros = value === "" ? null : Math.max(0, Math.round(Number(value) * 1_000_000)); setForm((current) => ({ ...current, usageBudgets: { ...(current.usageBudgets ?? defaultForm.usageBudgets!), [key]: Number.isFinite(micros) ? micros : null } })); }} /></Field>)}
+              </div>
+              <Field label={language === "zh-CN" ? "结算时区" : "Settlement timezone"}><TextInput value={form.usageTimezone ?? "UTC"} onChange={(event) => setForm((current) => ({ ...current, usageTimezone: event.target.value }))} /></Field>
+              <label className="flex min-h-11 items-center justify-between gap-3 text-sm text-slate-300"><span>{language === "zh-CN" ? "允许费用未知模型继续调用" : "Allow calls with unknown pricing"}</span><input type="checkbox" checked={form.usageBudgets?.allowUnknownPricing ?? true} onChange={(event) => setForm((current) => ({ ...current, usageBudgets: { ...(current.usageBudgets ?? defaultForm.usageBudgets!), allowUnknownPricing: event.target.checked } }))} /></label>
+              <div className="flex flex-wrap gap-3"><Button disabled={loading || !hasUnsavedChanges} onClick={() => void saveSettings()}><Save size={16} />{copy.saveReady}</Button><Button variant="secondary" onClick={() => void loadUsageSummary()}><RefreshCw size={16} />{language === "zh-CN" ? "刷新汇总" : "Refresh summary"}</Button><Button variant="danger" onClick={() => setConfirmingUsageClear(true)}><Trash2 size={16} />{language === "zh-CN" ? "清除费用历史" : "Clear usage history"}</Button></div>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-4">
+              {([
+                [language === "zh-CN" ? "按模块" : "By module", usageSummary?.byModule],
+                [language === "zh-CN" ? "按供应商" : "By provider", usageSummary?.byProvider],
+                [language === "zh-CN" ? "按模型" : "By model", usageSummary?.byModel],
+                [language === "zh-CN" ? "按聊天" : "By chat", usageSummary?.byChat]
+              ] as const).map(([title, rows], groupIndex) => <div key={title} className={`rounded-lg p-4 ${settingsSurfaceClassName}`}><div className="mb-3 text-sm font-semibold text-slate-100">{title}</div><div className="space-y-2">{rows?.slice(0, 8).map((row) => <div key={row.key} className="flex justify-between gap-3 text-xs">{groupIndex === 3 ? <button className="min-w-0 truncate text-left text-sky-300 hover:text-sky-200 hover:underline" type="button" onClick={() => openUsageChat(row.key)}>{row.label}</button> : <span className="min-w-0 truncate text-slate-400">{row.label}</span>}<span className="shrink-0 font-mono text-slate-200">${(row.estimatedCostMicros / 1_000_000).toFixed(4)} · {row.attempts}</span></div>) ?? <span className="text-xs text-slate-500">—</span>}</div></div>)}
+            </div>
+            <div className={`rounded-lg p-4 ${settingsSurfaceClassName}`}>
+              <div className="mb-3 text-sm font-semibold text-slate-100">{language === "zh-CN" ? "近期调用" : "Recent calls"}</div>
+              <div className="space-y-2">
+                {usageSummary?.recent.slice(0, 20).map((attempt) => (
+                  <div key={attempt.attemptId} className="grid gap-1 rounded-md border border-white/5 p-2 text-xs text-slate-400 sm:grid-cols-[1fr_auto_auto]">
+                    <span className="min-w-0 truncate">{attempt.chatId && attempt.chatTitle ? <button className="text-sky-300 hover:text-sky-200 hover:underline" type="button" onClick={() => openUsageChat(attempt.chatId!)}>{attempt.chatTitle}</button> : (language === "zh-CN" ? "无聊天关联" : "No chat link")} · {attempt.module} · {attempt.providerId}/{attempt.modelId}</span>
+                    <span>{attempt.status}{attempt.attemptNumber > 1 ? ` · retry ${attempt.attemptNumber - 1}` : ""}{attempt.usedFallback ? " · fallback" : ""}</span>
+                    <span className="font-mono text-slate-200">{attempt.estimatedCostMicros == null || attempt.specialTokensUnknown ? (language === "zh-CN" ? "费用未知" : "Cost unknown") : `$${(attempt.estimatedCostMicros / 1_000_000).toFixed(4)}`}</span>
+                  </div>
+                )) ?? <span className="text-xs text-slate-500">—</span>}
+              </div>
+            </div>
+          </div>
+        </Panel>
+      ) : null}
+
       {activeSection === "about" ? <AboutUpdatesPanel language={language} /> : null}
 
       {confirmingImport && pendingImportFile && backupPreview ? (
@@ -2742,6 +2940,24 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
           variant={syncPreview.mode === "replace" ? "danger" : "primary"}
           onCancel={() => setConfirmingSync(false)}
           onConfirm={() => void runLanSync()}
+        />
+      ) : null}
+
+      {confirmingUsageClear ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={language === "zh-CN" ? "清除" : "Clear"}
+          loading={loading}
+          message={language === "zh-CN" ? "这只会删除本地调用与费用历史，不会删除聊天，也不会影响供应商账单。" : "This deletes only local call and cost history. It does not delete chats or affect provider billing."}
+          title={language === "zh-CN" ? "清除费用历史" : "Clear usage history"}
+          variant="danger"
+          onCancel={() => setConfirmingUsageClear(false)}
+          onConfirm={() => void (async () => {
+            setLoading(true);
+            try { await api.usage.clear(); await loadUsageSummary(); setConfirmingUsageClear(false); setStatus(language === "zh-CN" ? "费用历史已清除" : "Usage history cleared"); }
+            catch (caught) { setError(caught instanceof Error ? caught.message : "Failed to clear usage history"); }
+            finally { setLoading(false); }
+          })()}
         />
       ) : null}
 
