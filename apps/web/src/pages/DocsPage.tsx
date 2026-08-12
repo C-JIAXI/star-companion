@@ -212,6 +212,10 @@ const getDocsCopy = (language: string): DocsCopy => {
               body: "输入框工具可录音转写、朗读最近回复和生成图片；每条助手回复也可单独朗读或停止。尚未配置兼容模型时，这些入口会直接定位到设置页对应的模块模型下拉框。设置页可指定文字朗读的声音 ID、0.5–2 倍播放速度，并选择是否自动朗读当前聊天中新收到的助手回复。图片会先在预览中展示，确认后才插入输入框。"
             },
             {
+              title: "发送图片给视觉模型",
+              body: "可通过文件选择、拖放或粘贴为一条用户消息添加最多 4 张图片，移动端使用系统相册/文件选择器。单张源文件最多 10 MB、每条消息规范化后合计最多 20 MB、解码后最多 2500 万像素。JPEG/PNG 会重新解码、应用方向并移除元数据；浏览器可安全读取的 WebP/GIF/AVIF 会转成静态 PNG/JPEG。SVG、图片网址和普通文件不支持。只有明确标记支持图片输入的聊天模型可发送；图片会经本地后端传给所选第三方模型服务，请同时遵守该服务的隐私与保留政策。"
+            },
+            {
               title: "快捷指令",
               body: "角色配置快捷回复后，会显示在输入区上方。点击指令会把预设内容填入输入框，适合常用动作或开场问题。"
             }
@@ -296,7 +300,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           items: [
             {
               title: "导出范围",
-              body: "完整备份包含角色、角色收藏状态、聊天、消息、长期记忆当前状态、记忆版本/操作批次和 chat 用户画像历史；单聊天 JSON 归档也携带该聊天的这些历史。消息会保留实际模型、token、估算费用和完成状态等生成摘要。设置会导出模型服务和参数，但不会导出 API Key。全局调用账本、预算占用和恢复点只保留在本机，不进入备份或局域网同步。角色收藏属于本地偏好，不会写入可分享的角色卡文件。"
+              body: "完整备份包含角色、角色收藏状态、聊天、消息及图片附件、长期记忆当前状态、记忆版本/操作批次和 chat 用户画像历史；单聊天 JSON 归档也携带该聊天的这些历史与图片。图片二进制按内容去重，只在带哈希、长度、格式和尺寸校验的 media 清单中保存一次。消息会保留实际模型、token、估算费用和完成状态等生成摘要。设置会导出模型服务和参数，但不会导出 API Key。全局调用账本、预算占用和恢复点只保留在本机，不进入备份或局域网同步。角色收藏属于本地偏好，不会写入可分享的角色卡文件。"
             },
             {
               title: "合并导入",
@@ -524,6 +528,10 @@ const getDocsCopy = (language: string): DocsCopy => {
             body: "Composer tools transcribe recordings, read the latest reply, and generate images; each assistant reply can also be narrated or stopped individually. When no compatible model is configured, these controls jump directly to the matching module-model selector in Settings. Settings let you choose a speech voice ID, a 0.5–2x playback rate, and automatic playback for new assistant replies in the current chat. Images are previewed before you insert one into the composer."
           },
           {
+            title: "Send images to a vision model",
+            body: "Add up to four images to one user turn with the file picker, drag and drop, or paste; mobile uses the system gallery/file picker. Each source image is limited to 10 MB, normalized images to 20 MB total per message, and decoded images to 25 megapixels. JPEG/PNG are re-decoded, oriented, and stripped of metadata; browser-decodable WebP/GIF/AVIF become a static PNG/JPEG. SVG, image URLs, and arbitrary files are unsupported. Sending requires a chat model explicitly marked for image input. The local backend passes selected images to that third-party model provider, so its privacy and retention policy also applies."
+          },
+          {
             title: "Quick commands",
             body: "When a character defines quick replies, they appear above the composer and fill the input with reusable actions or prompts."
           }
@@ -610,7 +618,7 @@ const getDocsCopy = (language: string): DocsCopy => {
         items: [
           {
             title: "Export contents",
-            body: "Full backups include characters, local favorite state, chats, messages, current long-term memories, immutable memory revisions/operations, and chat profile-summary history. Per-chat JSON archives carry the same chat-scoped history. Messages retain generation summaries such as actual model, tokens, estimated cost, and completion state. Settings export model services and parameters, but not API keys. The global call ledger, active budget reservations, and recovery points remain local and do not enter backups or LAN sync. Favorite state is not written into shareable character card files."
+            body: "Full backups include characters, local favorite state, chats, messages and image attachments, current long-term memories, immutable memory revisions/operations, and chat profile-summary history. Per-chat JSON archives carry the same chat-scoped history and images. Image bytes are content-deduplicated and appear once in a media manifest with hash, length, type, and dimension checks. Messages retain generation summaries such as actual model, tokens, estimated cost, and completion state. Settings export model services and parameters, but not API keys. The global call ledger, active budget reservations, and recovery points remain local and do not enter backups or LAN sync. Favorite state is not written into shareable character card files."
           },
           {
             title: "Merge import",

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import jpeg from "jpeg-js";
 import { PNG } from "pngjs";
 import { prisma } from "../db.js";
 import {
@@ -16,6 +17,26 @@ const png = (width = 2, height = 2) => {
   return PNG.sync.write(image).toString("base64");
 };
 
+const jpegWithOrientation = (orientation: number) => {
+  const encoded = Buffer.from(jpeg.encode({ data: Buffer.alloc(2 * 3 * 4, 255), width: 2, height: 3 }, 90).data);
+  const payload = Buffer.alloc(32);
+  payload.write("Exif\0\0", 0, "ascii");
+  payload.write("II", 6, "ascii");
+  payload.writeUInt16LE(42, 8);
+  payload.writeUInt32LE(8, 10);
+  payload.writeUInt16LE(1, 14);
+  payload.writeUInt16LE(0x0112, 16);
+  payload.writeUInt16LE(3, 18);
+  payload.writeUInt32LE(1, 20);
+  payload.writeUInt16LE(orientation, 24);
+  const app1 = Buffer.alloc(payload.length + 4);
+  app1[0] = 0xff;
+  app1[1] = 0xe1;
+  app1.writeUInt16BE(payload.length + 2, 2);
+  payload.copy(app1, 4);
+  return Buffer.concat([encoded.subarray(0, 2), app1, encoded.subarray(2)]);
+};
+
 test("validates signatures, declared MIME, pixel limits, unsupported and damaged data", () => {
   const valid = normalizeUploadedImage({ dataBase64: png(), mimeType: "image/png" });
   assert.equal(valid.mimeType, "image/png");
@@ -27,6 +48,12 @@ test("validates signatures, declared MIME, pixel limits, unsupported and damaged
   oversizedHeader.writeUInt32BE(5000, 20);
   assert.throws(() => normalizeUploadedImage({ dataBase64: oversizedHeader.toString("base64"), mimeType: "image/png" }), /25 megapixels/i);
   assert.throws(() => normalizeUploadedImage({ dataBase64: png(101, 1), mimeType: "image/png" }), /aspect ratio/i);
+});
+
+test("normalizes JPEG EXIF orientation and strips metadata", () => {
+  const valid = normalizeUploadedImage({ dataBase64: jpegWithOrientation(6).toString("base64"), mimeType: "image/jpeg" });
+  assert.deepEqual([valid.width, valid.height], [3, 2]);
+  assert.equal(valid.data.includes(Buffer.from("Exif\0\0", "ascii")), false);
 });
 
 test("deduplicates content, atomically attaches drafts, and deletes only unreferenced assets", async () => {

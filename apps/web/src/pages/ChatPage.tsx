@@ -370,6 +370,7 @@ export function ChatPage({
   const [editAttachmentDraftId, setEditAttachmentDraftId] = useState<string | null>(null);
   const [editAttachments, setEditAttachments] = useState<DraftImageAttachmentDTO[]>([]);
   const [editAttachmentBusy, setEditAttachmentBusy] = useState(false);
+  const [editAttachmentReady, setEditAttachmentReady] = useState(false);
   const [editAttachmentError, setEditAttachmentError] = useState<string | null>(null);
   const editAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const [memorySettingsOpen, setMemorySettingsOpen] = useState(false);
@@ -3579,6 +3580,7 @@ export function ChatPage({
     setEditingMessage(message);
     setEditDraft(message.content);
     setEditAttachments([]);
+    setEditAttachmentReady(message.role !== "user");
     setEditAttachmentError(null);
     if (message.role !== "user") return;
     const draftId = `draft_${generateId().replace(/-/g, "")}`;
@@ -3586,6 +3588,7 @@ export function ChatPage({
     setEditAttachmentBusy(true);
     try {
       setEditAttachments(await api.media.stageChatImagesForEdit(message.id, draftId));
+      setEditAttachmentReady(true);
     } catch (caught) {
       setEditAttachmentError(caught instanceof Error ? caught.message : (language === "zh-CN" ? "无法准备图片编辑。" : "Could not prepare image editing."));
     } finally {
@@ -3599,6 +3602,7 @@ export function ChatPage({
     setEditDraft("");
     setEditAttachmentDraftId(null);
     setEditAttachments([]);
+    setEditAttachmentReady(false);
     setEditAttachmentError(null);
   };
 
@@ -3656,6 +3660,10 @@ export function ChatPage({
     if (!editingMessage) {
       return;
     }
+    if (editingMessage.role === "user" && !editAttachmentReady) {
+      setEditAttachmentError(language === "zh-CN" ? "原图片尚未安全复制，请取消后重试。" : "The original images were not staged safely. Cancel and try again.");
+      return;
+    }
 
     setLoading(true);
     setError(null);
@@ -3672,6 +3680,7 @@ export function ChatPage({
       setEditDraft("");
       setEditAttachmentDraftId(null);
       setEditAttachments([]);
+      setEditAttachmentReady(false);
       setEditAttachmentError(null);
       setStatus(t("chat.messageSaved"));
     } catch (caught) {
@@ -4958,7 +4967,7 @@ export function ChatPage({
                     <p className="mt-1 text-xs leading-5 text-amber-200/80">{language === "zh-CN" ? "修改这些图片会改变后续回复使用的历史上下文。" : "Changing these images changes the history context used by later replies."}</p>
                   </div>
                   <input ref={editAttachmentInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" multiple aria-label={language === "zh-CN" ? "为消息添加图片" : "Add images to message"} onChange={(event) => void addEditImages(Array.from(event.target.files ?? []))} />
-                  <Button disabled={editAttachmentBusy || editAttachments.length >= 4} variant="ghost" onClick={() => editAttachmentInputRef.current?.click()}>
+                  <Button disabled={!editAttachmentReady || editAttachmentBusy || editAttachments.length >= 4} variant="ghost" onClick={() => editAttachmentInputRef.current?.click()}>
                     <Paperclip size={15} />
                     {language === "zh-CN" ? "添加图片" : "Add images"}
                   </Button>
@@ -4984,7 +4993,7 @@ export function ChatPage({
                 {t("common.cancel")}
               </Button>
               <Button
-                disabled={loading || editAttachmentBusy || (!editDraft.trim() && editAttachments.length === 0)}
+                disabled={loading || editAttachmentBusy || (editingMessage.role === "user" && !editAttachmentReady) || (!editDraft.trim() && editAttachments.length === 0)}
                 onClick={() => void saveEditedMessage()}
               >
                 <Check size={16} />

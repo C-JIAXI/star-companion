@@ -17,11 +17,13 @@ import { usageRouter } from "./routes/usage.js";
 import { attachChatSocket } from "./realtime/chatSocket.js";
 import { getAppInfo } from "./services/appInfo.js";
 import { recoverInterruptedModelCalls } from "./services/modelUsage.js";
+import { cleanupExpiredDraftAttachments } from "./services/messageAttachments.js";
 import { isPrivacyLocked, lockPrivacy, unlockPrivacy } from "./services/privacyLock.js";
 
 const APP_NAME = "Star Companion";
 const app = express();
 let closeWebSocketsForPrivacy = () => undefined;
+let draftCleanupTimer: NodeJS.Timeout | null = null;
 
 app.use(
   cors({
@@ -116,6 +118,11 @@ attachChatSocket(wsServer, APP_NAME);
 const start = async () => {
   await connectDatabase();
   await recoverInterruptedModelCalls();
+  await cleanupExpiredDraftAttachments();
+  draftCleanupTimer = setInterval(() => {
+    void cleanupExpiredDraftAttachments().catch(() => undefined);
+  }, 6 * 60 * 60 * 1000);
+  draftCleanupTimer.unref();
 
   httpServer.listen(serverConfig.port, () => {
     console.log(`${APP_NAME} server listening on http://localhost:${serverConfig.port}`);
@@ -123,6 +130,7 @@ const start = async () => {
 };
 
 const shutdown = async () => {
+  if (draftCleanupTimer) clearInterval(draftCleanupTimer);
   wsServer.close();
   httpServer.close();
   await disconnectDatabase();

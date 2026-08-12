@@ -100,6 +100,26 @@ schemaVersion 1 backup envelope and follow messages through LAN sync. The global
 request/attempt ledger, active budget reservations, recovery points, and API
 keys remain device-local and never enter backup or sync payloads.
 
+Chat image attachments use the same desktop/mobile contract. Android uses the
+system gallery/file picker; the shared web UI also supports paste and drag/drop
+where the platform exposes them. A message accepts at most four images, each
+source file is capped at 10 MB, normalized message data at 20 MB total, and
+decoded content at 25 megapixels. JPEG/PNG are signature-checked, decoded,
+oriented, and metadata-stripped. Browser-decodable WebP/GIF/AVIF inputs are
+converted to a static PNG/JPEG; SVG, remote URLs, and arbitrary files are
+rejected. Sending requires a model explicitly marked `vision_input`, and the UI
+warns that selected bytes pass through the local backend to the third-party
+provider selected for chat.
+
+Normalized binary assets stay in app-private, content-addressed storage rather
+than WebView local/session storage. Drafts expire after 24 hours and orphaned
+assets are collected without deleting content still referenced by another
+message or recovery point. Attachments follow edit, resend, branch, checkpoint,
+Trash, permanent deletion, chat archive, full backup, recovery, pull, and push.
+Archive/backup media manifests contain each binary once and validate SHA-256,
+byte length, MIME, dimensions, and references before a transaction writes. App
+lock unmounts previews and returns `423` from the protected media route.
+
 Memory history is bounded to 30 revisions per memory and 100 operations per
 chat. Snapshots keep only the memory fields needed for diff/restore and source
 message IDs; they do not copy embeddings, prompts, model responses, API keys,

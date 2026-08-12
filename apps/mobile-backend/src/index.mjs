@@ -4190,6 +4190,10 @@ const handleMobileStatus = (socket, raw) => {
 
 const startServer = async () => {
   await store.load();
+  const draftCleanupTimer = setInterval(() => {
+    void store.cleanupExpiredDraftAttachments().catch(() => undefined);
+  }, 6 * 60 * 60 * 1000);
+  draftCleanupTimer.unref();
   process.env.STAR_COMPANION_APP_VERSION = generatedBuildInfo.appVersion;
   process.env.STAR_COMPANION_PLATFORM = "android";
   process.env.STAR_COMPANION_BUILD_TYPE = mobileBuildType;

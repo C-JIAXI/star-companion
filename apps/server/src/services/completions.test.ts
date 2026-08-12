@@ -246,7 +246,10 @@ describe("model provider adapters", () => {
 describe("vision provider payload contracts", () => {
   const messages = [
     { role: "system" as const, content: "character" },
-    { role: "user" as const, content: "first", images: [{ mimeType: "image/png" as const, dataBase64: "AQID" }] },
+    { role: "user" as const, content: "first", images: [
+      { mimeType: "image/png" as const, dataBase64: "AQID" },
+      { mimeType: "image/jpeg" as const, dataBase64: "BwgJ" }
+    ] },
     { role: "assistant" as const, content: "reply" },
     { role: "user" as const, content: "second", images: [{ mimeType: "image/jpeg" as const, dataBase64: "BAUG" }] }
   ];
@@ -254,7 +257,8 @@ describe("vision provider payload contracts", () => {
     const body = openAiRequestBody({ settings: createSettings({}), messages, stream: false });
     assert.deepEqual(body.messages[1]?.content, [
       { type: "text", text: "first" },
-      { type: "image_url", image_url: { url: "data:image/png;base64,AQID" } }
+      { type: "image_url", image_url: { url: "data:image/png;base64,AQID" } },
+      { type: "image_url", image_url: { url: "data:image/jpeg;base64,BwgJ" } }
     ]);
     assert.deepEqual(body.messages[3]?.content, [
       { type: "text", text: "second" },
@@ -265,14 +269,24 @@ describe("vision provider payload contracts", () => {
     const body = toAnthropicPayload({ settings: createSettings({ activeProvider: "anthropic" }), messages, stream: false });
     assert.deepEqual(body.messages[0]?.content, [
       { type: "text", text: "first" },
-      { type: "image", source: { type: "base64", media_type: "image/png", data: "AQID" } }
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "AQID" } },
+      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "BwgJ" } }
+    ]);
+    assert.deepEqual(body.messages[2]?.content, [
+      { type: "text", text: "second" },
+      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "BAUG" } }
     ]);
   });
   it("builds ordered Gemini text/inlineData parts", () => {
     const body = toGeminiPayload({ settings: createSettings({ activeProvider: "google-gemini" }), messages });
     assert.deepEqual(body.contents[0]?.parts, [
       { text: "first" },
-      { inlineData: { mimeType: "image/png", data: "AQID" } }
+      { inlineData: { mimeType: "image/png", data: "AQID" } },
+      { inlineData: { mimeType: "image/jpeg", data: "BwgJ" } }
+    ]);
+    assert.deepEqual(body.contents[2]?.parts, [
+      { text: "second" },
+      { inlineData: { mimeType: "image/jpeg", data: "BAUG" } }
     ]);
   });
 });

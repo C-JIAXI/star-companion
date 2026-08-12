@@ -798,7 +798,9 @@ test("chat image attachments preview, send, reload, view, and unmount when locke
   const chatTitle = `Vision Chat ${suffix}`;
   let characterId: string | null = null;
   let chatId: string | null = null;
+  const derivedChatIds: string[] = [];
   const now = new Date().toISOString();
+  const visionReply = `Vision reply ${suffix}`;
 
   await page.route("**/api/settings", async (route) => {
     if (route.request().method() !== "GET") return route.continue();
@@ -819,7 +821,7 @@ test("chat image attachments preview, send, reload, view, and unmount when locke
     chatId = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data?.id ?? null;
     expect(chatId).toBeTruthy();
 
-    await page.addInitScript((selectedChatId) => {
+    await page.addInitScript(({ selectedChatId, reply }) => {
       window.localStorage.setItem("star-companion:selected-chat", selectedChatId);
       let socket: { onmessage: ((event: MessageEvent) => void) | null } | null = null;
       const emit = (message: Record<string, unknown>) => socket?.onmessage?.(new MessageEvent("message", { data: JSON.stringify(message) }));
@@ -836,13 +838,19 @@ test("chat image attachments preview, send, reload, view, and unmount when locke
             const response = await fetch("http://127.0.0.1:4010/api/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chatId: value.chatId, role: "user", content: value.content ?? "", draftId: value.draftId }) });
             const payload = await response.json();
             emit({ type: "user_message", requestId: value.requestId, message: payload.data });
+            emit({ type: "generation_started", requestId: value.requestId });
+            emit({ type: "token", requestId: value.requestId, content: reply.slice(0, 7) });
+            emit({ type: "token", requestId: value.requestId, content: reply.slice(7) });
+            const assistantResponse = await fetch("http://127.0.0.1:4010/api/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chatId: value.chatId, role: "assistant", content: reply }) });
+            const assistantPayload = await assistantResponse.json();
+            emit({ type: "assistant_message", requestId: value.requestId, message: assistantPayload.data });
             emit({ type: "generation_done", requestId: value.requestId });
           }, 0);
         }
         close() { this.readyState = 3; }
       }
       Object.assign(window, { WebSocket: MockWebSocket, __visionRequest: null });
-    }, chatId);
+    }, { selectedChatId: chatId, reply: visionReply });
 
     await page.goto("/");
     const chooser = page.getByLabel(/选择聊天图片|Choose chat images/);
@@ -853,9 +861,16 @@ test("chat image attachments preview, send, reload, view, and unmount when locke
     await draft.getByRole("button", { name: /移除图片|Remove image/ }).click();
     await expect(draft.getByRole("img")).toHaveCount(0);
 
-    await chooser.setInputFiles({ name: "vision.png", mimeType: "image/png", buffer: Buffer.from(e2ePngBase64, "base64") });
+    await page.locator("#chat-message-input").evaluate((element, base64) => {
+      const bytes = Uint8Array.from(atob(base64), (value) => value.charCodeAt(0));
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([bytes], "pasted-vision.png", { type: "image/png" }));
+      element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }));
+    }, e2ePngBase64);
+    await expect(draft.getByRole("img")).toHaveCount(1);
     await page.locator('#chat-primary-action[data-chat-action="send"]').click();
     await expect(page.locator('[data-chat-message="user"]')).toHaveCount(1);
+    await expect(page.getByText(visionReply)).toBeVisible();
     const requestPayload = await page.evaluate(() => (window as unknown as { __visionRequest: { content: string; draftId: string } }).__visionRequest);
     expect(requestPayload.content).toBe("");
     expect(requestPayload.draftId).toMatch(/^draft_/);
@@ -868,6 +883,21 @@ test("chat image attachments preview, send, reload, view, and unmount when locke
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog", { name: /图片查看器|Image viewer/ })).toHaveCount(0);
     await expect(opener).toBeFocused();
+
+    const sourceResponse = await request.get(`/api/chats/${chatId}`);
+    const source = ((await sourceResponse.json()) as ApiDataResponse<{ messages: Array<{ id: string; role: string; attachments: unknown[] }> }>).data;
+    const imageMessage = source?.messages.find((message) => message.role === "user");
+    expect(imageMessage?.attachments).toHaveLength(1);
+    const branchResponse = await request.post(`/api/chats/${chatId}/branches`, { data: { messageId: imageMessage?.id, title: `Vision branch ${suffix}`, kind: "branch" } });
+    const branch = ((await branchResponse.json()) as ApiDataResponse<{ id: string; messages: Array<{ attachments: unknown[] }> }>).data;
+    expect(branch?.messages[0]?.attachments).toHaveLength(1);
+    if (branch?.id) derivedChatIds.push(branch.id);
+    const archiveResponse = await request.get(`/api/chats/${chatId}/archive`);
+    const archive = ((await archiveResponse.json()) as ApiDataResponse<unknown>).data;
+    const importedResponse = await request.post("/api/chats/import-archive", { data: { archive, title: `Vision import ${suffix}` } });
+    const imported = ((await importedResponse.json()) as ApiDataResponse<{ id: string; messages: Array<{ attachments: unknown[] }> }>).data;
+    expect(imported?.messages.find((message) => message.attachments.length)?.attachments).toHaveLength(1);
+    if (imported?.id) derivedChatIds.push(imported.id);
 
     await page.locator('[data-chat-message="user"] [data-chat-action="edit"]').click();
     const editor = page.getByRole("dialog", { name: /编辑消息|Edit Message/ });
@@ -882,6 +912,7 @@ test("chat image attachments preview, send, reload, view, and unmount when locke
     await expect(page.getByTestId("privacy-lock-screen")).toBeVisible();
     await expect(page.getByTestId("message-image-gallery")).toHaveCount(0);
   } finally {
+    for (const id of derivedChatIds) await permanentlyDeleteChatViaApi(request, id).catch(() => {});
     if (chatId) await permanentlyDeleteChatViaApi(request, chatId).catch(() => {});
     if (characterId) await request.delete(`/api/characters/${characterId}`).catch(() => {});
   }
@@ -1071,6 +1102,7 @@ test("empty chats can generate a character opening without sending a user messag
           },
           loreMatches: [],
           memoryMatches: [],
+          attachments: [],
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }
@@ -1585,6 +1617,7 @@ test("resending a historical user message confirms its impact and waits for serv
                 tokenUsage: null,
                 loreMatches: [],
                 memoryMatches: [],
+                attachments: [],
                 createdAt: now,
                 updatedAt: now
               }
@@ -1889,6 +1922,7 @@ test("guided regeneration sends one-time feedback and keeps the previous variant
                   tokenUsage: null,
                   loreMatches: [],
                   memoryMatches: [],
+                  attachments: [],
                   createdAt,
                   updatedAt: new Date().toISOString()
                 }
@@ -3311,6 +3345,7 @@ test("new assistant replies use the configured voice playback preferences", asyn
                   tokenUsage: null,
                   loreMatches: [],
                   memoryMatches: [],
+                  attachments: [],
                   createdAt: new Date().toISOString(),
                   updatedAt: new Date().toISOString()
                 }

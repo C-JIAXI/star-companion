@@ -43,12 +43,14 @@ export const importChatArchive = async ({ archive, title }: ChatArchiveImportInp
   if (archive.media) {
     const messageIds = new Set(archive.messages.flatMap((message) => message.id ? [message.id] : []));
     const assetIds = new Set<string>();
+    const assetHashes = new Set<string>();
     for (const asset of archive.media.assets) {
       const bytes = Buffer.from(asset.dataBase64, "base64");
       try { validateStoredImage({ data: bytes, mimeType: asset.mimeType, width: asset.width, height: asset.height }); }
       catch (error) { if (error instanceof ImageValidationError) throw new HttpError(400, "The chat archive contains damaged or mismatched image data."); throw error; }
-      if (bytes.length !== asset.byteSize || createHash("sha256").update(bytes).digest("hex") !== asset.contentHash || assetIds.has(asset.id)) throw new HttpError(400, "The chat archive contains damaged or duplicate image data.");
+      if (bytes.length !== asset.byteSize || createHash("sha256").update(bytes).digest("hex") !== asset.contentHash || assetIds.has(asset.id) || assetHashes.has(asset.contentHash)) throw new HttpError(400, "The chat archive contains damaged or duplicate image data.");
       assetIds.add(asset.id);
+      assetHashes.add(asset.contentHash);
     }
     const orderKeys = new Set<string>();
     for (const attachment of archive.media.attachments) {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import type { UserSettings } from "@prisma/client";
+import { PNG } from "pngjs";
 import { prisma } from "../db.js";
 import { buildPromptContext, finalizePromptBreakdown } from "./promptBuilder.js";
 import { createCharacterExportCard, importCharacterCard } from "./characterCards.js";
@@ -409,6 +410,48 @@ describe("buildPromptContext", () => {
     const context = await buildPromptContext({ chatId: ids.chatId, settings: testSettings });
     const promptText = context.messages.map((message) => message.content).join("\n\n");
     assert.doesNotMatch(promptText, /Excluded context marker/);
+  });
+
+  it("includes only in-window, context-enabled image history and reports its count", async () => {
+    const image = new PNG({ width: 1, height: 1 });
+    image.data.fill(255);
+    const bytes = PNG.sync.write(image);
+    const hash = `prompt-image-${Date.now()}`;
+    const asset = await prisma.mediaAsset.create({ data: {
+      contentHash: hash,
+      mimeType: "image/png",
+      byteSize: bytes.length,
+      width: 1,
+      height: 1,
+      storageKey: `test:${hash}`,
+      data: new Uint8Array(bytes)
+    } });
+    const included = await prisma.message.create({ data: {
+      chatId: ids.chatId,
+      role: "user",
+      content: "Included image marker.",
+      attachments: { create: { assetId: asset.id, sortOrder: 0 } }
+    } });
+    const excluded = await prisma.message.create({ data: {
+      chatId: ids.chatId,
+      role: "user",
+      content: "Excluded image marker.",
+      contextIncluded: false,
+      attachments: { create: { assetId: asset.id, sortOrder: 0 } }
+    } });
+
+    try {
+      const context = await buildPromptContext({ chatId: ids.chatId, settings: testSettings });
+      const includedMessage = context.messages.find((message) => message.content === "Included image marker.");
+      assert.equal(includedMessage?.images?.length, 1);
+      assert.equal(context.messages.some((message) => message.content === "Excluded image marker."), false);
+      assert.equal(context.promptBreakdown.imageCount, 1);
+      assert.equal(context.promptBreakdown.sections.find((section) => section.id === "image_input")?.itemCount, 1);
+    } finally {
+      await prisma.messageAttachment.deleteMany({ where: { messageId: { in: [included.id, excluded.id] } } });
+      await prisma.message.deleteMany({ where: { id: { in: [included.id, excluded.id] } } });
+      await prisma.mediaAsset.delete({ where: { id: asset.id } });
+    }
   });
 
   it("injects always-active lore even when a chat has no messages", async () => {

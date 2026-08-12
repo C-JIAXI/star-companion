@@ -38,6 +38,70 @@ const readJpegSize = (bytes: Buffer) => {
   return null;
 };
 
+const readJpegOrientation = (bytes: Buffer) => {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return 1;
+  let offset = 2;
+  while (offset + 4 <= bytes.length) {
+    if (bytes[offset] !== 0xff) return 1;
+    while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+    const marker = bytes[offset++];
+    if (marker === 0xd9 || marker === 0xda) break;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 2 > bytes.length) break;
+    const length = bytes.readUInt16BE(offset);
+    if (length < 2 || offset + length > bytes.length) break;
+    if (marker === 0xe1) {
+      const payload = offset + 2;
+      const end = offset + length;
+      if (payload + 14 <= end && bytes.toString("ascii", payload, payload + 6) === "Exif\0\0") {
+        const tiff = payload + 6;
+        const byteOrder = bytes.toString("ascii", tiff, tiff + 2);
+        const littleEndian = byteOrder === "II";
+        if (!littleEndian && byteOrder !== "MM") return 1;
+        const read16 = (position: number) => littleEndian ? bytes.readUInt16LE(position) : bytes.readUInt16BE(position);
+        const read32 = (position: number) => littleEndian ? bytes.readUInt32LE(position) : bytes.readUInt32BE(position);
+        if (read16(tiff + 2) !== 42) return 1;
+        const ifd = tiff + read32(tiff + 4);
+        if (ifd + 2 > end) return 1;
+        const count = read16(ifd);
+        for (let index = 0; index < count; index += 1) {
+          const entry = ifd + 2 + index * 12;
+          if (entry + 12 > end) return 1;
+          if (read16(entry) === 0x0112 && read16(entry + 2) === 3 && read32(entry + 4) === 1) {
+            const orientation = read16(entry + 8);
+            return orientation >= 1 && orientation <= 8 ? orientation : 1;
+          }
+        }
+      }
+    }
+    offset += length;
+  }
+  return 1;
+};
+
+const orientRgba = (data: Uint8Array, width: number, height: number, orientation: number) => {
+  if (orientation === 1) return { data, width, height };
+  const swapsAxes = orientation >= 5;
+  const outputWidth = swapsAxes ? height : width;
+  const outputHeight = swapsAxes ? width : height;
+  const output = new Uint8Array(data.length);
+  for (let y = 0; y < outputHeight; y += 1) {
+    for (let x = 0; x < outputWidth; x += 1) {
+      const [sourceX, sourceY] = orientation === 2 ? [width - 1 - x, y]
+        : orientation === 3 ? [width - 1 - x, height - 1 - y]
+          : orientation === 4 ? [x, height - 1 - y]
+            : orientation === 5 ? [y, x]
+              : orientation === 6 ? [y, height - 1 - x]
+                : orientation === 7 ? [width - 1 - y, height - 1 - x]
+                  : [width - 1 - y, x];
+      const sourceOffset = (sourceY * width + sourceX) * 4;
+      const targetOffset = (y * outputWidth + x) * 4;
+      output.set(data.subarray(sourceOffset, sourceOffset + 4), targetOffset);
+    }
+  }
+  return { data: output, width: outputWidth, height: outputHeight };
+};
+
 const assertDimensions = (width: number, height: number) => {
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1) throw new ImageValidationError(400, "The image dimensions are invalid.");
   if (width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION || width * height > MAX_IMAGE_PIXELS) throw new ImageValidationError(413, "The decoded image is too large. Use an image no larger than 25 megapixels.");
@@ -79,9 +143,11 @@ export const normalizeUploadedImage = (input: { dataBase64: string; mimeType: Su
     }
     const decoded = jpeg.decode(bytes, { useTArray: true, formatAsRGBA: true, maxMemoryUsageInMB: 160 });
     assertDimensions(decoded.width, decoded.height);
-    const encoded = jpeg.encode({ data: decoded.data, width: decoded.width, height: decoded.height }, 90).data;
+    const oriented = orientRgba(decoded.data, decoded.width, decoded.height, readJpegOrientation(bytes));
+    assertDimensions(oriented.width, oriented.height);
+    const encoded = jpeg.encode(oriented, 90).data;
     if (encoded.length > MAX_MESSAGE_IMAGE_BYTES) throw new ImageValidationError(413, "The normalized image is too large.");
-    return { data: Buffer.from(encoded), mimeType: "image/jpeg" as const, width: decoded.width, height: decoded.height };
+    return { data: Buffer.from(encoded), mimeType: "image/jpeg" as const, width: oriented.width, height: oriented.height };
   } catch (error) {
     if (error instanceof ImageValidationError) throw error;
     throw new ImageValidationError(400, "The image is damaged or cannot be decoded safely.");

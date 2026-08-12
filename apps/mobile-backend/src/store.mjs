@@ -52,6 +52,7 @@ const compareAsc = (field) => (a, b) => String(a[field]).localeCompare(String(b[
 const toInteger = (value) => (value === undefined || value === null ? null : Number(value));
 const RECOVERY_POINT_LIMIT = 10;
 const RECOVERY_POINT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const DRAFT_ATTACHMENT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export class MobileStore {
   constructor(filePath) {
@@ -81,6 +82,7 @@ export class MobileStore {
     }
     await this.recoverInterruptedModelCalls();
     await this.ensureMemoryHistoryBaselines();
+    await this.cleanupExpiredDraftAttachments();
   }
 
   async persist() {
@@ -511,6 +513,16 @@ export class MobileStore {
     const referenced = new Set(this.readRecords("messageAttachment").map((item) => item.assetId));
     for (const item of this.readRecords("recoveryPointMediaAsset")) referenced.add(item.assetId);
     for (const asset of this.readRecords("mediaAsset")) if (!referenced.has(asset.id)) await this.deleteRecord("mediaAsset", asset.id);
+  }
+
+  async cleanupExpiredDraftAttachments() {
+    return this.atomicWrite(async () => {
+      const cutoff = Date.now() - DRAFT_ATTACHMENT_MAX_AGE_MS;
+      const expired = this.readRecords("messageAttachment").filter((item) => item.draftId && !item.messageId && Date.parse(item.createdAt) < cutoff);
+      for (const attachment of expired) await this.deleteRecord("messageAttachment", attachment.id);
+      await this.cleanupOrphanAssets();
+      return expired.length;
+    });
   }
 
   async removeDraftAttachment(draftId, attachmentId) {
