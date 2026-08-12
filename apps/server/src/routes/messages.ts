@@ -11,6 +11,7 @@ import {
 import { messageCreateSchema, messageListQuerySchema, messageUpdateSchema } from "../schemas.js";
 import { serializeMessage } from "../serializers.js";
 import { deleteMessageTimeline } from "../services/messageTimeline.js";
+import { attachDraftToMessage, messageIncludeAttachments } from "../services/messageAttachments.js";
 
 export const messagesRouter = Router();
 
@@ -41,7 +42,8 @@ messagesRouter.get(
         chat: { deletedAt: null },
         ...(query.chatId ? { chatId: query.chatId } : {})
       },
-      orderBy: { createdAt: "asc" }
+      orderBy: { createdAt: "asc" },
+      include: messageIncludeAttachments
     });
 
     response.json({ ok: true, data: messages.map(serializeMessage) });
@@ -59,8 +61,9 @@ messagesRouter.post(
     if (!chat) {
       throw new HttpError(404, "Chat not found");
     }
+    const { draftId, ...messageBody } = body;
     const data: Prisma.MessageUncheckedCreateInput = {
-      ...body,
+      ...messageBody,
       tokenUsage: normalizeTokenUsage(body.tokenUsage),
       generationMetadata: normalizeJsonObject(body.generationMetadata),
       variantMetadata: body.variantMetadata as Prisma.InputJsonValue,
@@ -68,11 +71,11 @@ messagesRouter.post(
       loreMatches: normalizeJsonArray(body.loreMatches),
       memoryMatches: normalizeJsonArray(body.memoryMatches)
     };
-    const message = await prisma.message.create({ data });
-
-    await prisma.chat.update({
-      where: { id: body.chatId },
-      data: { updatedAt: new Date() }
+    const message = await prisma.$transaction(async (tx) => {
+      const created = await tx.message.create({ data });
+      await attachDraftToMessage(tx, draftId, created.id);
+      await tx.chat.update({ where: { id: body.chatId }, data: { updatedAt: new Date() } });
+      return tx.message.findUniqueOrThrow({ where: { id: created.id }, include: messageIncludeAttachments });
     });
 
     response.status(201).json({ ok: true, data: serializeMessage(message) });
@@ -84,7 +87,8 @@ messagesRouter.get(
   asyncHandler(async (request, response) => {
     const id = requireParam(request, "id");
     const message = await prisma.message.findFirst({
-      where: { id, chat: { deletedAt: null } }
+      where: { id, chat: { deletedAt: null } },
+      include: messageIncludeAttachments
     });
 
     if (!message) {
@@ -102,7 +106,7 @@ messagesRouter.put(
     const body = parseBody(messageUpdateSchema, request.body);
     const existing = await prisma.message.findFirst({
       where: { id, chat: { deletedAt: null } },
-      select: { id: true }
+      select: { id: true, chatId: true }
     });
     if (!existing) {
       throw new HttpError(404, "Message not found");
@@ -117,16 +121,17 @@ messagesRouter.put(
       memoryMatches: normalizeJsonArray(body.memoryMatches)
     };
 
-    const message = await prisma.message.update({
+    await prisma.message.update({
       where: { id },
       data
     });
 
     await prisma.chat.update({
-      where: { id: message.chatId },
+      where: { id: existing.chatId },
       data: { updatedAt: new Date() }
     });
 
+    const message = await prisma.message.findUniqueOrThrow({ where: { id }, include: messageIncludeAttachments });
     response.json({ ok: true, data: serializeMessage(message) });
   })
 );

@@ -713,6 +713,7 @@ const zhCN = {
   "debug.breakdownHistory": "聊天历史",
   "debug.breakdownInstruction": "本轮生成指令",
   "debug.breakdownFormatting": "组合分隔开销",
+  "debug.breakdownImageInput": "图片输入",
   "debug.breakdownEstimatedNote": "供应商未返回 usage；总量与分类均为本地估算。",
   "debug.breakdownProviderNote": "总量来自供应商 usage；分类按本轮实际发送内容估算。",
   "debug.characterPrompt": "角色提示词",
@@ -1497,6 +1498,7 @@ const en: Record<keyof typeof zhCN, string> = {
   "debug.breakdownHistory": "Chat history",
   "debug.breakdownInstruction": "Turn-specific instruction",
   "debug.breakdownFormatting": "Composition separators",
+  "debug.breakdownImageInput": "Image input",
   "debug.breakdownEstimatedNote":
     "The provider did not return usage; the total and category split are local estimates.",
   "debug.breakdownProviderNote":

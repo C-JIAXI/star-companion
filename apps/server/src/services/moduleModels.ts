@@ -36,6 +36,7 @@ type ProviderProfile = {
 
 type AiModelCapability =
   | "text_generation"
+  | "vision_input"
   | "text_embedding"
   | "audio_transcription"
   | "text_to_speech"
@@ -54,6 +55,7 @@ const moduleCapabilities: Record<AiModuleId, AiModelCapability> = {
 
 const validCapabilities = new Set<AiModelCapability>([
   "text_generation",
+  "vision_input",
   "text_embedding",
   "audio_transcription",
   "text_to_speech",
@@ -171,6 +173,16 @@ export const resolveModuleSettings = (
   };
 };
 
+export const settingsSupportVisionInput = (settings: UserSettings) => {
+  const providers = toProviderProfiles(settings.providers);
+  const provider = providers.find((entry) => entry.id === settings.activeProviderId);
+  const model = provider?.models.find((entry) => entry.id === settings.activeModelId);
+  return Boolean(model && (model.capabilities ?? inferModelCapabilities(model.model)).includes("vision_input"));
+};
+
+export const filterVisionCapableSettings = (candidates: UserSettings[]) =>
+  candidates.filter(settingsSupportVisionInput);
+
 export const resolveModelReferenceSettings = (
   settings: UserSettings,
   moduleId: AiModuleId,
@@ -264,6 +276,10 @@ export const inferModelCapabilities = (model: string): AiModelCapability[] => {
   }
   if (/(?:dall[\-_.]?e|gpt[\-_.]?image|imagegen|stable[\-_.]?diffusion|(?:^|[-_/])sdxl?(?:[-_/]|$)|flux)/.test(normalized)) {
     return ["image_generation"];
+  }
+
+  if (/(?:gpt-4(?:o|\.1|\.5)|gpt-5|o[134](?:-|$)|claude-(?:3|sonnet|opus|haiku)|gemini-(?:1\.5|2|3)|qwen(?:2\.5|-)?vl|llava|pixtral|vision)/.test(normalized)) {
+    return ["text_generation", "vision_input"];
   }
 
   return ["text_generation"];

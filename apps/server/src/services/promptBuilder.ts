@@ -1,4 +1,4 @@
-import type { Character, Message, Prisma, UserSettings } from "@prisma/client";
+import type { Character, MediaAsset, Message, MessageAttachment, Prisma, UserSettings } from "@prisma/client";
 import { prisma } from "../db.js";
 import type { ChatCompletionMessage } from "./completions.js";
 import { resolveCharacterPromptFields } from "./characterCards.js";
@@ -40,6 +40,7 @@ export type PromptBreakdownSectionId =
   | "lore"
   | "memory"
   | "history"
+  | "image_input"
   | "generation_instruction"
   | "formatting";
 
@@ -47,6 +48,7 @@ export type PromptBreakdown = {
   promptTokens: number;
   promptTokensEstimated: boolean;
   includedMessageCount: number;
+  imageCount: number;
   sections: Array<{
     id: PromptBreakdownSectionId;
     tokenEstimate: number;
@@ -266,7 +268,10 @@ const buildPromptBreakdown = ({
       "history",
       historyMessages.map((message) => message.content),
       historyMessages.length
-    )
+    ),
+    ...(historyMessages.some((message) => message.images?.length)
+      ? [{ id: "image_input" as const, tokenEstimate: 0, characterCount: 0, itemCount: historyMessages.reduce((total, message) => total + (message.images?.length ?? 0), 0) }]
+      : [])
   ].filter((section) => section.tokenEstimate > 0 || section.itemCount > 0);
   const promptTokens = messages.reduce(
     (total, message) => total + estimatePromptTokens(message.content),
@@ -286,6 +291,7 @@ const buildPromptBreakdown = ({
     promptTokens,
     promptTokensEstimated: true,
     includedMessageCount: historyMessages.length,
+    imageCount: historyMessages.reduce((total, message) => total + (message.images?.length ?? 0), 0),
     sections
   };
 };
@@ -383,7 +389,8 @@ export const buildPromptContext = async ({
       ...(before ? { createdAt: { lt: before } } : {})
     },
     orderBy: { createdAt: "desc" },
-    take: contextMessageLimit
+    take: contextMessageLimit,
+    include: { attachments: { include: { asset: true }, orderBy: { sortOrder: "asc" } } }
   });
   let recentMessages = recentMessagesDesc.reverse();
   if (excludeMessageIds?.length) {
@@ -435,9 +442,12 @@ export const buildPromptContext = async ({
       content
     }));
 
-  const historyMessages: ChatCompletionMessage[] = recentMessages.map((message) => ({
+  const historyMessages: ChatCompletionMessage[] = recentMessages.map((message: Message & { attachments: Array<MessageAttachment & { asset: MediaAsset }> }) => ({
     role: message.role === "assistant" || message.role === "system" ? message.role : "user",
-    content: formatMessageContent(message, characterNames)
+    content: formatMessageContent(message, characterNames),
+    ...(message.attachments.length
+      ? { images: message.attachments.map((attachment) => ({ mimeType: attachment.asset.mimeType as "image/png" | "image/jpeg", dataBase64: Buffer.from(attachment.asset.data).toString("base64") })) }
+      : {})
   }));
   const messages = [...systemMessages, ...historyMessages];
 

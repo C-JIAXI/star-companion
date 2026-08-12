@@ -4,6 +4,7 @@ import type { UserSettings } from "@prisma/client";
 import {
   resolveModuleSettings,
   inferModelCapabilities,
+  settingsSupportVisionInput,
   supportsModule,
   validateModuleModelPreferences
 } from "./moduleModels.js";
@@ -30,6 +31,7 @@ describe("moduleModels", () => {
     assert.deepEqual(inferModelCapabilities("text-embedding-3-small"), ["text_embedding"]);
     assert.deepEqual(inferModelCapabilities("nomic-embed-text"), ["text_embedding"]);
     assert.deepEqual(inferModelCapabilities("local-roleplay-model"), ["text_generation"]);
+    assert.deepEqual(inferModelCapabilities("gpt-4o-mini"), ["text_generation", "vision_input"]);
   });
 
   it("only permits each module to select a compatible model", () => {
@@ -45,6 +47,15 @@ describe("moduleModels", () => {
       ),
       false
     );
+  });
+
+  it("requires an explicit vision capability for image input", () => {
+    const value = {
+      providers: [openAiProvider], activeProviderId: "openai", activeModelId: "chat"
+    } as unknown as UserSettings;
+    assert.equal(settingsSupportVisionInput(value), false);
+    const vision = { ...openAiProvider, models: [{ ...openAiProvider.models[0]!, capabilities: ["text_generation", "vision_input"] }] };
+    assert.equal(settingsSupportVisionInput({ ...value, providers: [vision] } as unknown as UserSettings), true);
   });
 
   it("rejects module preferences that point to incompatible models", () => {

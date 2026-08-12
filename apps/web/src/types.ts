@@ -72,6 +72,8 @@ import type {
   ProfileSummaryRestorePreviewDTO,
   ProfileSummaryRevisionDTO,
   MessageDTO,
+  MessageAttachmentDTO,
+  DraftImageAttachmentDTO,
   MessageRole,
   PromptBreakdownDTO,
   PromptBreakdownSectionId,
@@ -139,6 +141,7 @@ export type MessageInput = {
   role: MessageRole;
   characterId?: string | null;
   content: string;
+  draftId?: string;
   contextIncluded?: boolean;
   isBookmarked?: boolean;
   variants?: string[];
@@ -246,6 +249,8 @@ export type {
   ProfileSummaryRestorePreviewDTO,
   ProfileSummaryRevisionDTO,
   MessageDTO,
+  MessageAttachmentDTO,
+  DraftImageAttachmentDTO,
   MessageRole,
   PromptBreakdownDTO,
   PromptBreakdownSectionId,

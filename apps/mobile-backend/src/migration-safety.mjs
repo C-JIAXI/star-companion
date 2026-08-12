@@ -33,6 +33,12 @@ export const MOBILE_MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_records_type_card ON records(type, cardId);
       CREATE INDEX IF NOT EXISTS idx_records_type_chat ON records(type, chatId);
     `
+  },
+  {
+    name: "002_message_image_assets",
+    sql: `
+      CREATE INDEX IF NOT EXISTS idx_records_type_role ON records(type, role);
+    `
   }
 ];
 

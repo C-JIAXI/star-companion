@@ -101,7 +101,8 @@ function PromptBreakdownPanel({ breakdown }: { breakdown: PromptBreakdownDTO }) 
       memory: t("debug.breakdownMemory"),
       history: t("debug.breakdownHistory"),
       generation_instruction: t("debug.breakdownInstruction"),
-      formatting: t("debug.breakdownFormatting")
+      formatting: t("debug.breakdownFormatting"),
+      image_input: t("debug.breakdownImageInput")
     };
     return labels[id];
   };

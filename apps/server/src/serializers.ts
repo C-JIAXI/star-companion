@@ -1,4 +1,5 @@
-import type { Character, Chat, ChatMemory, MemoryOperation, MemoryRevision, Message, Prisma, ProfileSummaryRevision, UserSettings } from "@prisma/client";
+import type { Character, Chat, ChatMemory, MediaAsset, MemoryOperation, MemoryRevision, Message, MessageAttachment, Prisma, ProfileSummaryRevision, UserSettings } from "@prisma/client";
+import { serializeAttachment } from "./services/messageAttachments.js";
 import { resolveCharacterRecord } from "./services/characterCards.js";
 
 interface ProviderModel {
@@ -18,6 +19,7 @@ interface ProviderModel {
 
 type AiModelCapability =
   | "text_generation"
+  | "vision_input"
   | "text_embedding"
   | "audio_transcription"
   | "text_to_speech"
@@ -51,6 +53,7 @@ const promptBreakdownSectionIds = new Set([
   "lore",
   "memory",
   "history",
+  "image_input",
   "generation_instruction",
   "formatting"
 ]);
@@ -116,6 +119,7 @@ const toProviderModels = (value: unknown): ProviderModel[] => {
         ? item.capabilities.filter(
             (capability): capability is AiModelCapability =>
               capability === "text_generation" ||
+              capability === "vision_input" ||
               capability === "text_embedding" ||
               capability === "audio_transcription" ||
               capability === "text_to_speech" ||
@@ -339,6 +343,7 @@ const toPromptBreakdown = (value: Prisma.JsonValue | null) => {
     promptTokens: raw.promptTokens,
     promptTokensEstimated: raw.promptTokensEstimated,
     includedMessageCount: raw.includedMessageCount,
+    imageCount: typeof raw.imageCount === "number" ? raw.imageCount : 0,
     sections
   };
 };
@@ -611,12 +616,13 @@ export const serializeProfileSummaryRevisionForBackup = (revision: ProfileSummar
   createdAt: toIso(revision.createdAt)
 });
 
-export const serializeMessage = (message: Message) => ({
+export const serializeMessage = (message: Message & { attachments?: Array<MessageAttachment & { asset: MediaAsset }> }) => ({
   id: message.id,
   chatId: message.chatId,
   role: message.role === "assistant" || message.role === "system" ? message.role : "user",
   characterId: message.characterId,
   content: message.content,
+  attachments: (message.attachments ?? []).map(serializeAttachment),
   contextIncluded: message.contextIncluded,
   isBookmarked: message.isBookmarked,
   variants: toStringArray(message.variants),

@@ -10,6 +10,7 @@ import {
 export type ChatCompletionMessage = {
   role: "system" | "user" | "assistant";
   content: string;
+  images?: Array<{ mimeType: "image/png" | "image/jpeg"; dataBase64: string }>;
 };
 
 export type TokenUsage = {
@@ -148,7 +149,7 @@ async function* readSseJson(response: Response) {
   }
 }
 
-const openAiRequestBody = ({
+export const openAiRequestBody = ({
   settings,
   messages,
   stream,
@@ -162,7 +163,15 @@ const openAiRequestBody = ({
   temperature?: number;
 }) => ({
   model: settings.model,
-  messages,
+  messages: messages.map((message) => ({
+    role: message.role,
+    content: message.images?.length
+      ? [
+          ...(message.content ? [{ type: "text" as const, text: message.content }] : []),
+          ...message.images.map((image) => ({ type: "image_url" as const, image_url: { url: `data:${image.mimeType};base64,${image.dataBase64}` } }))
+        ]
+      : message.content
+  })),
   temperature: temperature ?? settings.temperature,
   max_tokens: maxTokens ?? settings.maxTokens,
   top_p: settings.topP,
@@ -182,22 +191,24 @@ const splitSystemMessages = (messages: ChatCompletionMessage[]) => {
   return { system, conversation };
 };
 
-const mergeConversation = <Role extends string>(
-  entries: Array<{ role: Role; content: string }>,
+const mergeConversation = <Role extends string, Content = string>(
+  entries: Array<{ role: Role; content: Content }>,
   fallbackRole: Role,
-  fallbackContent: string
+  fallbackContent: Content
 ) => {
-  const merged: Array<{ role: Role; content: string }> = [];
+  const merged: Array<{ role: Role; content: Content }> = [];
 
   for (const entry of entries) {
-    const content = entry.content.trim();
-    if (!content) {
+    const content = entry.content;
+    if (typeof content === "string" && !content.trim()) {
       continue;
     }
 
     const last = merged.at(-1);
-    if (last?.role === entry.role) {
-      last.content = `${last.content}\n\n${content}`;
+    if (last?.role === entry.role && typeof last.content === "string" && typeof content === "string") {
+      last.content = `${last.content}\n\n${content}` as Content;
+    } else if (last?.role === entry.role && Array.isArray(last.content) && Array.isArray(content)) {
+      last.content = [...last.content, ...content] as Content;
     } else {
       merged.push({ role: entry.role, content });
     }
@@ -210,7 +221,7 @@ const mergeConversation = <Role extends string>(
   return merged;
 };
 
-const toAnthropicPayload = ({
+export const toAnthropicPayload = ({
   settings,
   messages,
   stream,
@@ -227,10 +238,15 @@ const toAnthropicPayload = ({
   const anthropicMessages = mergeConversation(
     conversation.map((message) => ({
       role: message.role === "assistant" ? ("assistant" as const) : ("user" as const),
-      content: message.content
+      content: message.images?.length
+        ? [
+            ...(message.content ? [{ type: "text" as const, text: message.content }] : []),
+            ...message.images.map((image) => ({ type: "image" as const, source: { type: "base64" as const, media_type: image.mimeType, data: image.dataBase64 } }))
+          ]
+        : [{ type: "text" as const, text: message.content }]
     })),
     "user",
-    "Continue the conversation."
+    [{ type: "text" as const, text: "Continue the conversation." }]
   );
 
   return {
@@ -246,7 +262,7 @@ const toAnthropicPayload = ({
 
 const normalizeGeminiModel = (model: string) => model.trim().replace(/^models\//, "");
 
-const toGeminiPayload = ({
+export const toGeminiPayload = ({
   settings,
   messages,
   maxTokens,
@@ -261,17 +277,20 @@ const toGeminiPayload = ({
   const geminiMessages = mergeConversation(
     conversation.map((message) => ({
       role: message.role === "assistant" ? ("model" as const) : ("user" as const),
-      content: message.content
+      content: [
+        ...(message.content ? [{ text: message.content }] : []),
+        ...(message.images ?? []).map((image) => ({ inlineData: { mimeType: image.mimeType, data: image.dataBase64 } }))
+      ]
     })),
     "user",
-    "Continue the conversation."
+    [{ text: "Continue the conversation." }]
   );
 
   return {
     ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
     contents: geminiMessages.map((message) => ({
       role: message.role,
-      parts: [{ text: message.content }]
+      parts: message.content
     })),
     generationConfig: {
       temperature: temperature ?? settings.temperature,
@@ -798,7 +817,7 @@ export const estimateTokenUsage = (
   messages: ChatCompletionMessage[],
   completion: string
 ): TokenUsage => {
-  const promptTokens = messages.reduce((total, message) => total + estimateTokens(message.content), 0);
+  const promptTokens = messages.reduce((total, message) => total + estimateTokens(message.content) + (message.images?.length ?? 0) * 1024, 0);
   const completionTokens = estimateTokens(completion);
 
   return {

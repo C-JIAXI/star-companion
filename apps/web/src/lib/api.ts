@@ -53,6 +53,7 @@ import type {
   ImageGenerationRequestDTO,
   GlobalChatMessageSearchDTO,
   MessageDTO,
+  DraftImageAttachmentDTO,
   MessageInput,
   VoiceSpeechDTO,
   VoiceSpeechRequestDTO,
@@ -361,6 +362,12 @@ export const api = {
     remove: (id: string) => request<void>(`/api/messages/${id}`, { method: "DELETE" })
   },
   media: {
+    uploadChatImage: (input: { draftId: string; dataBase64: string; mimeType: "image/png" | "image/jpeg"; originalFilename?: string }) =>
+      request<DraftImageAttachmentDTO>("/api/media/chat-images/drafts", { method: "POST", body: input }),
+    listDraftChatImages: (draftId: string) => request<DraftImageAttachmentDTO[]>(`/api/media/chat-images/drafts/${encodeURIComponent(draftId)}`),
+    removeDraftChatImage: (draftId: string, attachmentId: string) => request<void>(`/api/media/chat-images/drafts/${encodeURIComponent(draftId)}/${encodeURIComponent(attachmentId)}`, { method: "DELETE" }),
+    reorderDraftChatImages: (draftId: string, attachmentIds: string[]) => request<DraftImageAttachmentDTO[]>(`/api/media/chat-images/drafts/${encodeURIComponent(draftId)}/order`, { method: "PUT", body: { attachmentIds } }),
+    discardDraftChatImages: (draftId: string) => request<void>(`/api/media/chat-images/drafts/${encodeURIComponent(draftId)}`, { method: "DELETE" }),
     transcribe: (input: VoiceTranscriptionRequestDTO) =>
       request<VoiceTranscriptionDTO>("/api/media/voice/transcriptions", {
         method: "POST",

@@ -4,6 +4,16 @@ const CHARACTER_HTML_MAX_LENGTH = 200_000;
 const CHARACTER_CSS_MAX_LENGTH = 100_000;
 
 export const idSchema = z.string().min(1);
+export const attachmentDraftIdSchema = z.string().trim().regex(/^draft_[a-zA-Z0-9_-]{12,100}$/);
+export const imageAttachmentUploadSchema = z.object({
+  draftId: attachmentDraftIdSchema,
+  dataBase64: z.string().min(1).max(14_000_000),
+  mimeType: z.enum(["image/png", "image/jpeg"]),
+  originalFilename: z.string().trim().max(160).optional()
+});
+export const imageAttachmentReorderSchema = z.object({
+  attachmentIds: z.array(idSchema).min(1).max(4)
+});
 
 const stringArraySchema = z.array(z.string().trim().min(1)).default([]);
 const characterTagsSchema = z
@@ -43,6 +53,7 @@ const promptBreakdownSectionSchema = z.object({
     "lore",
     "memory",
     "history",
+    "image_input",
     "generation_instruction",
     "formatting"
   ]),
@@ -55,6 +66,7 @@ const promptBreakdownSchema = z.object({
   promptTokens: z.number().int().min(0),
   promptTokensEstimated: z.boolean(),
   includedMessageCount: z.number().int().min(0),
+  imageCount: z.number().int().min(0).default(0),
   sections: z.array(promptBreakdownSectionSchema).max(8)
 });
 
@@ -480,6 +492,7 @@ export const messageCreateSchema = z.object({
   role: z.enum(["user", "assistant", "system"]),
   characterId: idSchema.nullable().optional(),
   content: z.string(),
+  draftId: attachmentDraftIdSchema.optional(),
   contextIncluded: z.boolean().default(true),
   isBookmarked: z.boolean().default(false),
   variants: z.array(z.string()).default([]),
@@ -525,8 +538,8 @@ const providerModelSchema = z.object({
   model: z.string().min(1),
   contextWindow: z.number().int().min(256).max(10_000_000).optional(),
   capabilities: z
-    .array(z.enum(["text_generation", "text_embedding", "audio_transcription", "text_to_speech", "image_generation"]))
-    .max(5)
+    .array(z.enum(["text_generation", "vision_input", "text_embedding", "audio_transcription", "text_to_speech", "image_generation"]))
+    .max(6)
     .transform((capabilities) => Array.from(new Set(capabilities)))
     .optional(),
   pricing: z.object({
@@ -677,9 +690,10 @@ export const generationRequestSchema = z.object({
   type: z.literal("generate"),
   requestId: z.string().min(1),
   chatId: idSchema,
-  content: z.string().trim().min(1),
+  content: z.string().max(100000),
+  draftId: attachmentDraftIdSchema.optional(),
   overrideHardBudget: z.boolean().optional()
-});
+}).refine((value) => value.content.trim().length > 0 || Boolean(value.draftId), "Text or an image attachment is required.");
 
 export const regenerateRequestSchema = z.object({
   type: z.literal("regenerate"),

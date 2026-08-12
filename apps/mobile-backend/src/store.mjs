@@ -470,6 +470,66 @@ export class MobileStore {
     );
   }
 
+  listMessageAttachments(messageId) {
+    return clone(this.readRecords("messageAttachment").filter((item) => item.messageId === messageId).sort((a, b) => a.sortOrder - b.sortOrder));
+  }
+
+  listDraftAttachments(draftId) {
+    return clone(this.readRecords("messageAttachment").filter((item) => item.draftId === draftId && !item.messageId).sort((a, b) => a.sortOrder - b.sortOrder));
+  }
+
+  getMediaAsset(id) {
+    return clone(this.readRecord("mediaAsset", id));
+  }
+
+  async createDraftAttachment({ draftId, asset, originalFilename }) {
+    return this.atomicWrite(async () => {
+      const current = this.listDraftAttachments(draftId);
+      if (current.length >= 4) { const error = new Error("A message can contain at most 4 images."); error.status = 413; throw error; }
+      const total = current.reduce((sum, item) => sum + (this.getMediaAsset(item.assetId)?.byteSize ?? 0), 0);
+      if (total + asset.byteSize > 20 * 1024 * 1024) { const error = new Error("Images in one message can total at most 20 MB."); error.status = 413; throw error; }
+      const existingAsset = this.readRecords("mediaAsset").find((item) => item.contentHash === asset.contentHash);
+      const storedAsset = existingAsset ?? { ...asset, id: randomUUID(), storageKey: `sha256:${asset.contentHash}`, createdAt: now() };
+      if (!existingAsset) await this.writeRecord("mediaAsset", storedAsset);
+      const attachment = { id: randomUUID(), messageId: null, draftId, assetId: storedAsset.id, sortOrder: current.length, originalFilename: originalFilename ?? null, createdAt: now() };
+      await this.writeRecord("messageAttachment", attachment);
+      return { attachment, asset: storedAsset };
+    });
+  }
+
+  async attachDraftToMessage(draftId, messageId) {
+    if (!draftId) return [];
+    const attachments = this.listDraftAttachments(draftId);
+    if (!attachments.length) { const error = new Error("The selected draft images are unavailable. Add them again before sending."); error.status = 409; throw error; }
+    for (const attachment of attachments) await this.writeRecord("messageAttachment", { ...attachment, draftId: null, messageId });
+    return attachments.map((item) => ({ ...item, draftId: null, messageId }));
+  }
+
+  async cleanupOrphanAssets() {
+    const referenced = new Set(this.readRecords("messageAttachment").map((item) => item.assetId));
+    for (const asset of this.readRecords("mediaAsset")) if (!referenced.has(asset.id)) await this.deleteRecord("mediaAsset", asset.id);
+  }
+
+  async removeDraftAttachment(draftId, attachmentId) {
+    return this.atomicWrite(async () => {
+      const attachment = this.readRecord("messageAttachment", attachmentId);
+      if (!attachment || attachment.draftId !== draftId || attachment.messageId) return null;
+      await this.deleteRecord("messageAttachment", attachmentId);
+      for (const [sortOrder, item] of this.listDraftAttachments(draftId).entries()) await this.writeRecord("messageAttachment", { ...item, sortOrder });
+      await this.cleanupOrphanAssets();
+      return attachment;
+    });
+  }
+
+  async discardDraftAttachments(draftId) {
+    return this.atomicWrite(async () => {
+      const attachments = this.listDraftAttachments(draftId);
+      for (const item of attachments) await this.deleteRecord("messageAttachment", item.id);
+      await this.cleanupOrphanAssets();
+      return attachments.length;
+    });
+  }
+
   getMessage(id) {
     return clone(this.readRecord("message", id));
   }
@@ -514,6 +574,8 @@ export class MobileStore {
   async deleteMessage(id) {
     const existing = await this.deleteRecord("message", id);
     if (!existing) return null;
+    for (const attachment of this.listMessageAttachments(id)) await this.deleteRecord("messageAttachment", attachment.id);
+    await this.cleanupOrphanAssets();
     await this.touchChat(existing.chatId, false);
     await this.persist();
     return clone(existing);
@@ -552,8 +614,10 @@ export class MobileStore {
       if (targetIndex < 0) return null;
       const removed = target.role === "user" ? timeline.slice(targetIndex) : [target];
       for (const message of removed) {
+        for (const attachment of this.listMessageAttachments(message.id)) await this.deleteRecord("messageAttachment", attachment.id);
         await this.deleteRecord("message", message.id);
       }
+      await this.cleanupOrphanAssets();
       const disabledMemoryCount = await this.disableMemoriesForRemovedSourcesInTransaction(
         target.chatId,
         removed.map((message) => message.id)

@@ -324,7 +324,7 @@ try {
   const appInfo = await request("/api/app/info");
   assert.match(appInfo.appVersion, /^\d+\.\d+\.\d+/);
   assert.equal(appInfo.platform, "android");
-  assert.equal(appInfo.schemaVersion, "001_records");
+  assert.equal(appInfo.schemaVersion, "002_message_image_assets");
   assert.equal(appInfo.migration.status, "ready");
   assert.equal("apiKey" in appInfo, false);
 

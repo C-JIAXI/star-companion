@@ -247,11 +247,49 @@ model Message {
   character Character? @relation(fields: [characterId], references: [id], onDelete: SetNull)
   modelRequests ModelRequest[]
   usageAttempts ModelUsageAttempt[]
+  attachments MessageAttachment[]
 
   @@index([chatId])
   @@index([chatId, createdAt])
   @@index([chatId, isBookmarked, createdAt])
   @@index([characterId])
+}
+
+/// Immutable, content-addressed image bytes. Original paths and untrusted metadata are never stored.
+model MediaAsset {
+  id          String   @id @default(cuid())
+  contentHash String   @unique
+  mimeType    String
+  byteSize    Int
+  width       Int
+  height      Int
+  storageKey  String   @unique
+  data        Bytes
+  createdAt   DateTime @default(now())
+
+  attachments MessageAttachment[]
+
+  @@index([createdAt])
+}
+
+/// Ordered reference from a sent message or a controlled temporary draft to an immutable asset.
+model MessageAttachment {
+  id               String   @id @default(cuid())
+  messageId        String?
+  draftId          String?
+  assetId          String
+  sortOrder        Int
+  originalFilename String?
+  createdAt        DateTime @default(now())
+
+  message Message?   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  asset   MediaAsset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@index([messageId, sortOrder])
+  @@index([draftId, sortOrder])
+  @@index([assetId])
+  @@unique([messageId, sortOrder])
+  @@unique([draftId, sortOrder])
 }
 
 /// Content-free lifecycle record used for reconnect recovery and application-level deduplication.

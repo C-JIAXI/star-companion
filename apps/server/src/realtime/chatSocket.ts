@@ -33,6 +33,7 @@ import {
 } from "../services/promptBuilder.js";
 import { updateUserProfileFromChat } from "../services/userProfileMemory.js";
 import { isPrivacyLocked } from "../services/privacyLock.js";
+import { attachDraftToMessage, messageIncludeAttachments } from "../services/messageAttachments.js";
 
 export const GENERATION_ERROR_PREFIX = "[GENERATION_FAILED] ";
 
@@ -552,19 +553,11 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
       throw new Error("Chat not found");
     }
 
-    const userMessage = await prisma.message.create({
-      data: {
-        chatId: request.chatId,
-        role: "user",
-        content: request.content,
-        variants: [],
-        activeVariantIndex: 0
-      }
-    });
-
-    await prisma.chat.update({
-      where: { id: request.chatId },
-      data: { updatedAt: new Date() }
+    const userMessage = await prisma.$transaction(async (tx) => {
+      const created = await tx.message.create({ data: { chatId: request.chatId, role: "user", content: request.content.trim(), variants: [], activeVariantIndex: 0 } });
+      await attachDraftToMessage(tx, request.draftId, created.id);
+      await tx.chat.update({ where: { id: request.chatId }, data: { updatedAt: new Date() } });
+      return tx.message.findUniqueOrThrow({ where: { id: created.id }, include: messageIncludeAttachments });
     });
 
     sendJson(socket, {

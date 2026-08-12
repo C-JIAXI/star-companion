@@ -32,6 +32,19 @@ const invoke = (value: UserSettings, requestId = `req_${randomUUID()}`) => execu
 });
 
 describe("reliable model execution", () => {
+  it("filters non-vision primary and fallback models before any provider call", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => { calls += 1; return new Response("", { status: 500 }); }) as typeof fetch;
+    const value = settings({
+      providers: [{ id: "provider", label: "Provider", provider: "openai-compatible", apiBaseUrl: "https://mock.invalid/v1", models: [
+        { id: "model", label: "Text", model: "text-only", capabilities: ["text_generation"] },
+        { id: "fallback", label: "Fallback", model: "also-text", capabilities: ["text_generation"] }
+      ] }],
+      modelReliability: { retry: { enabled: false, maxRetries: 0 }, fallback: { chat: { enabled: true, allowAutomatic: true, chain: [{ providerId: "provider", modelId: "fallback" }] } } }
+    });
+    await assert.rejects(executeReliableTextStream({ settings: value, messages: [{ role: "user", content: "", images: [{ mimeType: "image/png", dataBase64: "AQID" }] }], context: { requestId: `req_${randomUUID()}`, module: "chat", operation: "test" } }).next(), (error) => error instanceof Error && "safe" in error && (error as { safe: { code: string } }).safe.code === "unsupported_capability");
+    assert.equal(calls, 0);
+  });
   it("retries 429 with Retry-After and records each actual provider attempt", async () => {
     let calls = 0;
     const retries: number[] = [];

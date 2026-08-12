@@ -5,6 +5,7 @@ export type CharacterVisibility = "public" | "private";
 
 export type AiModelCapability =
   | "text_generation"
+  | "vision_input"
   | "text_embedding"
   | "audio_transcription"
   | "text_to_speech"
@@ -272,6 +273,7 @@ export const aiModuleCapability: Record<AiModuleId, AiModelCapability> = {
 
 const knownAiModelCapabilities = new Set<AiModelCapability>([
   "text_generation",
+  "vision_input",
   "text_embedding",
   "audio_transcription",
   "text_to_speech",
@@ -295,6 +297,10 @@ export const inferAiModelCapabilities = (model: string): AiModelCapability[] => 
 
   if (/(?:dall[\-_.]?e|gpt[\-_.]?image|imagegen|stable[\-_.]?diffusion|(?:^|[-_/])sdxl?(?:[-_/]|$)|flux)/.test(normalized)) {
     return ["image_generation"];
+  }
+
+  if (/(?:gpt-4(?:o|\.1|\.5)|gpt-5|o[134](?:-|$)|claude-(?:3|sonnet|opus|haiku)|gemini-(?:1\.5|2|3)|qwen(?:2\.5|-)?vl|llava|pixtral|vision)/.test(normalized)) {
+    return ["text_generation", "vision_input"];
   }
 
   // Unrecognised provider models are treated as text models, preserving existing local/OpenAI-compatible setups.
@@ -782,6 +788,7 @@ export type PromptBreakdownSectionId =
   | "lore"
   | "memory"
   | "history"
+  | "image_input"
   | "generation_instruction"
   | "formatting";
 
@@ -796,6 +803,7 @@ export interface PromptBreakdownDTO {
   promptTokens: number;
   promptTokensEstimated: boolean;
   includedMessageCount: number;
+  imageCount: number;
   sections: PromptBreakdownSectionDTO[];
 }
 
@@ -805,6 +813,7 @@ export interface MessageDTO {
   role: MessageRole;
   characterId: string | null;
   content: string;
+  attachments: MessageAttachmentDTO[];
   contextIncluded: boolean;
   isBookmarked: boolean;
   variants: string[];
@@ -865,6 +874,25 @@ export interface ChatMemoryDTO {
   lastMatchedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface MessageAttachmentDTO {
+  id: string;
+  assetId: string;
+  mimeType: "image/png" | "image/jpeg";
+  byteSize: number;
+  width: number;
+  height: number;
+  contentHash: string;
+  sortOrder: number;
+  originalFilename: string | null;
+  createdAt: string;
+  url: string;
+}
+
+export interface DraftImageAttachmentDTO extends MessageAttachmentDTO {
+  draftId: string;
+  status: "ready";
 }
 
 export type MemoryActor = "user" | "automatic_memory" | "agent_confirmed" | "timeline_cleanup" | "restore";

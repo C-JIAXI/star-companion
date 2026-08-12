@@ -1,7 +1,7 @@
 import type { Prisma, UserSettings } from "@prisma/client";
 import { completeChatCompletionDetailed, estimateTokenUsage, normalizeProvider, streamChatCompletion, type ChatCompletionMessage, type ChatCompletionResult, type ChatCompletionStreamEvent } from "./completions.js";
-import { ModelCallError, normalizeModelError } from "./modelErrors.js";
-import { resolveAutomaticFallbackSettings, resolveModuleSettings, type AiModuleId } from "./moduleModels.js";
+import { createModelError, ModelCallError, normalizeModelError } from "./modelErrors.js";
+import { resolveAutomaticFallbackSettings, resolveModuleSettings, settingsSupportVisionInput, type AiModuleId } from "./moduleModels.js";
 import {
   beginModelRequest,
   estimateInputTokens,
@@ -420,7 +420,10 @@ export async function* executeReliableTextStream(input: {
   context: ReliableCallContext;
 }): AsyncGenerator<ReliableStreamEvent> {
   const primarySettings = resolveModuleSettings(input.settings, input.context.module);
-  const candidates = [primarySettings, ...resolveAutomaticFallbackSettings(input.settings, input.context.module)];
+  const requiresVision = input.messages.some((message) => Boolean(message.images?.length));
+  const candidates = [primarySettings, ...resolveAutomaticFallbackSettings(input.settings, input.context.module)]
+    .filter((settings) => !requiresVision || settingsSupportVisionInput(settings));
+  if (!candidates.length) throw createModelError({ code: "unsupported_capability", provider: primarySettings.activeProvider, modelId: primarySettings.model });
   const primaryIdentity = getModelIdentity(primarySettings);
   const promptTokensEstimate = estimateInputTokens(input.messages.map((message) => message.content));
   let attemptNumber = 0;

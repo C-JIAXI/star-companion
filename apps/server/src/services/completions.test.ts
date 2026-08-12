@@ -4,8 +4,11 @@ import type { UserSettings } from "@prisma/client";
 import {
   completeChatCompletion,
   fetchAvailableModels,
+  openAiRequestBody,
   streamChatCompletion,
-  testModelConnection
+  testModelConnection,
+  toAnthropicPayload,
+  toGeminiPayload
 } from "./completions.js";
 import { ModelCallError } from "./modelErrors.js";
 
@@ -237,5 +240,39 @@ describe("model provider adapters", () => {
     assert.equal((requestedBody as { temperature?: number }).temperature, 0);
     assert.equal(result.reachable, true);
     assert.equal(result.model, "local-chat-model");
+  });
+});
+
+describe("vision provider payload contracts", () => {
+  const messages = [
+    { role: "system" as const, content: "character" },
+    { role: "user" as const, content: "first", images: [{ mimeType: "image/png" as const, dataBase64: "AQID" }] },
+    { role: "assistant" as const, content: "reply" },
+    { role: "user" as const, content: "second", images: [{ mimeType: "image/jpeg" as const, dataBase64: "BAUG" }] }
+  ];
+  it("builds ordered OpenAI-compatible text and image_url blocks", () => {
+    const body = openAiRequestBody({ settings: createSettings({}), messages, stream: false });
+    assert.deepEqual(body.messages[1]?.content, [
+      { type: "text", text: "first" },
+      { type: "image_url", image_url: { url: "data:image/png;base64,AQID" } }
+    ]);
+    assert.deepEqual(body.messages[3]?.content, [
+      { type: "text", text: "second" },
+      { type: "image_url", image_url: { url: "data:image/jpeg;base64,BAUG" } }
+    ]);
+  });
+  it("builds ordered Anthropic text/image blocks", () => {
+    const body = toAnthropicPayload({ settings: createSettings({ activeProvider: "anthropic" }), messages, stream: false });
+    assert.deepEqual(body.messages[0]?.content, [
+      { type: "text", text: "first" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "AQID" } }
+    ]);
+  });
+  it("builds ordered Gemini text/inlineData parts", () => {
+    const body = toGeminiPayload({ settings: createSettings({ activeProvider: "google-gemini" }), messages });
+    assert.deepEqual(body.contents[0]?.parts, [
+      { text: "first" },
+      { inlineData: { mimeType: "image/png", data: "AQID" } }
+    ]);
   });
 });
