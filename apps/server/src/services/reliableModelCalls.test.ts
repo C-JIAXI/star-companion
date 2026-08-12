@@ -45,6 +45,28 @@ describe("reliable model execution", () => {
     await assert.rejects(executeReliableTextStream({ settings: value, messages: [{ role: "user", content: "", images: [{ mimeType: "image/png", dataBase64: "AQID" }] }], context: { requestId: `req_${randomUUID()}`, module: "chat", operation: "test" } }).next(), (error) => error instanceof Error && "safe" in error && (error as { safe: { code: string } }).safe.code === "unsupported_capability");
     assert.equal(calls, 0);
   });
+  it("reserves conservatively for images and marks estimated image usage unknown", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 })) as typeof fetch;
+    const requestId = `vision_budget_${randomUUID()}`;
+    const configured = settings({
+      providers: [{ id: "provider", label: "Provider", provider: "openai-compatible", apiBaseUrl: "https://mock.invalid/v1", models: [{
+        id: "model", label: "Vision", model: "test-model", capabilities: ["text_generation", "vision_input"],
+        pricing: { inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 2_000_000, currency: "USD", updatedAt: new Date().toISOString(), source: "user" }
+      }] }]
+    });
+    await prisma.modelRequest.create({ data: { id: requestId, module: "chat", operation: "test" } });
+    const iterator = executeReliableTextStream({
+      settings: configured,
+      messages: [{ role: "user", content: "", images: [{ mimeType: "image/png", dataBase64: "AQID" }] }],
+      context: { requestId, module: "chat", operation: "test" }
+    });
+    for await (const _event of iterator) { /* consume */ }
+    const attempt = await prisma.modelUsageAttempt.findFirstOrThrow({ where: { requestId } });
+    assert.ok((attempt.promptTokens ?? 0) >= 1024);
+    assert.equal(attempt.usageSource, "estimated");
+    assert.equal(attempt.specialTokensUnknown, true);
+    assert.ok((attempt.estimatedCostMicros ?? 0) > 0);
+  });
   it("retries 429 with Retry-After and records each actual provider attempt", async () => {
     let calls = 0;
     const retries: number[] = [];

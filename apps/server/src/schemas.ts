@@ -14,6 +14,7 @@ export const imageAttachmentUploadSchema = z.object({
 export const imageAttachmentReorderSchema = z.object({
   attachmentIds: z.array(idSchema).min(1).max(4)
 });
+export const imageAttachmentEditDraftSchema = z.object({ draftId: attachmentDraftIdSchema });
 
 const stringArraySchema = z.array(z.string().trim().min(1)).default([]);
 const characterTagsSchema = z
@@ -519,9 +520,12 @@ export const messageUpdateSchema = z
   variantMetadata: z.array(generationMetadataSchema.nullable()).max(100).optional(),
   promptBreakdown: promptBreakdownSchema.nullable().optional(),
   loreMatches: z.array(loreMatchSchema).nullable().optional(),
-  memoryMatches: z.array(matchedMemorySchema).nullable().optional()
+  memoryMatches: z.array(matchedMemorySchema).nullable().optional(),
+  draftId: attachmentDraftIdSchema.optional(),
+  replaceAttachments: z.boolean().optional()
   })
-  .refine((value) => Object.keys(value).length > 0, "At least one field is required");
+  .refine((value) => Object.keys(value).length > 0, "At least one field is required")
+  .refine((value) => value.draftId === undefined || value.replaceAttachments === true, "draftId requires replaceAttachments");
 
 export const messageListQuerySchema = z.object({
   chatId: idSchema.optional()
@@ -790,7 +794,7 @@ export const backupMessageSchema = messageCreateSchema.extend({
   id: idSchema.optional(),
   createdAt: backupDateSchema,
   updatedAt: backupDateSchema
-});
+}).omit({ draftId: true });
 
 const memoryActorSchema = z.enum(["user", "automatic_memory", "agent_confirmed", "timeline_cleanup", "restore"]);
 const memoryActionSchema = z.enum(["baseline", "automatic_create", "automatic_update", "automatic_disable", "manual_create", "manual_edit", "manual_enable", "manual_disable", "manual_delete", "agent_confirmed_create", "timeline_disable", "restore", "undo_create", "undo_update", "undo_disable"]);
@@ -801,6 +805,33 @@ const memorySnapshotSchema = z.object({
   importance: z.number().int().min(1).max(5),
   enabled: z.boolean(),
   sourceMessageIds: z.array(idSchema).max(20).default([])
+});
+
+export const backupMediaAssetSchema = z.object({
+  id: idSchema,
+  contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+  mimeType: z.enum(["image/png", "image/jpeg"]),
+  byteSize: z.number().int().positive().max(20 * 1024 * 1024),
+  width: z.number().int().positive().max(16_384),
+  height: z.number().int().positive().max(16_384),
+  dataBase64: z.string().min(1).max(28_000_000),
+  createdAt: backupDateSchema
+});
+
+export const backupMessageAttachmentSchema = z.object({
+  id: idSchema,
+  messageId: idSchema,
+  assetId: idSchema,
+  sortOrder: z.number().int().min(0).max(3),
+  originalFilename: z.string().max(160).nullable(),
+  createdAt: backupDateSchema
+});
+
+export const backupMediaEnvelopeSchema = z.object({
+  version: z.literal(1),
+  manifestHash: z.string().regex(/^[a-f0-9]{64}$/),
+  assets: z.array(backupMediaAssetSchema).max(10_000),
+  attachments: z.array(backupMessageAttachmentSchema).max(40_000)
 });
 
 export const backupMemorySchema = chatMemoryCreateSchema.omit({ actor: true }).extend({
@@ -850,6 +881,7 @@ export const backupImportSchema = z.object({
   memoryRevisions: z.array(backupMemoryRevisionSchema).default([]),
   memoryOperations: z.array(backupMemoryOperationSchema).default([]),
   profileSummaryRevisions: z.array(backupProfileSummaryRevisionSchema).default([]),
+  media: backupMediaEnvelopeSchema.optional(),
   mode: z.enum(["merge", "replace"]).default("merge")
 });
 
@@ -875,6 +907,7 @@ export const backupPreviewRequestSchema = z
     memoryRevisions: z.unknown().optional(),
     memoryOperations: z.unknown().optional(),
     profileSummaryRevisions: z.unknown().optional(),
+    media: z.unknown().optional(),
     mode: z.enum(["merge", "replace"]).default("merge")
   })
   .passthrough();
@@ -894,7 +927,8 @@ export const chatArchiveImportSchema = z.object({
     memories: z.array(backupMemorySchema).max(500),
     memoryRevisions: z.array(backupMemoryRevisionSchema).max(15_000).default([]),
     memoryOperations: z.array(backupMemoryOperationSchema).max(10_000).default([]),
-    profileSummaryRevisions: z.array(backupProfileSummaryRevisionSchema).max(15_000).default([])
+    profileSummaryRevisions: z.array(backupProfileSummaryRevisionSchema).max(15_000).default([]),
+    media: backupMediaEnvelopeSchema.optional()
   }),
   title: z.string().trim().min(1).max(120).optional()
 });

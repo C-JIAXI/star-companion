@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { HttpError } from "../lib/http.js";
 import { updateMemoryInTransaction } from "./memoryHistory.js";
+import { deleteUnreferencedAssets, messageIncludeAttachments } from "./messageAttachments.js";
 
 const listTimelineMessageIdsFrom = async (
   transaction: Prisma.TransactionClient,
@@ -60,6 +61,7 @@ export const deleteMessageTimeline = (messageId: string) =>
     const deleted = await transaction.message.deleteMany({
       where: { id: { in: messageIds } }
     });
+    await deleteUnreferencedAssets(transaction);
     const disabledMemoryCount = await disableMemoriesFromTimeline(
       transaction,
       existing.chatId,
@@ -77,7 +79,7 @@ export const prepareUserMessageResend = (messageId: string) =>
   prisma.$transaction(async (transaction) => {
     const targetMessage = await transaction.message.findFirst({
       where: { id: messageId, chat: { deletedAt: null } },
-      select: { id: true, chatId: true, role: true, content: true }
+      include: messageIncludeAttachments
     });
     if (!targetMessage || targetMessage.role !== "user") {
       throw new HttpError(404, "User message not found");
@@ -110,6 +112,20 @@ export const prepareUserMessageResend = (messageId: string) =>
         activeVariantIndex: 0
       }
     });
+    if (targetMessage.attachments.length) {
+      await transaction.messageAttachment.createMany({ data: targetMessage.attachments.map((attachment) => ({
+        messageId: userMessage.id,
+        assetId: attachment.assetId,
+        sortOrder: attachment.sortOrder,
+        originalFilename: attachment.originalFilename,
+        createdAt: attachment.createdAt
+      })) });
+    }
+    const userMessageWithAttachments = await transaction.message.findUniqueOrThrow({
+      where: { id: userMessage.id },
+      include: messageIncludeAttachments
+    });
+    await deleteUnreferencedAssets(transaction);
     await transaction.chat.update({
       where: { id: targetMessage.chatId },
       data: { updatedAt: new Date(), memoryUpdatedAt: null }
@@ -117,7 +133,7 @@ export const prepareUserMessageResend = (messageId: string) =>
 
     return {
       chat,
-      userMessage,
+      userMessage: userMessageWithAttachments,
       replacedCount: messageIds.length - 1,
       disabledMemoryCount
     };

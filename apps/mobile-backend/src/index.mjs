@@ -41,6 +41,8 @@ import {
   chatUpdateSchema,
   continueRequestSchema,
   imageGenerationSchema,
+  imageAttachmentUploadSchema,
+  imageAttachmentReorderSchema,
   generationRequestSchema,
   messageCreateSchema,
   messageListQuerySchema,
@@ -55,6 +57,7 @@ import {
   settingsUpdateSchema,
   lanSyncRequestSchema
 } from "../server-dist/schemas.js";
+import { normalizeUploadedImage } from "../server-dist/services/imageNormalization.js";
 import { buildCharacterDraftMessages, getCharacterDraftMeta, parseCharacterDraftItems } from "../server-dist/services/characterDraftProtocol.js";
 import { applyCharacterTagOperation } from "../server-dist/services/characterTags.js";
 import {
@@ -1110,6 +1113,7 @@ const serializeMessage = (message) => ({
   role: message.role === "assistant" || message.role === "system" ? message.role : "user",
   characterId: message.characterId ?? null,
   content: message.content ?? "",
+  attachments: store.listMessageAttachments(message.id).map((attachment) => serializeMobileAttachment(attachment)),
   contextIncluded: message.contextIncluded !== false,
   isBookmarked: message.isBookmarked === true,
   variants: toStringArray(message.variants),
@@ -1123,6 +1127,24 @@ const serializeMessage = (message) => ({
   createdAt: message.createdAt,
   updatedAt: message.updatedAt
 });
+
+const serializeMobileAttachment = (attachment) => {
+  const asset = store.getMediaAsset(attachment.assetId);
+  if (!asset) throw new Error("Image asset is missing.");
+  return {
+    id: attachment.id,
+    assetId: asset.id,
+    mimeType: asset.mimeType,
+    byteSize: asset.byteSize,
+    width: asset.width,
+    height: asset.height,
+    contentHash: asset.contentHash,
+    sortOrder: attachment.sortOrder,
+    originalFilename: attachment.originalFilename ?? null,
+    createdAt: attachment.createdAt,
+    url: `/api/media/chat-images/${encodeURIComponent(asset.id)}`
+  };
+};
 
 const buildMessageSearchSnippet = (content, query) => {
   const normalizedContent = String(content ?? "").toLowerCase();
@@ -1219,11 +1241,20 @@ const inferModelCapabilities = (model) => {
   if (/(?:dall[\-_.]?e|gpt[\-_.]?image|imagegen|stable[\-_.]?diffusion|(?:^|[-_/])sdxl?(?:[-_/]|$)|flux)/.test(normalized)) {
     return ["image_generation"];
   }
+  if (/(?:gpt-4(?:o|\.1|\.5)|gpt-5|o[134](?:-|$)|claude-(?:3|sonnet|opus|haiku)|gemini-(?:1\.5|2|3)|qwen(?:2\.5|-)?vl|llava|pixtral|vision)/.test(normalized)) {
+    return ["text_generation", "vision_input"];
+  }
   return ["text_generation"];
 };
 
 const getModelCapabilities = (model) =>
   Array.isArray(model?.capabilities) ? model.capabilities : inferModelCapabilities(model?.model);
+
+const settingsSupportVisionInput = (settings) => {
+  const provider = (settings.providers ?? []).find((entry) => entry.id === settings.activeProviderId);
+  const model = provider?.models?.find((entry) => entry.id === settings.activeModelId) ?? { model: settings.model };
+  return getModelCapabilities(model).includes("vision_input");
+};
 
 const supportsModule = (provider, model, moduleId) => {
   const providerKind = normalizeProviderKind(provider?.provider);
@@ -1777,7 +1808,12 @@ const getPromptContext = async ({ chatId, before, excludeMessageIds = [] }) => {
     if (message.role === "system") continue;
     const historyMessage = {
       role: message.role === "assistant" ? "assistant" : "user",
-      content: message.content
+      content: message.content,
+      ...(store.listMessageAttachments(message.id).length ? { images: store.listMessageAttachments(message.id).map((attachment) => {
+        const asset = store.getMediaAsset(attachment.assetId);
+        if (!asset) throw new Error("A referenced image asset is missing.");
+        return { mimeType: asset.mimeType, dataBase64: asset.dataBase64 };
+      }) } : {})
     };
     historyMessages.push(historyMessage);
     messages.push(historyMessage);
@@ -2744,7 +2780,7 @@ app.post(
     });
 
     for (const message of messages.slice(0, targetIndex + 1)) {
-      await store.createMessage({
+      const copiedMessage = await store.createMessage({
         chatId: branch.id,
         role: message.role,
         characterId: message.characterId,
@@ -2754,12 +2790,15 @@ app.post(
         variants: message.variants,
         activeVariantIndex: message.activeVariantIndex,
         tokenUsage: message.tokenUsage,
+        generationMetadata: message.generationMetadata,
+        variantMetadata: message.variantMetadata,
         promptBreakdown: message.promptBreakdown,
         loreMatches: message.loreMatches,
         memoryMatches: message.memoryMatches,
         createdAt: message.createdAt,
         updatedAt: message.updatedAt
       });
+      await store.copyMessageAttachments(message.id, copiedMessage.id);
     }
 
     response.status(201).json({
@@ -2971,7 +3010,8 @@ app.post(
   asyncHandler(async (request, response) => {
     const body = parseBody(messageCreateSchema, request.body);
     if (!getActiveChat(body.chatId)) throw notFound("Chat not found");
-    const message = await store.createMessage(body);
+    const { draftId, ...messageBody } = body;
+    const message = draftId ? await store.createMessageWithDraft(messageBody, draftId) : await store.createMessage(messageBody);
     response.status(201).json({ ok: true, data: serializeMessage(message) });
   })
 );
@@ -3018,6 +3058,65 @@ app.delete(
     response.status(204).send();
   })
 );
+
+app.post(
+  "/api/media/chat-images/drafts",
+  asyncHandler(async (request, response) => {
+    const body = parseBody(imageAttachmentUploadSchema, request.body);
+    const normalized = normalizeUploadedImage(body);
+    const contentHash = createHash("sha256").update(normalized.data).digest("hex");
+    const result = await store.createDraftAttachment({
+      draftId: body.draftId,
+      asset: {
+        contentHash,
+        mimeType: normalized.mimeType,
+        byteSize: normalized.data.length,
+        width: normalized.width,
+        height: normalized.height,
+        dataBase64: normalized.data.toString("base64")
+      },
+      originalFilename: body.originalFilename?.replace(/[\\/\0-\x1f\x7f<>:"|?*]/g, "_").slice(0, 160) || null
+    });
+    response.status(201).json({ ok: true, data: { ...serializeMobileAttachment(result.attachment), draftId: body.draftId, status: "ready" } });
+  })
+);
+
+app.get("/api/media/chat-images/drafts/:draftId", (request, response) => {
+  const draftId = requireParam(request, "draftId");
+  response.json({ ok: true, data: store.listDraftAttachments(draftId).map((item) => ({ ...serializeMobileAttachment(item), draftId, status: "ready" })) });
+});
+
+app.put(
+  "/api/media/chat-images/drafts/:draftId/order",
+  asyncHandler(async (request, response) => {
+    const draftId = requireParam(request, "draftId");
+    const body = parseBody(imageAttachmentReorderSchema, request.body);
+    const items = await store.reorderDraftAttachments(draftId, body.attachmentIds);
+    response.json({ ok: true, data: items.map((item) => ({ ...serializeMobileAttachment(item), draftId, status: "ready" })) });
+  })
+);
+
+app.delete("/api/media/chat-images/drafts/:draftId/:attachmentId", asyncHandler(async (request, response) => {
+  const removed = await store.removeDraftAttachment(requireParam(request, "draftId"), requireParam(request, "attachmentId"));
+  if (!removed) throw notFound("Draft image not found");
+  response.status(204).send();
+}));
+
+app.delete("/api/media/chat-images/drafts/:draftId", asyncHandler(async (request, response) => {
+  await store.discardDraftAttachments(requireParam(request, "draftId"));
+  response.status(204).send();
+}));
+
+app.get("/api/media/chat-images/:assetId", (request, response) => {
+  const asset = store.getMediaAsset(requireParam(request, "assetId"));
+  if (!asset || !store.readRecords("messageAttachment").some((item) => item.assetId === asset.id)) throw notFound("Image not found");
+  response.setHeader("Content-Type", asset.mimeType);
+  response.setHeader("Content-Length", String(asset.byteSize));
+  response.setHeader("Cache-Control", "private, no-store");
+  response.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.send(Buffer.from(asset.dataBase64, "base64"));
+});
 
 app.get("/api/settings", (_request, response) => {
   response.json({ ok: true, data: publicSettings(store.getSettings()) });
@@ -3617,9 +3716,12 @@ const createAssistantReply = async ({
   let stopped = false;
   let terminalStreamError = null;
   const rootSettings = store.getSettings();
-  const candidates = [resolveModuleSettings(rootSettings, "chat"), ...resolveAutomaticFallbackSettings(rootSettings, "chat")];
+  const requiresVision = completionMessages.some((message) => message.images?.length);
+  const candidates = [resolveModuleSettings(rootSettings, "chat"), ...resolveAutomaticFallbackSettings(rootSettings, "chat")]
+    .filter((settings) => !requiresVision || settingsSupportVisionInput(settings));
+  if (!candidates.length) throw new ModelCallError({ code: "unsupported_capability", retryable: false, receivedOutputTokens: false, provider: rootSettings.activeProvider, modelId: rootSettings.model, attempt: 0, summary: "The selected chat model does not support image input." });
   const primaryIdentity = mobileModelIdentity(candidates[0]);
-  const promptTokenEstimate = completionMessages.reduce((total, message) => total + estimatePromptTokens(message.content), 0);
+  const promptTokenEstimate = completionMessages.reduce((total, message) => total + estimatePromptTokens(message.content) + (message.images?.length ?? 0) * 1024, 0);
   let activeAttempt = null;
   let activeIdentity = primaryIdentity;
   let lastError = null;
@@ -3649,6 +3751,7 @@ const createAssistantReply = async ({
         usedFallback: candidateIndex > 0,
         fallbackFromProviderId: candidateIndex > 0 ? primaryIdentity.providerId : null,
         fallbackFromModelId: candidateIndex > 0 ? primaryIdentity.modelId : null
+        ,specialTokensUnknown: requiresVision
       });
       if (attempt.status === "blocked") {
         throw new ModelCallError({ code: "budget_blocked", retryable: false, receivedOutputTokens: false, provider: identity.providerType, modelId: identity.modelId, attempt: attemptNumber, summary: "The local hard budget prevented this model call.", diagnosticId: attempt.diagnosticId });
@@ -3676,6 +3779,7 @@ const createAssistantReply = async ({
           outputTokens: partialUsage?.completionTokens ?? null,
           totalTokens: partialUsage?.totalTokens ?? null,
           usageSource: partialUsage ? "estimated" : null,
+          specialTokensUnknown: requiresVision,
           estimatedCostMicros: partialUsage && identity.pricing ? Math.ceil((partialUsage.promptTokens * identity.pricing.inputMicrosPerMillion + partialUsage.completionTokens * identity.pricing.outputMicrosPerMillion) / 1_000_000) : null,
           reservedCostMicros: 0,
           errorCode: normalized.safe.code,
@@ -3780,6 +3884,7 @@ const createAssistantReply = async ({
       outputTokens: tokenUsage.completionTokens,
       totalTokens: tokenUsage.totalTokens,
       usageSource: tokenUsage.estimated ? "estimated" : "provider",
+      specialTokensUnknown: requiresVision && tokenUsage.estimated,
       estimatedCostMicros,
       reservedCostMicros: 0,
       errorCode: terminalStreamError?.safe.code ?? (stopped ? "cancelled" : null),
@@ -3815,13 +3920,13 @@ const handleGenerate = async (socket, raw) => {
     const chat = getActiveChat(request.chatId);
     if (!chat) throw notFound("Chat not found");
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
-    const userMessage = await store.createMessage({
+    const userMessage = await store.createMessageWithDraft({
       chatId: request.chatId,
       role: "user",
       content: request.content,
       variants: [],
       activeVariantIndex: 0
-    });
+    }, request.draftId);
     sendJson(socket, {
       type: "user_message",
       requestId: request.requestId,
@@ -3963,15 +4068,8 @@ const handleResend = async (socket, raw) => {
   if (!await claimMobileRequest(socket, { requestId: request.requestId, operation: "resend", messageId: target.id, chatId: target.chatId, overrideHardBudget: request.overrideHardBudget })) return;
   controllers.set(request.requestId, abortController);
   try {
-    await store.deleteMessagesAfter(target);
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
-    const userMessage = await store.createMessage({
-      chatId: target.chatId,
-      role: "user",
-      content: target.content,
-      variants: [],
-      activeVariantIndex: 0
-    });
+    const { userMessage } = await store.prepareUserMessageResend(target);
     sendJson(socket, { type: "user_message", requestId: request.requestId, message: serializeMessage(userMessage) });
     const result = await createAssistantReply({
       socket,

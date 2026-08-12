@@ -57,6 +57,10 @@ const reliability = (settings: UserSettings) => {
   };
 };
 
+const estimateMultimodalInputTokens = (messages: ChatCompletionMessage[]) =>
+  estimateInputTokens(messages.map((message) => message.content)) +
+  messages.reduce((total, message) => total + (message.images?.length ?? 0) * 1024, 0);
+
 export type ReliableCallContext = {
   requestId: string;
   module: AiModuleId;
@@ -246,9 +250,12 @@ export const executeReliableTextCompletion = async (input: {
   }
 
   const primarySettings = resolveModuleSettings(input.settings, input.context.module);
-  const candidates = [primarySettings, ...resolveAutomaticFallbackSettings(input.settings, input.context.module)];
+  const requiresVision = input.messages.some((message) => Boolean(message.images?.length));
+  const candidates = [primarySettings, ...resolveAutomaticFallbackSettings(input.settings, input.context.module)]
+    .filter((settings) => !requiresVision || settingsSupportVisionInput(settings));
+  if (!candidates.length) throw createModelError({ code: "unsupported_capability", provider: primarySettings.activeProvider, modelId: primarySettings.model });
   const primaryIdentity = getModelIdentity(primarySettings);
-  const promptTokens = estimateInputTokens(input.messages.map((message) => message.content));
+  const promptTokens = estimateMultimodalInputTokens(input.messages);
   let attemptNumber = 0;
   let lastError: ModelCallError | null = null;
 
@@ -274,7 +281,8 @@ export const executeReliableTextCompletion = async (input: {
       pricing: identity.pricing,
       usedFallback: candidateIndex > 0,
       fallbackFromProviderId: candidateIndex > 0 ? primaryIdentity.providerId : undefined,
-      fallbackFromModelId: candidateIndex > 0 ? primaryIdentity.modelId : undefined
+      fallbackFromModelId: candidateIndex > 0 ? primaryIdentity.modelId : undefined,
+      specialTokensUnknown: requiresVision
     });
     if (attempt.status === "blocked") {
       throw normalizeModelError(new ModelCallError({
@@ -299,6 +307,7 @@ export const executeReliableTextCompletion = async (input: {
         promptTokens: usage.promptTokens,
         outputTokens: usage.completionTokens,
         usageSource: usage.estimated ? "estimated" : "provider",
+        specialTokensUnknown: requiresVision && usage.estimated,
         pricing: identity.pricing,
         requestComplete: true,
         messageId: input.context.messageId
@@ -319,6 +328,7 @@ export const executeReliableTextCompletion = async (input: {
         requestId: input.context.requestId,
         status: error.safe.code === "cancelled" ? "cancelled" : "failed",
         pricing: identity.pricing,
+        specialTokensUnknown: requiresVision,
         error: error.safe,
         requestComplete: final
       });
@@ -425,7 +435,7 @@ export async function* executeReliableTextStream(input: {
     .filter((settings) => !requiresVision || settingsSupportVisionInput(settings));
   if (!candidates.length) throw createModelError({ code: "unsupported_capability", provider: primarySettings.activeProvider, modelId: primarySettings.model });
   const primaryIdentity = getModelIdentity(primarySettings);
-  const promptTokensEstimate = estimateInputTokens(input.messages.map((message) => message.content));
+  const promptTokensEstimate = estimateMultimodalInputTokens(input.messages);
   let attemptNumber = 0;
   let lastError: ModelCallError | null = null;
 
@@ -451,7 +461,8 @@ export async function* executeReliableTextStream(input: {
         pricing: identity.pricing,
         usedFallback: candidateIndex > 0,
         fallbackFromProviderId: candidateIndex > 0 ? primaryIdentity.providerId : undefined,
-        fallbackFromModelId: candidateIndex > 0 ? primaryIdentity.modelId : undefined
+        fallbackFromModelId: candidateIndex > 0 ? primaryIdentity.modelId : undefined,
+        specialTokensUnknown: requiresVision
       });
       if (attempt.status === "blocked") {
         throw new ModelCallError({
@@ -484,6 +495,7 @@ export async function* executeReliableTextStream(input: {
           promptTokens: usage.promptTokens,
           outputTokens: usage.completionTokens,
           usageSource: usage.estimated ? "estimated" : "provider",
+          specialTokensUnknown: requiresVision && usage.estimated,
           pricing: identity.pricing,
           requestComplete: false
         });
@@ -516,6 +528,7 @@ export async function* executeReliableTextStream(input: {
           promptTokens: partialUsage?.promptTokens,
           outputTokens: partialUsage?.completionTokens,
           usageSource: partialUsage ? "estimated" : undefined,
+          specialTokensUnknown: requiresVision,
           pricing: identity.pricing,
           error: error.safe,
           requestComplete: final

@@ -268,6 +268,7 @@ model MediaAsset {
   createdAt   DateTime @default(now())
 
   attachments MessageAttachment[]
+  recoveryPoints RecoveryPointMediaAsset[]
 
   @@index([createdAt])
 }
@@ -373,6 +374,19 @@ model RecoveryPoint {
   summary   Json
   snapshot  Json
   createdAt DateTime @default(now())
+  mediaAssets RecoveryPointMediaAsset[]
 
   @@index([createdAt])
+}
+
+/// Keeps deduplicated media alive for a bounded recovery point without copying bytes into JSON snapshots.
+model RecoveryPointMediaAsset {
+  recoveryPointId String
+  assetId         String
+
+  recoveryPoint RecoveryPoint @relation(fields: [recoveryPointId], references: [id], onDelete: Cascade)
+  asset         MediaAsset    @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@id([recoveryPointId, assetId])
+  @@index([assetId])
 }

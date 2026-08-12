@@ -6,6 +6,7 @@ import {
   backupMemorySchema,
   backupMemoryOperationSchema,
   backupMemoryRevisionSchema,
+  backupMediaEnvelopeSchema,
   backupMessageSchema,
   backupProfileSummaryRevisionSchema,
   backupSettingsSchema
@@ -74,6 +75,7 @@ export type BackupCandidate = {
   memoryRevisions?: unknown;
   memoryOperations?: unknown;
   profileSummaryRevisions?: unknown;
+  media?: unknown;
   mode: BackupMode;
 };
 
@@ -285,6 +287,41 @@ export const analyzeBackupCandidate = (
   const memoryRevisions = parseCollection(candidate, "memoryRevisions", backupMemoryRevisionSchema, issues, invalidIndexes);
   const memoryOperations = parseCollection(candidate, "memoryOperations", backupMemoryOperationSchema, issues, invalidIndexes);
   const profileSummaryRevisions = parseCollection(candidate, "profileSummaryRevisions", backupProfileSummaryRevisionSchema, issues, invalidIndexes);
+  let media: ParsedBackup["media"];
+  if (candidate.media !== undefined) {
+    const parsedMedia = backupMediaEnvelopeSchema.safeParse(candidate.media);
+    if (!parsedMedia.success) {
+      issues.push({ entity: "backup", index: null, code: "invalid_record", message: "The image attachment envelope is invalid." });
+    } else {
+      media = parsedMedia.data;
+      const messageIds = new Set(messages.flatMap((message) => message.id ? [message.id] : []));
+      const assetIds = new Set<string>();
+      const hashes = new Set<string>();
+      for (const asset of media.assets) {
+        const bytes = Buffer.from(asset.dataBase64, "base64");
+        const actualHash = createHash("sha256").update(bytes).digest("hex");
+        if (bytes.length !== asset.byteSize || actualHash !== asset.contentHash || asset.width * asset.height > 25_000_000 || assetIds.has(asset.id) || hashes.has(asset.contentHash)) {
+          issues.push({ entity: "backup", index: null, code: "invalid_record", message: "An image asset failed its size, hash, dimension, or uniqueness check." });
+          break;
+        }
+        assetIds.add(asset.id);
+        hashes.add(asset.contentHash);
+      }
+      const attachmentIds = new Set<string>();
+      const messageOrders = new Set<string>();
+      for (const attachment of media.attachments) {
+        const orderKey = `${attachment.messageId}:${attachment.sortOrder}`;
+        if (!messageIds.has(attachment.messageId) || !assetIds.has(attachment.assetId) || attachmentIds.has(attachment.id) || messageOrders.has(orderKey)) {
+          issues.push({ entity: "backup", index: null, code: "missing_reference", message: "An image attachment has a missing or duplicate message or asset reference." });
+          break;
+        }
+        attachmentIds.add(attachment.id);
+        messageOrders.add(orderKey);
+      }
+      const expectedManifest = createHash("sha256").update(JSON.stringify({ assets: media.assets.map(({ dataBase64: _data, ...asset }) => asset), attachments: media.attachments })).digest("hex");
+      if (expectedManifest !== media.manifestHash) issues.push({ entity: "backup", index: null, code: "invalid_record", message: "The image attachment manifest integrity check failed." });
+    }
+  }
 
   duplicateIds(characters, "characters", issues, invalidIndexes);
   duplicateIds(chats, "chats", issues, invalidIndexes);
@@ -404,6 +441,7 @@ export const analyzeBackupCandidate = (
     memoryRevisions,
     memoryOperations,
     profileSummaryRevisions,
+    ...(media ? { media } : {}),
     mode: candidate.mode
   };
 
@@ -451,6 +489,15 @@ export const analyzeBackupCandidate = (
     }))
   };
 
+  const mediaSignature = (backupMedia: ParsedBackup["media"], messageId: string) => {
+    if (!backupMedia) return [];
+    const hashes = new Map(backupMedia.assets.map((asset) => [asset.id, asset.contentHash]));
+    return backupMedia.attachments
+      .filter((attachment) => attachment.messageId === messageId)
+      .sort((left, right) => left.sortOrder - right.sortOrder)
+      .map((attachment) => ({ sortOrder: attachment.sortOrder, contentHash: hashes.get(attachment.assetId), originalFilename: attachment.originalFilename }));
+  };
+
   let settingsRecord: BackupAnalysis["records"]["settings"] = null;
   if (settings && byEntity.settings.invalid === 0) {
     if (!current.settings) {
@@ -472,7 +519,17 @@ export const analyzeBackupCandidate = (
     settings: settingsRecord,
     characters: characters.map((value, index) => analyzeRecord("characters", value, index, currentMaps.characters)),
     chats: chats.map((value, index) => analyzeRecord("chats", value, index, currentMaps.chats)),
-    messages: messages.map((value, index) => analyzeRecord("messages", value, index, currentMaps.messages)),
+    messages: messages.map((value, index) => {
+      const record = analyzeRecord("messages", value, index, currentMaps.messages);
+      if (!value.id || record.status !== "skipped") return record;
+      if (sameValue(mediaSignature(media, value.id), mediaSignature(current.media, value.id))) return record;
+      byEntity.messages.skipped -= 1;
+      byEntity.messages.updated += 1;
+      byEntity.messages.conflicts += 1;
+      const key = `messages:${value.id}`;
+      conflicts.push({ key, entity: "messages", id: value.id });
+      return { ...record, key, status: "conflict" as const };
+    }),
     memories: memories.map((value, index) => analyzeRecord("memories", value, index, currentMaps.memories)),
     memoryRevisions: memoryRevisions.map((value, index) => ({ ...analyzeRecord("memoryRevisions", { ...value, id: `${value.memoryId}:${value.revision}` }, index, currentMaps.memoryRevisions), value })),
     memoryOperations: memoryOperations.map((value, index) => analyzeRecord("memoryOperations", value, index, currentMaps.memoryOperations)),

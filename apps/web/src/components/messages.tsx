@@ -26,6 +26,7 @@ import { useI18n } from "../i18n";
 import { usePlaceholderSrc } from "../placeholderImages";
 import type { MessageDTO, TokenUsageDTO } from "../types";
 import { ScopedHtmlRenderer, containsRenderableHtml } from "./ScopedHtmlRenderer";
+import { ChatImageGallery } from "./ChatImageGallery";
 
 type TokenUsageFormatter = (usage: TokenUsageDTO | null) => string;
 
@@ -323,7 +324,8 @@ export function UserMessageBubble({
             {userName}
           </p>
         ) : null}
-        <MessageBody align="left" content={message.content} renderHtml={false} />
+        <ChatImageGallery attachments={message.attachments ?? []} language={language} />
+        {message.content.trim() ? <MessageBody align="left" content={message.content} renderHtml={false} /> : <span className="sr-only">{language === "zh-CN" ? "图片消息" : "Image message"}</span>}
         {message.contextIncluded === false ? (
           <div
             className="mt-3 inline-flex items-center gap-1.5 rounded border border-ink-950/15 px-2 py-1 text-xs font-medium text-ink-950/75"

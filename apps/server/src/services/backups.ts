@@ -1,4 +1,5 @@
 import { Prisma, type UserSettings } from "@prisma/client";
+import { createHash } from "node:crypto";
 import type { z } from "zod";
 import { prisma } from "../db.js";
 import { HttpError } from "../lib/http.js";
@@ -21,6 +22,7 @@ import {
   type BackupMode,
   type ParsedBackup
 } from "./backupContract.js";
+import { deleteUnreferencedAssets } from "./messageAttachments.js";
 
 type BackupPreviewInput = z.infer<typeof backupPreviewRequestSchema>;
 type BackupExecuteInput = z.infer<typeof backupExecuteSchema>;
@@ -36,6 +38,7 @@ type ExportedBackup = {
   memoryRevisions: unknown[];
   memoryOperations: unknown[];
   profileSummaryRevisions: unknown[];
+  media?: unknown;
 };
 
 const RECOVERY_POINT_LIMIT = 10;
@@ -89,7 +92,7 @@ const preserveProviderKeys = (incoming: unknown, existing: UserSettings | null) 
 };
 
 const readExportedBackup = async (client: DbClient): Promise<ExportedBackup> => {
-  const [settings, characters, chats, messages, memories, memoryRevisions, memoryOperations, profileSummaryRevisions] = await Promise.all([
+  const [settings, characters, chats, messages, memories, memoryRevisions, memoryOperations, profileSummaryRevisions, assets, attachments] = await Promise.all([
     client.userSettings.findFirst({ orderBy: { createdAt: "asc" } }),
     client.character.findMany({ orderBy: { updatedAt: "desc" } }),
     client.chat.findMany({ orderBy: { updatedAt: "desc" } }),
@@ -97,8 +100,14 @@ const readExportedBackup = async (client: DbClient): Promise<ExportedBackup> => 
     client.chatMemory.findMany({ orderBy: { updatedAt: "desc" } }),
     client.memoryRevision.findMany({ orderBy: { createdAt: "asc" } }),
     client.memoryOperation.findMany({ orderBy: { startedAt: "asc" } }),
-    client.profileSummaryRevision.findMany({ orderBy: { createdAt: "asc" } })
+    client.profileSummaryRevision.findMany({ orderBy: { createdAt: "asc" } }),
+    client.mediaAsset.findMany({ where: { attachments: { some: { messageId: { not: null } } } }, orderBy: { id: "asc" } }),
+    client.messageAttachment.findMany({ where: { messageId: { not: null } }, orderBy: [{ messageId: "asc" }, { sortOrder: "asc" }] })
   ]);
+
+  const mediaAssets = assets.map((asset) => ({ id: asset.id, contentHash: asset.contentHash, mimeType: asset.mimeType, byteSize: asset.byteSize, width: asset.width, height: asset.height, dataBase64: Buffer.from(asset.data).toString("base64"), createdAt: asset.createdAt.toISOString() }));
+  const mediaAttachments = attachments.map((attachment) => ({ id: attachment.id, messageId: attachment.messageId!, assetId: attachment.assetId, sortOrder: attachment.sortOrder, originalFilename: attachment.originalFilename, createdAt: attachment.createdAt.toISOString() }));
+  const manifestHash = createHash("sha256").update(JSON.stringify({ assets: mediaAssets.map(({ dataBase64: _data, ...asset }) => asset), attachments: mediaAttachments })).digest("hex");
 
   return {
     schemaVersion: 1,
@@ -110,7 +119,8 @@ const readExportedBackup = async (client: DbClient): Promise<ExportedBackup> => 
     memories: memories.map(serializeChatMemory),
     memoryRevisions: memoryRevisions.map(serializeMemoryRevisionForBackup),
     memoryOperations: memoryOperations.map(serializeMemoryOperationForBackup),
-    profileSummaryRevisions: profileSummaryRevisions.map(serializeProfileSummaryRevisionForBackup)
+    profileSummaryRevisions: profileSummaryRevisions.map(serializeProfileSummaryRevisionForBackup),
+    ...(mediaAssets.length ? { media: { version: 1 as const, manifestHash, assets: mediaAssets, attachments: mediaAttachments } } : {})
   } as const;
 };
 
@@ -128,6 +138,8 @@ const recoverySummary = (backup: ParsedBackup) => ({
   memoryRevisions: backup.memoryRevisions.length,
   memoryOperations: backup.memoryOperations.length,
   profileSummaryRevisions: backup.profileSummaryRevisions.length
+  ,mediaAssets: backup.media?.assets.length ?? 0
+  ,messageAttachments: backup.media?.attachments.length ?? 0
 });
 
 const pruneRecoveryPoints = async (tx: Prisma.TransactionClient) => {
@@ -141,6 +153,7 @@ const pruneRecoveryPoints = async (tx: Prisma.TransactionClient) => {
     .map((point) => point.id);
   if (ids.length) {
     await tx.recoveryPoint.deleteMany({ where: { id: { in: ids } } });
+    await deleteUnreferencedAssets(tx);
   }
 };
 
@@ -149,13 +162,18 @@ const createRecoveryPoint = async (
   reason: "before_import" | "before_restore"
 ) => {
   const snapshot = await readBackup(tx);
+  const storedSnapshot = snapshot.media ? {
+    ...snapshot,
+    media: { ...snapshot.media, assets: snapshot.media.assets.map(({ dataBase64: _data, ...asset }) => asset) }
+  } : snapshot;
   const point = await tx.recoveryPoint.create({
     data: {
       reason,
       summary: recoverySummary(snapshot) as Prisma.InputJsonValue,
-      snapshot: snapshot as Prisma.InputJsonValue
+      snapshot: storedSnapshot as Prisma.InputJsonValue
     }
   });
+  if (snapshot.media?.assets.length) await tx.recoveryPointMediaAsset.createMany({ data: snapshot.media.assets.map((asset) => ({ recoveryPointId: point.id, assetId: asset.id })) });
   await pruneRecoveryPoints(tx);
   return point;
 };
@@ -225,10 +243,22 @@ const applyBackup = async (
 ) => {
   const { backup, records } = analysis;
   if (backup.mode === "replace") {
+    await tx.messageAttachment.deleteMany();
     await tx.chatMemory.deleteMany();
     await tx.message.deleteMany();
     await tx.chat.deleteMany();
     await tx.character.deleteMany();
+  }
+
+  const importedAssetIds = new Map<string, string>();
+  if (backup.media) for (const asset of backup.media.assets) {
+    const bytes = Buffer.from(asset.dataBase64, "base64");
+    const existing = await tx.mediaAsset.findUnique({ where: { contentHash: asset.contentHash } });
+    if (existing) importedAssetIds.set(asset.id, existing.id);
+    else {
+      const created = await tx.mediaAsset.create({ data: { id: asset.id, contentHash: asset.contentHash, mimeType: asset.mimeType, byteSize: asset.byteSize, width: asset.width, height: asset.height, storageKey: `sha256:${asset.contentHash}`, data: new Uint8Array(bytes), ...(asset.createdAt ? { createdAt: new Date(asset.createdAt) } : {}) } });
+      importedAssetIds.set(asset.id, created.id);
+    }
   }
 
   const existingSettings = await tx.userSettings.findFirst({ orderBy: { createdAt: "asc" } });
@@ -335,6 +365,17 @@ const applyBackup = async (
     }
   }
 
+  if (backup.media) {
+    const appliedMessageIds = new Set(records.messages.filter((record) => shouldApplyRecord(record, backup.mode, resolutions)).flatMap((record) => record.value.id ? [record.value.id] : []));
+    for (const messageId of appliedMessageIds) await tx.messageAttachment.deleteMany({ where: { messageId } });
+    for (const attachment of backup.media.attachments) {
+      if (!appliedMessageIds.has(attachment.messageId)) continue;
+      const assetId = importedAssetIds.get(attachment.assetId);
+      if (!assetId) throw new HttpError(400, "An image attachment refers to unavailable image data.");
+      await tx.messageAttachment.create({ data: { id: attachment.id, messageId: attachment.messageId, assetId, sortOrder: attachment.sortOrder, originalFilename: attachment.originalFilename, ...(attachment.createdAt ? { createdAt: new Date(attachment.createdAt) } : {}) } });
+    }
+  }
+
   for (const record of records.memories) {
     if (!shouldApplyRecord(record, backup.mode, resolutions)) continue;
     const memory = record.value;
@@ -411,6 +452,7 @@ const applyBackup = async (
       create: { id: revision.id, chatId: revision.chatId, revision: revision.revision, ...data }
     });
   }
+  await deleteUnreferencedAssets(tx);
 
   // Conflict choices are independent records in the preview. Re-align imported
   // current-state pointers so choosing a memory/chat without its matching history
@@ -568,10 +610,13 @@ export const importBackup = async (input: BackupExecuteInput) =>
 
 export const restoreRecoveryPoint = async (id: string) =>
   prisma.$transaction(async (tx) => {
-    const point = await tx.recoveryPoint.findUnique({ where: { id } });
+    const point = await tx.recoveryPoint.findUnique({ where: { id }, include: { mediaAssets: { include: { asset: true } } } });
     if (!point) throw new HttpError(404, "Recovery point not found.");
 
-    const snapshot = backupImportSchema.safeParse({ ...(point.snapshot as object), mode: "replace" });
+    const rawSnapshot = point.snapshot as Record<string, unknown>;
+    const rawMedia = rawSnapshot.media && typeof rawSnapshot.media === "object" && !Array.isArray(rawSnapshot.media) ? rawSnapshot.media as Record<string, unknown> : null;
+    const assets = point.mediaAssets.map(({ asset }) => ({ id: asset.id, contentHash: asset.contentHash, mimeType: asset.mimeType, byteSize: asset.byteSize, width: asset.width, height: asset.height, dataBase64: Buffer.from(asset.data).toString("base64"), createdAt: asset.createdAt.toISOString() }));
+    const snapshot = backupImportSchema.safeParse({ ...rawSnapshot, ...(rawMedia ? { media: { ...rawMedia, assets } } : {}), mode: "replace" });
     if (!snapshot.success) {
       throw new HttpError(400, "This recovery point is damaged and cannot be restored.");
     }

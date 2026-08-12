@@ -25,6 +25,7 @@ import {
 import { serializeChat, serializeChatMemory, serializeMessage } from "../serializers.js";
 import { createChatAgentDraft } from "../services/chatAgent.js";
 import { createChatOpeningMessage } from "../services/chatOpening.js";
+import { deleteUnreferencedAssets, messageIncludeAttachments } from "../services/messageAttachments.js";
 import { createChatTitleSuggestion } from "../services/chatTitle.js";
 import { exportChatArchive, importChatArchive } from "../services/chatArchives.js";
 import {
@@ -229,7 +230,9 @@ chatsRouter.post(
         where: { parentChatId: { in: body.ids } },
         data: { parentChatId: null, branchSourceMessageId: null }
       });
-      return tx.chat.deleteMany({ where: { id: { in: body.ids } } });
+      const result = await tx.chat.deleteMany({ where: { id: { in: body.ids } } });
+      await deleteUnreferencedAssets(tx);
+      return result;
     });
 
     response.json({ ok: true, data: { deleted: deleted.count } });
@@ -319,7 +322,7 @@ chatsRouter.post(
     const chat = await prisma.chat.findFirst({
       where: { id: chatId, deletedAt: null },
       include: {
-        messages: { orderBy: { createdAt: "asc" } }
+        messages: { orderBy: { createdAt: "asc" }, include: messageIncludeAttachments }
       }
     });
 
@@ -360,35 +363,40 @@ chatsRouter.post(
           summary: chat.userProfileSummary, sourceMessageIds: [], createdAt: now
         } });
       }
-      await tx.message.createMany({ data: messagesToCopy.map((message) => ({
-        chatId: created.id,
-        role: message.role,
-        characterId: message.characterId,
-        content: message.content,
-        contextIncluded: message.contextIncluded,
-        isBookmarked: message.isBookmarked,
-        variants: (message.variants ?? []) as Prisma.InputJsonValue,
-        activeVariantIndex: message.activeVariantIndex,
-        tokenUsage:
-          message.tokenUsage === null ? Prisma.JsonNull : (message.tokenUsage as Prisma.InputJsonValue),
-        promptBreakdown:
-          message.promptBreakdown === null
-            ? Prisma.JsonNull
-            : (message.promptBreakdown as Prisma.InputJsonValue),
-        loreMatches:
-          message.loreMatches === null ? Prisma.JsonNull : (message.loreMatches as Prisma.InputJsonValue),
-        memoryMatches:
-          message.memoryMatches === null ? Prisma.JsonNull : (message.memoryMatches as Prisma.InputJsonValue),
-        createdAt: message.createdAt,
-        updatedAt: message.updatedAt
-      })) });
+      for (const message of messagesToCopy) {
+        const copied = await tx.message.create({ data: {
+          chatId: created.id,
+          role: message.role,
+          characterId: message.characterId,
+          content: message.content,
+          contextIncluded: message.contextIncluded,
+          isBookmarked: message.isBookmarked,
+          variants: (message.variants ?? []) as Prisma.InputJsonValue,
+          activeVariantIndex: message.activeVariantIndex,
+          tokenUsage: message.tokenUsage === null ? Prisma.JsonNull : (message.tokenUsage as Prisma.InputJsonValue),
+          generationMetadata: message.generationMetadata === null ? Prisma.JsonNull : (message.generationMetadata as Prisma.InputJsonValue),
+          variantMetadata: (message.variantMetadata ?? []) as Prisma.InputJsonValue,
+          promptBreakdown: message.promptBreakdown === null ? Prisma.JsonNull : (message.promptBreakdown as Prisma.InputJsonValue),
+          loreMatches: message.loreMatches === null ? Prisma.JsonNull : (message.loreMatches as Prisma.InputJsonValue),
+          memoryMatches: message.memoryMatches === null ? Prisma.JsonNull : (message.memoryMatches as Prisma.InputJsonValue),
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt
+        } });
+        if (message.attachments.length) await tx.messageAttachment.createMany({ data: message.attachments.map((attachment) => ({
+          messageId: copied.id,
+          assetId: attachment.assetId,
+          sortOrder: attachment.sortOrder,
+          originalFilename: attachment.originalFilename,
+          createdAt: attachment.createdAt
+        })) });
+      }
       return created;
     });
 
     const branchWithMessages = await prisma.chat.findUniqueOrThrow({
       where: { id: branch.id },
       include: {
-        messages: { orderBy: { createdAt: "asc" } },
+        messages: { orderBy: { createdAt: "asc" }, include: messageIncludeAttachments },
         memories: { orderBy: [{ enabled: "desc" }, { importance: "desc" }, { updatedAt: "desc" }] }
       }
     });
@@ -687,7 +695,7 @@ chatsRouter.get(
     const chat = await prisma.chat.findFirst({
       where: { id, deletedAt: null },
       include: {
-        messages: { orderBy: { createdAt: "asc" } },
+        messages: { orderBy: { createdAt: "asc" }, include: messageIncludeAttachments },
         memories: { orderBy: [{ enabled: "desc" }, { importance: "desc" }, { updatedAt: "desc" }] }
       }
     });
@@ -767,13 +775,14 @@ chatsRouter.delete(
       throw new HttpError(404, "Trashed chat not found");
     }
 
-    await prisma.$transaction([
-      prisma.chat.updateMany({
+    await prisma.$transaction(async (tx) => {
+      await tx.chat.updateMany({
         where: { parentChatId: id },
         data: { parentChatId: null, branchSourceMessageId: null }
-      }),
-      prisma.chat.delete({ where: { id } })
-    ]);
+      });
+      await tx.chat.delete({ where: { id } });
+      await deleteUnreferencedAssets(tx);
+    });
     response.status(204).send();
   })
 );

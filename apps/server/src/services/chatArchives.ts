@@ -1,9 +1,11 @@
 import { Prisma } from "@prisma/client";
+import { createHash } from "node:crypto";
 import { prisma } from "../db.js";
 import { HttpError } from "../lib/http.js";
 import { serializeCharacterForBackup, serializeChat, serializeChatMemory, serializeMemoryOperationForBackup, serializeMemoryRevisionForBackup, serializeMessage, serializeProfileSummaryRevisionForBackup } from "../serializers.js";
 import type { z } from "zod";
 import type { chatArchiveImportSchema } from "../schemas.js";
+import { messageIncludeAttachments } from "./messageAttachments.js";
 
 type ChatArchiveImportInput = z.infer<typeof chatArchiveImportSchema>;
 
@@ -12,11 +14,15 @@ export const exportChatArchive = async (chatId: string) => {
     where: { id: chatId, deletedAt: null },
     include: {
       character: true,
-      messages: { orderBy: { createdAt: "asc" } },
+      messages: { orderBy: { createdAt: "asc" }, include: messageIncludeAttachments },
       memories: { orderBy: [{ enabled: "desc" }, { importance: "desc" }, { updatedAt: "desc" }] }
     }
   }), prisma.memoryRevision.findMany({ where: { chatId }, orderBy: { createdAt: "asc" } }), prisma.memoryOperation.findMany({ where: { chatId }, orderBy: { startedAt: "asc" } }), prisma.profileSummaryRevision.findMany({ where: { chatId }, orderBy: { createdAt: "asc" } })]);
   if (!chat) throw new HttpError(404, "Chat not found");
+  const assetMap = new Map(chat.messages.flatMap((message) => message.attachments.map((attachment) => [attachment.assetId, attachment.asset] as const)));
+  const assets = [...assetMap.values()].sort((a, b) => a.id.localeCompare(b.id)).map((asset) => ({ id: asset.id, contentHash: asset.contentHash, mimeType: asset.mimeType as "image/png" | "image/jpeg", byteSize: asset.byteSize, width: asset.width, height: asset.height, dataBase64: Buffer.from(asset.data).toString("base64"), createdAt: asset.createdAt.toISOString() }));
+  const attachments = chat.messages.flatMap((message) => message.attachments.map((attachment) => ({ id: attachment.id, messageId: message.id, assetId: attachment.assetId, sortOrder: attachment.sortOrder, originalFilename: attachment.originalFilename, createdAt: attachment.createdAt.toISOString() })));
+  const manifestHash = createHash("sha256").update(JSON.stringify({ assets: assets.map(({ dataBase64: _data, ...asset }) => asset), attachments })).digest("hex");
 
   return {
     archiveVersion: 1 as const,
@@ -27,12 +33,30 @@ export const exportChatArchive = async (chatId: string) => {
     memories: chat.memories.map(serializeChatMemory),
     memoryRevisions: memoryRevisions.map(serializeMemoryRevisionForBackup),
     memoryOperations: memoryOperations.map(serializeMemoryOperationForBackup),
-    profileSummaryRevisions: profileSummaryRevisions.map(serializeProfileSummaryRevisionForBackup)
+    profileSummaryRevisions: profileSummaryRevisions.map(serializeProfileSummaryRevisionForBackup),
+    ...(assets.length ? { media: { version: 1 as const, manifestHash, assets, attachments } } : {})
   };
 };
 
-export const importChatArchive = async ({ archive, title }: ChatArchiveImportInput) =>
-  prisma.$transaction(async (tx) => {
+export const importChatArchive = async ({ archive, title }: ChatArchiveImportInput) => {
+  if (archive.media) {
+    const messageIds = new Set(archive.messages.flatMap((message) => message.id ? [message.id] : []));
+    const assetIds = new Set<string>();
+    for (const asset of archive.media.assets) {
+      const bytes = Buffer.from(asset.dataBase64, "base64");
+      if (bytes.length !== asset.byteSize || createHash("sha256").update(bytes).digest("hex") !== asset.contentHash || assetIds.has(asset.id)) throw new HttpError(400, "The chat archive contains damaged or duplicate image data.");
+      assetIds.add(asset.id);
+    }
+    const orderKeys = new Set<string>();
+    for (const attachment of archive.media.attachments) {
+      const key = `${attachment.messageId}:${attachment.sortOrder}`;
+      if (!messageIds.has(attachment.messageId) || !assetIds.has(attachment.assetId) || orderKeys.has(key)) throw new HttpError(400, "The chat archive contains an invalid image attachment reference.");
+      orderKeys.add(key);
+    }
+    const expected = createHash("sha256").update(JSON.stringify({ assets: archive.media.assets.map(({ dataBase64: _data, ...asset }) => asset), attachments: archive.media.attachments })).digest("hex");
+    if (expected !== archive.media.manifestHash) throw new HttpError(400, "The chat archive image manifest failed integrity validation.");
+  }
+  return prisma.$transaction(async (tx) => {
     let characterId: string | null = null;
     if (archive.character) {
       const existing = await tx.character.findUnique({
@@ -102,6 +126,24 @@ export const importChatArchive = async ({ archive, title }: ChatArchiveImportInp
       });
       if (source.id) {
         messageIds.set(source.id, message.id);
+      }
+    }
+
+    if (archive.media) {
+      const assetIds = new Map<string, string>();
+      for (const asset of archive.media.assets) {
+        const existing = await tx.mediaAsset.findUnique({ where: { contentHash: asset.contentHash } });
+        if (existing) assetIds.set(asset.id, existing.id);
+        else {
+          const created = await tx.mediaAsset.create({ data: { contentHash: asset.contentHash, mimeType: asset.mimeType, byteSize: asset.byteSize, width: asset.width, height: asset.height, storageKey: `sha256:${asset.contentHash}`, data: new Uint8Array(Buffer.from(asset.dataBase64, "base64")), ...(asset.createdAt ? { createdAt: new Date(asset.createdAt) } : {}) } });
+          assetIds.set(asset.id, created.id);
+        }
+      }
+      for (const attachment of archive.media.attachments) {
+        const messageId = messageIds.get(attachment.messageId);
+        const assetId = assetIds.get(attachment.assetId);
+        if (!messageId || !assetId) throw new HttpError(400, "The chat archive contains an unavailable image reference.");
+        await tx.messageAttachment.create({ data: { messageId, assetId, sortOrder: attachment.sortOrder, originalFilename: attachment.originalFilename, ...(attachment.createdAt ? { createdAt: new Date(attachment.createdAt) } : {}) } });
       }
     }
 
@@ -182,7 +224,7 @@ export const importChatArchive = async ({ archive, title }: ChatArchiveImportInp
     const imported = await tx.chat.findUniqueOrThrow({
       where: { id: chat.id },
       include: {
-        messages: { orderBy: { createdAt: "asc" } },
+        messages: { orderBy: { createdAt: "asc" }, include: messageIncludeAttachments },
         memories: { orderBy: [{ enabled: "desc" }, { importance: "desc" }, { updatedAt: "desc" }] }
       }
     });
@@ -192,3 +234,4 @@ export const importChatArchive = async ({ archive, title }: ChatArchiveImportInp
       memories: imported.memories.map(serializeChatMemory)
     };
   });
+};

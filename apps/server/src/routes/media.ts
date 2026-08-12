@@ -4,6 +4,7 @@ import {
   attachmentDraftIdSchema,
   imageGenerationSchema,
   imageAttachmentReorderSchema,
+  imageAttachmentEditDraftSchema,
   imageAttachmentUploadSchema,
   voiceSpeechSchema,
   voiceTranscriptionSchema
@@ -16,6 +17,7 @@ import {
   removeDraftAttachment,
   reorderDraftAttachments,
   serializeAttachment,
+  stageMessageAttachmentsForEdit,
   uploadDraftImage
 } from "../services/messageAttachments.js";
 import { generateImage, createSpeechAudio, transcribeAudio } from "../services/media.js";
@@ -23,6 +25,15 @@ import { resolveModuleSettings } from "../services/moduleModels.js";
 import { getOrCreateSettings } from "./settings.js";
 
 export const mediaRouter = Router();
+
+mediaRouter.post(
+  "/chat-images/messages/:messageId/edit-draft",
+  asyncHandler(async (request, response) => {
+    const { draftId } = parseBody(imageAttachmentEditDraftSchema, request.body);
+    const attachments = await stageMessageAttachmentsForEdit(requireParam(request, "messageId"), draftId);
+    response.status(201).json({ ok: true, data: attachments.map((item) => ({ ...serializeAttachment(item), draftId, status: "ready" })) });
+  })
+);
 
 mediaRouter.post(
   "/chat-images/drafts",

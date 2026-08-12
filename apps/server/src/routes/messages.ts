@@ -11,7 +11,7 @@ import {
 import { messageCreateSchema, messageListQuerySchema, messageUpdateSchema } from "../schemas.js";
 import { serializeMessage } from "../serializers.js";
 import { deleteMessageTimeline } from "../services/messageTimeline.js";
-import { attachDraftToMessage, messageIncludeAttachments } from "../services/messageAttachments.js";
+import { attachDraftToMessage, deleteUnreferencedAssets, messageIncludeAttachments } from "../services/messageAttachments.js";
 
 export const messagesRouter = Router();
 
@@ -106,13 +106,17 @@ messagesRouter.put(
     const body = parseBody(messageUpdateSchema, request.body);
     const existing = await prisma.message.findFirst({
       where: { id, chat: { deletedAt: null } },
-      select: { id: true, chatId: true }
+      select: { id: true, chatId: true, role: true }
     });
     if (!existing) {
       throw new HttpError(404, "Message not found");
     }
+    const { draftId, replaceAttachments, ...ordinaryBody } = body;
+    if (replaceAttachments && existing.role !== "user") {
+      throw new HttpError(400, "Image attachments can only be edited on user messages.");
+    }
     const data: Prisma.MessageUncheckedUpdateInput = {
-      ...body,
+      ...ordinaryBody,
       tokenUsage: normalizeTokenUsage(body.tokenUsage),
       generationMetadata: normalizeJsonObject(body.generationMetadata),
       variantMetadata: body.variantMetadata as Prisma.InputJsonValue | undefined,
@@ -121,14 +125,19 @@ messagesRouter.put(
       memoryMatches: normalizeJsonArray(body.memoryMatches)
     };
 
-    await prisma.message.update({
-      where: { id },
-      data
-    });
-
-    await prisma.chat.update({
-      where: { id: existing.chatId },
-      data: { updatedAt: new Date() }
+    await prisma.$transaction(async (tx) => {
+      if (replaceAttachments) {
+        await tx.messageAttachment.deleteMany({ where: { messageId: id } });
+        if (draftId) await attachDraftToMessage(tx, draftId, id);
+      }
+      const attachmentCount = replaceAttachments
+        ? draftId ? await tx.messageAttachment.count({ where: { messageId: id } }) : 0
+        : await tx.messageAttachment.count({ where: { messageId: id } });
+      const nextContent = typeof ordinaryBody.content === "string" ? ordinaryBody.content : (await tx.message.findUniqueOrThrow({ where: { id }, select: { content: true } })).content;
+      if (!nextContent.trim() && attachmentCount === 0) throw new HttpError(400, "A message must contain text or an image attachment.");
+      await tx.message.update({ where: { id }, data });
+      await tx.chat.update({ where: { id: existing.chatId }, data: { updatedAt: new Date() } });
+      await deleteUnreferencedAssets(tx);
     });
 
     const message = await prisma.message.findUniqueOrThrow({ where: { id }, include: messageIncludeAttachments });

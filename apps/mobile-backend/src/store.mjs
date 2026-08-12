@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import initSqlJs from "sql.js";
 import { analyzeBackupCandidate } from "../server-dist/services/backupContract.js";
 import { backupImportSchema } from "../server-dist/schemas.js";
@@ -447,9 +447,11 @@ export class MobileStore {
         }
       }
       for (const id of uniqueIds) {
+        for (const message of this.listMessages(id)) for (const attachment of this.listMessageAttachments(message.id)) await this.deleteRecord("messageAttachment", attachment.id);
         await this.deleteRecord("chat", id);
         this.db.run("DELETE FROM records WHERE type IN ('message', 'memory', 'memoryRevision', 'memoryOperation', 'profileSummaryRevision') AND chatId = ?", [id]);
       }
+      await this.cleanupOrphanAssets();
       this.db.run("COMMIT");
     } catch (error) {
       this.db.run("ROLLBACK");
@@ -507,6 +509,7 @@ export class MobileStore {
 
   async cleanupOrphanAssets() {
     const referenced = new Set(this.readRecords("messageAttachment").map((item) => item.assetId));
+    for (const item of this.readRecords("recoveryPointMediaAsset")) referenced.add(item.assetId);
     for (const asset of this.readRecords("mediaAsset")) if (!referenced.has(asset.id)) await this.deleteRecord("mediaAsset", asset.id);
   }
 
@@ -518,6 +521,18 @@ export class MobileStore {
       for (const [sortOrder, item] of this.listDraftAttachments(draftId).entries()) await this.writeRecord("messageAttachment", { ...item, sortOrder });
       await this.cleanupOrphanAssets();
       return attachment;
+    });
+  }
+
+  async reorderDraftAttachments(draftId, attachmentIds) {
+    return this.atomicWrite(async () => {
+      const current = this.listDraftAttachments(draftId);
+      if (current.length !== attachmentIds.length || new Set(attachmentIds).size !== current.length || current.some((item) => !attachmentIds.includes(item.id))) {
+        const error = new Error("The draft images changed. Reload them before reordering."); error.status = 409; throw error;
+      }
+      const byId = new Map(current.map((item) => [item.id, item]));
+      for (const [sortOrder, id] of attachmentIds.entries()) await this.writeRecord("messageAttachment", { ...byId.get(id), sortOrder });
+      return this.listDraftAttachments(draftId);
     });
   }
 
@@ -534,7 +549,7 @@ export class MobileStore {
     return clone(this.readRecord("message", id));
   }
 
-  async createMessage(input) {
+  async createMessage(input, persist = true) {
     const timestamp = now();
     const message = {
       id: input.id ?? randomUUID(),
@@ -557,8 +572,26 @@ export class MobileStore {
     };
     await this.writeRecord("message", message);
     await this.touchChat(message.chatId, false);
-    await this.persist();
+    if (persist) await this.persist();
     return clone(message);
+  }
+
+  async createMessageWithDraft(input, draftId) {
+    return this.atomicWrite(async () => {
+      const message = await this.createMessage(input, false);
+      await this.attachDraftToMessage(draftId, message.id);
+      return message;
+    });
+  }
+
+  async copyMessageAttachments(sourceMessageId, targetMessageId) {
+    for (const attachment of this.listMessageAttachments(sourceMessageId)) await this.writeRecord("messageAttachment", {
+      ...attachment,
+      id: randomUUID(),
+      messageId: targetMessageId,
+      draftId: null
+    });
+    await this.persist();
   }
 
   async updateMessage(id, updates) {
@@ -587,6 +620,7 @@ export class MobileStore {
         message.chatId,
         message.createdAt
       ]);
+      for (const item of removed) for (const attachment of this.listMessageAttachments(item.id)) await this.deleteRecord("messageAttachment", attachment.id);
       this.db.run("DELETE FROM records WHERE type = 'message' AND chatId = ? AND createdAt >= ?", [
         message.chatId,
         message.createdAt
@@ -595,8 +629,37 @@ export class MobileStore {
         message.chatId,
         removed.map((item) => item.id)
       );
+      await this.cleanupOrphanAssets();
       await this.touchChat(message.chatId, false);
       return { removed: clone(removed), disabledMemoryCount };
+    });
+  }
+
+  async prepareUserMessageResend(message) {
+    return this.atomicWrite(async () => {
+      const sourceAttachments = this.listMessageAttachments(message.id);
+      const removed = this.readRecords("message", "AND chatId = ? AND createdAt >= ?", [message.chatId, message.createdAt]);
+      for (const item of removed) {
+        for (const attachment of this.listMessageAttachments(item.id)) await this.deleteRecord("messageAttachment", attachment.id);
+        await this.deleteRecord("message", item.id);
+      }
+      const userMessage = await this.createMessage({
+        chatId: message.chatId,
+        role: "user",
+        content: message.content,
+        variants: [],
+        activeVariantIndex: 0
+      }, false);
+      for (const attachment of sourceAttachments) await this.writeRecord("messageAttachment", {
+        ...attachment,
+        id: randomUUID(),
+        messageId: userMessage.id,
+        draftId: null
+      });
+      const disabledMemoryCount = await this.disableMemoriesForRemovedSourcesInTransaction(message.chatId, removed.map((item) => item.id));
+      await this.cleanupOrphanAssets();
+      await this.touchChat(message.chatId, false);
+      return { userMessage, disabledMemoryCount };
     });
   }
 
@@ -1256,6 +1319,7 @@ export class MobileStore {
 
   async createRecoveryPoint(reason, settings) {
     const snapshot = { ...this.exportBackup(settings), mode: "replace" };
+    const storedSnapshot = snapshot.media ? { ...snapshot, media: { ...snapshot.media, assets: snapshot.media.assets.map(({ dataBase64: _data, ...asset }) => asset) } } : snapshot;
     const point = {
       id: randomUUID(),
       reason,
@@ -1269,17 +1333,22 @@ export class MobileStore {
         memoryRevisions: snapshot.memoryRevisions.length,
         memoryOperations: snapshot.memoryOperations.length,
         profileSummaryRevisions: snapshot.profileSummaryRevisions.length
+        ,mediaAssets: snapshot.media?.assets.length ?? 0
+        ,messageAttachments: snapshot.media?.attachments.length ?? 0
       },
-      snapshot
+      snapshot: storedSnapshot
     };
     await this.writeRecord("recoveryPoint", point);
+    for (const asset of snapshot.media?.assets ?? []) await this.writeRecord("recoveryPointMediaAsset", { id: `${point.id}:${asset.id}`, recoveryPointId: point.id, assetId: asset.id, createdAt: point.createdAt });
     const points = this.readRecords("recoveryPoint", "", [], "ORDER BY createdAt DESC");
     const cutoff = Date.now() - RECOVERY_POINT_MAX_AGE_MS;
     for (const [index, entry] of points.entries()) {
       if (index >= RECOVERY_POINT_LIMIT || Date.parse(entry.createdAt) < cutoff) {
         await this.deleteRecord("recoveryPoint", entry.id);
+        for (const reference of this.readRecords("recoveryPointMediaAsset").filter((item) => item.recoveryPointId === entry.id)) await this.deleteRecord("recoveryPointMediaAsset", reference.id);
       }
     }
+    await this.cleanupOrphanAssets();
     return point;
   }
 
@@ -1309,7 +1378,7 @@ export class MobileStore {
   async applyBackupAnalysis(analysis, resolutions) {
     const { backup, records } = analysis;
     if (backup.mode === "replace") {
-      this.db.run("DELETE FROM records WHERE type IN ('character', 'chat', 'message', 'memory', 'memoryRevision', 'memoryOperation', 'profileSummaryRevision')");
+      this.db.run("DELETE FROM records WHERE type IN ('character', 'chat', 'message', 'messageAttachment', 'memory', 'memoryRevision', 'memoryOperation', 'profileSummaryRevision')");
     }
 
     const existingSettings = this.getSettings();
@@ -1351,6 +1420,24 @@ export class MobileStore {
         };
         await this.writeRecord(type, value);
         appliedCounts[entity] += 1;
+      }
+    }
+
+    const importedAssetIds = new Map();
+    for (const asset of backup.media?.assets ?? []) {
+      const existing = this.readRecords("mediaAsset").find((item) => item.contentHash === asset.contentHash);
+      const stored = existing ?? { ...asset, id: asset.id, storageKey: `sha256:${asset.contentHash}` };
+      if (!existing) await this.writeRecord("mediaAsset", stored);
+      importedAssetIds.set(asset.id, stored.id);
+    }
+    if (backup.media) {
+      const appliedMessageIds = new Set(records.messages.filter((record) => this.shouldApplyBackupRecord(record, backup.mode, resolutions)).flatMap((record) => record.value.id ? [record.value.id] : []));
+      for (const messageId of appliedMessageIds) for (const attachment of this.listMessageAttachments(messageId)) await this.deleteRecord("messageAttachment", attachment.id);
+      for (const attachment of backup.media.attachments) {
+        if (!appliedMessageIds.has(attachment.messageId)) continue;
+        const assetId = importedAssetIds.get(attachment.assetId);
+        if (!assetId) throw new Error("An image attachment refers to unavailable image data.");
+        await this.writeRecord("messageAttachment", { ...attachment, assetId, draftId: null });
       }
     }
 
@@ -1463,6 +1550,7 @@ export class MobileStore {
         }
       }
     }
+    await this.cleanupOrphanAssets();
     return { mode: backup.mode, ...appliedCounts, settingsImported, added, updated, skipped, conflictsResolved };
   }
 
@@ -1507,7 +1595,9 @@ export class MobileStore {
         throw error;
       }
       const current = backupImportSchema.parse({ ...this.exportBackup(settings), mode: "merge" });
-      const analysis = analyzeBackupCandidate({ ...point.snapshot, mode: "replace" }, current);
+      const rawMedia = point.snapshot.media;
+      const assets = this.readRecords("recoveryPointMediaAsset").filter((item) => item.recoveryPointId === id).map((item) => this.getMediaAsset(item.assetId)).filter(Boolean).map(({ storageKey: _storageKey, ...asset }) => asset);
+      const analysis = analyzeBackupCandidate({ ...point.snapshot, ...(rawMedia ? { media: { ...rawMedia, assets } } : {}), mode: "replace" }, current);
       if (!analysis.preview.canExecute) {
         const error = new Error("This recovery point failed integrity validation and was not restored.");
         error.status = 400;
@@ -1530,6 +1620,11 @@ export class MobileStore {
     const memories = this.readRecords("memory", "", [], "ORDER BY updatedAt DESC").map(
       ({ embedding: _embedding, ...memory }) => memory
     );
+    const attachments = this.readRecords("messageAttachment").filter((item) => item.messageId).sort((a, b) => `${a.messageId}:${a.sortOrder}`.localeCompare(`${b.messageId}:${b.sortOrder}`)).map((item) => ({ id: item.id, messageId: item.messageId, assetId: item.assetId, sortOrder: item.sortOrder, originalFilename: item.originalFilename ?? null, createdAt: item.createdAt }));
+    const assetIds = new Set(attachments.map((item) => item.assetId));
+    const assets = this.readRecords("mediaAsset").filter((item) => assetIds.has(item.id)).sort((a, b) => a.id.localeCompare(b.id)).map(({ storageKey: _storageKey, ...asset }) => asset);
+    const manifestAssets = assets.map(({ dataBase64: _data, ...asset }) => asset);
+    const manifestHash = createHash("sha256").update(JSON.stringify({ assets: manifestAssets, attachments })).digest("hex");
     return {
       schemaVersion: 1,
       exportedAt: now(),
@@ -1545,7 +1640,8 @@ export class MobileStore {
       memories: clone(memories),
       memoryRevisions: clone(this.readRecords("memoryRevision", "", [], "ORDER BY createdAt ASC").map(withoutInternalUpdatedAt)),
       memoryOperations: clone(this.readRecords("memoryOperation", "", [], "ORDER BY createdAt ASC").map(withoutInternalUpdatedAt)),
-      profileSummaryRevisions: clone(this.readRecords("profileSummaryRevision", "", [], "ORDER BY createdAt ASC").map(withoutInternalUpdatedAt))
+      profileSummaryRevisions: clone(this.readRecords("profileSummaryRevision", "", [], "ORDER BY createdAt ASC").map(withoutInternalUpdatedAt)),
+      ...(assets.length ? { media: { version: 1, manifestHash, assets: clone(assets), attachments: clone(attachments) } } : {})
     };
   }
 

@@ -1,19 +1,19 @@
 import type { MediaAsset, MessageAttachment, Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
-import jpeg from "jpeg-js";
-import { PNG } from "pngjs";
 import { prisma } from "../db.js";
 import { HttpError } from "../lib/http.js";
+import { ImageValidationError, MAX_MESSAGE_IMAGE_BYTES, normalizeUploadedImage as normalizeImage, type SupportedImageMime } from "./imageNormalization.js";
+
+export { MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, MAX_MESSAGE_IMAGE_BYTES } from "./imageNormalization.js";
+export const normalizeUploadedImage = (input: Parameters<typeof normalizeImage>[0]) => {
+  try { return normalizeImage(input); }
+  catch (error) { if (error instanceof ImageValidationError) throw new HttpError(error.status, error.message); throw error; }
+};
 
 export const MAX_MESSAGE_IMAGES = 4;
-export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-export const MAX_MESSAGE_IMAGE_BYTES = 20 * 1024 * 1024;
-export const MAX_IMAGE_PIXELS = 25_000_000;
-const MAX_IMAGE_DIMENSION = 16_384;
-const MAX_ASPECT_RATIO = 100;
 const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-type SupportedMime = "image/png" | "image/jpeg";
+type SupportedMime = SupportedImageMime;
 export type AttachmentWithAsset = MessageAttachment & { asset: MediaAsset };
 
 const cleanFilename = (value?: string) => {
@@ -26,7 +26,7 @@ const cleanFilename = (value?: string) => {
   return cleaned || null;
 };
 
-const readPngSize = (bytes: Buffer) => {
+/* const readPngSize = (bytes: Buffer) => {
   if (bytes.length < 24 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return null;
   if (bytes.toString("ascii", 12, 16) !== "IHDR") return null;
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20), mimeType: "image/png" as const };
@@ -65,7 +65,7 @@ const assertDimensions = (width: number, height: number) => {
   }
 };
 
-export const normalizeUploadedImage = (input: {
+const legacyNormalizeUploadedImage = (input: {
   dataBase64: string;
   mimeType: SupportedMime;
 }) => {
@@ -96,7 +96,7 @@ export const normalizeUploadedImage = (input: {
     if (error instanceof HttpError) throw error;
     throw new HttpError(400, "The image is damaged or cannot be decoded safely.");
   }
-};
+}; */
 
 export const serializeAttachment = (attachment: AttachmentWithAsset) => ({
   id: attachment.id,
@@ -112,8 +112,8 @@ export const serializeAttachment = (attachment: AttachmentWithAsset) => ({
   url: `/api/media/chat-images/${encodeURIComponent(attachment.assetId)}`
 });
 
-const deleteUnreferencedAssets = async (tx: Prisma.TransactionClient) => {
-  await tx.mediaAsset.deleteMany({ where: { attachments: { none: {} } } });
+export const deleteUnreferencedAssets = async (tx: Prisma.TransactionClient) => {
+  await tx.mediaAsset.deleteMany({ where: { attachments: { none: {} }, recoveryPoints: { none: {} } } });
 };
 
 export const cleanupExpiredDraftAttachments = async (tx: Prisma.TransactionClient = prisma) => {
@@ -178,6 +178,15 @@ export const discardDraftAttachments = async (draftId: string) => prisma.$transa
   const removed = await tx.messageAttachment.deleteMany({ where: { draftId, messageId: null } });
   await deleteUnreferencedAssets(tx);
   return removed.count;
+});
+
+export const stageMessageAttachmentsForEdit = async (messageId: string, draftId: string) => prisma.$transaction(async (tx) => {
+  const message = await tx.message.findFirst({ where: { id: messageId, chat: { deletedAt: null } }, include: messageIncludeAttachments });
+  if (!message) throw new HttpError(404, "Message not found.");
+  if (message.role !== "user") throw new HttpError(400, "Image attachments can only be edited on user messages.");
+  await tx.messageAttachment.deleteMany({ where: { draftId, messageId: null } });
+  if (message.attachments.length) await tx.messageAttachment.createMany({ data: message.attachments.map((attachment) => ({ draftId, assetId: attachment.assetId, sortOrder: attachment.sortOrder, originalFilename: attachment.originalFilename, createdAt: attachment.createdAt })) });
+  return tx.messageAttachment.findMany({ where: { draftId, messageId: null }, include: { asset: true }, orderBy: { sortOrder: "asc" } });
 });
 
 export const attachDraftToMessage = async (tx: Prisma.TransactionClient, draftId: string | undefined, messageId: string) => {

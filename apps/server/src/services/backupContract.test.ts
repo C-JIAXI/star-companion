@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { backupImportSchema } from "../schemas.js";
 import { analyzeBackupCandidate } from "./backupContract.js";
+import { createHash } from "node:crypto";
 
 const emptyCurrent = () =>
   backupImportSchema.parse({
@@ -35,6 +36,24 @@ const character = (name = "Test Character") => ({
 });
 
 describe("backup preflight contract", () => {
+  it("validates image bytes, manifest, references, and detects attachment conflicts", () => {
+    const dataBase64 = Buffer.from("safe-image-bytes").toString("base64");
+    const contentHash = createHash("sha256").update(Buffer.from(dataBase64, "base64")).digest("hex");
+    const asset = { id: "asset-1", contentHash, mimeType: "image/png" as const, byteSize: Buffer.from(dataBase64, "base64").length, width: 1, height: 1, dataBase64, createdAt: "2026-08-10T00:00:00.000Z" };
+    const attachment = { id: "attachment-1", messageId: "message-1", assetId: "asset-1", sortOrder: 0, originalFilename: null, createdAt: "2026-08-10T00:00:00.000Z" };
+    const manifestHash = createHash("sha256").update(JSON.stringify({ assets: [{ id: asset.id, contentHash: asset.contentHash, mimeType: asset.mimeType, byteSize: asset.byteSize, width: asset.width, height: asset.height, createdAt: asset.createdAt }], attachments: [attachment] })).digest("hex");
+    const message = { id: "message-1", chatId: "chat-1", role: "user" as const, content: "", contextIncluded: true, isBookmarked: false, variants: [], activeVariantIndex: 0, variantMetadata: [], createdAt: "2026-08-10T00:00:00.000Z", updatedAt: "2026-08-10T00:00:00.000Z" };
+    const chat = { id: "chat-1", title: "Chat", characterId: null, memoryTurns: 12, autoMemoryEnabled: true, backgroundUrl: "", userPersona: "", userAvatar: "", userProfileSummary: "", createdAt: "2026-08-10T00:00:00.000Z", updatedAt: "2026-08-10T00:00:00.000Z" };
+    const media = { version: 1 as const, manifestHash, assets: [asset], attachments: [attachment] };
+    const current = backupImportSchema.parse({ ...emptyCurrent(), chats: [chat], messages: [message] });
+    const valid = analyzeBackupCandidate({ schemaVersion: 1, mode: "merge", chats: [chat], messages: [message], memories: [], characters: [], media }, current);
+    assert.equal(valid.preview.canExecute, true);
+    assert.equal(valid.preview.counts.conflicts, 1);
+
+    const damaged = analyzeBackupCandidate({ schemaVersion: 1, mode: "merge", chats: [chat], messages: [message], memories: [], characters: [], media: { ...media, assets: [{ ...asset, byteSize: asset.byteSize + 1 }] } }, current);
+    assert.equal(damaged.preview.canExecute, false);
+    assert.ok(damaged.preview.issues.some((issue) => /image asset/i.test(issue.message)));
+  });
   it("is read-only and reports a conflict-free merge", () => {
     const current = emptyCurrent();
     const candidate = {

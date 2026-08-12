@@ -153,6 +153,35 @@ describe("message timeline operations", () => {
     );
   });
 
+  it("reuses the same image asset when resending a user message", async () => {
+    const { chat, entries } = await createTimeline();
+    const asset = await prisma.mediaAsset.create({ data: {
+      contentHash: `timeline-${Date.now()}-${Math.random()}`,
+      mimeType: "image/png",
+      byteSize: 4,
+      width: 1,
+      height: 1,
+      storageKey: `timeline:${Date.now()}:${Math.random()}`,
+      data: new Uint8Array([1, 2, 3, 4])
+    } });
+    await prisma.messageAttachment.create({ data: {
+      messageId: entries[2].id,
+      assetId: asset.id,
+      sortOrder: 0,
+      originalFilename: "safe.png"
+    } });
+
+    const result = await prepareUserMessageResend(entries[2].id);
+    const attachment = await prisma.messageAttachment.findFirstOrThrow({
+      where: { messageId: result.userMessage.id }
+    });
+
+    assert.equal(attachment.assetId, asset.id);
+    assert.equal(result.userMessage.attachments[0]?.assetId, asset.id);
+    assert.equal(await prisma.mediaAsset.count({ where: { id: asset.id } }), 1);
+    assert.equal(await prisma.message.count({ where: { chatId: chat.id } }), 3);
+  });
+
   it("prepares resend context without changing the current timeline", async () => {
     const { chat, entries } = await createTimeline();
     const result = await getUserMessageResendTarget(entries[2].id);

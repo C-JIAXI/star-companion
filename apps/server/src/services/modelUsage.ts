@@ -122,6 +122,7 @@ export const reserveModelAttempt = async (input: {
   usedFallback: boolean;
   fallbackFromProviderId?: string;
   fallbackFromModelId?: string;
+  specialTokensUnknown?: boolean;
 }) => withReservationLock(() => prisma.$transaction(async (tx) => {
   const request = await tx.modelRequest.findUniqueOrThrow({ where: { id: input.requestId } });
   const budgets = parseUsageBudgets(input.settings.usageBudgets);
@@ -155,6 +156,7 @@ export const reserveModelAttempt = async (input: {
       fallbackFromModelId: input.fallbackFromModelId,
       errorCode: error.safe.code,
       diagnosticId: error.safe.diagnosticId,
+      specialTokensUnknown: input.specialTokensUnknown ?? false,
       reservationDay: periods.day,
       reservationMonth: periods.month
     } });
@@ -202,6 +204,7 @@ export const reserveModelAttempt = async (input: {
     usedFallback: input.usedFallback,
     fallbackFromProviderId: input.fallbackFromProviderId,
     fallbackFromModelId: input.fallbackFromModelId,
+    specialTokensUnknown: input.specialTokensUnknown ?? false,
     reservedCostMicros: reservedCostMicros ?? 0,
     reservationDay: periods.day,
     reservationMonth: periods.month

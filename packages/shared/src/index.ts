@@ -1164,6 +1164,34 @@ export interface BackupDTO {
   chats: ChatDTO[];
   messages: MessageDTO[];
   memories: ChatMemoryDTO[];
+  media?: BackupMediaEnvelopeDTO;
+}
+
+export interface BackupMediaAssetDTO {
+  id: string;
+  contentHash: string;
+  mimeType: "image/png" | "image/jpeg";
+  byteSize: number;
+  width: number;
+  height: number;
+  dataBase64: string;
+  createdAt?: string;
+}
+
+export interface BackupMessageAttachmentDTO {
+  id: string;
+  messageId: string;
+  assetId: string;
+  sortOrder: number;
+  originalFilename: string | null;
+  createdAt?: string;
+}
+
+export interface BackupMediaEnvelopeDTO {
+  version: 1;
+  manifestHash: string;
+  assets: BackupMediaAssetDTO[];
+  attachments: BackupMessageAttachmentDTO[];
 }
 
 export interface BackupImportSummaryDTO {
@@ -1233,6 +1261,8 @@ export interface RecoveryPointSummaryDTO {
   memoryRevisions?: number;
   memoryOperations?: number;
   profileSummaryRevisions?: number;
+  mediaAssets?: number;
+  messageAttachments?: number;
 }
 
 export interface RecoveryPointDTO {
@@ -1327,6 +1357,7 @@ export type GenerationClientMessage =
       requestId: string;
       chatId: string;
       content: string;
+      draftId?: string;
       overrideHardBudget?: boolean;
     }
   | {
