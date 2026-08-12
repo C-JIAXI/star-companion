@@ -7,6 +7,7 @@ import net from "node:net";
 import { createServer } from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { PNG } from "pngjs";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -18,6 +19,9 @@ const prismaTmpRoot = path.join(serverDir, "prisma", ".tmp");
 const tsxCliPath = path.join(serverDir, "node_modules", "tsx", "dist", "cli.mjs");
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const smokePng = new PNG({ width: 1, height: 1 });
+smokePng.data.fill(255);
+const smokePngBase64 = PNG.sync.write(smokePng).toString("base64");
 const withoutExportTimestamp = ({ exportedAt: _exportedAt, ...backup }) => backup;
 
 const log = (message) => {
@@ -503,6 +507,7 @@ const main = async () => {
               contextWindow: 32768,
               capabilities: [
                 "text_generation",
+                "vision_input",
                 "text_embedding",
                 "audio_transcription",
                 "text_to_speech",
@@ -990,6 +995,27 @@ const main = async () => {
     assert.equal(createdChat.autoMemoryEnabled, true);
     assert.equal(createdChat.userAvatar, "data:image/png;base64,YQ==");
 
+    const imageDraftId = `draft_${runId.replace(/[^a-z0-9]/gi, "")}_image0001`;
+    const uploadedImage = await requestData(baseUrl, "/api/media/chat-images/drafts", {
+      method: "POST", expectedStatus: 201,
+      body: { draftId: imageDraftId, dataBase64: smokePngBase64, mimeType: "image/png", originalFilename: "../smoke.png" }
+    });
+    assert.equal(uploadedImage.originalFilename, ".._smoke.png");
+    const imageMessage = await requestData(baseUrl, "/api/messages", {
+      method: "POST", expectedStatus: 201,
+      body: { chatId: createdChat.id, role: "user", content: "", draftId: imageDraftId }
+    });
+    assert.equal(imageMessage.attachments.length, 1);
+    const mediaResponse = await fetch(`${baseUrl}${imageMessage.attachments[0].url}`);
+    assert.equal(mediaResponse.status, 200);
+    assert.equal(mediaResponse.headers.get("cache-control"), "private, no-store");
+    assert.equal(Buffer.from(await mediaResponse.arrayBuffer()).length, uploadedImage.byteSize);
+    const editDraftId = `draft_${runId.replace(/[^a-z0-9]/gi, "")}_edit0001`;
+    const staged = await requestData(baseUrl, `/api/media/chat-images/messages/${imageMessage.id}/edit-draft`, { method: "POST", expectedStatus: 201, body: { draftId: editDraftId } });
+    assert.equal(staged.length, 1);
+    const editedImageMessage = await requestData(baseUrl, `/api/messages/${imageMessage.id}`, { method: "PUT", body: { content: "Image-only smoke", draftId: editDraftId, replaceAttachments: true } });
+    assert.equal(editedImageMessage.attachments.length, 1);
+
     const batchFolderResult = await requestData(baseUrl, "/api/chats/batch-folder", {
       method: "POST",
       body: { ids: [createdChat.id], folder: "Smoke folder updated" }
@@ -1007,7 +1033,7 @@ const main = async () => {
     const listedChats = await requestData(baseUrl, "/api/chats");
     const listedChat = listedChats.find((item) => item.id === createdChat.id);
     assert.ok(listedChat);
-    assert.equal(listedChat.messageCount, 0);
+    assert.equal(listedChat.messageCount, 1);
     assert.equal("userAvatar" in listedChat, false);
 
     const openingChat = await requestData(baseUrl, "/api/chats", {
@@ -1341,12 +1367,12 @@ const main = async () => {
       baseUrl,
       `/api/messages?${new URLSearchParams({ chatId: createdChat.id }).toString()}`
     );
-    assert.equal(listedMessages.length, 2);
-    assert.equal(listedMessages[1]?.content, "Nominal status confirmed. Continued.");
+    assert.equal(listedMessages.length, 3);
+    assert.equal(listedMessages.find((message) => message.id === assistantMessage.id)?.content, "Nominal status confirmed. Continued.");
 
     const chatsWithPreview = await requestData(baseUrl, "/api/chats");
     const chatListPreview = chatsWithPreview.find((chat) => chat.id === createdChat.id);
-    assert.equal(chatListPreview?.messageCount, 2);
+    assert.equal(chatListPreview?.messageCount, 3);
     assert.equal(chatListPreview?.lastMessagePreview?.role, "assistant");
     assert.equal(
       chatListPreview?.lastMessagePreview?.content,
@@ -1355,7 +1381,7 @@ const main = async () => {
     assert.ok(chatListPreview?.lastMessagePreview?.createdAt);
 
     const chatWithMessages = await requestData(baseUrl, `/api/chats/${createdChat.id}`);
-    assert.equal(chatWithMessages.messages.length, 2);
+    assert.equal(chatWithMessages.messages.length, 3);
 
     const messageSearch = await requestData(
       baseUrl,
@@ -1365,7 +1391,7 @@ const main = async () => {
       }).toString()}`
     );
     assert.equal(messageSearch.total, 1);
-    assert.equal(messageSearch.results[0]?.index, 1);
+    assert.equal(messageSearch.results[0]?.index, 2);
     assert.equal(messageSearch.results[0]?.message.id, assistantMessage.id);
     assert.match(messageSearch.results[0]?.snippet ?? "", /nominal/i);
 
@@ -1375,7 +1401,7 @@ const main = async () => {
     assert.equal(titleSuggestion.title, "Smoke Title Suggestion");
     const chatAfterTitleSuggestion = await requestData(baseUrl, `/api/chats/${createdChat.id}`);
     assert.equal(chatAfterTitleSuggestion.title, createdChat.title);
-    assert.equal(chatAfterTitleSuggestion.messages.length, 2);
+    assert.equal(chatAfterTitleSuggestion.messages.length, 3);
 
     const skippedAutoTitle = await requestData(baseUrl, `/api/chats/${createdChat.id}/auto-title`, {
       method: "POST"
@@ -1429,14 +1455,16 @@ const main = async () => {
     assert.equal(Array.isArray(agentDraft.matchedLoreEntries), true);
     assert.equal(Array.isArray(agentDraft.matchedMemoryEntries), true);
     const chatAfterAgentDraft = await requestData(baseUrl, `/api/chats/${createdChat.id}`);
-    assert.equal(chatAfterAgentDraft.messages.length, 2);
+    assert.equal(chatAfterAgentDraft.messages.length, 3);
     assert.equal(chatAfterAgentDraft.memories.length, 1);
 
     const chatArchive = await requestData(baseUrl, `/api/chats/${createdChat.id}/archive`);
     assert.equal(chatArchive.archiveVersion, 1);
-    assert.equal(chatArchive.messages.length, 2);
-    assert.equal(chatArchive.messages[0]?.contextIncluded, false);
-    assert.equal(chatArchive.messages[0]?.isBookmarked, true);
+    assert.equal(chatArchive.messages.length, 3);
+    assert.equal(chatArchive.media.assets.length, 1);
+    assert.equal(chatArchive.media.attachments.length, 1);
+    assert.equal(chatArchive.messages.find((message) => message.id === userMessage.id)?.contextIncluded, false);
+    assert.equal(chatArchive.messages.find((message) => message.id === userMessage.id)?.isBookmarked, true);
     assert.equal(chatArchive.memories.length, 1);
     assert.equal(chatArchive.memoryRevisions.length, 3);
     assert.ok(Array.isArray(chatArchive.memoryOperations));
@@ -1450,9 +1478,9 @@ const main = async () => {
     });
     assert.notEqual(importedArchive.id, createdChat.id);
     assert.equal(importedArchive.title, "Imported Smoke Archive");
-    assert.equal(importedArchive.messages.length, 2);
-    assert.equal(importedArchive.messages[0]?.contextIncluded, false);
-    assert.equal(importedArchive.messages[0]?.isBookmarked, true);
+    assert.equal(importedArchive.messages.length, 3);
+    assert.equal(importedArchive.messages.find((message) => message.content === "Image-only smoke")?.attachments.length, 1);
+    assert.ok(importedArchive.messages.some((message) => message.contextIncluded === false && message.isBookmarked === true));
     assert.equal(importedArchive.memories.length, 1);
     const importedHistory = await requestData(baseUrl, `/api/chats/${importedArchive.id}/memories/${importedArchive.memories[0].id}/revisions`);
     assert.equal(importedHistory.length, chatArchive.memoryRevisions.length);
@@ -1472,11 +1500,11 @@ const main = async () => {
     assert.equal(branchedChat.folder, "Smoke folder renamed");
     assert.equal(branchedChat.parentChatId, createdChat.id);
     assert.equal(branchedChat.branchSourceMessageId, assistantMessage.id);
-    assert.equal(branchedChat.messages.length, 2);
-    assert.equal(branchedChat.messages[0]?.contextIncluded, false);
-    assert.equal(branchedChat.messages[0]?.isBookmarked, true);
+    assert.equal(branchedChat.messages.length, 3);
+    assert.ok(branchedChat.messages.some((message) => message.contextIncluded === false && message.isBookmarked === true));
+    assert.equal(branchedChat.messages.find((message) => message.content === "Image-only smoke")?.attachments.length, 1);
     assert.equal(branchedChat.userAvatar, "data:image/png;base64,YQ==");
-    assert.ok(branchedChat.messages[1]?.promptBreakdown?.promptTokens > 0);
+    assert.ok(branchedChat.messages.find((message) => message.role === "assistant")?.promptBreakdown?.promptTokens > 0);
     assert.equal(branchedChat.memories.length, 0);
     await permanentlyDeleteChat(baseUrl, branchedChat.id);
 
@@ -1487,7 +1515,8 @@ const main = async () => {
     });
     assert.equal(checkpointChat.isCheckpoint, true);
     assert.equal(checkpointChat.parentChatId, createdChat.id);
-    assert.equal(checkpointChat.messages.length, 2);
+    assert.equal(checkpointChat.messages.length, 3);
+    assert.equal(checkpointChat.messages.find((message) => message.content === "Image-only smoke")?.attachments.length, 1);
     assert.equal(checkpointChat.memories.length, 0);
     await permanentlyDeleteChat(baseUrl, checkpointChat.id);
 
@@ -1563,7 +1592,9 @@ const main = async () => {
     assert.equal(exportedBackup.chats[0]?.isPinned, true);
     assert.equal(exportedBackup.chats[0]?.isArchived, true);
     assert.equal(exportedBackup.chats[0]?.userAvatar, "data:image/png;base64,YQ==");
-    assert.equal(exportedBackup.messages.length, 2);
+    assert.equal(exportedBackup.messages.length, 3);
+    assert.equal(exportedBackup.media.assets.length, 1);
+    assert.equal(exportedBackup.media.attachments.length, 1);
     const exportedGeneratedMessage = exportedBackup.messages.find((message) => message.id === assistantMessage.id);
     assert.equal(exportedGeneratedMessage?.generationMetadata?.estimatedCostMicros, 40);
     assert.equal(exportedGeneratedMessage?.variantMetadata?.[0], null);
@@ -1594,6 +1625,9 @@ const main = async () => {
     log("Verifying session privacy lock API isolation");
     assert.equal((await requestData(baseUrl, "/api/privacy/status")).locked, false);
     assert.equal((await requestData(baseUrl, "/api/privacy/lock", { method: "POST", body: { passcode: "2468" } })).locked, true);
+    const lockedMedia = await request(baseUrl, imageMessage.attachments[0].url, { expectedStatus: 423 });
+    assert.equal(lockedMedia.ok, false);
+    assert.doesNotMatch(JSON.stringify(lockedMedia), /iVBOR|smoke\.png/i);
     const lockedHistory = await request(baseUrl, `/api/chats/${createdChat.id}/memories/${createdMemory.id}/revisions`, { expectedStatus: 423 });
     assert.equal(lockedHistory.ok, false, "locked history response must be denied");
     assert.doesNotMatch(JSON.stringify(lockedHistory), /smoke path|nominal/i);
@@ -1655,7 +1689,7 @@ const main = async () => {
     assert.equal(importedBackupSummary.mode, "replace");
     assert.equal(importedBackupSummary.characters, 2);
     assert.equal(importedBackupSummary.chats, 1);
-    assert.equal(importedBackupSummary.messages, 2);
+    assert.equal(importedBackupSummary.messages, 3);
     assert.equal(importedBackupSummary.memories, 1);
     assert.equal(
       (await requestData(baseUrl, `/api/chats/${createdChat.id}`)).userAvatar,
@@ -1910,7 +1944,7 @@ const main = async () => {
       baseUrl,
       `/api/messages?${new URLSearchParams({ chatId: createdChat.id }).toString()}`
     );
-    assert.equal(messagesAfterTimelineDeletion.length, 2);
+    assert.equal(messagesAfterTimelineDeletion.length, 3);
 
     await request(baseUrl, `/api/messages/${assistantMessage.id}`, {
       method: "DELETE",
@@ -1920,7 +1954,7 @@ const main = async () => {
       baseUrl,
       `/api/messages?${new URLSearchParams({ chatId: createdChat.id }).toString()}`
     );
-    assert.equal(remainingMessages.length, 1);
+    assert.equal(remainingMessages.length, 2);
 
     await request(baseUrl, `/api/chats/${createdChat.id}`, {
       method: "DELETE",
@@ -1940,7 +1974,7 @@ const main = async () => {
       method: "POST"
     });
     assert.equal(restoredChat.deletedAt, null);
-    assert.equal((await requestData(baseUrl, `/api/chats/${createdChat.id}`)).messages.length, 1);
+    assert.equal((await requestData(baseUrl, `/api/chats/${createdChat.id}`)).messages.length, 2);
     await permanentlyDeleteChat(baseUrl, createdChat.id);
 
     await request(baseUrl, `/api/characters/${importedPublicCharacter.id}`, {

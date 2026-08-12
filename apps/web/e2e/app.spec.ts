@@ -41,7 +41,8 @@ type E2EProviderModel = {
     "text_embedding" |
     "audio_transcription" |
     "text_to_speech" |
-    "image_generation"
+    "image_generation" |
+    "vision_input"
   >;
 };
 
@@ -102,6 +103,8 @@ const importBackupViaApi = async (request: APIRequestContext, data: Record<strin
     }
   });
 };
+
+const e2ePngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4AWP8DwQMQMDEAAUAPfgEADYYS7QAAAAASUVORK5CYII=";
 
 const permanentlyDeleteChatViaApi = async (
   request: APIRequestContext,
@@ -786,6 +789,136 @@ test("new chat can quick-create a character and enter the conversation", async (
   } finally {
     if (chatId) await permanentlyDeleteChatViaApi(request, chatId);
     if (characterId) await request.delete(`/api/characters/${characterId}`);
+  }
+});
+
+test("chat image attachments preview, send, reload, view, and unmount when locked", async ({ page, request }, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const characterName = `Vision Character ${suffix}`;
+  const chatTitle = `Vision Chat ${suffix}`;
+  let characterId: string | null = null;
+  let chatId: string | null = null;
+  const now = new Date().toISOString();
+
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: {
+      id: "vision-settings-e2e", activeProvider: "openai-compatible", apiBaseUrl: "https://example.invalid/v1", model: "vision-model",
+      temperature: 0.8, maxTokens: 800, topP: 1, language: "en",
+      providers: [{ id: "vision-provider", label: "Vision provider", provider: "openai-compatible", apiBaseUrl: "https://example.invalid/v1", models: [{ id: "vision-model-id", label: "Vision model", model: "vision-model", capabilities: ["text_generation", "vision_input"] }] }],
+      activeProviderId: "vision-provider", activeModelId: "vision-model-id", moduleModelPreferences: {}, userPersonaPresets: [], userProfileSummary: "", autoSummarizeUser: false,
+      showMessageAvatars: true, showMessageTimestamps: false, ttsVoice: "alloy", ttsPlaybackRate: 1, ttsAutoPlay: false,
+      userProfileUpdatedAt: null, createdAt: now, updatedAt: now, hasApiKey: true
+    } }) });
+  });
+
+  try {
+    const characterResponse = await request.post("/api/characters", { data: { name: characterName, description: "Vision E2E", prefix: "", prompt: "Describe images.", suffix: "" } });
+    characterId = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data?.id ?? null;
+    const chatResponse = await request.post("/api/chats", { data: { title: chatTitle, characterId } });
+    chatId = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data?.id ?? null;
+    expect(chatId).toBeTruthy();
+
+    await page.addInitScript((selectedChatId) => {
+      window.localStorage.setItem("star-companion:selected-chat", selectedChatId);
+      let socket: { onmessage: ((event: MessageEvent) => void) | null } | null = null;
+      const emit = (message: Record<string, unknown>) => socket?.onmessage?.(new MessageEvent("message", { data: JSON.stringify(message) }));
+      class MockWebSocket {
+        static readonly CONNECTING = 0; static readonly OPEN = 1; static readonly CLOSING = 2; static readonly CLOSED = 3;
+        readonly CONNECTING = 0; readonly OPEN = 1; readonly CLOSING = 2; readonly CLOSED = 3;
+        readyState = 0; onopen: ((event: Event) => void) | null = null; onclose: ((event: CloseEvent) => void) | null = null; onerror: ((event: Event) => void) | null = null; onmessage: ((event: MessageEvent) => void) | null = null;
+        constructor() { socket = this; window.setTimeout(() => { this.readyState = 1; this.onopen?.(new Event("open")); }, 0); }
+        send(data: string) {
+          const value = JSON.parse(data) as { type: string; requestId: string; chatId?: string; content?: string; draftId?: string };
+          if (value.type !== "generate") return;
+          (window as unknown as { __visionRequest: unknown }).__visionRequest = value;
+          window.setTimeout(async () => {
+            const response = await fetch("http://127.0.0.1:4010/api/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chatId: value.chatId, role: "user", content: value.content ?? "", draftId: value.draftId }) });
+            const payload = await response.json();
+            emit({ type: "user_message", requestId: value.requestId, message: payload.data });
+            emit({ type: "generation_done", requestId: value.requestId });
+          }, 0);
+        }
+        close() { this.readyState = 3; }
+      }
+      Object.assign(window, { WebSocket: MockWebSocket, __visionRequest: null });
+    }, chatId);
+
+    await page.goto("/");
+    const chooser = page.getByLabel(/选择聊天图片|Choose chat images/);
+    await chooser.setInputFiles({ name: "vision.png", mimeType: "image/png", buffer: Buffer.from(e2ePngBase64, "base64") });
+    const draft = page.getByTestId("chat-image-draft");
+    await expect(draft).toBeVisible();
+    await expect(draft.getByRole("img")).toHaveCount(1);
+    await draft.getByRole("button", { name: /移除图片|Remove image/ }).click();
+    await expect(draft.getByRole("img")).toHaveCount(0);
+
+    await chooser.setInputFiles({ name: "vision.png", mimeType: "image/png", buffer: Buffer.from(e2ePngBase64, "base64") });
+    await page.locator('#chat-primary-action[data-chat-action="send"]').click();
+    await expect(page.locator('[data-chat-message="user"]')).toHaveCount(1);
+    const requestPayload = await page.evaluate(() => (window as unknown as { __visionRequest: { content: string; draftId: string } }).__visionRequest);
+    expect(requestPayload.content).toBe("");
+    expect(requestPayload.draftId).toMatch(/^draft_/);
+    await expect(page.getByTestId("message-image-gallery")).toBeVisible();
+    await page.reload();
+    await expect(page.getByTestId("message-image-gallery")).toBeVisible();
+    const opener = page.getByTestId("message-image-gallery").getByRole("button");
+    await opener.click();
+    await expect(page.getByRole("dialog", { name: /图片查看器|Image viewer/ })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: /图片查看器|Image viewer/ })).toHaveCount(0);
+    await expect(opener).toBeFocused();
+
+    await page.locator('[data-chat-message="user"] [data-chat-action="edit"]').click();
+    const editor = page.getByRole("dialog", { name: /编辑消息|Edit Message/ });
+    await expect(editor.getByTestId("edit-message-images").getByRole("img")).toHaveCount(1);
+    await editor.getByRole("button", { name: /移除图片|Remove image/ }).click();
+    await editor.locator("textarea").fill("Edited without image");
+    await editor.getByRole("button", { name: /保存修改|Save Edit/ }).click();
+    await expect(page.getByTestId("message-image-gallery")).toHaveCount(0);
+    await expect(page.locator('[data-chat-message="user"]')).toContainText("Edited without image");
+
+    await page.evaluate(() => window.dispatchEvent(new Event("star-companion:privacy-locked")));
+    await expect(page.getByTestId("privacy-lock-screen")).toBeVisible();
+    await expect(page.getByTestId("message-image-gallery")).toHaveCount(0);
+  } finally {
+    if (chatId) await permanentlyDeleteChatViaApi(request, chatId).catch(() => {});
+    if (characterId) await request.delete(`/api/characters/${characterId}`).catch(() => {});
+  }
+});
+
+test("chat image controls explain incompatible models without uploading", async ({ page, request }, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  let characterId: string | null = null;
+  let chatId: string | null = null;
+  const now = new Date().toISOString();
+  await page.route("**/api/settings", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: {
+    id: "text-only-settings-e2e", activeProvider: "openai-compatible", apiBaseUrl: "https://example.invalid/v1", model: "text-model", temperature: 0.8, maxTokens: 800, topP: 1, language: "en",
+    providers: [{ id: "text-provider", label: "Text provider", provider: "openai-compatible", apiBaseUrl: "https://example.invalid/v1", models: [{ id: "text-model-id", label: "Text model", model: "text-model", capabilities: ["text_generation"] }] }],
+    activeProviderId: "text-provider", activeModelId: "text-model-id", moduleModelPreferences: {}, userPersonaPresets: [], userProfileSummary: "", autoSummarizeUser: false,
+    showMessageAvatars: true, showMessageTimestamps: false, ttsVoice: "alloy", ttsPlaybackRate: 1, ttsAutoPlay: false, userProfileUpdatedAt: null, createdAt: now, updatedAt: now, hasApiKey: true
+  } }) }));
+  try {
+    const characterResponse = await request.post("/api/characters", { data: { name: `Text Only ${suffix}`, description: "", prefix: "", prompt: "Text only.", suffix: "" } });
+    characterId = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data?.id ?? null;
+    const chatResponse = await request.post("/api/chats", { data: { title: `Text Only Chat ${suffix}`, characterId } });
+    chatId = ((await chatResponse.json()) as ApiDataResponse<E2EChat>).data?.id ?? null;
+    expect(characterId).toBeTruthy();
+    expect(chatId).toBeTruthy();
+    await page.addInitScript((selectedChatId) => window.localStorage.setItem("star-companion:selected-chat", selectedChatId), chatId);
+    await page.goto("/");
+    if (await page.locator('[data-chat-action="attach-image"]').count() === 0) await openChatHistoryAndSelect(page, `Text Only Chat ${suffix}`);
+    const attach = page.locator('[data-chat-action="attach-image"]');
+    await expect(attach).toHaveAttribute("title", /不支持图片输入|does not support image input/);
+    await attach.click();
+    const chooser = page.getByLabel(/选择聊天图片|Choose chat images/);
+    await chooser.setInputFiles({ name: "blocked.png", mimeType: "image/png", buffer: Buffer.from(e2ePngBase64, "base64") });
+    await expect(page.getByRole("alert")).toContainText(/不支持图片输入|does not support image input/);
+    await expect(page.getByRole("button", { name: /切换模型|Switch model/ })).toBeVisible();
+    await expect(page.getByTestId("chat-image-draft").getByRole("img")).toHaveCount(0);
+  } finally {
+    if (chatId) await permanentlyDeleteChatViaApi(request, chatId).catch(() => {});
+    if (characterId) await request.delete(`/api/characters/${characterId}`).catch(() => {});
   }
 });
 

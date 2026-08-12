@@ -362,6 +362,8 @@ export const api = {
     remove: (id: string) => request<void>(`/api/messages/${id}`, { method: "DELETE" })
   },
   media: {
+    stageChatImagesForEdit: (messageId: string, draftId: string) =>
+      request<DraftImageAttachmentDTO[]>(`/api/media/chat-images/messages/${encodeURIComponent(messageId)}/edit-draft`, { method: "POST", body: { draftId } }),
     uploadChatImage: (input: { draftId: string; dataBase64: string; mimeType: "image/png" | "image/jpeg"; originalFilename?: string }) =>
       request<DraftImageAttachmentDTO>("/api/media/chat-images/drafts", { method: "POST", body: input }),
     listDraftChatImages: (draftId: string) => request<DraftImageAttachmentDTO[]>(`/api/media/chat-images/drafts/${encodeURIComponent(draftId)}`),

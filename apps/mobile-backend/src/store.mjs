@@ -224,7 +224,7 @@ export class MobileStore {
     return clone(row);
   }
 
-  async createCharacter(input) {
+  async createCharacter(input, persist = true) {
     const timestamp = now();
     const character = {
       id: input.id ?? randomUUID(),
@@ -245,7 +245,7 @@ export class MobileStore {
       updatedAt: input.updatedAt ?? timestamp
     };
     await this.writeRecord("character", character);
-    await this.persist();
+    if (persist) await this.persist();
     return clone(character);
   }
 
@@ -318,7 +318,7 @@ export class MobileStore {
     return clone(this.readRecord("chat", id));
   }
 
-  async createChat(input) {
+  async createChat(input, persist = true) {
     const timestamp = now();
     const initialProfile = (input.userProfileSummary ?? "").trim();
     const shouldCreateProfileBaseline = initialProfile.length > 0 && input.profileRevision === undefined;
@@ -345,7 +345,7 @@ export class MobileStore {
       createdAt: input.createdAt ?? timestamp,
       updatedAt: input.updatedAt ?? timestamp
     };
-    this.db.run("BEGIN");
+    if (persist) this.db.run("BEGIN");
     try {
       await this.writeRecord("chat", chat);
       if (shouldCreateProfileBaseline) {
@@ -360,12 +360,12 @@ export class MobileStore {
           createdAt: timestamp
         });
       }
-      this.db.run("COMMIT");
+      if (persist) this.db.run("COMMIT");
     } catch (error) {
-      this.db.run("ROLLBACK");
+      if (persist) this.db.run("ROLLBACK");
       throw error;
     }
-    await this.persist();
+    if (persist) await this.persist();
     return clone(chat);
   }
 
@@ -592,6 +592,36 @@ export class MobileStore {
       draftId: null
     });
     await this.persist();
+  }
+
+  async stageMessageAttachmentsForEdit(messageId, draftId) {
+    return this.atomicWrite(async () => {
+      const message = this.getMessage(messageId);
+      if (!message) return null;
+      if (message.role !== "user") { const error = new Error("Image attachments can only be edited on user messages."); error.status = 400; throw error; }
+      for (const attachment of this.listDraftAttachments(draftId)) await this.deleteRecord("messageAttachment", attachment.id);
+      for (const attachment of this.listMessageAttachments(messageId)) await this.writeRecord("messageAttachment", { ...attachment, id: randomUUID(), messageId: null, draftId });
+      return this.listDraftAttachments(draftId);
+    });
+  }
+
+  async updateMessageWithAttachments(id, updates, { replaceAttachments = false, draftId } = {}) {
+    return this.atomicWrite(async () => {
+      const existing = this.readRecord("message", id);
+      if (!existing) return null;
+      if (replaceAttachments && existing.role !== "user") { const error = new Error("Image attachments can only be edited on user messages."); error.status = 400; throw error; }
+      if (replaceAttachments) {
+        for (const attachment of this.listMessageAttachments(id)) await this.deleteRecord("messageAttachment", attachment.id);
+        if (draftId) await this.attachDraftToMessage(draftId, id);
+      }
+      const nextContent = typeof updates.content === "string" ? updates.content : existing.content;
+      if (!String(nextContent ?? "").trim() && this.listMessageAttachments(id).length === 0) { const error = new Error("A message must contain text or an image attachment."); error.status = 400; throw error; }
+      const message = { ...existing, ...updates, updatedAt: now() };
+      await this.writeRecord("message", message);
+      await this.touchChat(message.chatId, false);
+      await this.cleanupOrphanAssets();
+      return clone(message);
+    });
   }
 
   async updateMessage(id, updates) {
@@ -1426,7 +1456,8 @@ export class MobileStore {
     const importedAssetIds = new Map();
     for (const asset of backup.media?.assets ?? []) {
       const existing = this.readRecords("mediaAsset").find((item) => item.contentHash === asset.contentHash);
-      const stored = existing ?? { ...asset, id: asset.id, storageKey: `sha256:${asset.contentHash}` };
+      const idInUse = this.readRecord("mediaAsset", asset.id);
+      const stored = existing ?? { ...asset, id: idInUse ? randomUUID() : asset.id, storageKey: `sha256:${asset.contentHash}` };
       if (!existing) await this.writeRecord("mediaAsset", stored);
       importedAssetIds.set(asset.id, stored.id);
     }
@@ -1437,7 +1468,8 @@ export class MobileStore {
         if (!appliedMessageIds.has(attachment.messageId)) continue;
         const assetId = importedAssetIds.get(attachment.assetId);
         if (!assetId) throw new Error("An image attachment refers to unavailable image data.");
-        await this.writeRecord("messageAttachment", { ...attachment, assetId, draftId: null });
+        const idInUse = this.readRecord("messageAttachment", attachment.id);
+        await this.writeRecord("messageAttachment", { ...attachment, id: idInUse ? randomUUID() : attachment.id, assetId, draftId: null });
       }
     }
 
@@ -1622,7 +1654,7 @@ export class MobileStore {
     );
     const attachments = this.readRecords("messageAttachment").filter((item) => item.messageId).sort((a, b) => `${a.messageId}:${a.sortOrder}`.localeCompare(`${b.messageId}:${b.sortOrder}`)).map((item) => ({ id: item.id, messageId: item.messageId, assetId: item.assetId, sortOrder: item.sortOrder, originalFilename: item.originalFilename ?? null, createdAt: item.createdAt }));
     const assetIds = new Set(attachments.map((item) => item.assetId));
-    const assets = this.readRecords("mediaAsset").filter((item) => assetIds.has(item.id)).sort((a, b) => a.id.localeCompare(b.id)).map(({ storageKey: _storageKey, ...asset }) => asset);
+    const assets = this.readRecords("mediaAsset").filter((item) => assetIds.has(item.id)).sort((a, b) => a.id.localeCompare(b.id)).map((asset) => ({ id: asset.id, contentHash: asset.contentHash, mimeType: asset.mimeType, byteSize: asset.byteSize, width: asset.width, height: asset.height, dataBase64: asset.dataBase64, createdAt: asset.createdAt }));
     const manifestAssets = assets.map(({ dataBase64: _data, ...asset }) => asset);
     const manifestHash = createHash("sha256").update(JSON.stringify({ assets: manifestAssets, attachments })).digest("hex");
     return {

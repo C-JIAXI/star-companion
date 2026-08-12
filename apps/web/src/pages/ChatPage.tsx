@@ -367,6 +367,11 @@ export function ChatPage({
   const [generationChatId, setGenerationChatId] = useState<string | null>(null);
   const [editingMessage, setEditingMessage] = useState<MessageDTO | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  const [editAttachmentDraftId, setEditAttachmentDraftId] = useState<string | null>(null);
+  const [editAttachments, setEditAttachments] = useState<DraftImageAttachmentDTO[]>([]);
+  const [editAttachmentBusy, setEditAttachmentBusy] = useState(false);
+  const [editAttachmentError, setEditAttachmentError] = useState<string | null>(null);
+  const editAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const [memorySettingsOpen, setMemorySettingsOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState("12");
   const [chatMemories, setChatMemories] = useState<ChatMemoryDTO[]>([]);
@@ -2868,6 +2873,10 @@ export function ChatPage({
 
     const [message, ...rest] = queuedMessagesRef.current;
     if (!message) return;
+    if (message.draftId && !activeChatSupportsVision) {
+      setError(language === "zh-CN" ? "队列中的图片消息尚未发送：当前聊天模型不支持图片输入。请切换模型或编辑该队列项。" : "The queued image message was not sent because the current chat model does not support image input. Switch models or edit the queued item.");
+      return;
+    }
     replaceQueuedMessages(rest);
     void startMessageGeneration(message.content, message.draftId);
   };
@@ -2956,7 +2965,7 @@ export function ChatPage({
 
   useEffect(() => {
     onMessageHandlersRef.current.dispatchQueuedMessages = dispatchQueuedMessages;
-  }, [activeChat, isConnected]);
+  }, [activeChat, activeChatSupportsVision, isConnected]);
 
   const regenerateMessage = async (message: MessageDTO, guidance?: string) => {
     if (message.role !== "assistant") {
@@ -3566,14 +3575,81 @@ export function ChatPage({
     upsertMessage(updated);
   };
 
-  const startEditingMessage = (message: MessageDTO) => {
+  const startEditingMessage = async (message: MessageDTO) => {
     setEditingMessage(message);
     setEditDraft(message.content);
+    setEditAttachments([]);
+    setEditAttachmentError(null);
+    if (message.role !== "user") return;
+    const draftId = `draft_${generateId().replace(/-/g, "")}`;
+    setEditAttachmentDraftId(draftId);
+    setEditAttachmentBusy(true);
+    try {
+      setEditAttachments(await api.media.stageChatImagesForEdit(message.id, draftId));
+    } catch (caught) {
+      setEditAttachmentError(caught instanceof Error ? caught.message : (language === "zh-CN" ? "无法准备图片编辑。" : "Could not prepare image editing."));
+    } finally {
+      setEditAttachmentBusy(false);
+    }
   };
 
   const cancelEditingMessage = () => {
+    if (editAttachmentDraftId) void api.media.discardDraftChatImages(editAttachmentDraftId).catch(() => {});
     setEditingMessage(null);
     setEditDraft("");
+    setEditAttachmentDraftId(null);
+    setEditAttachments([]);
+    setEditAttachmentError(null);
+  };
+
+  const addEditImages = async (files: File[]) => {
+    if (!files.length || !editAttachmentDraftId) return;
+    if (!activeChatSupportsVision) {
+      setEditAttachmentError(language === "zh-CN" ? "当前聊天模型不支持图片输入。请先切换模型。" : "The current chat model does not support image input. Switch models first.");
+      return;
+    }
+    if (editAttachments.length + files.length > 4) {
+      setEditAttachmentError(language === "zh-CN" ? "每条消息最多添加 4 张图片。" : "A message can contain at most 4 images.");
+      return;
+    }
+    setEditAttachmentBusy(true);
+    setEditAttachmentError(null);
+    try {
+      let next = [...editAttachments];
+      for (const file of files) {
+        const uploaded = await api.media.uploadChatImage({ draftId: editAttachmentDraftId, ...await normalizeChatImageFile(file) });
+        next = [...next, uploaded];
+        setEditAttachments(next);
+      }
+    } catch (caught) {
+      setEditAttachmentError(caught instanceof Error ? caught.message : (language === "zh-CN" ? "图片处理失败。" : "Image processing failed."));
+    } finally {
+      setEditAttachmentBusy(false);
+      if (editAttachmentInputRef.current) editAttachmentInputRef.current.value = "";
+    }
+  };
+
+  const removeEditImage = async (attachment: DraftImageAttachmentDTO) => {
+    if (!editAttachmentDraftId) return;
+    try {
+      await api.media.removeDraftChatImage(editAttachmentDraftId, attachment.id);
+      setEditAttachments((current) => current.filter((item) => item.id !== attachment.id));
+    } catch (caught) {
+      setEditAttachmentError(caught instanceof Error ? caught.message : (language === "zh-CN" ? "移除图片失败。" : "Image removal failed."));
+    }
+  };
+
+  const moveEditImage = async (index: number, delta: -1 | 1) => {
+    if (!editAttachmentDraftId) return;
+    const target = index + delta;
+    if (target < 0 || target >= editAttachments.length) return;
+    const reordered = [...editAttachments];
+    [reordered[index], reordered[target]] = [reordered[target]!, reordered[index]!];
+    try {
+      setEditAttachments(await api.media.reorderDraftChatImages(editAttachmentDraftId, reordered.map((item) => item.id)));
+    } catch (caught) {
+      setEditAttachmentError(caught instanceof Error ? caught.message : (language === "zh-CN" ? "调整图片顺序失败。" : "Image reordering failed."));
+    }
   };
 
   const saveEditedMessage = async () => {
@@ -3584,9 +3660,19 @@ export function ChatPage({
     setLoading(true);
     setError(null);
     try {
-      const updated = await api.messages.update(editingMessage.id, { content: editDraft });
+      const updated = await api.messages.update(editingMessage.id, {
+        content: editDraft,
+        ...(editingMessage.role === "user" ? {
+          replaceAttachments: true,
+          ...(editAttachments.length && editAttachmentDraftId ? { draftId: editAttachmentDraftId } : {})
+        } : {})
+      });
       upsertMessage(updated);
-      cancelEditingMessage();
+      setEditingMessage(null);
+      setEditDraft("");
+      setEditAttachmentDraftId(null);
+      setEditAttachments([]);
+      setEditAttachmentError(null);
       setStatus(t("chat.messageSaved"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedEdit"));
@@ -4864,13 +4950,41 @@ export function ChatPage({
               />
             </div>
 
+            {editingMessage.role === "user" ? (
+              <div className="mt-4 rounded-lg border border-white/10 bg-black/10 p-3" data-testid="edit-message-images">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-200">{language === "zh-CN" ? "图片附件" : "Image attachments"}</p>
+                    <p className="mt-1 text-xs leading-5 text-amber-200/80">{language === "zh-CN" ? "修改这些图片会改变后续回复使用的历史上下文。" : "Changing these images changes the history context used by later replies."}</p>
+                  </div>
+                  <input ref={editAttachmentInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" multiple aria-label={language === "zh-CN" ? "为消息添加图片" : "Add images to message"} onChange={(event) => void addEditImages(Array.from(event.target.files ?? []))} />
+                  <Button disabled={editAttachmentBusy || editAttachments.length >= 4} variant="ghost" onClick={() => editAttachmentInputRef.current?.click()}>
+                    <Paperclip size={15} />
+                    {language === "zh-CN" ? "添加图片" : "Add images"}
+                  </Button>
+                </div>
+                {editAttachments.length ? <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+                  {editAttachments.map((attachment, index) => <div key={attachment.id} className="relative w-24 shrink-0 rounded border border-white/10 bg-ink-950 p-1">
+                    <img className="h-16 w-full rounded object-cover" alt={`${language === "zh-CN" ? "编辑中的图片" : "Image being edited"} ${index + 1}`} src={resolveApiUrl(attachment.url)} />
+                    <div className="mt-1 flex justify-between">
+                      <button className="min-h-7 min-w-7" type="button" disabled={index === 0 || editAttachmentBusy} aria-label={language === "zh-CN" ? "图片前移" : "Move image earlier"} onClick={() => void moveEditImage(index, -1)}><ChevronLeft size={13} /></button>
+                      <button className="min-h-7 min-w-7 text-rose-300" type="button" disabled={editAttachmentBusy} aria-label={language === "zh-CN" ? "移除图片" : "Remove image"} onClick={() => void removeEditImage(attachment)}><X size={13} /></button>
+                      <button className="min-h-7 min-w-7" type="button" disabled={index === editAttachments.length - 1 || editAttachmentBusy} aria-label={language === "zh-CN" ? "图片后移" : "Move image later"} onClick={() => void moveEditImage(index, 1)}><ChevronRight size={13} /></button>
+                    </div>
+                  </div>)}
+                </div> : null}
+                {editAttachmentBusy ? <p className="mt-2 flex items-center gap-2 text-xs text-slate-300" role="status"><RefreshCw className="animate-spin" size={14} />{language === "zh-CN" ? "正在准备图片…" : "Preparing images…"}</p> : null}
+                {editAttachmentError ? <p className="mt-2 text-xs text-rose-300" role="alert">{editAttachmentError}</p> : null}
+              </div>
+            ) : null}
+
             <div className="mt-6 flex flex-wrap justify-end gap-3 pt-4 border-t border-white/5">
               <Button disabled={loading} variant="ghost" onClick={cancelEditingMessage}>
                 <X size={16} />
                 {t("common.cancel")}
               </Button>
               <Button
-                disabled={loading || !editDraft.trim()}
+                disabled={loading || editAttachmentBusy || (!editDraft.trim() && editAttachments.length === 0)}
                 onClick={() => void saveEditedMessage()}
               >
                 <Check size={16} />

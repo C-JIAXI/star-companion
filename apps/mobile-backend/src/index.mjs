@@ -43,6 +43,7 @@ import {
   imageGenerationSchema,
   imageAttachmentUploadSchema,
   imageAttachmentReorderSchema,
+  imageAttachmentEditDraftSchema,
   generationRequestSchema,
   messageCreateSchema,
   messageListQuerySchema,
@@ -57,7 +58,7 @@ import {
   settingsUpdateSchema,
   lanSyncRequestSchema
 } from "../server-dist/schemas.js";
-import { normalizeUploadedImage } from "../server-dist/services/imageNormalization.js";
+import { normalizeUploadedImage, validateStoredImage } from "../server-dist/services/imageNormalization.js";
 import { buildCharacterDraftMessages, getCharacterDraftMeta, parseCharacterDraftItems } from "../server-dist/services/characterDraftProtocol.js";
 import { applyCharacterTagOperation } from "../server-dist/services/characterTags.js";
 import {
@@ -2107,20 +2108,50 @@ const exportChatArchive = (chatId) => {
   const chat = getActiveChat(chatId);
   if (!chat) throw notFound("Chat not found");
   const character = chat.characterId ? store.getCharacter(chat.characterId) : null;
+  const messages = store.listMessages(chatId);
+  const attachments = messages.flatMap((message) => store.listMessageAttachments(message.id)).sort((a, b) => `${a.messageId}:${a.sortOrder}`.localeCompare(`${b.messageId}:${b.sortOrder}`)).map((attachment) => ({ id: attachment.id, messageId: attachment.messageId, assetId: attachment.assetId, sortOrder: attachment.sortOrder, originalFilename: attachment.originalFilename ?? null, createdAt: attachment.createdAt }));
+  const assetIds = new Set(attachments.map((attachment) => attachment.assetId));
+  const assets = store.readRecords("mediaAsset").filter((asset) => assetIds.has(asset.id)).sort((a, b) => a.id.localeCompare(b.id)).map((asset) => ({ id: asset.id, contentHash: asset.contentHash, mimeType: asset.mimeType, byteSize: asset.byteSize, width: asset.width, height: asset.height, dataBase64: asset.dataBase64, createdAt: asset.createdAt }));
+  const manifestHash = createHash("sha256").update(JSON.stringify({ assets: assets.map(({ dataBase64: _data, ...asset }) => asset), attachments })).digest("hex");
   return {
     archiveVersion: 1,
     exportedAt: new Date().toISOString(),
     chat: serializeChat(chat, store.listMessages(chatId).length),
     character,
-    messages: store.listMessages(chatId).map(serializeMessage),
+    messages: messages.map(serializeMessage),
     memories: store.listMemories(chatId).map(serializeMemory),
     memoryRevisions: store.listRawMemoryRevisions(chatId),
     memoryOperations: store.listRawMemoryOperations(chatId),
-    profileSummaryRevisions: store.listRawProfileSummaryRevisions(chatId)
+    profileSummaryRevisions: store.listRawProfileSummaryRevisions(chatId),
+    ...(assets.length ? { media: { version: 1, manifestHash, assets, attachments } } : {})
   };
 };
 
 const importChatArchive = async ({ archive, title }) => {
+  if (archive.media) {
+    const messageIds = new Set(archive.messages.flatMap((message) => message.id ? [message.id] : []));
+    const assetIds = new Set();
+    const hashes = new Set();
+    for (const asset of archive.media.assets) {
+      const bytes = Buffer.from(asset.dataBase64, "base64");
+      try { validateStoredImage({ data: bytes, mimeType: asset.mimeType, width: asset.width, height: asset.height }); }
+      catch { throw Object.assign(new Error("The chat archive contains damaged or mismatched image data."), { status: 400 }); }
+      if (bytes.length !== asset.byteSize || createHash("sha256").update(bytes).digest("hex") !== asset.contentHash || assetIds.has(asset.id) || hashes.has(asset.contentHash)) throw Object.assign(new Error("The chat archive contains damaged or duplicate image data."), { status: 400 });
+      assetIds.add(asset.id);
+      hashes.add(asset.contentHash);
+    }
+    const attachmentIds = new Set();
+    const orderKeys = new Set();
+    for (const attachment of archive.media.attachments) {
+      const orderKey = `${attachment.messageId}:${attachment.sortOrder}`;
+      if (!messageIds.has(attachment.messageId) || !assetIds.has(attachment.assetId) || attachmentIds.has(attachment.id) || orderKeys.has(orderKey)) throw Object.assign(new Error("The chat archive contains an invalid image attachment reference."), { status: 400 });
+      attachmentIds.add(attachment.id);
+      orderKeys.add(orderKey);
+    }
+    const expected = createHash("sha256").update(JSON.stringify({ assets: archive.media.assets.map(({ dataBase64: _data, ...asset }) => asset), attachments: archive.media.attachments })).digest("hex");
+    if (expected !== archive.media.manifestHash) throw Object.assign(new Error("The chat archive image manifest failed integrity validation."), { status: 400 });
+  }
+  return store.atomicWrite(async () => {
   const importedAt = () => new Date().toISOString();
   let characterId = null;
   if (archive.character) {
@@ -2128,7 +2159,7 @@ const importChatArchive = async ({ archive, title }) => {
     if (existing) {
       characterId = existing.id;
     } else {
-      characterId = (await store.createCharacter(archive.character)).id;
+      characterId = (await store.createCharacter(archive.character, false)).id;
     }
   }
   const chat = await store.createChat({
@@ -2145,7 +2176,7 @@ const importChatArchive = async ({ archive, title }) => {
     profileRevision: archive.profileSummaryRevisions.length
       ? archive.chat.profileRevision
       : archive.chat.userProfileSummary ? 1 : 0
-  });
+  }, false);
   const messageIds = new Map();
   for (const source of archive.messages) {
     const { id: sourceId, ...messageInput } = source;
@@ -2153,12 +2184,26 @@ const importChatArchive = async ({ archive, title }) => {
       ...messageInput,
       chatId: chat.id,
       characterId: source.characterId ? characterId : null
-    });
+    }, false);
     if (sourceId) messageIds.set(sourceId, message.id);
+  }
+  if (archive.media) {
+    const importedAssetIds = new Map();
+    for (const asset of archive.media.assets) {
+      const existing = store.readRecords("mediaAsset").find((item) => item.contentHash === asset.contentHash);
+      const stored = existing ?? { ...asset, id: randomUUID(), storageKey: `sha256:${asset.contentHash}` };
+      if (!existing) await store.writeRecord("mediaAsset", stored);
+      importedAssetIds.set(asset.id, stored.id);
+    }
+    for (const attachment of archive.media.attachments) {
+      const messageId = messageIds.get(attachment.messageId);
+      const assetId = importedAssetIds.get(attachment.assetId);
+      if (!messageId || !assetId) throw Object.assign(new Error("The chat archive contains an unavailable image reference."), { status: 400 });
+      await store.writeRecord("messageAttachment", { ...attachment, id: randomUUID(), messageId, assetId, draftId: null });
+    }
   }
   const memoryIds = new Map();
   const operationIds = new Map();
-  await store.atomicWrite(async () => {
     for (const source of archive.memoryOperations) {
       const id = randomUUID();
       operationIds.set(source.id, id);
@@ -2242,13 +2287,13 @@ const importChatArchive = async ({ archive, title }) => {
         reasonCode: "legacy_archive_baseline", createdAt: baseline.createdAt ?? importedAt(), updatedAt: importedAt()
       });
     }
-  });
   const importedChat = store.getChat(chat.id);
   return {
     ...serializeChat(importedChat, store.listMessages(chat.id).length),
     messages: store.listMessages(chat.id).map(serializeMessage),
     memories: store.listMemories(chat.id).map(serializeMemory)
   };
+  });
 };
 
 const app = express();
@@ -3029,7 +3074,8 @@ app.put(
     const existing = store.getMessage(id);
     if (!existing || !getActiveChat(existing.chatId)) throw notFound("Message not found");
     const body = parseBody(messageUpdateSchema, request.body);
-    const message = await store.updateMessage(id, body);
+    const { draftId, replaceAttachments, ...ordinaryBody } = body;
+    const message = await store.updateMessageWithAttachments(id, ordinaryBody, { draftId, replaceAttachments });
     if (!message) throw notFound("Message not found");
     response.json({ ok: true, data: serializeMessage(message) });
   })
@@ -3056,6 +3102,18 @@ app.delete(
     const result = await store.deleteMessageTimeline(id);
     if (!result) throw notFound("Message not found");
     response.status(204).send();
+  })
+);
+
+app.post(
+  "/api/media/chat-images/messages/:messageId/edit-draft",
+  asyncHandler(async (request, response) => {
+    const { draftId } = parseBody(imageAttachmentEditDraftSchema, request.body);
+    const messageId = requireParam(request, "messageId");
+    const message = store.getMessage(messageId);
+    if (!message || !getActiveChat(message.chatId)) throw notFound("Message not found");
+    const attachments = await store.stageMessageAttachmentsForEdit(messageId, draftId);
+    response.status(201).json({ ok: true, data: attachments.map((item) => ({ ...serializeMobileAttachment(item), draftId, status: "ready" })) });
   })
 );
 

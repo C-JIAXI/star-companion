@@ -44,6 +44,23 @@ const assertDimensions = (width: number, height: number) => {
   if (Math.max(width / height, height / width) > MAX_ASPECT_RATIO) throw new ImageValidationError(400, "The image aspect ratio is too extreme to process safely.");
 };
 
+export const validateStoredImage = (input: { data: Buffer; mimeType: SupportedImageMime; width: number; height: number }) => {
+  if (!input.data.length || input.data.length > MAX_MESSAGE_IMAGE_BYTES) throw new ImageValidationError(413, "The stored image size is invalid.");
+  const header = readPngSize(input.data) ?? readJpegSize(input.data);
+  if (!header || header.mimeType !== input.mimeType) throw new ImageValidationError(400, "The stored image signature does not match its declared type.");
+  assertDimensions(header.width, header.height);
+  try {
+    const decoded = header.mimeType === "image/png"
+      ? PNG.sync.read(input.data, { checkCRC: true, skipRescale: false })
+      : jpeg.decode(input.data, { useTArray: true, formatAsRGBA: true, maxMemoryUsageInMB: 160 });
+    assertDimensions(decoded.width, decoded.height);
+    if (decoded.width !== input.width || decoded.height !== input.height) throw new ImageValidationError(400, "The stored image dimensions do not match its manifest.");
+  } catch (error) {
+    if (error instanceof ImageValidationError) throw error;
+    throw new ImageValidationError(400, "The stored image is damaged or cannot be decoded safely.");
+  }
+};
+
 export const normalizeUploadedImage = (input: { dataBase64: string; mimeType: SupportedImageMime }) => {
   const bytes = Buffer.from(input.dataBase64, "base64");
   if (!bytes.length || bytes.toString("base64").replace(/=+$/, "") !== input.dataBase64.replace(/\s+/g, "").replace(/=+$/, "")) throw new ImageValidationError(400, "The image data is not valid base64.");

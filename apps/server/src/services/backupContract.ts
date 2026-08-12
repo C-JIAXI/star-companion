@@ -12,6 +12,7 @@ import {
   backupSettingsSchema
 } from "../schemas.js";
 import type { backupImportSchema } from "../schemas.js";
+import { ImageValidationError, validateStoredImage } from "./imageNormalization.js";
 
 export const backupEntityTypes = [
   "settings",
@@ -300,7 +301,10 @@ export const analyzeBackupCandidate = (
       for (const asset of media.assets) {
         const bytes = Buffer.from(asset.dataBase64, "base64");
         const actualHash = createHash("sha256").update(bytes).digest("hex");
-        if (bytes.length !== asset.byteSize || actualHash !== asset.contentHash || asset.width * asset.height > 25_000_000 || assetIds.has(asset.id) || hashes.has(asset.contentHash)) {
+        let decoded = true;
+        try { validateStoredImage({ data: bytes, mimeType: asset.mimeType, width: asset.width, height: asset.height }); }
+        catch (error) { if (error instanceof ImageValidationError) decoded = false; else throw error; }
+        if (!decoded || bytes.length !== asset.byteSize || actualHash !== asset.contentHash || asset.width * asset.height > 25_000_000 || assetIds.has(asset.id) || hashes.has(asset.contentHash)) {
           issues.push({ entity: "backup", index: null, code: "invalid_record", message: "An image asset failed its size, hash, dimension, or uniqueness check." });
           break;
         }

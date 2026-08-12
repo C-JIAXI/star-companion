@@ -256,7 +256,8 @@ const applyBackup = async (
     const existing = await tx.mediaAsset.findUnique({ where: { contentHash: asset.contentHash } });
     if (existing) importedAssetIds.set(asset.id, existing.id);
     else {
-      const created = await tx.mediaAsset.create({ data: { id: asset.id, contentHash: asset.contentHash, mimeType: asset.mimeType, byteSize: asset.byteSize, width: asset.width, height: asset.height, storageKey: `sha256:${asset.contentHash}`, data: new Uint8Array(bytes), ...(asset.createdAt ? { createdAt: new Date(asset.createdAt) } : {}) } });
+      const idInUse = await tx.mediaAsset.findUnique({ where: { id: asset.id }, select: { id: true } });
+      const created = await tx.mediaAsset.create({ data: { ...(!idInUse ? { id: asset.id } : {}), contentHash: asset.contentHash, mimeType: asset.mimeType, byteSize: asset.byteSize, width: asset.width, height: asset.height, storageKey: `sha256:${asset.contentHash}`, data: new Uint8Array(bytes), ...(asset.createdAt ? { createdAt: new Date(asset.createdAt) } : {}) } });
       importedAssetIds.set(asset.id, created.id);
     }
   }
@@ -372,7 +373,8 @@ const applyBackup = async (
       if (!appliedMessageIds.has(attachment.messageId)) continue;
       const assetId = importedAssetIds.get(attachment.assetId);
       if (!assetId) throw new HttpError(400, "An image attachment refers to unavailable image data.");
-      await tx.messageAttachment.create({ data: { id: attachment.id, messageId: attachment.messageId, assetId, sortOrder: attachment.sortOrder, originalFilename: attachment.originalFilename, ...(attachment.createdAt ? { createdAt: new Date(attachment.createdAt) } : {}) } });
+      const idInUse = await tx.messageAttachment.findUnique({ where: { id: attachment.id }, select: { id: true } });
+      await tx.messageAttachment.create({ data: { ...(!idInUse ? { id: attachment.id } : {}), messageId: attachment.messageId, assetId, sortOrder: attachment.sortOrder, originalFilename: attachment.originalFilename, ...(attachment.createdAt ? { createdAt: new Date(attachment.createdAt) } : {}) } });
     }
   }
 

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { backupImportSchema } from "../schemas.js";
 import { analyzeBackupCandidate } from "./backupContract.js";
 import { createHash } from "node:crypto";
+import { PNG } from "pngjs";
 
 const emptyCurrent = () =>
   backupImportSchema.parse({
@@ -37,7 +38,9 @@ const character = (name = "Test Character") => ({
 
 describe("backup preflight contract", () => {
   it("validates image bytes, manifest, references, and detects attachment conflicts", () => {
-    const dataBase64 = Buffer.from("safe-image-bytes").toString("base64");
+    const image = new PNG({ width: 1, height: 1 });
+    image.data.fill(255);
+    const dataBase64 = PNG.sync.write(image).toString("base64");
     const contentHash = createHash("sha256").update(Buffer.from(dataBase64, "base64")).digest("hex");
     const asset = { id: "asset-1", contentHash, mimeType: "image/png" as const, byteSize: Buffer.from(dataBase64, "base64").length, width: 1, height: 1, dataBase64, createdAt: "2026-08-10T00:00:00.000Z" };
     const attachment = { id: "attachment-1", messageId: "message-1", assetId: "asset-1", sortOrder: 0, originalFilename: null, createdAt: "2026-08-10T00:00:00.000Z" };

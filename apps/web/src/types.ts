@@ -147,6 +147,7 @@ export type MessageInput = {
   variants?: string[];
   activeVariantIndex?: number;
   memoryMatches?: MatchedMemoryDTO[];
+  replaceAttachments?: boolean;
 };
 
 export type SettingsInput = {

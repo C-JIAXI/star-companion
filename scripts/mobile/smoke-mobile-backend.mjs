@@ -5,11 +5,15 @@ import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
+import { PNG } from "pngjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const port = 4111;
 const modelPort = 4112;
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "star-companion-mobile-"));
+const smokePng = new PNG({ width: 1, height: 1 });
+smokePng.data.fill(255);
+const smokePngBase64 = PNG.sync.write(smokePng).toString("base64");
 
 const readJsonBody = (request) =>
   new Promise((resolve, reject) => {
@@ -347,7 +351,7 @@ try {
         models: [
           {
             id: "mobile-chat", label: "Chat", model: "fake-mobile-model", contextWindow: 128000,
-            capabilities: ["text_generation"],
+            capabilities: ["text_generation", "vision_input"],
             pricing: { inputMicrosPerMillion: 2_000_000, outputMicrosPerMillion: 6_000_000, currency: "USD", updatedAt: "2026-08-12T00:00:00.000Z", source: "user" }
           },
           { id: "mobile-embedding", label: "Embedding", model: "fake-mobile-embedding", capabilities: ["text_embedding"] },
@@ -646,6 +650,29 @@ try {
   assert.equal(chat.folder, "Mobile smoke folder");
   assert.equal(chat.userAvatar, "data:image/png;base64,YQ==");
 
+  const imageDraftId = "draft_mobile_smoke_image_0001";
+  const uploadedImage = await request("/api/media/chat-images/drafts", {
+    method: "POST",
+    body: { draftId: imageDraftId, dataBase64: smokePngBase64, mimeType: "image/png", originalFilename: "../mobile-smoke.png" }
+  });
+  assert.equal(uploadedImage.mimeType, "image/png");
+  assert.equal(uploadedImage.originalFilename, ".._mobile-smoke.png");
+  const imageMessage = await request("/api/messages", {
+    method: "POST",
+    body: { chatId: chat.id, role: "user", content: "Mobile image context", draftId: imageDraftId }
+  });
+  assert.equal(imageMessage.attachments.length, 1);
+  const mediaResponse = await fetch(`http://127.0.0.1:${port}${imageMessage.attachments[0].url}`);
+  assert.equal(mediaResponse.status, 200);
+  assert.equal(mediaResponse.headers.get("cache-control"), "private, no-store");
+  assert.equal(Buffer.from(await mediaResponse.arrayBuffer()).length, uploadedImage.byteSize);
+  const editDraftId = "draft_mobile_smoke_edit_0001";
+  const stagedImages = await request(`/api/media/chat-images/messages/${imageMessage.id}/edit-draft`, { method: "POST", body: { draftId: editDraftId } });
+  assert.equal(stagedImages.length, 1);
+  const editedImageMessage = await request(`/api/messages/${imageMessage.id}`, { method: "PUT", body: { content: "", draftId: editDraftId, replaceAttachments: true } });
+  assert.equal(editedImageMessage.content, "");
+  assert.equal(editedImageMessage.attachments.length, 1);
+
   const movedToFolder = await request("/api/chats/batch-folder", {
     method: "POST",
     body: { ids: [chat.id], folder: "Mobile organized folder" }
@@ -773,7 +800,7 @@ try {
 
   const chatAfterGeneration = await request(`/api/chats/${chat.id}`);
   assert.match(chatAfterGeneration.userProfileSummary, /blue doors/i);
-  assert.equal(chatAfterGeneration.messages.length, 2);
+  assert.equal(chatAfterGeneration.messages.length, 3);
   assert.equal(chatAfterGeneration.memories.length, 1);
   assert.match(chatAfterGeneration.memories[0].content, /blue door/i);
   assert.ok(memoryUpdatedEvent.summary.operationId);
@@ -783,12 +810,12 @@ try {
   const automaticRevisions = await request(`/api/chats/${chat.id}/memories/${chatAfterGeneration.memories[0].id}/revisions`);
   assert.equal(automaticRevisions[0]?.action, "automatic_create");
   assert.equal(automaticRevisions[0]?.operationId, memoryUpdatedEvent.summary.operationId);
-  assert.equal(automaticRevisions[0]?.sourceMessageIds.length, 2);
+  assert.equal(automaticRevisions[0]?.sourceMessageIds.length, 3);
   assert.ok(automaticRevisions[0]?.sources.every((source) => source.available));
   assert.equal("embedding" in automaticRevisions[0].afterSnapshot, false);
   const profileHistory = await request(`/api/chats/${chat.id}/profile-summary/revisions`);
   assert.equal(profileHistory[0]?.action, "automatic_update");
-  assert.equal(profileHistory[0]?.sourceMessageIds.length, 1);
+  assert.equal(profileHistory[0]?.sourceMessageIds.length, 2);
   const manuallyProfiledChat = await request(`/api/chats/${chat.id}`, {
     method: "PUT",
     body: { userProfileSummary: "Manual mobile profile revision." }
@@ -818,13 +845,15 @@ try {
     method: "POST",
     body: { revision: 1, expectedCurrentRevision: restoreAutomaticPreview.expectedCurrentRevision, confirm: "RESTORE_MEMORY_REVISION" }
   });
-  assert.ok(chatAfterGeneration.messages[1]?.promptBreakdown?.promptTokens > 0);
+  const firstAssistantMessage = chatAfterGeneration.messages.find((message) => message.role === "assistant");
+  assert.ok(firstAssistantMessage?.promptBreakdown?.promptTokens > 0);
   assert.ok(
-    chatAfterGeneration.messages[1]?.promptBreakdown?.sections.some(
+    firstAssistantMessage?.promptBreakdown?.sections.some(
       (section) => section.id === "user_persona"
     )
   );
-  const excludedUserMessage = await request(`/api/messages/${chatAfterGeneration.messages[0].id}`, {
+  const generatedUserMessage = chatAfterGeneration.messages.find((message) => message.content.includes("blue doors"));
+  const excludedUserMessage = await request(`/api/messages/${generatedUserMessage.id}`, {
     method: "PUT",
     body: { contextIncluded: false, isBookmarked: true }
   });
@@ -882,8 +911,8 @@ try {
   assert.equal(usagePreview.unknownPricing, false);
   assert.ok(usagePreview.todayCostMicros >= 40);
   const chatAfterContinuation = await request(`/api/chats/${chat.id}`);
-  assert.equal(chatAfterContinuation.messages.length, 2);
-  assert.equal(chatAfterContinuation.messages[1]?.content, "Mobile assistant reply. Mobile assistant reply.");
+  assert.equal(chatAfterContinuation.messages.length, 3);
+  assert.equal(chatAfterContinuation.messages.find((message) => message.role === "assistant")?.content, "Mobile assistant reply. Mobile assistant reply.");
 
   const regenerationBodyStart = fakeModelServer.getChatCompletionBodies().length;
   const regenerationEvents = await runSocketRequest({
@@ -991,7 +1020,7 @@ try {
   assert.equal(titleSuggestion.title, "Mobile Blue Door");
   const chatAfterTitleSuggestion = await request(`/api/chats/${chat.id}`);
   assert.equal(chatAfterTitleSuggestion.title, chat.title);
-  assert.equal(chatAfterTitleSuggestion.messages.length, 6);
+  assert.equal(chatAfterTitleSuggestion.messages.length, 7);
 
   const agentDraft = await request(`/api/chats/${chat.id}/agent-draft`, {
     method: "POST",
@@ -1007,14 +1036,16 @@ try {
   assert.equal(Array.isArray(agentDraft.matchedLoreEntries), true);
   assert.equal(Array.isArray(agentDraft.matchedMemoryEntries), true);
   const chatAfterAgentDraft = await request(`/api/chats/${chat.id}`);
-  assert.equal(chatAfterAgentDraft.messages.length, 6);
+  assert.equal(chatAfterAgentDraft.messages.length, 7);
   assert.ok(chatAfterAgentDraft.memories.length >= 1);
 
   const chatArchive = await request(`/api/chats/${chat.id}/archive`);
   assert.equal(chatArchive.archiveVersion, 1);
-  assert.equal(chatArchive.messages.length, 6);
-  assert.equal(chatArchive.messages[0]?.contextIncluded, false);
-  assert.equal(chatArchive.messages[0]?.isBookmarked, true);
+  assert.equal(chatArchive.messages.length, 7);
+  assert.equal(chatArchive.media.assets.length, 1);
+  assert.equal(chatArchive.media.attachments.length, 1);
+  assert.equal(chatArchive.messages.find((message) => message.id === generatedUserMessage.id)?.contextIncluded, false);
+  assert.equal(chatArchive.messages.find((message) => message.id === generatedUserMessage.id)?.isBookmarked, true);
   assert.equal(chatArchive.chat.userAvatar, "data:image/png;base64,YQ==");
   assert.ok(
     chatArchive.messages.find((message) => message.role === "assistant")?.promptBreakdown
@@ -1026,9 +1057,9 @@ try {
   });
   assert.notEqual(importedArchive.id, chat.id);
   assert.equal(importedArchive.title, "Mobile Imported Archive");
-  assert.equal(importedArchive.messages.length, 6);
-  assert.equal(importedArchive.messages[0]?.contextIncluded, false);
-  assert.equal(importedArchive.messages[0]?.isBookmarked, true);
+  assert.equal(importedArchive.messages.length, 7);
+  assert.equal(importedArchive.messages.find((message) => message.content === "")?.attachments.length, 1);
+  assert.ok(importedArchive.messages.some((message) => message.contextIncluded === false && message.isBookmarked === true));
   assert.ok(importedArchive.memories.length >= 1);
   assert.equal(importedArchive.isArchived, false);
   assert.equal(importedArchive.folder, "Mobile renamed folder");
@@ -1059,13 +1090,13 @@ try {
     branchedChat.branchSourceMessageId,
     chatAfterAgentDraft.messages.find((message) => message.role === "assistant").id
   );
-  assert.equal(branchedChat.messages.length, 2);
-  assert.equal(branchedChat.messages[0]?.contextIncluded, false);
-  assert.equal(branchedChat.messages[0]?.isBookmarked, true);
+  assert.equal(branchedChat.messages.length, 3);
+  assert.equal(branchedChat.messages.find((message) => message.content === "")?.attachments.length, 1);
+  assert.ok(branchedChat.messages.some((message) => message.contextIncluded === false && message.isBookmarked === true));
   assert.equal(branchedChat.memories.length, 0);
   assert.equal(branchedChat.folder, "Mobile renamed folder");
   assert.equal(branchedChat.userAvatar, "data:image/png;base64,YQ==");
-  assert.ok(branchedChat.messages[1]?.promptBreakdown?.promptTokens > 0);
+  assert.ok(branchedChat.messages.find((message) => message.role === "assistant")?.promptBreakdown?.promptTokens > 0);
   await permanentlyDeleteChat(branchedChat.id);
 
   const checkpointChat = await request(`/api/chats/${chat.id}/branches`, {
@@ -1078,7 +1109,8 @@ try {
   });
   assert.equal(checkpointChat.isCheckpoint, true);
   assert.equal(checkpointChat.parentChatId, chat.id);
-  assert.equal(checkpointChat.messages.length, 2);
+  assert.equal(checkpointChat.messages.length, 3);
+  assert.equal(checkpointChat.messages.find((message) => message.content === "")?.attachments.length, 1);
   assert.equal(checkpointChat.memories.length, 0);
   assert.equal(checkpointChat.userAvatar, "data:image/png;base64,YQ==");
   await permanentlyDeleteChat(checkpointChat.id);
@@ -1135,7 +1167,9 @@ try {
   assert.equal(backup.chats[0]?.isArchived, true);
   assert.equal(backup.chats[0]?.folder, "Mobile renamed folder");
   assert.equal(backup.chats[0]?.userAvatar, "data:image/png;base64,YQ==");
-  assert.equal(backup.messages.length, 6);
+  assert.equal(backup.messages.length, 7);
+  assert.equal(backup.media.assets.length, 1);
+  assert.equal(backup.media.attachments.length, 1);
   assert.ok(backup.messages.some((message) => message.generationMetadata?.estimatedCostMicros === 40));
   assert.equal("usageAttempts" in backup, false);
   assert.equal("modelRequests" in backup, false);
@@ -1154,6 +1188,9 @@ try {
 
   assert.equal((await request("/api/privacy/status")).locked, false);
   assert.equal((await request("/api/privacy/lock", { method: "POST", body: { passcode: "2468" } })).locked, true);
+  const lockedMediaResponse = await fetch(`http://127.0.0.1:${port}${imageMessage.attachments[0].url}`);
+  assert.equal(lockedMediaResponse.status, 423);
+  assert.doesNotMatch(await lockedMediaResponse.text(), /iVBOR|mobile-smoke/i);
   const lockedProfileResponse = await fetch(`http://127.0.0.1:${port}/api/chats/${chat.id}/profile-summary/revisions`);
   assert.equal(lockedProfileResponse.status, 423);
   assert.doesNotMatch(await lockedProfileResponse.text(), /blue doors|user likes/i);

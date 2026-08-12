@@ -6,6 +6,7 @@ import { serializeCharacterForBackup, serializeChat, serializeChatMemory, serial
 import type { z } from "zod";
 import type { chatArchiveImportSchema } from "../schemas.js";
 import { messageIncludeAttachments } from "./messageAttachments.js";
+import { ImageValidationError, validateStoredImage } from "./imageNormalization.js";
 
 type ChatArchiveImportInput = z.infer<typeof chatArchiveImportSchema>;
 
@@ -44,6 +45,8 @@ export const importChatArchive = async ({ archive, title }: ChatArchiveImportInp
     const assetIds = new Set<string>();
     for (const asset of archive.media.assets) {
       const bytes = Buffer.from(asset.dataBase64, "base64");
+      try { validateStoredImage({ data: bytes, mimeType: asset.mimeType, width: asset.width, height: asset.height }); }
+      catch (error) { if (error instanceof ImageValidationError) throw new HttpError(400, "The chat archive contains damaged or mismatched image data."); throw error; }
       if (bytes.length !== asset.byteSize || createHash("sha256").update(bytes).digest("hex") !== asset.contentHash || assetIds.has(asset.id)) throw new HttpError(400, "The chat archive contains damaged or duplicate image data.");
       assetIds.add(asset.id);
     }
