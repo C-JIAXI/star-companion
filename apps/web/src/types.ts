@@ -37,6 +37,7 @@ import type {
   GenerationClientMessage,
   GenerationServerMessage,
   AppLanguage,
+  AppearancePreferencesDTO,
   AiModelCapability,
   AiModuleId,
   AppInfoDTO,
@@ -170,6 +171,7 @@ export type SettingsInput = {
   autoSummarizeUser?: boolean;
   showMessageAvatars?: boolean;
   showMessageTimestamps?: boolean;
+  appearancePreferences?: AppearancePreferencesDTO;
   ttsVoice?: string;
   ttsPlaybackRate?: number;
   ttsAutoPlay?: boolean;
@@ -219,6 +221,7 @@ export type {
   GenerationClientMessage,
   GenerationServerMessage,
   AppLanguage,
+  AppearancePreferencesDTO,
   AiModelCapability,
   AiModuleId,
   AppInfoDTO,

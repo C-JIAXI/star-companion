@@ -17,6 +17,7 @@ import { NewChatDialog } from "./components/NewChatDialog";
 import { ConfirmDialog, Drawer, ErrorNotice } from "./components/ui";
 import { useAppStore } from "./store/useAppStore";
 import { useMobileViewport } from "./lib/useMobileViewport";
+import { subscribeToSystemAppearance } from "./lib/appearance";
 import type { AppSection } from "./types";
 
 const loadChatPage = () =>
@@ -135,6 +136,8 @@ export function App() {
 
   useMobileViewport();
 
+  useEffect(() => subscribeToSystemAppearance(() => useAppStore.getState().appearancePreferences), []);
+
   useEffect(() => {
     void api.privacy.status()
       .then(({ locked }) => useAppStore.getState().setPrivacyLocked(locked))
@@ -176,6 +179,7 @@ export function App() {
         setLanguage(settings.language);
         setShowMessageAvatars(settings.showMessageAvatars);
         useAppStore.getState().setShowMessageTimestamps(settings.showMessageTimestamps);
+        useAppStore.getState().setAppearancePreferences(settings.appearancePreferences);
       })
       .catch(() => {
         document.documentElement.lang = useAppStore.getState().language;
@@ -306,15 +310,16 @@ export function App() {
 
   if (!privacyStatusReady) {
     return (
-      <main className="grid h-dvh place-items-center bg-ink-950 text-ink-50" data-testid="privacy-status-loading">
-        <LoaderCircle className="animate-spin text-ember-300" size={24} />
+      <main id="main-content" className="grid h-dvh place-items-center bg-ink-950 text-ink-50" data-testid="privacy-status-loading">
+        <LoaderCircle aria-hidden="true" className="animate-spin text-ember-300" size={24} />
+        <span className="sr-only">{language === "zh-CN" ? "正在加载" : "Loading"}</span>
       </main>
     );
   }
 
   if (isPrivacyLocked) {
     return (
-      <main className="grid h-dvh place-items-center bg-ink-950 p-4 text-ink-50" data-testid="privacy-lock-screen">
+      <main id="main-content" className="grid h-dvh place-items-center bg-ink-950 p-4 text-ink-50" data-testid="privacy-lock-screen">
         <form
           className="w-full max-w-sm rounded-xl border border-white/10 bg-ink-900 p-6 shadow-2xl"
           onSubmit={(event) => {
@@ -362,6 +367,9 @@ export function App() {
 
   return (
     <div className="h-dvh bg-ink-950 text-ink-50 selection:bg-ember-400/25 safe-area-top safe-area-bottom transition-[height] duration-200">
+      <a className="skip-link" href="#main-content">
+        {language === "zh-CN" ? "跳到主要内容" : "Skip to main content"}
+      </a>
       <ErrorNotice message={chatCreationError} />
       {upgradeNotice ? (
         <div className="fixed left-1/2 top-4 z-[80] flex w-[min(92vw,42rem)] -translate-x-1/2 items-start justify-between gap-3 rounded-lg border border-emerald-400/25 bg-ink-900 px-4 py-3 text-sm text-emerald-100 shadow-2xl" data-testid="upgrade-launch-notice" role="status">
@@ -389,6 +397,7 @@ export function App() {
 
                 return (
                   <button
+                    aria-current={selected ? "page" : undefined}
                     className={`group flex min-h-[44px] items-center gap-3 rounded-md border px-3 text-sm font-medium transition-colors ${
                       selected
                         ? "border-ember-400/20 bg-ember-500/10 text-ember-100"
@@ -468,6 +477,7 @@ export function App() {
 
               return (
                 <button
+                  aria-current={selected ? "page" : undefined}
                   className={`group flex min-h-10 items-center gap-2.5 rounded-md border px-3 text-sm font-medium transition-colors ${
                     selected
                       ? "border-ember-400/20 bg-ember-500/10 text-ember-100"
@@ -514,7 +524,7 @@ export function App() {
           </div>
         </aside>
 
-        <main className="flex min-w-0 flex-1 flex-col min-h-0 overflow-hidden">
+        <main id="main-content" tabIndex={-1} className="flex min-w-0 flex-1 flex-col min-h-0 overflow-hidden">
           <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-white/[0.08] bg-ink-950/95 px-3 py-2.5 backdrop-blur-md safe-area-top sm:px-4 lg:hidden">
             <button
               className="grid h-11 w-11 shrink-0 place-items-center rounded-md text-ink-300 transition-colors hover:bg-white/[0.06] hover:text-ink-50"

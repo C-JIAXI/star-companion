@@ -1,13 +1,14 @@
 import DOMPurify from "dompurify";
 import { useEffect, useRef } from "react";
-import { scopeCharacterHtmlCss } from "../lib/characterHtmlCss";
+import { scopeCharacterHtmlCss, scopeRestrictedCharacterHtmlCss } from "../lib/characterHtmlCss";
+import { useAppStore } from "../store/useAppStore";
 
 const RENDERABLE_HTML_PATTERN = /<\/?[a-z][\w:-]*(?:\s[^<>]*)?>/i;
 
 const BASE_SCOPED_HTML_CSS = `
 :where(.rp-wrap) {
-  color: #e2e8f0;
-  font: 400 0.875rem/1.75 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--foreground);
+  font: 400 0.875rem/var(--reading-line-height, 1.65) ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   overflow-wrap: anywhere;
   word-break: break-word;
   white-space: pre-wrap;
@@ -37,7 +38,7 @@ const BASE_SCOPED_HTML_CSS = `
 }
 
 :where(.rp-wrap) h1, :where(.rp-wrap) h2, :where(.rp-wrap) h3, :where(.rp-wrap) h4, :where(.rp-wrap) h5, :where(.rp-wrap) h6 {
-  color: #f8fafc;
+  color: var(--foreground);
   font-weight: 700;
   line-height: 1.4;
 }
@@ -48,7 +49,7 @@ const BASE_SCOPED_HTML_CSS = `
 
 :where(.rp-wrap) p, :where(.rp-wrap) li, :where(.rp-wrap) blockquote, :where(.rp-wrap) td, :where(.rp-wrap) th, :where(.rp-wrap) small, :where(.rp-wrap) span {
   color: inherit;
-  line-height: 1.75;
+  line-height: var(--reading-line-height, 1.65);
 }
 
 :where(.rp-wrap) ul, :where(.rp-wrap) ol {
@@ -356,6 +357,7 @@ export function ScopedHtmlRenderer({
   className?: string;
 }) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const characterStyle = useAppStore((state) => state.appearancePreferences.characterStyle);
 
   useEffect(() => {
     const wrapper = wrapperRef.current;
@@ -425,7 +427,12 @@ export function ScopedHtmlRenderer({
     wrapper.replaceChildren();
 
     const styleEl = document.createElement("style");
-    styleEl.textContent = `${BASE_SCOPED_HTML_CSS}\n${scopeCharacterHtmlCss(htmlCss ?? "")}`;
+    const customCss = characterStyle === "off"
+      ? ""
+      : characterStyle === "restricted"
+        ? scopeRestrictedCharacterHtmlCss(htmlCss ?? "")
+        : scopeCharacterHtmlCss(htmlCss ?? "");
+    styleEl.textContent = `${BASE_SCOPED_HTML_CSS}\n${customCss}`;
     wrapper.appendChild(styleEl);
 
     const root = document.createElement("div");
@@ -452,7 +459,7 @@ export function ScopedHtmlRenderer({
     return () => {
       wrapper.removeEventListener("click", handleCopyClick);
     };
-  }, [content, htmlCss]);
+  }, [characterStyle, content, htmlCss]);
 
   return <div ref={wrapperRef} className={`min-w-0 max-w-full ${className}`} />;
 }

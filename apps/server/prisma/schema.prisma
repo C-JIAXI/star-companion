@@ -42,6 +42,8 @@ model UserSettings {
   autoSummarizeUser      Boolean   @default(true)
   showMessageAvatars     Boolean   @default(true)
   showMessageTimestamps  Boolean   @default(false)
+  /// Non-sensitive global appearance and accessibility preferences.
+  appearancePreferences  Json      @default("{}")
   ttsVoice               String    @default("alloy")
   ttsPlaybackRate        Float     @default(1.0)
   ttsAutoPlay            Boolean   @default(false)

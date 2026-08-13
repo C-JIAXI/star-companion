@@ -20,15 +20,22 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { getAiModelCapabilities, modelSupportsAiModule } from "@local-roleplay/shared";
+import {
+  defaultAppearancePreferences,
+  getAiModelCapabilities,
+  modelSupportsAiModule,
+  normalizeAppearancePreferences
+} from "@local-roleplay/shared";
 import { AboutUpdatesPanel } from "../components/AboutUpdatesPanel";
 import { languageOptions, useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { readFileText, saveJsonFile } from "../lib/files";
 import { generateId } from "../lib/uuid";
+import { applyAppearancePreferences } from "../lib/appearance";
 import { useAppStore } from "../store/useAppStore";
 import type {
   AppLanguage,
+  AppearancePreferencesDTO,
   AiModelCapability,
   AiModuleId,
   BackupConflictAction,
@@ -76,6 +83,7 @@ const defaultForm: SettingsInput = {
   userPersonaPresets: [],
   showMessageAvatars: true,
   showMessageTimestamps: false,
+  appearancePreferences: { ...defaultAppearancePreferences },
   ttsVoice: "alloy",
   ttsPlaybackRate: 1,
   ttsAutoPlay: false,
@@ -546,7 +554,7 @@ const getPageCopy = (language: AppLanguage) =>
         noPendingChanges: "No pending changes"
       };
 
-type SettingsSection = "runtime" | "providers" | "usage" | "backup" | "about";
+type SettingsSection = "appearance" | "runtime" | "providers" | "usage" | "backup" | "about";
 type SettingsSetupFocus = "provider" | "api-key" | "model";
 type SettingsModuleFocus = `module-${AiModuleId}`;
 type SettingsFocus = SettingsSetupFocus | SettingsModuleFocus;
@@ -574,7 +582,7 @@ const readSettingsLocation = () => {
     .find((value) => value === focus);
 
   return {
-    section: section === "providers" || section === "usage" || section === "backup" || section === "about" ? section : "runtime",
+    section: section === "appearance" || section === "providers" || section === "usage" || section === "backup" || section === "about" ? section : "runtime",
     focus:
       focus === "provider" || focus === "api-key" || focus === "model"
         ? focus
@@ -653,6 +661,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const setLanguage = useAppStore((state) => state.setLanguage);
   const setShowMessageAvatars = useAppStore((state) => state.setShowMessageAvatars);
   const setShowMessageTimestamps = useAppStore((state) => state.setShowMessageTimestamps);
+  const setAppearancePreferences = useAppStore((state) => state.setAppearancePreferences);
 
   const [form, setForm] = useState<SettingsInput>(defaultForm);
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -679,6 +688,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const [recoveryPoints, setRecoveryPoints] = useState<RecoveryPointDTO[]>([]);
   const [usageSummary, setUsageSummary] = useState<UsageSummaryDTO | null>(null);
   const [confirmingUsageClear, setConfirmingUsageClear] = useState(false);
+  const [confirmingAppearanceReset, setConfirmingAppearanceReset] = useState(false);
   const [privacyPasscode, setPrivacyPasscode] = useState("");
   const [privacyPasscodeConfirm, setPrivacyPasscodeConfirm] = useState("");
   const [privacyLockError, setPrivacyLockError] = useState<string | null>(null);
@@ -744,6 +754,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         userPersonaPresets: settings.userPersonaPresets ?? [],
         showMessageAvatars: settings.showMessageAvatars,
         showMessageTimestamps: settings.showMessageTimestamps,
+        appearancePreferences: normalizeAppearancePreferences(settings.appearancePreferences),
         ttsVoice: settings.ttsVoice ?? "alloy",
         ttsPlaybackRate: settings.ttsPlaybackRate ?? 1,
         ttsAutoPlay: settings.ttsAutoPlay ?? false,
@@ -754,11 +765,30 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       setLanguage(settings.language);
       setShowMessageAvatars(settings.showMessageAvatars);
       setShowMessageTimestamps(settings.showMessageTimestamps);
+      setAppearancePreferences(settings.appearancePreferences);
       setHasApiKey(settings.hasApiKey);
       setClearStoredApiKey(false);
     },
-    [setLanguage, setShowMessageAvatars, setShowMessageTimestamps]
+    [setAppearancePreferences, setLanguage, setShowMessageAvatars, setShowMessageTimestamps]
   );
+
+  useEffect(() => {
+    if (savedSnapshot === null) return;
+    applyAppearancePreferences(form.appearancePreferences, { persistMirror: false });
+    const color = window.matchMedia("(prefers-color-scheme: dark)");
+    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const refresh = () => applyAppearancePreferences(form.appearancePreferences, { persistMirror: false });
+    color.addEventListener("change", refresh);
+    motion.addEventListener("change", refresh);
+    return () => {
+      color.removeEventListener("change", refresh);
+      motion.removeEventListener("change", refresh);
+    };
+  }, [form.appearancePreferences, savedSnapshot]);
+
+  useEffect(() => () => {
+    applyAppearancePreferences(useAppStore.getState().appearancePreferences, { persistMirror: false });
+  }, []);
 
   useEffect(() => {
     void api.settings
@@ -820,6 +850,18 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const hasUnsavedChanges =
     savedSnapshot !== null &&
     (serializeForm(form) !== savedSnapshot || clearStoredApiKey);
+
+  const appearancePreferences = normalizeAppearancePreferences(form.appearancePreferences);
+  const updateAppearancePreference = <Key extends keyof AppearancePreferencesDTO>(
+    key: Key,
+    value: AppearancePreferencesDTO[Key]
+  ) => setForm((current) => ({
+    ...current,
+    appearancePreferences: {
+      ...normalizeAppearancePreferences(current.appearancePreferences),
+      [key]: value
+    }
+  }));
 
   const setupProviderReady = form.providers.some(
     (provider) =>
@@ -1027,6 +1069,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         autoSummarizeUser: settings.autoSummarizeUser,
         showMessageAvatars: settings.showMessageAvatars,
         showMessageTimestamps: settings.showMessageTimestamps,
+        appearancePreferences: normalizeAppearancePreferences(settings.appearancePreferences),
         ttsVoice: settings.ttsVoice ?? "alloy",
         ttsPlaybackRate: settings.ttsPlaybackRate ?? 1,
         ttsAutoPlay: settings.ttsAutoPlay ?? false,
@@ -1040,6 +1083,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       setLanguage(settings.language);
       setShowMessageAvatars(settings.showMessageAvatars);
       setShowMessageTimestamps(settings.showMessageTimestamps);
+      setAppearancePreferences(settings.appearancePreferences);
       setStatus(t("settings.saved"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("settings.failedSave"));
@@ -1586,6 +1630,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         <div className="flex gap-1 overflow-x-auto">
           {([
             ["runtime", copy.runtimeTitle],
+            ["appearance", language === "zh-CN" ? "外观与无障碍" : "Appearance & accessibility"],
             ["providers", copy.providersTitle],
             ["usage", language === "zh-CN" ? "使用量与预算" : "Usage & budgets"],
             ["backup", copy.backupTitle],
@@ -1612,6 +1657,117 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
           })}
         </div>
       </div>
+
+      {activeSection === "appearance" ? (
+        <Panel
+          className={settingsPanelClassName}
+          title={language === "zh-CN" ? "外观与无障碍" : "Appearance & accessibility"}
+          action={<SettingsBadge>{language === "zh-CN" ? "即时预览" : "Live preview"}</SettingsBadge>}
+        >
+          <div className="space-y-6" data-testid="appearance-settings">
+            <p className="text-sm leading-6 text-slate-400">
+              {language === "zh-CN"
+                ? "这些设置统一作用于聊天、角色、设置与应用内文档。系统模式会实时跟随设备，外观预览不会携带或暴露私密数据。"
+                : "These preferences apply consistently to chat, characters, settings, and in-app docs. System modes follow the device live, and previews never expose private data."}
+            </p>
+
+            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+              <Field label={language === "zh-CN" ? "主题" : "Theme"}>
+                <select data-testid="appearance-theme" className={selectClassName} value={appearancePreferences.themeMode} onChange={(event) => updateAppearancePreference("themeMode", event.target.value as AppearancePreferencesDTO["themeMode"])}>
+                  <option value="system">{language === "zh-CN" ? "跟随系统" : "System"}</option>
+                  <option value="light">{language === "zh-CN" ? "浅色" : "Light"}</option>
+                  <option value="dark">{language === "zh-CN" ? "深色" : "Dark"}</option>
+                </select>
+              </Field>
+              <Field label={language === "zh-CN" ? "字号" : "Font size"}>
+                <select data-testid="appearance-font-size" className={selectClassName} value={appearancePreferences.fontSize} onChange={(event) => updateAppearancePreference("fontSize", event.target.value as AppearancePreferencesDTO["fontSize"])}>
+                  <option value="small">{language === "zh-CN" ? "较小" : "Small"}</option>
+                  <option value="standard">{language === "zh-CN" ? "标准" : "Standard"}</option>
+                  <option value="large">{language === "zh-CN" ? "较大" : "Large"}</option>
+                  <option value="extra-large">{language === "zh-CN" ? "超大" : "Extra large"}</option>
+                </select>
+              </Field>
+              <Field label={language === "zh-CN" ? "行距" : "Line height"}>
+                <select data-testid="appearance-line-height" className={selectClassName} value={appearancePreferences.lineHeight} onChange={(event) => updateAppearancePreference("lineHeight", event.target.value as AppearancePreferencesDTO["lineHeight"])}>
+                  <option value="compact">{language === "zh-CN" ? "紧凑" : "Compact"}</option>
+                  <option value="comfortable">{language === "zh-CN" ? "舒适" : "Comfortable"}</option>
+                  <option value="relaxed">{language === "zh-CN" ? "宽松" : "Relaxed"}</option>
+                </select>
+              </Field>
+              <Field label={language === "zh-CN" ? "聊天内容宽度" : "Chat content width"}>
+                <select data-testid="appearance-chat-width" className={selectClassName} value={appearancePreferences.chatWidth} onChange={(event) => updateAppearancePreference("chatWidth", event.target.value as AppearancePreferencesDTO["chatWidth"])}>
+                  <option value="narrow">{language === "zh-CN" ? "窄" : "Narrow"}</option>
+                  <option value="standard">{language === "zh-CN" ? "标准" : "Standard"}</option>
+                  <option value="wide">{language === "zh-CN" ? "宽" : "Wide"}</option>
+                </select>
+              </Field>
+              <Field label={language === "zh-CN" ? "消息间距" : "Message spacing"}>
+                <select data-testid="appearance-message-spacing" className={selectClassName} value={appearancePreferences.messageSpacing} onChange={(event) => updateAppearancePreference("messageSpacing", event.target.value as AppearancePreferencesDTO["messageSpacing"])}>
+                  <option value="compact">{language === "zh-CN" ? "紧凑" : "Compact"}</option>
+                  <option value="standard">{language === "zh-CN" ? "标准" : "Standard"}</option>
+                  <option value="relaxed">{language === "zh-CN" ? "宽松" : "Relaxed"}</option>
+                </select>
+              </Field>
+              <Field label={language === "zh-CN" ? "对比度" : "Contrast"}>
+                <select data-testid="appearance-contrast" className={selectClassName} value={appearancePreferences.contrast} onChange={(event) => updateAppearancePreference("contrast", event.target.value as AppearancePreferencesDTO["contrast"])}>
+                  <option value="standard">{language === "zh-CN" ? "标准" : "Standard"}</option>
+                  <option value="high">{language === "zh-CN" ? "高对比度" : "High contrast"}</option>
+                </select>
+              </Field>
+              <Field label={language === "zh-CN" ? "动态效果" : "Motion"}>
+                <select data-testid="appearance-motion" className={selectClassName} value={appearancePreferences.motion} onChange={(event) => updateAppearancePreference("motion", event.target.value as AppearancePreferencesDTO["motion"])}>
+                  <option value="system">{language === "zh-CN" ? "跟随系统" : "System"}</option>
+                  <option value="reduced">{language === "zh-CN" ? "减少动态" : "Reduced"}</option>
+                  <option value="full">{language === "zh-CN" ? "完整动态" : "Full"}</option>
+                </select>
+              </Field>
+              <Field label={language === "zh-CN" ? "聊天背景模糊" : "Chat background blur"}>
+                <select data-testid="appearance-background-blur" className={selectClassName} value={appearancePreferences.backgroundBlur} onChange={(event) => updateAppearancePreference("backgroundBlur", event.target.value as AppearancePreferencesDTO["backgroundBlur"])}>
+                  <option value="off">{language === "zh-CN" ? "关闭" : "Off"}</option>
+                  <option value="subtle">{language === "zh-CN" ? "轻微" : "Subtle"}</option>
+                  <option value="medium">{language === "zh-CN" ? "适中" : "Medium"}</option>
+                </select>
+              </Field>
+              <Field label={language === "zh-CN" ? "角色自定义样式" : "Character custom styles"}>
+                <select data-testid="appearance-character-style" className={selectClassName} value={appearancePreferences.characterStyle} onChange={(event) => updateAppearancePreference("characterStyle", event.target.value as AppearancePreferencesDTO["characterStyle"])}>
+                  <option value="full">{language === "zh-CN" ? "完整" : "Full"}</option>
+                  <option value="restricted">{language === "zh-CN" ? "受限（推荐无障碍）" : "Restricted (accessibility)"}</option>
+                  <option value="off">{language === "zh-CN" ? "关闭" : "Off"}</option>
+                </select>
+              </Field>
+            </div>
+
+            <Field label={`${language === "zh-CN" ? "聊天背景遮罩强度" : "Chat background overlay"} · ${Math.round(appearancePreferences.backgroundOverlay * 100)}%`}>
+              <input
+                aria-valuetext={`${Math.round(appearancePreferences.backgroundOverlay * 100)}%`}
+                className="w-full accent-ember-500"
+                data-testid="appearance-background-overlay"
+                max={90}
+                min={20}
+                step={5}
+                type="range"
+                value={Math.round(appearancePreferences.backgroundOverlay * 100)}
+                onChange={(event) => updateAppearancePreference("backgroundOverlay", Number(event.target.value) / 100)}
+              />
+            </Field>
+
+            <div className={`rounded-lg p-5 ${settingsSurfaceClassName}`} data-testid="appearance-preview" aria-label={language === "zh-CN" ? "外观预览" : "Appearance preview"}>
+              <p className="section-kicker">{language === "zh-CN" ? "阅读预览" : "Reading preview"}</p>
+              <h3 className="mt-2 text-lg font-semibold text-ink-50">{language === "zh-CN" ? "在星光下继续故事" : "Continue the story under starlight"}</h3>
+              <p className="mt-2 text-sm text-slate-300" style={{ lineHeight: "var(--reading-line-height)" }}>
+                {language === "zh-CN" ? "正文、控件、边框和状态会一起响应主题、字号、行距、对比度与动态效果。" : "Body text, controls, borders, and status cues respond together to theme, type size, spacing, contrast, and motion."}
+              </p>
+            </div>
+
+            <div className="flex justify-end">
+              <Button data-testid="appearance-reset" variant="secondary" onClick={() => setConfirmingAppearanceReset(true)}>
+                <RefreshCw aria-hidden="true" size={16} />
+                {language === "zh-CN" ? "恢复外观默认值" : "Reset appearance defaults"}
+              </Button>
+            </div>
+          </div>
+        </Panel>
+      ) : null}
 
       {activeSection === "runtime" ? (
         <Panel
@@ -2914,6 +3070,20 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       ) : null}
 
       {activeSection === "about" ? <AboutUpdatesPanel language={language} /> : null}
+
+      {confirmingAppearanceReset ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={language === "zh-CN" ? "恢复默认" : "Reset defaults"}
+          message={language === "zh-CN" ? "只重置外观与无障碍设置。角色、聊天、背景与模型配置不会改变；保存后才会永久生效。" : "Only appearance and accessibility preferences will reset. Characters, chats, backgrounds, and model settings stay unchanged; save to make it permanent."}
+          title={language === "zh-CN" ? "恢复外观默认值？" : "Reset appearance defaults?"}
+          onCancel={() => setConfirmingAppearanceReset(false)}
+          onConfirm={() => {
+            setForm((current) => ({ ...current, appearancePreferences: { ...defaultAppearancePreferences } }));
+            setConfirmingAppearanceReset(false);
+          }}
+        />
+      ) : null}
 
       {confirmingImport && pendingImportFile && backupPreview ? (
         <ConfirmDialog

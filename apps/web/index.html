@@ -2,12 +2,39 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="format-detection" content="telephone=no" />
     <meta name="theme-color" content="#0a0e0d" />
     <link rel="icon" type="image/png" href="/app-logo-v2.png" />
+    <script>
+      (() => {
+        const defaults = { themeMode: "system", fontSize: "standard", lineHeight: "comfortable", chatWidth: "standard", messageSpacing: "standard", contrast: "standard", motion: "system", backgroundOverlay: 0.55, backgroundBlur: "subtle", characterStyle: "full" };
+        let saved = {};
+        try { saved = JSON.parse(localStorage.getItem("star-companion:appearance-v1") || "null") || {}; } catch {}
+        const allowed = (value, values, fallback) => values.includes(value) ? value : fallback;
+        const prefs = {
+          themeMode: allowed(saved.themeMode, ["system", "light", "dark"], defaults.themeMode),
+          fontSize: allowed(saved.fontSize, ["small", "standard", "large", "extra-large"], defaults.fontSize),
+          lineHeight: allowed(saved.lineHeight, ["compact", "comfortable", "relaxed"], defaults.lineHeight),
+          chatWidth: allowed(saved.chatWidth, ["narrow", "standard", "wide"], defaults.chatWidth),
+          messageSpacing: allowed(saved.messageSpacing, ["compact", "standard", "relaxed"], defaults.messageSpacing),
+          contrast: allowed(saved.contrast, ["standard", "high"], defaults.contrast),
+          motion: allowed(saved.motion, ["system", "reduced", "full"], defaults.motion),
+          backgroundOverlay: Number.isFinite(saved.backgroundOverlay) && saved.backgroundOverlay >= .2 && saved.backgroundOverlay <= .9 ? saved.backgroundOverlay : defaults.backgroundOverlay,
+          backgroundBlur: allowed(saved.backgroundBlur, ["off", "subtle", "medium"], defaults.backgroundBlur),
+          characterStyle: allowed(saved.characterStyle, ["full", "restricted", "off"], defaults.characterStyle)
+        };
+        const root = document.documentElement;
+        const theme = prefs.themeMode === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : prefs.themeMode;
+        const motion = prefs.motion === "system" ? (matchMedia("(prefers-reduced-motion: reduce)").matches ? "reduced" : "full") : prefs.motion;
+        Object.assign(root.dataset, { themePreference: prefs.themeMode, theme, fontSize: prefs.fontSize, lineHeight: prefs.lineHeight, chatWidth: prefs.chatWidth, messageSpacing: prefs.messageSpacing, contrast: prefs.contrast, motionPreference: prefs.motion, motion, backgroundBlur: prefs.backgroundBlur, characterStyle: prefs.characterStyle });
+        root.style.colorScheme = theme;
+        root.style.setProperty("--chat-background-overlay", String(prefs.backgroundOverlay));
+        document.querySelector('meta[name="theme-color"]').content = theme === "dark" ? "#0a0e0d" : "#f7faf9";
+      })();
+    </script>
     <title>星伴 / Star Companion</title>
   </head>
   <body>

@@ -81,6 +81,8 @@ The local backend must keep the existing product boundary:
 - character context through embedded `loreEntries`
 - API keys stored in app-private local storage, never in frontend state
 
+The shared WebView also uses the same global appearance and accessibility contract as desktop: system/light/dark theme, reading size and spacing, high contrast, motion preference, chat background masking, and full/restricted/off character CSS. Only an allow-listed, non-sensitive appearance mirror is read before first paint. Android's browser zoom remains enabled, theme color follows the resolved theme, and the embedded mobile backend persists and transfers these non-key settings through backup/recovery/LAN sync exactly like the desktop backend.
+
 LAN sync is intentionally manual. The settings page lets a user enter a peer
 backend address on the same local network and choose pull or push with either
 merge or replace mode. The sync payload is the existing full backup envelope,

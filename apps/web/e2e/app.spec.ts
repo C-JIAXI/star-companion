@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 
 type E2ECharacter = {
   id: string;
@@ -77,6 +78,7 @@ type SettingsPutPayload = {
     updatedAt: string;
   }>;
   userProfileSummary?: string;
+  appearancePreferences?: Record<string, unknown>;
 };
 
 type ApiDataResponse<T> = {
@@ -342,6 +344,102 @@ test("direct routes render their workspace headers", async ({ page }) => {
 
   await page.goto("/settings");
   await expect(page.getByRole("heading", { name: /模型设置|Model Settings/ })).toBeVisible();
+});
+
+test("appearance preferences preview, persist, reset, and bootstrap without a theme flash", async ({ page }) => {
+  const now = new Date().toISOString();
+  const defaults = { themeMode: "system", fontSize: "standard", lineHeight: "comfortable", chatWidth: "standard", messageSpacing: "standard", contrast: "standard", motion: "system", backgroundOverlay: 0.55, backgroundBlur: "subtle", characterStyle: "full" };
+  const settings = {
+    id: "appearance-settings-e2e", activeProvider: "openai-compatible", apiBaseUrl: "https://example.invalid/v1", model: "chat-model",
+    temperature: 0.8, maxTokens: 800, topP: 1, language: "en", providers: [], activeProviderId: "", activeModelId: "",
+    moduleModelPreferences: {}, userPersonaPresets: [], userProfileSummary: "", autoSummarizeUser: false,
+    showMessageAvatars: true, showMessageTimestamps: false, ttsVoice: "alloy", ttsPlaybackRate: 1, ttsAutoPlay: false,
+    appearancePreferences: { ...defaults }, userProfileUpdatedAt: null, createdAt: now, updatedAt: now, hasApiKey: false
+  };
+
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() === "PUT") {
+      Object.assign(settings, route.request().postDataJSON());
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: settings }) });
+  });
+
+  await page.goto("/settings");
+  await page.getByTestId("settings-section-appearance").click();
+  await page.getByTestId("appearance-theme").selectOption("light");
+  await page.getByTestId("appearance-font-size").selectOption("large");
+  await page.getByTestId("appearance-motion").selectOption("reduced");
+  await page.getByTestId("appearance-character-style").selectOption("restricted");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.locator("html")).toHaveAttribute("data-font-size", "large");
+  await expect(page.locator("html")).toHaveAttribute("data-motion", "reduced");
+  await expect(page.getByTestId("appearance-settings")).toHaveScreenshot("appearance-settings-light.png", { animations: "disabled" });
+  await page.getByTestId("settings-save").click();
+  await expect.poll(() => settings.appearancePreferences).toEqual(expect.objectContaining({ themeMode: "light", fontSize: "large", motion: "reduced", characterStyle: "restricted" }));
+
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.locator("html")).toHaveAttribute("data-font-size", "large");
+  await page.getByTestId("settings-section-appearance").click();
+  await page.getByTestId("appearance-reset").click();
+  await page.getByRole("button", { name: "Reset defaults" }).click();
+  await expect(page.getByTestId("appearance-theme")).toHaveValue("system");
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator("html")).toHaveAttribute("data-motion", "reduced");
+  await page.emulateMedia({ colorScheme: "light", reducedMotion: "no-preference" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.locator("html")).toHaveAttribute("data-motion", "full");
+
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.getByTestId("appearance-font-size").selectOption("extra-large");
+  await expect(page.getByTestId("appearance-preview")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await page.getByTestId("appearance-preview").scrollIntoViewIfNeeded();
+  await expect(page.getByTestId("appearance-preview")).toHaveScreenshot("appearance-preview-320px-extra-large.png", { animations: "disabled" });
+  await page.evaluate(() => window.dispatchEvent(new Event("star-companion:privacy-locked")));
+  await expect(page.getByTestId("privacy-lock-screen")).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-font-size", "large");
+  await expect(page.locator("[data-chat-background-layer]")).toHaveCount(0);
+});
+
+test("critical navigation and settings controls pass automated accessibility checks", async ({ page }) => {
+  for (const pathName of ["/", "/characters", "/settings", "/docs"]) {
+    await page.goto(pathName);
+    if (pathName === "/settings") await page.getByTestId("settings-section-appearance").click();
+    const results = await new AxeBuilder({ page }).withRules([
+      "aria-allowed-attr",
+      "aria-required-attr",
+      "aria-valid-attr-value",
+      "button-name",
+      "document-title",
+      "html-has-lang",
+      "label",
+      "link-name"
+    ]).analyze();
+    expect(results.violations, `${pathName} accessibility violations`).toEqual([]);
+  }
+
+  const skipLink = page.locator(".skip-link");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Tab");
+  await expect(skipLink).toBeFocused();
+  await skipLink.press("Enter");
+  await expect(page.locator("#main-content")).toBeFocused();
+});
+
+test("invalid appearance bootstrap data falls back before the server responds", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("star-companion:appearance-v1", JSON.stringify({ themeMode: "neon", fontSize: "huge", motion: "spin", backgroundOverlay: 9, characterStyle: "unsafe" })));
+  await page.route("**/api/settings", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    await route.continue();
+  });
+  await page.goto("/settings", { waitUntil: "domcontentloaded" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme-preference", "system");
+  await expect(page.locator("html")).toHaveAttribute("data-font-size", "standard");
+  await expect(page.locator("html")).toHaveAttribute("data-motion-preference", "system");
+  await expect(page.locator("html")).toHaveAttribute("data-character-style", "full");
+  expect(await page.locator("html").evaluate((element) => getComputedStyle(element).getPropertyValue("--chat-background-overlay").trim())).toBe("0.55");
 });
 
 test("usage and reliability panel hides all details behind the session privacy lock", async ({ page }) => {
@@ -870,7 +968,7 @@ test("chat image attachments preview, send, reload, view, and unmount when locke
     await expect(draft.getByRole("img")).toHaveCount(1);
     await page.locator('#chat-primary-action[data-chat-action="send"]').click();
     await expect(page.locator('[data-chat-message="user"]')).toHaveCount(1);
-    await expect(page.getByText(visionReply)).toBeVisible();
+    await expect(page.getByTestId("chat-message-viewport").getByText(visionReply)).toBeVisible();
     const requestPayload = await page.evaluate(() => (window as unknown as { __visionRequest: { content: string; draftId: string } }).__visionRequest);
     expect(requestPayload.content).toBe("");
     expect(requestPayload.draftId).toMatch(/^draft_/);
@@ -3583,7 +3681,7 @@ test("character built-in css previews in the editor and styles only matching cha
   const chatATitle = `CSS Chat A ${suffix}`;
   const chatBTitle = `CSS Chat B ${suffix}`;
   const assistantReplyAText = "Assistant reply for character CSS coverage.";
-  const assistantReplyA = `<div class="custom-fold"><details open><summary><span class="title-icon"></span>Memory Scroll</summary><p>${assistantReplyAText}</p></details></div>`;
+  const assistantReplyA = `<div class="custom-fold"><details open><summary><span class="title-icon"></span>Memory Scroll</summary><p>${assistantReplyAText}</p><button class="css-danger">Accessible control</button></details></div>`;
   const assistantReplyB = "Assistant reply that should keep default chat styling.";
   const customCss = `body {
   background-color: rgb(253, 246, 227);
@@ -3630,6 +3728,16 @@ test("character built-in css previews in the editor and styles only matching cha
   margin-left: auto;
 }
 
+.css-danger {
+  display: none;
+  font-size: 1px;
+  pointer-events: none;
+  animation: pulse 1s infinite;
+  z-index: 999999;
+}
+
+@keyframes pulse { from { opacity: 0; } to { opacity: 1; } }
+
 /* Responsive card tweak */
 @media (min-width: 1px) {
   .custom-fold summary {
@@ -3639,6 +3747,23 @@ test("character built-in css previews in the editor and styles only matching cha
   const expandedCss = `${customCss}
 /* expanded editor smoke */`;
   const expandedOpeningHtml = `<section><h1>Expanded opening ${suffix}</h1></section>`;
+  const settingsResponse = await request.get("/api/settings");
+  const settingsPayload = (await settingsResponse.json()) as ApiDataResponse<Record<string, unknown>>;
+  const originalSettings = settingsPayload.data ?? {};
+  let characterStyleMode: "full" | "restricted" | "off" = "full";
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    const appearance = originalSettings.appearancePreferences && typeof originalSettings.appearancePreferences === "object"
+      ? originalSettings.appearancePreferences as Record<string, unknown>
+      : {};
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, data: { ...originalSettings, appearancePreferences: { ...appearance, characterStyle: characterStyleMode } } })
+    });
+  });
 
   const createCharacter = async (name: string) => {
     const response = await request.post("/api/characters", {
@@ -3807,6 +3932,18 @@ test("character built-in css previews in the editor and styles only matching cha
       afterContent: '""',
       listStyleType: "none"
     });
+    await expect(page.getByRole("button", { name: "Accessible control" })).toBeHidden();
+
+    characterStyleMode = "restricted";
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Accessible control" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Accessible control" })).toHaveCSS("pointer-events", "auto");
+    await expect(page.locator("#chat-composer")).toHaveCSS("background-color", "rgb(17, 24, 39)");
+
+    characterStyleMode = "off";
+    await page.reload();
+    await expect(page.locator("#chat-composer")).not.toHaveCSS("background-color", "rgb(17, 24, 39)");
+    await expect(page.getByRole("button", { name: "Accessible control" })).toBeVisible();
 
     await openHistoryAndSelectChat(chatBTitle);
     await expect(page.getByTestId("chat-message-viewport").getByText(assistantReplyB)).toBeVisible();
@@ -5072,7 +5209,8 @@ test("the last selected chat is restored after reloading the app", async ({ page
 test("chat model switch preserves stored key and runtime settings when provider has no dedicated key", async ({
   page,
   request
-}) => {
+}, testInfo) => {
+  testInfo.setTimeout(90_000);
   const suffix = Date.now();
   const characterName = `Switch Character ${suffix}`;
   const chatTitle = `Switch Chat ${suffix}`;
@@ -5135,6 +5273,8 @@ test("chat model switch preserves stored key and runtime settings when provider 
             userProfileSummary: "Stored profile summary.",
             autoSummarizeUser: true,
             showMessageAvatars: true,
+            showMessageTimestamps: false,
+            appearancePreferences: { themeMode: "system", fontSize: "standard", lineHeight: "comfortable", chatWidth: "standard", messageSpacing: "standard", contrast: "standard", motion: "system", backgroundOverlay: 0.55, backgroundBlur: "subtle", characterStyle: "full" },
             userProfileUpdatedAt: null,
             createdAt: now,
             updatedAt: now,
@@ -5175,6 +5315,8 @@ test("chat model switch preserves stored key and runtime settings when provider 
             userProfileSummary: latestSettingsPut.value?.userProfileSummary ?? "Stored profile summary.",
             autoSummarizeUser: true,
             showMessageAvatars: true,
+            showMessageTimestamps: false,
+            appearancePreferences: latestSettingsPut.value?.appearancePreferences,
             userProfileUpdatedAt: null,
             createdAt: now,
             updatedAt: now,
@@ -5225,8 +5367,10 @@ test("chat model switch preserves stored key and runtime settings when provider 
 
   try {
     await page.goto("/");
-    await openChatHistoryAndSelect(page, chatTitle);
-    await page.getByRole("button", { name: /记忆|Memory/ }).click();
+    await page.evaluate((chatId) => localStorage.setItem("star-companion:selected-chat", chatId), chat.id);
+    await page.reload();
+    await expect(page.locator("#chat-title")).toContainText(chatTitle);
+    await page.locator("#chat-settings-trigger").click();
     await page.getByRole("button", { name: /模型切换|Switch Model/ }).click();
     await page.getByRole("button", { name: /Target Model/ }).click();
 

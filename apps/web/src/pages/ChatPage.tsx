@@ -52,7 +52,7 @@ import {
   safeChatTranscriptName,
   type ChatTranscriptFormat
 } from "../lib/chatTranscript";
-import { scopeCharacterChatUiCss } from "../lib/characterHtmlCss";
+import { scopeCharacterChatUiCss, scopeRestrictedCharacterChatUiCss } from "../lib/characterHtmlCss";
 import { readFileAsDataUrl, saveTextFile } from "../lib/files";
 import { queueChatMessageJump, takeChatMessageJump } from "../lib/messageNavigation";
 import { generateId } from "../lib/uuid";
@@ -114,6 +114,8 @@ import { normalizeChatImageFile } from "../lib/chatImages";
 import { resolveApiUrl } from "../lib/appBackend";
 
 const MESSAGES_PER_PAGE = 30;
+const preferredScrollBehavior = (): ScrollBehavior =>
+  document.documentElement.dataset.motion === "reduced" ? "auto" : "smooth";
 const CHAT_DRAFT_STORAGE_PREFIX = "star-companion:chat-draft:";
 const CHAT_QUEUE_STORAGE_PREFIX = "star-companion:chat-queue:";
 const ACTIVE_REQUEST_STORAGE_KEY = "star-companion:active-model-request";
@@ -338,6 +340,7 @@ export function ChatPage({
   const { language, t } = useI18n();
   const showMessageAvatars = useAppStore((state) => state.showMessageAvatars);
   const showMessageTimestamps = useAppStore((state) => state.showMessageTimestamps);
+  const characterStyle = useAppStore((state) => state.appearancePreferences.characterStyle);
   const [characters, setCharacters] = useState<CharacterDTO[]>([]);
   const [activeChat, setActiveChat] = useState<ChatWithMessagesDTO | null>(null);
   const [draft, setDraft] = useState("");
@@ -1287,7 +1290,7 @@ export function ChatPage({
   const scrollToBottom = useCallback(() => {
     const viewport = messageViewportRef.current;
     if (viewport) {
-      viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior: preferredScrollBehavior() });
     }
   }, []);
 
@@ -1560,6 +1563,9 @@ export function ChatPage({
     setQueuedMessages(storedQueue);
     setDraft(readStoredChatDraft(id));
     const chat = await api.chats.get(id);
+    if (draftChatIdRef.current !== id) {
+      return;
+    }
     setActiveChat(chat);
     setAgentDraft(null);
     setChatMemories(chat.memories ?? []);
@@ -1576,7 +1582,7 @@ export function ChatPage({
       setTimeout(() => {
         document
           .querySelector(`[data-message-id="${pendingMessageJump.messageId}"]`)
-          ?.scrollIntoView({ block: "center", behavior: "smooth" });
+          ?.scrollIntoView({ block: "center", behavior: preferredScrollBehavior() });
       }, 50);
       window.setTimeout(() => {
         setHighlightedMessageId((current) =>
@@ -1591,6 +1597,9 @@ export function ChatPage({
       const fetchedCharacters = await Promise.all(
         missingCharacterIds.map((characterId) => api.characters.get(characterId).catch(() => null))
       );
+      if (draftChatIdRef.current !== id) {
+        return;
+      }
       mergeCharacterCache(
         fetchedCharacters.filter((character): character is CharacterDTO => character !== null)
       );
@@ -1717,7 +1726,11 @@ export function ChatPage({
     );
     existing?.remove();
 
-    const css = scopeCharacterChatUiCss(activeCharacterHtmlCss).trim();
+    const css = characterStyle === "off"
+      ? ""
+      : characterStyle === "restricted"
+        ? scopeRestrictedCharacterChatUiCss(activeCharacterHtmlCss).trim()
+        : scopeCharacterChatUiCss(activeCharacterHtmlCss).trim();
     if (!css) {
       return;
     }
@@ -1730,7 +1743,7 @@ export function ChatPage({
     return () => {
       styleEl.remove();
     };
-  }, [activeCharacterHtmlCss]);
+  }, [activeCharacterHtmlCss, characterStyle]);
 
   const openMemorySettings = () => {
     if (!activeChat) {
@@ -2329,7 +2342,7 @@ export function ChatPage({
     setTimeout(() => {
       document
         .querySelector(`[data-message-id="${message.id}"]`)
-        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+        ?.scrollIntoView({ block: "center", behavior: preferredScrollBehavior() });
     }, 50);
     window.setTimeout(() => {
       setHighlightedMessageId((current) => (current === message.id ? null : current));
@@ -4039,10 +4052,10 @@ export function ChatPage({
                     alt=""
                     aria-hidden="true"
                     className="h-full w-full object-cover"
+                    data-chat-background-layer
                     src={activeBackgroundUrl}
                   />
-                  <div className="absolute inset-0 bg-black/35" />
-                  <div className="absolute inset-0 bg-black/45" />
+                  <div className="absolute inset-0" data-chat-background-overlay />
                 </div>
               ) : !activeChat ? (
                 <div className="pointer-events-none absolute inset-0 bg-ink-950/35" />
@@ -4138,7 +4151,7 @@ export function ChatPage({
                         </div>
                       ) : (
                         <div
-                            className="mx-auto max-w-3xl space-y-4 p-2 sm:space-y-6 sm:p-5"
+                            className="mx-auto w-full p-2 sm:p-5"
                           id="chat-message-list"
                         >
                           {activeChat.messages.length > MESSAGES_PER_PAGE ? (

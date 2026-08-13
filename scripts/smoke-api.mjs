@@ -475,6 +475,7 @@ const main = async () => {
     const initialSettings = await requestData(baseUrl, "/api/settings");
     assert.equal(initialSettings.hasApiKey, false);
     assert.equal("apiKey" in initialSettings, false);
+    assert.equal(initialSettings.appearancePreferences.themeMode, "system");
 
     const settingsPayload = {
       activeProvider: "openai-compatible",
@@ -488,6 +489,7 @@ const main = async () => {
       autoSummarizeUser: false,
       showMessageAvatars: false,
       showMessageTimestamps: true,
+      appearancePreferences: { themeMode: "light", fontSize: "large", lineHeight: "relaxed", chatWidth: "wide", messageSpacing: "compact", contrast: "high", motion: "reduced", backgroundOverlay: 0.75, backgroundBlur: "medium", characterStyle: "restricted" },
       ttsVoice: "nova",
       ttsPlaybackRate: 1.25,
       ttsAutoPlay: true,
@@ -554,6 +556,8 @@ const main = async () => {
     assert.equal(updatedSettings.language, "en");
     assert.equal(updatedSettings.showMessageAvatars, false);
     assert.equal(updatedSettings.showMessageTimestamps, true);
+    assert.equal(updatedSettings.appearancePreferences.themeMode, "light");
+    assert.equal(updatedSettings.appearancePreferences.characterStyle, "restricted");
     assert.equal(updatedSettings.ttsVoice, "nova");
     assert.equal(updatedSettings.ttsPlaybackRate, 1.25);
     assert.equal(updatedSettings.ttsAutoPlay, true);
@@ -1585,6 +1589,8 @@ const main = async () => {
 
     log("Verifying backup export/import and delete flows");
     const exportedBackup = await requestData(baseUrl, "/api/backups/export");
+    assert.equal(exportedBackup.settings.appearancePreferences.themeMode, "light");
+    assert.equal("apiKey" in exportedBackup.settings, false);
     assert.equal(exportedBackup.schemaVersion, 1);
     assert.ok(exportedBackup.settings);
     assert.equal(exportedBackup.characters.length, 2);
@@ -1792,6 +1798,8 @@ const main = async () => {
     );
     assert.ok(restoreResult.safetyRecoveryPointId);
     const restoredBackup = await requestData(baseUrl, "/api/backups/export");
+    assert.equal(restoredBackup.settings.appearancePreferences.themeMode, "light");
+    assert.equal(restoredBackup.settings.appearancePreferences.characterStyle, "restricted");
     assert.deepEqual(restoredBackup.memoryRevisions, exportedBackup.memoryRevisions);
     assert.deepEqual(restoredBackup.memoryOperations, exportedBackup.memoryOperations);
     assert.deepEqual(restoredBackup.profileSummaryRevisions, exportedBackup.profileSummaryRevisions);

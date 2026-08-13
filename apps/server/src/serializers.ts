@@ -17,6 +17,24 @@ interface ProviderModel {
   };
 }
 
+const normalizeAppearancePreferences = (value: unknown) => {
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const allowed = <T extends string>(candidate: unknown, values: readonly T[], fallback: T): T =>
+    typeof candidate === "string" && values.includes(candidate as T) ? candidate as T : fallback;
+  return {
+    themeMode: allowed(input.themeMode, ["system", "light", "dark"] as const, "system"),
+    fontSize: allowed(input.fontSize, ["small", "standard", "large", "extra-large"] as const, "standard"),
+    lineHeight: allowed(input.lineHeight, ["compact", "comfortable", "relaxed"] as const, "comfortable"),
+    chatWidth: allowed(input.chatWidth, ["narrow", "standard", "wide"] as const, "standard"),
+    messageSpacing: allowed(input.messageSpacing, ["compact", "standard", "relaxed"] as const, "standard"),
+    contrast: allowed(input.contrast, ["standard", "high"] as const, "standard"),
+    motion: allowed(input.motion, ["system", "reduced", "full"] as const, "system"),
+    backgroundOverlay: typeof input.backgroundOverlay === "number" && Number.isFinite(input.backgroundOverlay) && input.backgroundOverlay >= 0.2 && input.backgroundOverlay <= 0.9 ? input.backgroundOverlay : 0.55,
+    backgroundBlur: allowed(input.backgroundBlur, ["off", "subtle", "medium"] as const, "subtle"),
+    characterStyle: allowed(input.characterStyle, ["full", "restricted", "off"] as const, "full")
+  };
+};
+
 type AiModelCapability =
   | "text_generation"
   | "vision_input"
@@ -470,6 +488,7 @@ export const serializeSettings = (settings: UserSettings) => ({
   autoSummarizeUser: settings.autoSummarizeUser,
   showMessageAvatars: settings.showMessageAvatars,
   showMessageTimestamps: settings.showMessageTimestamps,
+  appearancePreferences: normalizeAppearancePreferences(settings.appearancePreferences),
   ttsVoice: settings.ttsVoice,
   ttsPlaybackRate: settings.ttsPlaybackRate,
   ttsAutoPlay: settings.ttsAutoPlay,

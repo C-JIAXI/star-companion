@@ -963,6 +963,23 @@ const serializeProviderProfiles = (providers) =>
         }))
     : [];
 
+const normalizeAppearancePreferences = (value) => {
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const allowed = (candidate, values, fallback) => values.includes(candidate) ? candidate : fallback;
+  return {
+    themeMode: allowed(input.themeMode, ["system", "light", "dark"], "system"),
+    fontSize: allowed(input.fontSize, ["small", "standard", "large", "extra-large"], "standard"),
+    lineHeight: allowed(input.lineHeight, ["compact", "comfortable", "relaxed"], "comfortable"),
+    chatWidth: allowed(input.chatWidth, ["narrow", "standard", "wide"], "standard"),
+    messageSpacing: allowed(input.messageSpacing, ["compact", "standard", "relaxed"], "standard"),
+    contrast: allowed(input.contrast, ["standard", "high"], "standard"),
+    motion: allowed(input.motion, ["system", "reduced", "full"], "system"),
+    backgroundOverlay: Number.isFinite(input.backgroundOverlay) && input.backgroundOverlay >= 0.2 && input.backgroundOverlay <= 0.9 ? input.backgroundOverlay : 0.55,
+    backgroundBlur: allowed(input.backgroundBlur, ["off", "subtle", "medium"], "subtle"),
+    characterStyle: allowed(input.characterStyle, ["full", "restricted", "off"], "full")
+  };
+};
+
 const serializeSettings = (settings) => ({
   id: settings.id,
   activeProvider: settings.activeProvider,
@@ -991,6 +1008,7 @@ const serializeSettings = (settings) => ({
   autoSummarizeUser: settings.autoSummarizeUser !== false,
   showMessageAvatars: settings.showMessageAvatars !== false,
   showMessageTimestamps: settings.showMessageTimestamps === true,
+  appearancePreferences: normalizeAppearancePreferences(settings.appearancePreferences),
   ttsVoice: String(settings.ttsVoice || "alloy"),
   ttsPlaybackRate: Number(settings.ttsPlaybackRate) || 1,
   ttsAutoPlay: settings.ttsAutoPlay === true,
@@ -3226,6 +3244,7 @@ app.put(
       autoSummarizeUser: body.autoSummarizeUser,
       showMessageAvatars: body.showMessageAvatars,
       showMessageTimestamps: body.showMessageTimestamps,
+      appearancePreferences: normalizeAppearancePreferences(body.appearancePreferences ?? existingSettings.appearancePreferences),
       ttsVoice: body.ttsVoice,
       ttsPlaybackRate: body.ttsPlaybackRate,
       ttsAutoPlay: body.ttsAutoPlay,

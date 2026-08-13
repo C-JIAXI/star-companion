@@ -314,6 +314,7 @@ settingsRouter.put(
     const modelReliability = body.modelReliability ?? existingSettings.modelReliability;
     const usageBudgets = body.usageBudgets ?? existingSettings.usageBudgets;
     const usageTimezone = body.usageTimezone ?? existingSettings.usageTimezone;
+    const appearancePreferences = body.appearancePreferences ?? existingSettings.appearancePreferences;
 
     const moduleModelError = validateModuleModelPreferences(
       body.providers,
@@ -365,6 +366,7 @@ settingsRouter.put(
       autoSummarizeUser: body.autoSummarizeUser,
       showMessageAvatars: body.showMessageAvatars,
       showMessageTimestamps: body.showMessageTimestamps,
+      appearancePreferences: appearancePreferences as unknown as Prisma.JsonObject,
       ttsVoice: body.ttsVoice,
       ttsPlaybackRate: body.ttsPlaybackRate,
       ttsAutoPlay: body.ttsAutoPlay,

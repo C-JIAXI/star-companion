@@ -324,6 +324,7 @@ child.stderr.on("data", (chunk) => process.stderr.write(chunk));
 try {
   const health = await waitForHealth();
   assert.equal(health.ok, true);
+  assert.equal((await request("/api/settings")).appearancePreferences.themeMode, "system");
   assert.equal(health.database, "sqlite");
   const appInfo = await request("/api/app/info");
   assert.match(appInfo.appVersion, /^\d+\.\d+\.\d+/);
@@ -372,6 +373,7 @@ try {
     autoSummarizeUser: true,
     showMessageAvatars: false,
     showMessageTimestamps: true,
+    appearancePreferences: { themeMode: "light", fontSize: "large", lineHeight: "relaxed", chatWidth: "wide", messageSpacing: "compact", contrast: "high", motion: "reduced", backgroundOverlay: 0.75, backgroundBlur: "medium", characterStyle: "restricted" },
     ttsVoice: "nova",
     ttsPlaybackRate: 1.25,
     ttsAutoPlay: true,
@@ -398,6 +400,8 @@ try {
   });
   assert.equal(savedModelSettings.showMessageAvatars, false);
   assert.equal(savedModelSettings.showMessageTimestamps, true);
+  assert.equal(savedModelSettings.appearancePreferences.themeMode, "light");
+  assert.equal(savedModelSettings.appearancePreferences.characterStyle, "restricted");
   assert.equal(savedModelSettings.ttsVoice, "nova");
   assert.equal(savedModelSettings.ttsPlaybackRate, 1.25);
   assert.equal(savedModelSettings.ttsAutoPlay, true);
@@ -425,6 +429,7 @@ try {
       })),
       showMessageAvatars: undefined,
       showMessageTimestamps: undefined,
+      appearancePreferences: undefined,
       ttsVoice: undefined,
       ttsPlaybackRate: undefined,
       ttsAutoPlay: undefined,
@@ -435,6 +440,7 @@ try {
   assert.equal(switchedModelSettings.model, "fake-mobile-model-2");
   assert.equal(switchedModelSettings.showMessageAvatars, false);
   assert.equal(switchedModelSettings.showMessageTimestamps, true);
+  assert.equal(switchedModelSettings.appearancePreferences.fontSize, "large");
   assert.equal(switchedModelSettings.ttsVoice, "nova");
   assert.equal(switchedModelSettings.ttsPlaybackRate, 1.25);
   assert.equal(switchedModelSettings.ttsAutoPlay, true);
@@ -1158,6 +1164,8 @@ try {
   assert.equal(image.images[0]?.b64Json, Buffer.from("mobile-image").toString("base64"));
 
   const backup = await request("/api/backups/export");
+  assert.equal(backup.settings.appearancePreferences.themeMode, "light");
+  assert.equal("apiKey" in backup.settings, false);
   assert.equal(backup.schemaVersion, 1);
   assert.equal(backup.characters.length, 1);
   assert.equal(backup.characters[0]?.avatar, "https://example.test/mobile-private.png");
@@ -1247,6 +1255,7 @@ try {
   assert.ok(mobileRestore.safetyRecoveryPointId);
   assert.equal((await request(`/api/characters/${character.id}`)).name, metadataUpdatedPrivateCharacter.name);
   const restoredMobileBackup = await request("/api/backups/export");
+  assert.equal(restoredMobileBackup.settings.appearancePreferences.themeMode, "light");
   assert.deepEqual(restoredMobileBackup.memoryRevisions, backup.memoryRevisions);
   assert.deepEqual(restoredMobileBackup.memoryOperations, backup.memoryOperations);
   assert.deepEqual(restoredMobileBackup.profileSummaryRevisions, backup.profileSummaryRevisions);

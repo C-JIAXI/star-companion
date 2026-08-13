@@ -262,6 +262,10 @@ const getDocsCopy = (language: string): DocsCopy => {
           kind: "guide",
           items: [
             {
+              title: "外观与无障碍",
+              body: "全局外观设置统一作用于聊天、角色、设置与文档页，包含系统/浅色/深色主题、字号、行距、聊天宽度、消息间距、高对比度、动态效果和聊天背景遮罩。系统模式会实时跟随设备；减少动态效果会关闭非必要动画和平滑滚动。角色 CSS 可选择完整、受限或关闭；受限模式不会改写已保存的 CSS，但会阻止隐藏控件、过小文字、极端层级和无限动画。隐私锁会保留这些非敏感外观，但不会显示聊天背景或工作区内容。"
+            },
+            {
               title: "API Key",
               body: "API Key 只保存在本地配置中，运行时代码会加密保存；界面不会展示已保存密钥的明文。"
             },
@@ -579,6 +583,10 @@ const getDocsCopy = (language: string): DocsCopy => {
           "Settings manages model connection, language, and display preferences.",
         kind: "guide",
         items: [
+          {
+            title: "Appearance and accessibility",
+            body: "Global appearance preferences apply to Chat, Characters, Settings, and Docs: system/light/dark theme, type size, line height, chat width, message spacing, high contrast, motion, and chat-background masking. System modes follow the device live; reduced motion removes non-essential animation and smooth scrolling. Character CSS can be full, restricted, or off. Restricted mode leaves stored CSS unchanged but blocks hidden controls, tiny text, extreme stacking, and endless animation. Privacy lock keeps this non-sensitive appearance without showing chat backgrounds or workspace content."
+          },
           {
             title: "API keys",
             body: "API keys are stored only in local configuration. The interface does not reveal the saved key after it is stored."

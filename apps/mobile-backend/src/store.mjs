@@ -37,6 +37,11 @@ const defaultSettings = () => {
     autoSummarizeUser: true,
     showMessageAvatars: true,
     showMessageTimestamps: false,
+    appearancePreferences: {
+      themeMode: "system", fontSize: "standard", lineHeight: "comfortable", chatWidth: "standard",
+      messageSpacing: "standard", contrast: "standard", motion: "system", backgroundOverlay: 0.55,
+      backgroundBlur: "subtle", characterStyle: "full"
+    },
     ttsVoice: "alloy",
     ttsPlaybackRate: 1,
     ttsAutoPlay: false,

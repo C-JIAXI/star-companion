@@ -327,6 +327,31 @@ describe("characterBatchTagsSchema", () => {
 });
 
 describe("settingsUpdateSchema", () => {
+  it("applies stable appearance defaults and validates explicit preferences", () => {
+    const base = { apiBaseUrl: "https://example.com/v1", model: "model", temperature: 0.8, maxTokens: 800, topP: 1 };
+    const defaults = parseBody(settingsUpdateSchema, { ...base, appearancePreferences: {} }).appearancePreferences!;
+    assert.deepEqual(defaults, {
+      themeMode: "system",
+      fontSize: "standard",
+      lineHeight: "comfortable",
+      chatWidth: "standard",
+      messageSpacing: "standard",
+      contrast: "standard",
+      motion: "system",
+      backgroundOverlay: 0.55,
+      backgroundBlur: "subtle",
+      characterStyle: "full"
+    });
+
+    const explicit = parseBody(settingsUpdateSchema, { ...base,
+      appearancePreferences: { themeMode: "dark", fontSize: "extra-large", lineHeight: "relaxed", chatWidth: "wide", messageSpacing: "compact", contrast: "high", motion: "reduced", backgroundOverlay: 0.8, backgroundBlur: "medium", characterStyle: "restricted" }
+    }).appearancePreferences!;
+    assert.equal(explicit.themeMode, "dark");
+    assert.equal(explicit.characterStyle, "restricted");
+    assert.throws(() => parseBody(settingsUpdateSchema, { ...base, appearancePreferences: { themeMode: "midnight" } }));
+    assert.throws(() => parseBody(settingsUpdateSchema, { ...base, appearancePreferences: { backgroundOverlay: 1 } }));
+  });
+
   it("accepts chat display preferences in settings payloads", () => {
     const parsed = parseBody(settingsUpdateSchema, {
       activeProvider: "openai-compatible",

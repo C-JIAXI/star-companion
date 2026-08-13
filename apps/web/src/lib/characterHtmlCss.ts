@@ -127,7 +127,9 @@ const findMatchingBrace = (css: string, openIndex: number) => {
 const scopeCssRules = (
   css: string,
   scope: string,
-  shouldKeepSelector: (selector: string) => boolean = () => true
+  shouldKeepSelector: (selector: string) => boolean = () => true,
+  transformBody: (body: string) => string = (body) => body,
+  restrictedAtRules = false
 ): string => {
   let output = "";
   let cursor = 0;
@@ -153,12 +155,12 @@ const scopeCssRules = (
 
     if (comparablePrelude.startsWith("@")) {
       if (/^@(media|supports|container|layer)\b/i.test(comparablePrelude)) {
-        const scopedBody = scopeCssRules(body, scope, shouldKeepSelector);
+        const scopedBody = scopeCssRules(body, scope, shouldKeepSelector, transformBody, restrictedAtRules);
         if (scopedBody.trim()) {
           output += `${leading}${trimmedPrelude} {${scopedBody}}`;
         }
       } else {
-        output += `${prelude}{${body}}`;
+        if (!restrictedAtRules) output += `${prelude}{${body}}`;
       }
     } else {
       const scopedSelectors = splitSelectorList(trimmedPrelude)
@@ -166,7 +168,8 @@ const scopeCssRules = (
         .map((selector) => scopeSelector(selector, scope))
         .join(", ");
       if (scopedSelectors) {
-        output += `${leading}${scopedSelectors} {${body}}`;
+        const transformedBody = transformBody(body);
+        if (transformedBody.trim()) output += `${leading}${scopedSelectors} {${transformedBody}}`;
       }
     }
 
@@ -175,6 +178,30 @@ const scopeCssRules = (
 
   return output;
 };
+
+const restrictDeclarations = (body: string) => body
+  .split(";")
+  .map((declaration) => declaration.trim())
+  .filter(Boolean)
+  .filter((declaration) => {
+    const separator = declaration.indexOf(":");
+    if (separator < 1) return false;
+    const property = declaration.slice(0, separator).trim().toLowerCase();
+    const value = declaration.slice(separator + 1).trim().toLowerCase().replace(/\s*!important\s*$/, "");
+    if (["animation", "animation-name", "transition", "z-index", "pointer-events"].includes(property)) return false;
+    if (property === "display" && value === "none") return false;
+    if (property === "visibility" && value === "hidden") return false;
+    if (property === "opacity" && Number(value) < 0.4) return false;
+    if (property === "position" && (value === "fixed" || value === "sticky")) return false;
+    if (property === "outline" && /^(?:0|none)/.test(value)) return false;
+    if ((property === "overflow" || property === "overflow-x" || property === "overflow-y") && /^(?:hidden|clip)/.test(value)) return false;
+    if (property === "font-size") {
+      const match = value.match(/^([\d.]+)(px|rem|em)$/);
+      if (match && ((match[2] === "px" && Number(match[1]) < 12) || (match[2] !== "px" && Number(match[1]) < 0.75))) return false;
+    }
+    return true;
+  })
+  .join("; ");
 
 export const scopeCharacterHtmlCss = (css: string, scope = ":where(.rp-wrap)") => {
   const sanitized = sanitizeCharacterHtmlCss(css).trim();
@@ -192,4 +219,14 @@ export const scopeCharacterChatUiCss = (css: string, scope = "#chat-page-root") 
   }
 
   return scopeCssRules(sanitized, scope, targetsChatUiSelector);
+};
+
+export const scopeRestrictedCharacterHtmlCss = (css: string, scope = ":where(.rp-wrap)") => {
+  const sanitized = sanitizeCharacterHtmlCss(css).trim();
+  return sanitized ? scopeCssRules(sanitized, scope, () => true, restrictDeclarations, true) : "";
+};
+
+export const scopeRestrictedCharacterChatUiCss = (css: string, scope = "#chat-page-root") => {
+  const sanitized = sanitizeCharacterHtmlCss(css).trim();
+  return sanitized ? scopeCssRules(sanitized, scope, targetsChatUiSelector, restrictDeclarations, true) : "";
 };

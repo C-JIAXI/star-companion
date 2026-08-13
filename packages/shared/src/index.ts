@@ -3,6 +3,65 @@ export * from "./characterQuality.js";
 export type AppLanguage = "zh-CN" | "en";
 export type CharacterVisibility = "public" | "private";
 
+export type ThemeMode = "system" | "light" | "dark";
+export type AppearanceFontSize = "small" | "standard" | "large" | "extra-large";
+export type ReadingLineHeight = "compact" | "comfortable" | "relaxed";
+export type ChatContentWidth = "narrow" | "standard" | "wide";
+export type MessageSpacing = "compact" | "standard" | "relaxed";
+export type ContrastMode = "standard" | "high";
+export type MotionPreference = "system" | "reduced" | "full";
+export type BackgroundBlur = "off" | "subtle" | "medium";
+export type CharacterStyleMode = "full" | "restricted" | "off";
+
+export interface AppearancePreferencesDTO {
+  themeMode: ThemeMode;
+  fontSize: AppearanceFontSize;
+  lineHeight: ReadingLineHeight;
+  chatWidth: ChatContentWidth;
+  messageSpacing: MessageSpacing;
+  contrast: ContrastMode;
+  motion: MotionPreference;
+  backgroundOverlay: number;
+  backgroundBlur: BackgroundBlur;
+  characterStyle: CharacterStyleMode;
+}
+
+export const defaultAppearancePreferences: AppearancePreferencesDTO = {
+  themeMode: "system",
+  fontSize: "standard",
+  lineHeight: "comfortable",
+  chatWidth: "standard",
+  messageSpacing: "standard",
+  contrast: "standard",
+  motion: "system",
+  backgroundOverlay: 0.55,
+  backgroundBlur: "subtle",
+  characterStyle: "full"
+};
+
+const isOneOf = <T extends string>(value: unknown, allowed: readonly T[]): value is T =>
+  typeof value === "string" && allowed.includes(value as T);
+
+export const normalizeAppearancePreferences = (value: unknown): AppearancePreferencesDTO => {
+  const input = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Partial<Record<keyof AppearancePreferencesDTO, unknown>>
+    : {};
+  return {
+    themeMode: isOneOf(input.themeMode, ["system", "light", "dark"] as const) ? input.themeMode : defaultAppearancePreferences.themeMode,
+    fontSize: isOneOf(input.fontSize, ["small", "standard", "large", "extra-large"] as const) ? input.fontSize : defaultAppearancePreferences.fontSize,
+    lineHeight: isOneOf(input.lineHeight, ["compact", "comfortable", "relaxed"] as const) ? input.lineHeight : defaultAppearancePreferences.lineHeight,
+    chatWidth: isOneOf(input.chatWidth, ["narrow", "standard", "wide"] as const) ? input.chatWidth : defaultAppearancePreferences.chatWidth,
+    messageSpacing: isOneOf(input.messageSpacing, ["compact", "standard", "relaxed"] as const) ? input.messageSpacing : defaultAppearancePreferences.messageSpacing,
+    contrast: isOneOf(input.contrast, ["standard", "high"] as const) ? input.contrast : defaultAppearancePreferences.contrast,
+    motion: isOneOf(input.motion, ["system", "reduced", "full"] as const) ? input.motion : defaultAppearancePreferences.motion,
+    backgroundOverlay: typeof input.backgroundOverlay === "number" && Number.isFinite(input.backgroundOverlay) && input.backgroundOverlay >= 0.2 && input.backgroundOverlay <= 0.9
+      ? input.backgroundOverlay
+      : defaultAppearancePreferences.backgroundOverlay,
+    backgroundBlur: isOneOf(input.backgroundBlur, ["off", "subtle", "medium"] as const) ? input.backgroundBlur : defaultAppearancePreferences.backgroundBlur,
+    characterStyle: isOneOf(input.characterStyle, ["full", "restricted", "off"] as const) ? input.characterStyle : defaultAppearancePreferences.characterStyle
+  };
+};
+
 export type AiModelCapability =
   | "text_generation"
   | "vision_input"
@@ -64,6 +123,7 @@ export interface UserSettingsDTO {
   autoSummarizeUser: boolean;
   showMessageAvatars: boolean;
   showMessageTimestamps: boolean;
+  appearancePreferences: AppearancePreferencesDTO;
   ttsVoice: string;
   ttsPlaybackRate: number;
   ttsAutoPlay: boolean;

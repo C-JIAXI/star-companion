@@ -13,6 +13,19 @@ export default {
     },
     extend: {
       colors: {
+        slate: {
+          50: "rgb(var(--slate-50) / <alpha-value>)",
+          100: "rgb(var(--slate-100) / <alpha-value>)",
+          200: "rgb(var(--slate-200) / <alpha-value>)",
+          300: "rgb(var(--slate-300) / <alpha-value>)",
+          400: "rgb(var(--slate-400) / <alpha-value>)",
+          500: "rgb(var(--slate-500) / <alpha-value>)",
+          600: "rgb(var(--slate-600) / <alpha-value>)",
+          700: "rgb(var(--slate-700) / <alpha-value>)",
+          800: "rgb(var(--slate-800) / <alpha-value>)",
+          900: "rgb(var(--slate-900) / <alpha-value>)",
+          950: "rgb(var(--slate-950) / <alpha-value>)",
+        },
         ember: {
           50: "#effcf9",
           100: "#d5f7ef",
@@ -27,17 +40,17 @@ export default {
           950: "#082d29",
         },
         ink: {
-          50: "#f4f6f5",
-          100: "#e2e7e5",
-          200: "#c6cecb",
-          300: "#a2aeaa",
-          400: "#788783",
-          500: "#5c6966",
-          600: "#454f4d",
-          700: "#303937",
-          800: "#1b2221",
-          900: "#121716",
-          950: "#0a0e0d",
+          50: "rgb(var(--ink-50) / <alpha-value>)",
+          100: "rgb(var(--ink-100) / <alpha-value>)",
+          200: "rgb(var(--ink-200) / <alpha-value>)",
+          300: "rgb(var(--ink-300) / <alpha-value>)",
+          400: "rgb(var(--ink-400) / <alpha-value>)",
+          500: "rgb(var(--ink-500) / <alpha-value>)",
+          600: "rgb(var(--ink-600) / <alpha-value>)",
+          700: "rgb(var(--ink-700) / <alpha-value>)",
+          800: "rgb(var(--ink-800) / <alpha-value>)",
+          900: "rgb(var(--ink-900) / <alpha-value>)",
+          950: "rgb(var(--ink-950) / <alpha-value>)",
         }
       },
       fontFamily: {

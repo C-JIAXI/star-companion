@@ -613,6 +613,19 @@ export const modelReliabilitySchema = z.object({
   }).default({})
 });
 
+export const appearancePreferencesSchema = z.object({
+  themeMode: z.enum(["system", "light", "dark"]).default("system"),
+  fontSize: z.enum(["small", "standard", "large", "extra-large"]).default("standard"),
+  lineHeight: z.enum(["compact", "comfortable", "relaxed"]).default("comfortable"),
+  chatWidth: z.enum(["narrow", "standard", "wide"]).default("standard"),
+  messageSpacing: z.enum(["compact", "standard", "relaxed"]).default("standard"),
+  contrast: z.enum(["standard", "high"]).default("standard"),
+  motion: z.enum(["system", "reduced", "full"]).default("system"),
+  backgroundOverlay: z.number().min(0.2).max(0.9).default(0.55),
+  backgroundBlur: z.enum(["off", "subtle", "medium"]).default("subtle"),
+  characterStyle: z.enum(["full", "restricted", "off"]).default("full")
+});
+
 const nullableBudgetMicrosSchema = z.number().int().min(0).max(2_000_000_000).nullable();
 export const usageBudgetsSchema = z.object({
   dailySoftMicros: nullableBudgetMicrosSchema.default(null),
@@ -655,6 +668,7 @@ export const settingsUpdateSchema = z.object({
   autoSummarizeUser: z.boolean().optional(),
   showMessageAvatars: z.boolean().optional(),
   showMessageTimestamps: z.boolean().optional(),
+  appearancePreferences: appearancePreferencesSchema.optional(),
   ttsVoice: z.string().trim().min(1).max(80).optional(),
   ttsPlaybackRate: z.number().min(0.5).max(2).optional(),
   ttsAutoPlay: z.boolean().optional(),
