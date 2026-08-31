@@ -1201,6 +1201,22 @@ const main = async () => {
     assert.equal(reindexedMemories[0]?.embeddingStatus, "ready");
     assert.equal(reindexedMemories[0]?.embeddingDimensions, 3);
 
+    let embeddingJob = await requestData(
+      baseUrl,
+      `/api/chats/${createdChat.id}/memories/reindex-jobs`,
+      { method: "POST", expectedStatus: 202 }
+    );
+    for (let attempt = 0; attempt < 100 && ["queued", "running"].includes(embeddingJob.state); attempt += 1) {
+      await delay(20);
+      embeddingJob = await requestData(
+        baseUrl,
+        `/api/chats/${createdChat.id}/memories/reindex-jobs/${embeddingJob.id}`
+      );
+    }
+    assert.equal(embeddingJob.state, "completed");
+    assert.equal(embeddingJob.completed, embeddingJob.total);
+    assert.equal("content" in embeddingJob, false);
+
     const updatedMemory = await requestData(
       baseUrl,
       `/api/chats/${createdChat.id}/memories/${createdMemory.id}`,
@@ -1327,6 +1343,11 @@ const main = async () => {
     });
     assert.equal(excludedUserMessage.contextIncluded, false);
     assert.equal(excludedUserMessage.isBookmarked, true);
+    const bookmarkPage = await requestData(baseUrl, `/api/messages/page?${new URLSearchParams({
+      chatId: createdChat.id, limit: "1", includeTotal: "true", bookmarkedOnly: "true"
+    }).toString()}`);
+    assert.equal(bookmarkPage.total, 1);
+    assert.equal(bookmarkPage.items[0]?.id, userMessage.id);
 
     const globalMessageSearch = await requestData(
       baseUrl,

@@ -44,6 +44,45 @@ type ExportedBackup = {
 
 const RECOVERY_POINT_LIMIT = 10;
 const RECOVERY_POINT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const DESTRUCTIVE_TRANSACTION_OPTIONS = { maxWait: 30_000, timeout: 10 * 60_000 } as const;
+const traceBackupPerformance = (stage: string) => {
+  if (process.env.STAR_COMPANION_PERF_METRICS === "1") console.info(`[perf:backup] ${stage}`);
+};
+
+const suspendMessageSearch = async (tx: Prisma.TransactionClient) => {
+  await tx.$executeRawUnsafe('DROP TRIGGER IF EXISTS "Message_search_after_insert"');
+  await tx.$executeRawUnsafe('DROP TRIGGER IF EXISTS "Message_search_after_update"');
+  await tx.$executeRawUnsafe('DROP TRIGGER IF EXISTS "Message_search_after_delete"');
+  await tx.$executeRawUnsafe('DROP TABLE IF EXISTS "MessageSearch"');
+  for (const index of [
+    "Message_chatId_idx",
+    "Message_characterId_idx",
+    "Message_chatId_createdAt_idx",
+    "Message_chatId_isBookmarked_createdAt_idx",
+    "Message_chatId_contextIncluded_createdAt_idx",
+    "Message_chatId_createdAt_id_idx",
+    "Message_createdAt_id_idx",
+    "Message_chatId_contextIncluded_createdAt_id_idx",
+    "Message_chatId_isBookmarked_createdAt_id_idx"
+  ]) await tx.$executeRawUnsafe(`DROP INDEX IF EXISTS "${index}"`);
+};
+
+const rebuildMessageSearch = async (tx: Prisma.TransactionClient) => {
+  await tx.$executeRawUnsafe('CREATE INDEX "Message_chatId_idx" ON "Message"("chatId")');
+  await tx.$executeRawUnsafe('CREATE INDEX "Message_characterId_idx" ON "Message"("characterId")');
+  await tx.$executeRawUnsafe('CREATE INDEX "Message_chatId_createdAt_idx" ON "Message"("chatId", "createdAt")');
+  await tx.$executeRawUnsafe('CREATE INDEX "Message_chatId_isBookmarked_createdAt_idx" ON "Message"("chatId", "isBookmarked", "createdAt")');
+  await tx.$executeRawUnsafe('CREATE INDEX "Message_chatId_contextIncluded_createdAt_idx" ON "Message"("chatId", "contextIncluded", "createdAt")');
+  await tx.$executeRawUnsafe('CREATE INDEX "Message_chatId_createdAt_id_idx" ON "Message"("chatId", "createdAt", "id")');
+  await tx.$executeRawUnsafe('CREATE INDEX "Message_createdAt_id_idx" ON "Message"("createdAt", "id")');
+  await tx.$executeRawUnsafe('CREATE INDEX "Message_chatId_contextIncluded_createdAt_id_idx" ON "Message"("chatId", "contextIncluded", "createdAt", "id")');
+  await tx.$executeRawUnsafe('CREATE INDEX "Message_chatId_isBookmarked_createdAt_id_idx" ON "Message"("chatId", "isBookmarked", "createdAt", "id")');
+  await tx.$executeRawUnsafe(`CREATE VIRTUAL TABLE "MessageSearch" USING fts5("messageId" UNINDEXED, "chatId" UNINDEXED, "content", tokenize = 'trigram')`);
+  await tx.$executeRawUnsafe('INSERT INTO "MessageSearch" ("messageId", "chatId", "content") SELECT "id", "chatId", "content" FROM "Message"');
+  await tx.$executeRawUnsafe(`CREATE TRIGGER "Message_search_after_insert" AFTER INSERT ON "Message" BEGIN INSERT INTO "MessageSearch" ("messageId", "chatId", "content") VALUES (new."id", new."chatId", new."content"); END`);
+  await tx.$executeRawUnsafe(`CREATE TRIGGER "Message_search_after_update" AFTER UPDATE OF "content", "chatId" ON "Message" BEGIN DELETE FROM "MessageSearch" WHERE "messageId" = old."id"; INSERT INTO "MessageSearch" ("messageId", "chatId", "content") VALUES (new."id", new."chatId", new."content"); END`);
+  await tx.$executeRawUnsafe(`CREATE TRIGGER "Message_search_after_delete" AFTER DELETE ON "Message" BEGIN DELETE FROM "MessageSearch" WHERE "messageId" = old."id"; END`);
+};
 
 const importedDates = (value: { createdAt?: string; updatedAt?: string }) => ({
   ...(value.createdAt ? { createdAt: new Date(value.createdAt) } : {}),
@@ -54,6 +93,16 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const stableJson = (value: unknown) => JSON.stringify(value);
+
+const writeBatches = async <T>(
+  values: T[],
+  write: (batch: T[]) => Promise<unknown>,
+  batchSize = 250
+) => {
+  for (let index = 0; index < values.length; index += batchSize) {
+    await write(values.slice(index, index + batchSize));
+  }
+};
 
 const memorySnapshotForImport = (memory: {
   title: string;
@@ -243,12 +292,169 @@ const applyBackup = async (
   resolutions: Map<string, BackupConflictAction>
 ) => {
   const { backup, records } = analysis;
+  const bulkCharacterIds = new Set<string>();
+  const bulkChatIds = new Set<string>();
+  const bulkMessageIds = new Set<string>();
+  const bulkMemoryIds = new Set<string>();
+  const bulkMemoryOperationIds = new Set<string>();
+  const bulkMemoryRevisionIds = new Set<string>();
+  const bulkProfileRevisionIds = new Set<string>();
   if (backup.mode === "replace") {
+    traceBackupPerformance("replace_delete_started");
+    await suspendMessageSearch(tx);
     await tx.messageAttachment.deleteMany();
     await tx.chatMemory.deleteMany();
     await tx.message.deleteMany();
     await tx.chat.deleteMany();
     await tx.character.deleteMany();
+    traceBackupPerformance("replace_delete_completed");
+
+    const characters = records.characters.flatMap(({ value: character }) => {
+      if (!character.id) return [];
+      bulkCharacterIds.add(character.id);
+      return [{
+        id: character.id,
+        cardId: character.cardId,
+        name: character.name,
+        avatar: character.avatar ?? null,
+        description: character.description,
+        tags: character.tags,
+        prefix: character.prefix,
+        prompt: character.prompt,
+        suffix: character.suffix,
+        htmlCss: character.htmlCss ?? "",
+        openingHtml: character.openingHtml ?? "",
+        loreEntries: character.loreEntries ?? [],
+        quickReplies: character.quickReplies ?? [],
+        isFavorite: character.isFavorite,
+        ...importedDates(character)
+      }];
+    });
+    await writeBatches(characters, (data) => tx.character.createMany({ data }));
+    traceBackupPerformance("replace_characters_completed");
+
+    const chats = records.chats.flatMap(({ value: chat }) => {
+      if (!chat.id) return [];
+      bulkChatIds.add(chat.id);
+      return [{
+        id: chat.id,
+        title: chat.title,
+        characterId: chat.characterId ?? null,
+        parentChatId: chat.parentChatId ?? null,
+        branchSourceMessageId: chat.branchSourceMessageId ?? null,
+        isCheckpoint: chat.isCheckpoint,
+        isPinned: chat.isPinned,
+        isArchived: chat.isArchived,
+        folder: chat.folder,
+        deletedAt: chat.deletedAt ? new Date(chat.deletedAt) : null,
+        backgroundUrl: chat.backgroundUrl,
+        memoryTurns: chat.memoryTurns,
+        autoMemoryEnabled: chat.autoMemoryEnabled,
+        memoryUpdatedAt: chat.memoryUpdatedAt ? new Date(chat.memoryUpdatedAt) : null,
+        userPersona: chat.userPersona,
+        userAvatar: chat.userAvatar,
+        userProfileSummary: chat.userProfileSummary,
+        userProfileUpdatedAt: chat.userProfileUpdatedAt ? new Date(chat.userProfileUpdatedAt) : null,
+        profileRevision: chat.profileRevision,
+        ...importedDates(chat)
+      }];
+    });
+    await writeBatches(chats, (data) => tx.chat.createMany({ data }));
+    traceBackupPerformance("replace_chats_completed");
+
+    const messages = records.messages.flatMap(({ value: message }) => {
+      if (!message.id) return [];
+      bulkMessageIds.add(message.id);
+      return [{
+        id: message.id,
+        chatId: message.chatId,
+        role: message.role,
+        characterId: message.characterId ?? null,
+        content: message.content,
+        contextIncluded: message.contextIncluded,
+        isBookmarked: message.isBookmarked,
+        variants: message.variants,
+        activeVariantIndex: message.activeVariantIndex,
+        tokenUsage: message.tokenUsage ?? undefined,
+        generationMetadata: message.generationMetadata ?? undefined,
+        variantMetadata: message.variantMetadata,
+        promptBreakdown: message.promptBreakdown ?? undefined,
+        loreMatches: message.loreMatches ?? undefined,
+        memoryMatches: message.memoryMatches ?? undefined,
+        ...importedDates(message)
+      }];
+    });
+    await writeBatches(messages, (data) => tx.message.createMany({ data }), 200);
+    await rebuildMessageSearch(tx);
+    traceBackupPerformance("replace_messages_completed");
+
+    const memories = records.memories.flatMap(({ value: memory }) => {
+      if (!memory.id) return [];
+      bulkMemoryIds.add(memory.id);
+      return [{
+        id: memory.id,
+        chatId: memory.chatId,
+        title: memory.title,
+        content: memory.content,
+        keywords: memory.keywords,
+        importance: memory.importance,
+        enabled: memory.enabled,
+        deletedAt: memory.deletedAt ? new Date(memory.deletedAt) : null,
+        currentRevision: memory.currentRevision,
+        lastActor: memory.lastActor,
+        lastAction: memory.lastAction,
+        sourceMessageIds: memory.sourceMessageIds,
+        embedding: Prisma.DbNull,
+        embeddingModel: null,
+        embeddingSource: null,
+        embeddingDimensions: null,
+        embeddingStatus: "stale",
+        embeddingUpdatedAt: null,
+        lastMatchedAt: memory.lastMatchedAt ? new Date(memory.lastMatchedAt) : null,
+        ...importedDates(memory)
+      }];
+    });
+    await writeBatches(memories, (data) => tx.chatMemory.createMany({ data }));
+    traceBackupPerformance("replace_memories_completed");
+
+    const operations = records.memoryOperations.map(({ value: operation }) => {
+      bulkMemoryOperationIds.add(operation.id);
+      return {
+        id: operation.id, chatId: operation.chatId, type: operation.type, actor: operation.actor,
+        status: operation.status, startedAt: new Date(operation.startedAt),
+        completedAt: operation.completedAt ? new Date(operation.completedAt) : null,
+        createdCount: operation.created, updatedCount: operation.updated,
+        disabledCount: operation.disabled, unchangedCount: operation.unchanged,
+        sourceMessageIds: operation.sourceMessageIds, errorCode: operation.errorCode,
+        undoneAt: operation.undoneAt ? new Date(operation.undoneAt) : null,
+        undoOperationId: operation.undoOperationId
+      };
+    });
+    await writeBatches(operations, (data) => tx.memoryOperation.createMany({ data }));
+
+    const revisions = records.memoryRevisions.map(({ value: revision }) => {
+      bulkMemoryRevisionIds.add(revision.id);
+      return {
+        id: revision.id, memoryId: revision.memoryId, chatId: revision.chatId,
+        revision: revision.revision, action: revision.action, actor: revision.actor,
+        beforeSnapshot: revision.beforeSnapshot === null ? Prisma.JsonNull : revision.beforeSnapshot,
+        afterSnapshot: revision.afterSnapshot === null ? Prisma.JsonNull : revision.afterSnapshot,
+        sourceMessageIds: revision.sourceMessageIds, operationId: revision.operationId,
+        reasonCode: revision.reasonCode, createdAt: new Date(revision.createdAt)
+      };
+    });
+    await writeBatches(revisions, (data) => tx.memoryRevision.createMany({ data }));
+
+    const profileRevisions = records.profileSummaryRevisions.map(({ value: revision }) => {
+      bulkProfileRevisionIds.add(revision.id);
+      return {
+        id: revision.id, chatId: revision.chatId, revision: revision.revision,
+        action: revision.action, actor: revision.actor, summary: revision.summary,
+        sourceMessageIds: revision.sourceMessageIds, createdAt: new Date(revision.createdAt)
+      };
+    });
+    await writeBatches(profileRevisions, (data) => tx.profileSummaryRevision.createMany({ data }));
+    traceBackupPerformance("replace_history_completed");
   }
 
   const importedAssetIds = new Map<string, string>();
@@ -286,6 +492,7 @@ const applyBackup = async (
   for (const record of records.characters) {
     if (!shouldApplyRecord(record, backup.mode, resolutions)) continue;
     const character = record.value;
+    if (character.id && bulkCharacterIds.has(character.id)) continue;
     const data = {
       cardId: character.cardId,
       name: character.name,
@@ -312,6 +519,7 @@ const applyBackup = async (
   for (const record of records.chats) {
     if (!shouldApplyRecord(record, backup.mode, resolutions)) continue;
     const chat = record.value;
+    if (chat.id && bulkChatIds.has(chat.id)) continue;
     const data = {
       title: chat.title,
       characterId: chat.characterId ?? null,
@@ -343,6 +551,7 @@ const applyBackup = async (
   for (const record of records.messages) {
     if (!shouldApplyRecord(record, backup.mode, resolutions)) continue;
     const message = record.value;
+    if (message.id && bulkMessageIds.has(message.id)) continue;
     const data = {
       chatId: message.chatId,
       role: message.role,
@@ -369,7 +578,9 @@ const applyBackup = async (
 
   if (backup.media) {
     const appliedMessageIds = new Set(records.messages.filter((record) => shouldApplyRecord(record, backup.mode, resolutions)).flatMap((record) => record.value.id ? [record.value.id] : []));
-    for (const messageId of appliedMessageIds) await tx.messageAttachment.deleteMany({ where: { messageId } });
+    if (backup.mode !== "replace") {
+      for (const messageId of appliedMessageIds) await tx.messageAttachment.deleteMany({ where: { messageId } });
+    }
     for (const attachment of backup.media.attachments) {
       if (!appliedMessageIds.has(attachment.messageId)) continue;
       const assetId = importedAssetIds.get(attachment.assetId);
@@ -382,6 +593,7 @@ const applyBackup = async (
   for (const record of records.memories) {
     if (!shouldApplyRecord(record, backup.mode, resolutions)) continue;
     const memory = record.value;
+    if (memory.id && bulkMemoryIds.has(memory.id)) continue;
     const data = {
       chatId: memory.chatId,
       title: memory.title,
@@ -413,6 +625,7 @@ const applyBackup = async (
   for (const record of records.memoryOperations) {
     if (!shouldApplyRecord(record, backup.mode, resolutions)) continue;
     const operation = record.value;
+    if (bulkMemoryOperationIds.has(operation.id)) continue;
     await tx.memoryOperation.upsert({ where: { id: operation.id }, update: {
       chatId: operation.chatId, type: operation.type, actor: operation.actor, status: operation.status,
       startedAt: new Date(operation.startedAt), completedAt: operation.completedAt ? new Date(operation.completedAt) : null,
@@ -431,6 +644,7 @@ const applyBackup = async (
   for (const record of records.memoryRevisions) {
     if (!shouldApplyRecord(record, backup.mode, resolutions)) continue;
     const revision = record.value;
+    if (bulkMemoryRevisionIds.has(revision.id)) continue;
     const data = {
       chatId: revision.chatId, action: revision.action, actor: revision.actor,
       beforeSnapshot: revision.beforeSnapshot === null ? Prisma.JsonNull : revision.beforeSnapshot,
@@ -448,6 +662,7 @@ const applyBackup = async (
   for (const record of records.profileSummaryRevisions) {
     if (!shouldApplyRecord(record, backup.mode, resolutions)) continue;
     const revision = record.value;
+    if (bulkProfileRevisionIds.has(revision.id)) continue;
     const data = { action: revision.action, actor: revision.actor, summary: revision.summary, sourceMessageIds: revision.sourceMessageIds, createdAt: new Date(revision.createdAt) };
     await tx.profileSummaryRevision.upsert({
       where: { chatId_revision: { chatId: revision.chatId, revision: revision.revision } },
@@ -460,7 +675,7 @@ const applyBackup = async (
   // Conflict choices are independent records in the preview. Re-align imported
   // current-state pointers so choosing a memory/chat without its matching history
   // can never leave a dangling or misleading revision pointer.
-  for (const record of records.memories) {
+  if (backup.mode !== "replace") for (const record of records.memories) {
     if (!shouldApplyRecord(record, backup.mode, resolutions) || !record.value.id) continue;
     const memory = await tx.chatMemory.findUniqueOrThrow({ where: { id: record.value.id } });
     const snapshot = memorySnapshotForImport(memory);
@@ -500,7 +715,7 @@ const applyBackup = async (
     });
   }
 
-  for (const record of records.chats) {
+  if (backup.mode !== "replace") for (const record of records.chats) {
     if (!shouldApplyRecord(record, backup.mode, resolutions) || !record.value.id) continue;
     const chat = await tx.chat.findUniqueOrThrow({ where: { id: record.value.id } });
     const revisions = await tx.profileSummaryRevision.findMany({
@@ -596,21 +811,26 @@ const applyBackup = async (
 export const importBackup = async (input: BackupExecuteInput) => {
   await assertStorageCapacity(Buffer.byteLength(JSON.stringify(input)));
   return prisma.$transaction(async (tx) => {
+    traceBackupPerformance("execute_read_current_started");
     const current = await readBackup(tx);
+    traceBackupPerformance("execute_read_current_completed");
     const analysis = analyzeBackupCandidate(input as BackupExecuteInput & { mode: BackupMode }, current);
+    traceBackupPerformance("execute_analysis_completed");
     const resolutions = resolutionMap(input);
     assertExecutable(analysis, input, resolutions);
 
     const recoveryPoint = analysis.preview.requiresRecoveryPoint
       ? await createRecoveryPoint(tx, "before_import")
       : null;
+    traceBackupPerformance("execute_recovery_point_completed");
     const applied = await applyBackup(tx, analysis, resolutions);
+    traceBackupPerformance("execute_apply_completed");
     return {
       ...applied,
       recoveryPointId: recoveryPoint?.id ?? null,
       completedAt: new Date().toISOString()
     };
-  });
+  }, DESTRUCTIVE_TRANSACTION_OPTIONS);
 };
 
 export const restoreRecoveryPoint = async (id: string) =>
@@ -643,4 +863,4 @@ export const restoreRecoveryPoint = async (id: string) =>
         completedAt: new Date().toISOString()
       }
     };
-  });
+  }, DESTRUCTIVE_TRANSACTION_OPTIONS);

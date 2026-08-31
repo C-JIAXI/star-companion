@@ -178,11 +178,11 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "消息操作",
-              body: "用户消息可复制、编辑、删除、重发；角色回复可复制、编辑、删除、重新生成，并在有候选版本时切换变体。每条新生成的角色回复都可打开提示词调试，查看角色设定、用户设定、lore、长期记忆、聊天历史和本轮指令分别占用的 Prompt token。长聊天会在时间线标出下一轮普通回复的滚动上下文边界；手动排除的消息有独立标记，不会与仅因窗口长度而未发送的旧消息混淆。重发历史用户消息会先提示将替换的后续消息；确认框可直接创建保留完整原剧情的分支，并在分支中重发。"
+              body: "用户消息可复制、编辑、删除、重发；角色回复可复制、编辑、删除、重新生成，并在有候选版本时切换变体。每条新生成的角色回复都可打开提示词调试，查看角色设定、用户设定、lore、长期记忆、聊天历史和本轮指令分别占用的 Prompt token。长聊天按页载入并限制同时渲染的消息数量；加载更早记录会保持当前可见位置，搜索、来源引用和书签可以直接定位到未载入的消息。时间线会标出下一轮普通回复的滚动上下文边界；手动排除的消息有独立标记。重发历史用户消息会先提示将替换的后续消息；确认框可直接创建保留完整原剧情的分支，并在分支中重发。"
             },
             {
               title: "聊天设置",
-              body: "右上角设置菜单可查看上下文预算，并调整记忆轮数、长期记忆、聊天背景、用户设定、用户画像摘要和当前模型。Persona 预设可同时保存聊天内显示名、可选本地头像与三段用户配置；未上传头像时会生成稳定占位图，但只有前置词、提示词和后置词会进入模型上下文。每个模型可在供应商设置中填写上下文窗口；预算面板会估算下一轮输入与预留回复空间并提示风险，但不会自动裁剪剧情。长期记忆可单独指定向量模型，使用语义与关键词混合召回；面板会汇总就绪、待刷新和失败状态。“整理记忆”调用文本模型更新内容，“重建索引”只重算向量；未配置或接口失败时会自动退回关键词。每次内容或状态变化都会形成不可变版本，可查看字段差异和来源、恢复旧版本，或在冲突预检后事务撤销一次完整整理。"
+              body: "右上角设置菜单可查看上下文预算，并调整记忆轮数、长期记忆、聊天背景、用户设定、用户画像摘要和当前模型。Persona 预设可同时保存聊天内显示名、可选本地头像与三段用户配置；未上传头像时会生成稳定占位图，但只有前置词、提示词和后置词会进入模型上下文。每个模型可在供应商设置中填写上下文窗口；预算面板会估算下一轮输入与预留回复空间并提示风险，但不会自动裁剪剧情。长期记忆可单独指定向量模型，使用语义与关键词混合召回；面板汇总全部就绪、待刷新和失败状态。“重建索引”按批次更新并显示进度，可随时取消，已经完成的批次仍可使用；未配置或接口失败时自动退回关键词。每次内容或状态变化都会形成不可变版本，可查看字段差异和来源、恢复旧版本，或在冲突预检后事务撤销一次完整整理。"
             },
             {
               title: "剧情路径",
@@ -329,7 +329,11 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "局域网同步",
-              body: "拉取和推送都先生成差异预览。合并冲突必须明确选择本机、对端或跳过；替换仍需危险确认。桌面和移动后端使用同一契约，载荷永不包含 API Key。"
+              body: "拉取和推送都先生成差异预览。合并冲突必须明确选择本机、对端或跳过；替换仍需危险确认。可选的启动自动同步只会对最近成功连接的设备执行 pull+merge，并且仍先预检；遇到冲突、无效载荷或无法连接时不会写入。桌面和移动后端使用同一契约，载荷永不包含 API Key。"
+            },
+            {
+              title: "大型数据操作",
+              body: "备份与同步 JSON 上限为 256 MB；对端导出和预检最多等待 3 分钟，执行最多等待 10 分钟。校验、可用空间、冲突和恢复点规则不会因上限提高而放宽。大型替换或恢复可能持续数分钟并暂用较多内存，请保持应用打开。"
             }
           ],
           note: "恢复点最多保留 10 个并清理超过 30 天的旧记录；每条记忆最多保留 30 个版本，每个聊天最多保留 100 次记忆操作。恢复失败时当前数据保持不变。旧 schemaVersion 1 只有当前状态时会建立明确基线，不伪造过去事件。"
@@ -482,11 +486,11 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Message actions",
-            body: "User messages can be copied, edited, deleted, or resent. Character replies can be copied, edited, deleted, regenerated directly, regenerated with one-time revision guidance, continued when they are the latest reply, and switched between variants. Each newly generated reply exposes Prompt composition for character instructions, user configuration, lore, recalled memory, chat history, and turn-specific instructions. Long timelines mark the rolling-context boundary for the next normal reply, while manually excluded messages are labeled separately from older messages outside the window. Guided regeneration preserves the current reply as a variant and never stores its guidance as story context. Resending a historical user message first previews the following messages it will replace; the confirmation can create a branch that preserves the full original path, then resend in that branch."
+            body: "User messages can be copied, edited, deleted, or resent. Character replies can be copied, edited, deleted, regenerated directly, regenerated with one-time revision guidance, continued when they are the latest reply, and switched between variants. Each newly generated reply exposes Prompt composition for character instructions, user configuration, lore, recalled memory, chat history, and turn-specific instructions. Long chats load in bounded pages; loading older history preserves the visible position, while search, source references, and bookmarks can jump directly to unloaded turns. The timeline marks the next rolling-context boundary and labels manual exclusions separately. Guided regeneration preserves the current reply as a variant and never stores its guidance as story context."
           },
           {
             title: "Chat settings",
-            body: "The top-right menu shows the context budget and controls memory turns, long-term memory, chat background, user notes, profile summary, and the active model. Persona presets can retain a chat display name, an optional local avatar, and the three prompt sections; a stable placeholder is generated when no avatar is uploaded, while only prefix, prompt, and suffix enter model context. Each model can store a context-window limit; the budget estimates the next prompt and reserved response space without silently trimming story history. Settings can also assign a separate memory embedding model for hybrid semantic and keyword retrieval. The memory panel summarizes ready, stale, and failed vectors; organizing memory updates content with the text model, while rebuilding the index only recalculates embeddings. Every content/status change creates an immutable revision with field diffs and source links; users can restore an old revision or transactionally undo a complete maintenance run after conflict preflight."
+            body: "The top-right menu shows the context budget and controls memory turns, long-term memory, chat background, user notes, profile summary, and the active model. Persona presets can retain a chat display name, an optional local avatar, and the three prompt sections; only prefix, prompt, and suffix enter model context. Each model can store a context-window limit; the budget estimates the next prompt and reserved response space without silently trimming story history. A separate memory embedding model enables hybrid semantic and keyword retrieval. The panel aggregates every ready, stale, and failed vector. Rebuilds commit short batches, show content-free progress, and can be cancelled while completed batches remain usable; keyword recall remains available. Every content/status change creates an immutable revision with field diffs and source links."
           },
           {
             title: "AI title draft",
@@ -659,7 +663,11 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "LAN sync",
-            body: "Pull and push both generate a difference preview first. Merge conflicts require an explicit local, peer, or skip choice; replace keeps a separate danger confirmation. Desktop and mobile use the same contract, and API keys never enter the payload."
+            body: "Pull and push both generate a difference preview first. Merge conflicts require an explicit local, peer, or skip choice; replace keeps a separate danger confirmation. Optional startup auto-sync only pulls and merges from the last successful peer after the same preview; it writes nothing for conflicts, invalid data, or an unreachable peer and never runs replace. Desktop and mobile use the same contract, and API keys never enter the payload."
+          },
+          {
+            title: "Large data operations",
+            body: "Backup and sync JSON is capped at 256 MB. Peer export and preview can wait up to three minutes and execute up to ten. Validation, free-space, conflict, and recovery-point rules are not relaxed by the larger ceiling. A large replace or restore can take several minutes and temporarily use substantial memory, so keep the app open."
           }
         ],
         note: "At most 10 recovery points are retained, and points older than 30 days are cleaned up. Each memory retains at most 30 revisions and each chat at most 100 memory operations. A failed restore leaves current data unchanged. Old schemaVersion 1 current states receive an explicit baseline rather than invented history."

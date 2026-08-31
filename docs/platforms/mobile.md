@@ -90,9 +90,13 @@ The default connection check uses provider model metadata and does not create a 
 
 The mobile smoke suite and server contract tests use isolated loopback mock providers only. They never call a paid endpoint or load real API keys, conversations, profiles, or user images.
 
-LAN sync is intentionally manual. The settings page lets a user enter a peer
+LAN sync remains explicitly previewed. The settings page lets a user enter a peer
 backend address on the same local network and choose pull or push with either
-merge or replace mode. The sync payload is the existing full backup envelope,
+merge or replace mode. A device-local switch may also run one automatic
+pull-and-merge from the last successfully used peer after backend startup. That
+automatic path stops without writing when the peer is unavailable, the payload
+is invalid, or any conflict needs a user choice; it never runs replace mode.
+The sync payload is the existing full backup envelope,
 so model API keys are not included. Both directions first return an impact
 preview. A different record with the same ID is a conflict and cannot be
 silently overwritten: the user chooses local, peer, or skip before execution.
@@ -102,6 +106,14 @@ characters, chats, messages, memories, memory revisions/operations, chat-profile
 history, and non-key settings. Recovery points
 are capped at 10 and older-than-30-day entries are pruned; restore uses an
 atomic SQLite transaction and creates a pre-restore safety point.
+
+Backup and sync JSON bodies use the same 256 MB ceiling as desktop. Peer export
+and preview have a three-minute request timeout and execute has a ten-minute
+timeout; schema/media validation, free-space checks, conflict handling, and
+transactions still apply. The deterministic Mobile-large fixture verified a
+30.3 MB envelope with 60,000 messages through preview, replace, automatic
+recovery point, safety point, and exact restore. The WASM database and envelope
+are visible in process RSS, so large operations should keep the app foregrounded.
 
 Message-level generation summaries (actual provider/model, token usage, local
 cost estimate, fallback state, and incomplete state) use the existing
@@ -165,6 +177,15 @@ priced reliably remains `unknown`, never zero. The mobile and desktop APIs share
 the same summary/filter/preview/delete contract and the same explicit
 one-request hard-budget override. Deleting local usage history requires
 confirmation and cannot change a provider bill.
+
+Large mobile collections use indexed cursor pages for chats, messages,
+bookmarks, message search, and memories. The embedded backend stores searchable
+message text in a migration-managed column so global search does not deserialize
+the complete message corpus. Prompt context reads only the configured recent
+window. Memory-vector rebuilds run in 64-item batches with status polling and
+cancellation; app lock cancels an active rebuild and clears protected thumbnail
+caches. The repeatable Mobile-large benchmark is described in
+[`docs/performance.md`](../performance.md).
 
 Schema upgrades use a separate database-level safety layer. Before changing an
 existing WASM SQLite file, the backend runs `PRAGMA integrity_check`, verifies

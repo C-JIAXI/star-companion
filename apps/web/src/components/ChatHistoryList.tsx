@@ -279,6 +279,49 @@ export function ChatHistoryList({
     }
   };
 
+  const chatMatchesCurrentFilter = (chat: ChatDTO) => {
+    const matchesScope = chatScope === "trash"
+      ? Boolean(chat.deletedAt)
+      : !chat.deletedAt && chat.isArchived === (chatScope === "archived");
+    const matchesFolder = folderFilter === "all"
+      || (folderFilter === "unfiled" ? !chat.folder : chat.folder === folderFilter);
+    const query = searchQuery.trim().toLocaleLowerCase();
+    const matchesQuery = !query
+      || chat.title.toLocaleLowerCase().includes(query)
+      || characterCache.get(chat.characterId ?? "")?.name.toLocaleLowerCase().includes(query);
+    return matchesScope && matchesFolder && matchesQuery;
+  };
+
+  const reconcileCachedChat = (updated: ChatDTO) => {
+    setChats((current) => current.map((chat) => chat.id === updated.id
+      ? { ...chat, ...updated, lastMessagePreview: chat.lastMessagePreview }
+      : chat));
+    setFilteredPage((current) => {
+      if (!current) return current;
+      const index = current.items.findIndex((chat) => chat.id === updated.id);
+      if (index < 0) return current;
+      if (!chatMatchesCurrentFilter(updated)) {
+        return { ...current, items: current.items.filter((chat) => chat.id !== updated.id), total: Math.max(0, current.total - 1) };
+      }
+      return {
+        ...current,
+        items: current.items.map((chat) => chat.id === updated.id
+          ? { ...chat, ...updated, lastMessagePreview: chat.lastMessagePreview }
+          : chat)
+      };
+    });
+  };
+
+  const removeCachedChats = (ids: Iterable<string>) => {
+    const removedIds = new Set(ids);
+    setChats((current) => current.filter((chat) => !removedIds.has(chat.id)));
+    setFilteredPage((current) => {
+      if (!current) return current;
+      const items = current.items.filter((chat) => !removedIds.has(chat.id));
+      return { ...current, items, total: Math.max(0, current.total - (current.items.length - items.length)) };
+    });
+  };
+
   useEffect(() => {
     void loadChats();
   }, [refreshKey]);
@@ -547,6 +590,7 @@ export function ChatHistoryList({
       if (selectedChatId === pendingDeleteChat.id) {
         onSelectChat(null);
       }
+      removeCachedChats([pendingDeleteChat.id]);
       await loadChats();
     } catch (caught) {
       setError(
@@ -577,6 +621,7 @@ export function ChatHistoryList({
       if (selectedChatId && selectedIds.has(selectedChatId)) {
         onSelectChat(null);
       }
+      removeCachedChats(ids);
       setSelectedIds(new Set());
       setManageMode(false);
       await loadChats();
@@ -605,6 +650,7 @@ export function ChatHistoryList({
       if (isArchived && selectedChatId && selectedIds.has(selectedChatId)) {
         onSelectChat(null);
       }
+      removeCachedChats(ids);
       setSelectedIds(new Set());
       setManageMode(false);
       await loadChats();
@@ -620,6 +666,7 @@ export function ChatHistoryList({
     setError(null);
     try {
       await api.chats.restore(chat.id);
+      removeCachedChats([chat.id]);
       await loadChats();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedRestore"));
@@ -637,6 +684,7 @@ export function ChatHistoryList({
     setError(null);
     try {
       await api.chats.batchTrash({ ids: [...selectedIds], action: "restore" });
+      removeCachedChats(selectedIds);
       setSelectedIds(new Set());
       setManageMode(false);
       await loadChats();
@@ -664,13 +712,7 @@ export function ChatHistoryList({
     }
     try {
       const updated = await api.chats.update(renamingId, { title: trimmed });
-      setChats((prev) =>
-        prev.map((chat) =>
-          chat.id === updated.id
-            ? { ...chat, ...updated, lastMessagePreview: chat.lastMessagePreview }
-            : chat
-        )
-      );
+      reconcileCachedChat(updated);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdate"));
     } finally {
@@ -682,13 +724,7 @@ export function ChatHistoryList({
     setError(null);
     try {
       const updated = await api.chats.update(chat.id, { isPinned: !chat.isPinned });
-      setChats((current) =>
-        current.map((entry) =>
-          entry.id === updated.id
-            ? { ...entry, ...updated, lastMessagePreview: entry.lastMessagePreview }
-            : entry
-        )
-      );
+      reconcileCachedChat(updated);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdate"));
     }
@@ -698,13 +734,7 @@ export function ChatHistoryList({
     setError(null);
     try {
       const updated = await api.chats.update(chat.id, { isArchived: !chat.isArchived });
-      setChats((current) =>
-        current.map((entry) =>
-          entry.id === updated.id
-            ? { ...entry, ...updated, lastMessagePreview: entry.lastMessagePreview }
-            : entry
-        )
-      );
+      reconcileCachedChat(updated);
       if (!chat.isArchived && selectedChatId === chat.id) {
         onSelectChat(null);
       }
@@ -728,13 +758,7 @@ export function ChatHistoryList({
     setError(null);
     try {
       const updated = await api.chats.update(folderEditingChat.id, { folder });
-      setChats((current) =>
-        current.map((chat) =>
-          chat.id === updated.id
-            ? { ...chat, ...updated, lastMessagePreview: chat.lastMessagePreview }
-            : chat
-        )
-      );
+      reconcileCachedChat(updated);
       setFolderEditingChat(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdate"));

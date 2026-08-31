@@ -44,7 +44,7 @@ import {
   type UserCustomConfigDTO
 } from "@local-roleplay/shared";
 import { getAiModelCapabilities } from "@local-roleplay/shared";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
 import { api } from "../lib/api";
@@ -67,6 +67,8 @@ import type {
   ChatAgentActionDTO,
   ChatAgentMode,
   ChatMemoryDTO,
+  MemoryEmbeddingJobStatusDTO,
+  MemoryIndexSummaryDTO,
   MemoryOperationDTO,
   MemoryRestorePreviewDTO,
   MemoryRevisionDTO,
@@ -387,6 +389,8 @@ export function ChatPage({
   const [memoryCursor, setMemoryCursor] = useState<string | null>(null);
   const [memoryHasMore, setMemoryHasMore] = useState(false);
   const [memoryTotal, setMemoryTotal] = useState(0);
+  const [memoryReindexJob, setMemoryReindexJob] = useState<MemoryEmbeddingJobStatusDTO | null>(null);
+  const [memoryIndexStats, setMemoryIndexStats] = useState<MemoryIndexSummaryDTO | null>(null);
   const [memoryOperations, setMemoryOperations] = useState<MemoryOperationDTO[]>([]);
   const [memoryRevisions, setMemoryRevisions] = useState<MemoryRevisionDTO[]>([]);
   const [selectedMemoryHistoryId, setSelectedMemoryHistoryId] = useState<string | null>(null);
@@ -473,6 +477,11 @@ export function ChatPage({
   const [messageSearchResult, setMessageSearchResult] = useState<ChatMessageSearchDTO | null>(null);
   const [messageSearchLoading, setMessageSearchLoading] = useState(false);
   const [showBookmarksDialog, setShowBookmarksDialog] = useState(false);
+  const [bookmarkedMessages, setBookmarkedMessages] = useState<MessageDTO[]>([]);
+  const [bookmarkCursor, setBookmarkCursor] = useState<string | null>(null);
+  const [bookmarkHasMore, setBookmarkHasMore] = useState(false);
+  const [bookmarkTotal, setBookmarkTotal] = useState(0);
+  const [bookmarkLoading, setBookmarkLoading] = useState(false);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   const [mediaLoading, setMediaLoading] = useState(false);
@@ -538,6 +547,7 @@ export function ChatPage({
   const refreshChatAfterReconnectRef = useRef<string | null>(null);
   const draftTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
+  const pendingTimelineAnchorRef = useRef<{ id: string; offset: number } | null>(null);
   const loadChatAbortRef = useRef<AbortController | null>(null);
   const backgroundFileInputRef = useRef<HTMLInputElement | null>(null);
   const hasMessagesRef = useRef(false);
@@ -983,7 +993,7 @@ export function ChatPage({
   const memoryEmbeddingConfigured = runtimeSettings
     ? hasCompatibleModuleModel(runtimeSettings, "memory_embedding")
     : false;
-  const memoryIndexSummary = useMemo(() => {
+  const loadedMemoryIndexSummary = useMemo(() => {
     const enabled = chatMemories.filter((memory) => memory.enabled);
     return {
       total: enabled.length,
@@ -995,6 +1005,7 @@ export function ChatPage({
       failed: enabled.filter((memory) => memory.embeddingStatus === "failed").length
     };
   }, [chatMemories]);
+  const memoryIndexSummary = memoryIndexStats ?? loadedMemoryIndexSummary;
 
   const activeChatModel = useMemo(() => {
     const preference = runtimeSettings?.moduleModelPreferences?.chat;
@@ -1382,15 +1393,6 @@ export function ChatPage({
     };
   }, [activeChat, hasNewerMessages]);
 
-  const bookmarkedMessages = useMemo(
-    () =>
-      (activeChat?.messages ?? [])
-        .map((message, index) => ({ message, index: messageWindowStart + index }))
-        .filter(({ message }) => message.isBookmarked)
-        .reverse(),
-    [activeChat?.messages, messageWindowStart]
-  );
-
   const pageRange = useMemo(() => {
     const totalMessages = activeChat?.messageCount ?? 0;
 
@@ -1731,6 +1733,47 @@ export function ChatPage({
     return () => loadChatAbortRef.current?.abort();
   }, [onSelectChat, selectedChatId]);
 
+  useLayoutEffect(() => {
+    const pending = pendingTimelineAnchorRef.current;
+    const viewport = messageViewportRef.current;
+    if (!pending || !viewport) return;
+
+    let frameId = 0;
+    let attempts = 0;
+    const previousScrollBehavior = viewport.style.scrollBehavior;
+    viewport.style.scrollBehavior = "auto";
+
+    const restoreAnchor = () => {
+      if (pendingTimelineAnchorRef.current !== pending) return;
+      const currentAnchor = [...viewport.querySelectorAll<HTMLElement>("[data-message-id]")]
+        .find((element) => element.dataset.messageId === pending.id);
+      if (!currentAnchor) {
+        pendingTimelineAnchorRef.current = null;
+        viewport.style.scrollBehavior = previousScrollBehavior;
+        return;
+      }
+
+      const delta = currentAnchor.getBoundingClientRect().top
+        - viewport.getBoundingClientRect().top
+        - pending.offset;
+      if (Math.abs(delta) > 0.5) viewport.scrollTop += delta;
+
+      attempts += 1;
+      if (attempts < 8) {
+        frameId = window.requestAnimationFrame(restoreAnchor);
+      } else {
+        pendingTimelineAnchorRef.current = null;
+        viewport.style.scrollBehavior = previousScrollBehavior;
+      }
+    };
+
+    restoreAnchor();
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      viewport.style.scrollBehavior = previousScrollBehavior;
+    };
+  }, [activeChat?.id, activeChat?.messages]);
+
   useEffect(() => {
     if (!selectedChatId || draftChatIdRef.current !== selectedChatId) {
       return;
@@ -1869,6 +1912,7 @@ export function ChatPage({
         includeTotal: false
       });
       if (draftChatIdRef.current !== chatId) return;
+      pendingTimelineAnchorRef.current = anchor?.id ? anchor : null;
       setActiveChat((current) => {
         if (!current || current.id !== chatId) return current;
         const currentIds = new Set(current.messages.map((message) => message.id));
@@ -1881,16 +1925,6 @@ export function ChatPage({
       setMessageWindowStart((value) => Math.max(0, value - page.items.length));
       setMessageCursor(page.nextCursor);
       setHasOlderMessages(page.hasMore);
-      window.requestAnimationFrame(() => {
-        if (!viewport || !anchor?.id) return;
-        const currentAnchor = viewport.querySelector<HTMLElement>(`[data-message-id="${anchor.id}"]`);
-        if (currentAnchor) {
-          const previousScrollBehavior = viewport.style.scrollBehavior;
-          viewport.style.scrollBehavior = "auto";
-          viewport.scrollTop += currentAnchor.getBoundingClientRect().top - viewport.getBoundingClientRect().top - anchor.offset;
-          window.requestAnimationFrame(() => { viewport.style.scrollBehavior = previousScrollBehavior; });
-        }
-      });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedLoadChat"));
     } finally {
@@ -2191,9 +2225,10 @@ export function ChatPage({
     }
 
     try {
-      const [page, operations] = await Promise.all([
+      const [page, operations, indexSummary] = await Promise.all([
         api.chats.memories.page(activeChat.id, append ? memoryCursor ?? undefined : undefined, !append),
-        append ? Promise.resolve(null) : api.chats.memoryOperations.list(activeChat.id)
+        append ? Promise.resolve(null) : api.chats.memoryOperations.list(activeChat.id),
+        append ? Promise.resolve(null) : api.chats.memories.indexSummary(activeChat.id)
       ]);
       setChatMemories((current) => append
         ? [...new Map([...current, ...page.items].map((memory) => [memory.id, memory])).values()]
@@ -2202,6 +2237,7 @@ export function ChatPage({
       setMemoryHasMore(page.hasMore);
       if (page.total !== null) setMemoryTotal(page.total);
       if (operations) setMemoryOperations(operations);
+      if (indexSummary) setMemoryIndexStats(indexSummary);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedLoadMemories"));
     }
@@ -2216,6 +2252,7 @@ export function ChatPage({
     setMemoryCursor(null);
     setMemoryHasMore(false);
     setMemoryTotal(0);
+    setMemoryIndexStats(null);
     setMemorySettingsOpen(false);
     void loadChatMemories();
   };
@@ -2505,12 +2542,51 @@ export function ChatPage({
     );
   };
 
+  const loadBookmarkedMessages = async (append = false) => {
+    if (!activeChat || bookmarkLoading) return;
+    setBookmarkLoading(true);
+    try {
+      const page = await timelineApi.page(activeChat.id, {
+        limit: 50,
+        cursor: append ? bookmarkCursor ?? undefined : undefined,
+        includeTotal: !append,
+        bookmarkedOnly: true
+      });
+      const items = [...page.items].reverse();
+      setBookmarkedMessages((current) => append
+        ? [...new Map([...current, ...items].map((message) => [message.id, message])).values()]
+        : items);
+      setBookmarkCursor(page.nextCursor);
+      setBookmarkHasMore(page.hasMore);
+      if (page.total !== null) setBookmarkTotal(page.total);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedLoad"));
+    } finally {
+      setBookmarkLoading(false);
+    }
+  };
+
+  const openBookmarks = () => {
+    setShowBookmarksDialog(true);
+    setBookmarkCursor(null);
+    setBookmarkHasMore(false);
+    setBookmarkTotal(0);
+    void loadBookmarkedMessages();
+  };
+
   const jumpToBookmarkedMessage = (message: MessageDTO) => {
     setShowBookmarksDialog(false);
     void jumpToMessage(message.id).catch((caught: unknown) =>
       setError(caught instanceof Error ? caught.message : t("chat.failedLoad"))
     );
   };
+
+  useEffect(() => {
+    setBookmarkedMessages([]);
+    setBookmarkCursor(null);
+    setBookmarkHasMore(false);
+    setBookmarkTotal(0);
+  }, [activeChat?.id]);
 
   const updateUserConfigDraft = (field: keyof UserCustomConfigDTO, value: string) => {
     setEditingPersonaDraft((current) => ({
@@ -2936,24 +3012,69 @@ export function ChatPage({
       return;
     }
 
-    setLoading(true);
     setError(null);
     setStatus(null);
     try {
-      const memories = await api.chats.memories.reindex(activeChat.id);
-      setChatMemories(memories);
-      const ready = memories.filter(
-        (memory) => memory.enabled && memory.embeddingStatus === "ready"
-      ).length;
-      const total = memories.filter((memory) => memory.enabled).length;
-      setStatus(t("chat.memoryIndexRebuilt", { ready, total }));
+      const job = await api.chats.memories.startReindex(activeChat.id);
+      setMemoryReindexJob(job);
+      if (job.state === "completed") {
+        await loadChatMemories();
+        setStatus(t("chat.memoryIndexRebuilt", { ready: job.completed, total: job.total }));
+      }
     } catch (caught) {
       await loadChatMemories();
       setError(caught instanceof Error ? caught.message : t("chat.failedRebuildMemoryIndex"));
-    } finally {
-      setLoading(false);
     }
   };
+
+  const cancelMemoryIndexRebuild = async () => {
+    if (!activeChat || !memoryReindexJob) return;
+    try {
+      const job = await api.chats.memories.cancelReindex(activeChat.id, memoryReindexJob.id);
+      setMemoryReindexJob(job);
+      setStatus(t("chat.memoryIndexCancelled"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedRebuildMemoryIndex"));
+    }
+  };
+
+  useEffect(() => {
+    if (!activeChat || !memoryReindexJob || !["queued", "running"].includes(memoryReindexJob.state)) {
+      return;
+    }
+    let disposed = false;
+    let timerId: number | null = null;
+    const poll = async () => {
+      try {
+        const job = await api.chats.memories.reindexStatus(activeChat.id, memoryReindexJob.id);
+        if (disposed) return;
+        setMemoryReindexJob(job);
+        if (job.state === "completed") {
+          await loadChatMemories();
+          if (!disposed) setStatus(t("chat.memoryIndexRebuilt", { ready: job.completed, total: job.total }));
+        } else if (job.state === "failed") {
+          await loadChatMemories();
+          if (!disposed) setError(t("chat.failedRebuildMemoryIndex"));
+        } else if (job.state === "cancelled") {
+          if (!disposed) setStatus(t("chat.memoryIndexCancelled"));
+        } else {
+          timerId = window.setTimeout(() => void poll(), 500);
+        }
+      } catch (caught) {
+        if (!disposed) setError(caught instanceof Error ? caught.message : t("chat.failedRebuildMemoryIndex"));
+      }
+    };
+    timerId = window.setTimeout(() => void poll(), 300);
+    return () => {
+      disposed = true;
+      if (timerId !== null) window.clearTimeout(timerId);
+    };
+  }, [activeChat?.id, memoryReindexJob?.id, memoryReindexJob?.state]);
+
+  useEffect(() => {
+    setMemoryReindexJob(null);
+    setMemoryIndexStats(null);
+  }, [activeChat?.id]);
 
   const generateOpeningMessage = async () => {
     if (!activeChat || activeChat.messages.length > 0) {
@@ -3214,6 +3335,10 @@ export function ChatPage({
         isBookmarked: !message.isBookmarked
       });
       upsertMessage(updated);
+      setBookmarkedMessages((current) => updated.isBookmarked
+        ? [updated, ...current.filter((item) => item.id !== updated.id)]
+        : current.filter((item) => item.id !== updated.id));
+      setBookmarkTotal((current) => Math.max(0, current + (updated.isBookmarked ? 1 : -1)));
       setStatus(t(updated.isBookmarked ? "chat.messageBookmarked" : "chat.messageUnbookmarked"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdate"));
@@ -4046,7 +4171,7 @@ export function ChatPage({
                     data-testid="chat-bookmarks-trigger"
                     title={t("chat.bookmarks")}
                     variant="ghost"
-                    onClick={() => setShowBookmarksDialog(true)}
+                    onClick={openBookmarks}
                   >
                     <Bookmark size={15} />
                   </Button>
@@ -5486,9 +5611,12 @@ export function ChatPage({
         <Modal title={t("chat.bookmarks")} onClose={() => setShowBookmarksDialog(false)}>
           <div className="space-y-4" data-testid="chat-bookmarks-dialog">
             <p className="text-sm leading-6 text-slate-400">{t("chat.bookmarksHelp")}</p>
+            {bookmarkTotal > 0 ? (
+              <p className="text-xs text-slate-500">{t("chat.bookmarksCount", { count: bookmarkTotal })}</p>
+            ) : null}
             {bookmarkedMessages.length ? (
               <div className="grid gap-2">
-                {bookmarkedMessages.map(({ message, index }) => {
+                {bookmarkedMessages.map((message) => {
                   const roleLabel =
                     message.role === "assistant"
                       ? t("chat.searchAssistant")
@@ -5506,7 +5634,7 @@ export function ChatPage({
                       <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                         <Bookmark className="text-ember-300" fill="currentColor" size={13} />
                         <span className="font-semibold text-slate-300">{roleLabel}</span>
-                        <span>{t("chat.bookmarkedAt", { index: index + 1 })}</span>
+                        <span>{new Date(message.createdAt).toLocaleString(language === "zh-CN" ? "zh-CN" : "en-US")}</span>
                       </div>
                       <p className="line-clamp-3 whitespace-pre-wrap break-words text-sm leading-6 text-slate-200">
                         {message.content}
@@ -5514,7 +5642,19 @@ export function ChatPage({
                     </button>
                   );
                 })}
+                {bookmarkHasMore ? (
+                  <Button
+                    className="w-full"
+                    disabled={bookmarkLoading}
+                    variant="ghost"
+                    onClick={() => void loadBookmarkedMessages(true)}
+                  >
+                    {bookmarkLoading ? t("app.loadingSection") : t("chat.loadMoreBookmarks")}
+                  </Button>
+                ) : null}
               </div>
+            ) : bookmarkLoading ? (
+              <p className="text-sm text-slate-500">{t("app.loadingSection")}</p>
             ) : (
               <p className="text-sm text-slate-500">{t("chat.bookmarksEmpty")}</p>
             )}
@@ -6298,11 +6438,16 @@ export function ChatPage({
                   data-testid="memory-index-summary"
                 >
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-slate-200">
-                      {t("chat.memoryIndexProgress", {
-                        ready: memoryIndexSummary.ready,
-                        total: memoryIndexSummary.total
-                      })}
+                    <p className="text-sm font-semibold text-slate-200" aria-live="polite">
+                      {memoryReindexJob && ["queued", "running"].includes(memoryReindexJob.state)
+                        ? t("chat.memoryIndexRebuilding", {
+                            completed: memoryReindexJob.completed,
+                            total: memoryReindexJob.total
+                          })
+                        : t("chat.memoryIndexProgress", {
+                            ready: memoryIndexSummary.ready,
+                            total: memoryIndexSummary.total
+                          })}
                     </p>
                     <p className="mt-1 text-xs leading-5 text-slate-400">
                       {t(
@@ -6320,7 +6465,17 @@ export function ChatPage({
                       )}
                     </p>
                   </div>
-                  {memoryEmbeddingConfigured ? (
+                  {memoryEmbeddingConfigured && memoryReindexJob && ["queued", "running"].includes(memoryReindexJob.state) ? (
+                    <Button
+                      className="shrink-0 !min-h-[34px] !px-3 text-xs"
+                      data-testid="memory-index-cancel"
+                      variant="secondary"
+                      onClick={() => void cancelMemoryIndexRebuild()}
+                    >
+                      <StopCircle size={14} />
+                      {t("chat.cancelMemoryIndex")}
+                    </Button>
+                  ) : memoryEmbeddingConfigured ? (
                     <Button
                       className="shrink-0 !min-h-[34px] !px-3 text-xs"
                       data-testid="memory-index-rebuild"

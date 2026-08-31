@@ -98,6 +98,33 @@ const runTransaction = (db, task) => {
   catch (error) { db.exec("ROLLBACK"); throw error; }
 };
 
+const suspendMessageSearchIndex = (db) => {
+  db.exec(`
+    DROP TRIGGER IF EXISTS "Message_search_after_insert";
+    DROP TRIGGER IF EXISTS "Message_search_after_update";
+    DROP TRIGGER IF EXISTS "Message_search_after_delete";
+    DELETE FROM "MessageSearch";
+  `);
+};
+
+const rebuildMessageSearchIndex = (db) => {
+  runTransaction(db, () => {
+    db.exec('INSERT INTO "MessageSearch" ("messageId", "chatId", "content") SELECT "id", "chatId", "content" FROM "Message";');
+  });
+  db.exec(`
+    CREATE TRIGGER "Message_search_after_insert" AFTER INSERT ON "Message" BEGIN
+      INSERT INTO "MessageSearch" ("messageId", "chatId", "content") VALUES (new."id", new."chatId", new."content");
+    END;
+    CREATE TRIGGER "Message_search_after_update" AFTER UPDATE OF "content", "chatId" ON "Message" BEGIN
+      DELETE FROM "MessageSearch" WHERE "messageId" = old."id";
+      INSERT INTO "MessageSearch" ("messageId", "chatId", "content") VALUES (new."id", new."chatId", new."content");
+    END;
+    CREATE TRIGGER "Message_search_after_delete" AFTER DELETE ON "Message" BEGIN
+      DELETE FROM "MessageSearch" WHERE "messageId" = old."id";
+    END;
+  `);
+};
+
 export const seedPerformanceDataset = async ({ profileName, seed = 20260831, databasePath, mediaDirectory, migrationsDirectory }) => {
   const profile = PERF_DATASET_PROFILES[profileName];
   if (!profile) throw new Error(`Unknown performance profile: ${profileName}`);
@@ -114,6 +141,7 @@ export const seedPerformanceDataset = async ({ profileName, seed = 20260831, dat
 
   const startedAt = performance.now();
   const { db, schemaVersion } = await initializeDatabase(databasePath, migrationsDirectory);
+  suspendMessageSearchIndex(db);
   const chatMessageCounts = distributeMessages(profile);
   const firstMessageByChat = new Map();
   try {
@@ -155,11 +183,12 @@ export const seedPerformanceDataset = async ({ profileName, seed = 20260831, dat
           const role = globalMessage % 2 === 0 ? "user" : "assistant";
           const variants = globalMessage % 11 === 0 ? [messageContent(globalMessage), `${messageContent(globalMessage)} variant`] : [];
           const createdAt = dbTime(globalMessage, 4);
-          insertMessage.run(messageId, chatId, role, role === "assistant" ? padded("char", chatIndex % profile.characters) : null, globalMessage < profile.attachments && globalMessage % 5 === 0 ? "" : messageContent(globalMessage), globalMessage % 17 === 0 ? 0 : 1, globalMessage % 53 === 0 ? 1 : 0, json(variants), variants.length ? 1 : 0, null, role === "assistant" ? json({ providerId: "mock", providerType: "mock", modelId: "mock-model", incomplete: globalMessage % 101 === 0 }) : null, json([]), null, null, null, createdAt, createdAt);
+          insertMessage.run(messageId, chatId, role, role === "assistant" ? padded("char", chatIndex % profile.characters) : null, globalMessage < profile.attachments && globalMessage % 5 === 0 ? "" : messageContent(globalMessage), globalMessage % 17 === 0 ? 0 : 1, globalMessage % 53 === 0 ? 1 : 0, json(variants), variants.length ? 1 : 0, null, role === "assistant" ? json({ providerId: "mock", providerType: "mock", modelId: "mock-model", requestId: `fixture-request-${globalMessage}`, attemptId: `fixture-attempt-${globalMessage}`, usage: { promptTokens: 20, completionTokens: 10, totalTokens: 30, estimated: false }, usageSource: "provider", inputPriceMicros: 1, outputPriceMicros: 2, estimatedCostMicros: 1, currency: "USD", usedFallback: false, incomplete: globalMessage % 101 === 0 }) : null, json([]), null, null, null, createdAt, createdAt);
           globalMessage += 1;
         }
       }
     });
+    rebuildMessageSearchIndex(db);
 
     runTransaction(db, () => {
       for (let index = 0; index < profile.mediaAssets; index += 1) {
@@ -183,10 +212,10 @@ export const seedPerformanceDataset = async ({ profileName, seed = 20260831, dat
         const timestamp = dbTime(index, 3);
         const source = firstMessageByChat.get(chatId) ? [firstMessageByChat.get(chatId)] : [];
         const embedding = index % 5 === 0 ? json([0.25, 0.5, 0.75, 1]) : null;
-        insertMemory.run(memoryId, chatId, `Memory ${index}`, `Synthetic memory content ${index}`, json([index % 2 ? "keyword" : "关键词"]), 1 + index % 5, enabled ? 1 : 0, deleted ? timestamp : null, revisionCount, "user", deleted ? "delete" : "create", json(source), embedding, embedding ? "mock-embedding" : null, embedding ? "mock" : null, embedding ? 4 : null, embedding ? "ready" : "stale", embedding ? timestamp : null, null, timestamp, timestamp);
+        insertMemory.run(memoryId, chatId, `Memory ${index}`, `Synthetic memory content ${index}`, json([index % 2 ? "keyword" : "关键词"]), 1 + index % 5, enabled ? 1 : 0, deleted ? timestamp : null, revisionCount, "user", deleted ? "manual_delete" : "manual_create", json(source), embedding, embedding ? "mock-embedding" : null, embedding ? "mock" : null, embedding ? 4 : null, embedding ? "ready" : "stale", embedding ? timestamp : null, null, timestamp, timestamp);
         for (let revision = 1; revision <= revisionCount; revision += 1) {
           const snapshot = json({ title: `Memory ${index}`, content: `Synthetic memory content ${index}`, keywords: ["keyword"], importance: 1 + index % 5, enabled: revision === revisionCount ? enabled : true, sourceMessageIds: source });
-          insertRevision.run(`${memoryId}-r${revision}`, memoryId, chatId, revision, revision === 1 ? "create" : deleted && revision === revisionCount ? "delete" : "update", "user", revision === 1 ? null : snapshot, snapshot, json(source), null, "perf_fixture", dbTime(index * 3 + revision, 2));
+          insertRevision.run(`${memoryId}-r${revision}`, memoryId, chatId, revision, revision === 1 ? "manual_create" : deleted && revision === revisionCount ? "manual_delete" : "manual_edit", "user", revision === 1 ? null : snapshot, snapshot, json(source), null, "perf_fixture", dbTime(index * 3 + revision, 2));
         }
       }
       const operationCount = Math.max(1, Math.floor(profile.memories / 10));

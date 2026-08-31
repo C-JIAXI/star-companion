@@ -539,7 +539,8 @@ export const messagePageQuerySchema = z.object({
   chatId: idSchema,
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().trim().min(1).max(1000).optional(),
-  includeTotal: z.preprocess((value) => value === "true" || value === true, z.boolean()).default(false)
+  includeTotal: z.preprocess((value) => value === "true" || value === true, z.boolean()).default(false),
+  bookmarkedOnly: z.preprocess((value) => value === "true" || value === true, z.boolean()).default(false)
 });
 
 export const messageLocateQuerySchema = z.object({

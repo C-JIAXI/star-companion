@@ -33,6 +33,8 @@ import type {
   CharacterSortMode,
   ChatMemoryDTO,
   ChatMemoryPageDTO,
+  MemoryEmbeddingJobStatusDTO,
+  MemoryIndexSummaryDTO,
   ChatMemoryInput,
   MemoryOperationDTO,
   MemoryRestorePreviewDTO,
@@ -361,6 +363,14 @@ export const api = {
         request<ChatMemoryDTO[]>(`/api/chats/${chatId}/memories/refresh`, { method: "POST" }),
       reindex: (chatId: string) =>
         request<ChatMemoryDTO[]>(`/api/chats/${chatId}/memories/reindex`, { method: "POST" }),
+      startReindex: (chatId: string) =>
+        request<MemoryEmbeddingJobStatusDTO>(`/api/chats/${chatId}/memories/reindex-jobs`, { method: "POST" }),
+      reindexStatus: (chatId: string, jobId: string) =>
+        request<MemoryEmbeddingJobStatusDTO>(`/api/chats/${chatId}/memories/reindex-jobs/${jobId}`),
+      cancelReindex: (chatId: string, jobId: string) =>
+        request<MemoryEmbeddingJobStatusDTO>(`/api/chats/${chatId}/memories/reindex-jobs/${jobId}`, { method: "DELETE" }),
+      indexSummary: (chatId: string) =>
+        request<MemoryIndexSummaryDTO>(`/api/chats/${chatId}/memories/index-summary`),
       revisions: (chatId: string, memoryId: string) =>
         request<MemoryRevisionDTO[]>(`/api/chats/${chatId}/memories/${memoryId}/revisions`),
       restorePreview: (chatId: string, memoryId: string, revision: number) =>

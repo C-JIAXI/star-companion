@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { Prisma, PrismaClient } from "@prisma/client";
+import { PrismaClient, type Prisma } from "@prisma/client";
 
 const performanceMetricsEnabled = process.env.STAR_COMPANION_PERF_METRICS === "1";
 let performanceQueryCount = 0;

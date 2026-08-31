@@ -384,13 +384,16 @@ export const analyzeBackupCandidate = (
   });
 
   const memoryIds = new Set([...collectIds(current.memories), ...collectIds(memories)]);
+  const memoriesById = new Map(
+    [...current.memories, ...memories].flatMap((memory) => memory.id ? [[memory.id, memory] as const] : [])
+  );
   const operationIds = new Set([...collectIds(current.memoryOperations), ...collectIds(memoryOperations)]);
   const revisionKeys = new Map<string, number>();
   memoryRevisions.forEach((revision, index) => {
     if (!memoryIds.has(revision.memoryId) || !chatIds.has(revision.chatId)) {
       addIssue(issues, invalidIndexes, "memoryRevisions", index, "missing_reference", `Memory revision ${index + 1} refers to unavailable memory data.`);
     }
-    const memory = [...current.memories, ...memories].find((item) => item.id === revision.memoryId);
+    const memory = memoriesById.get(revision.memoryId);
     if (memory && memory.chatId !== revision.chatId) {
       addIssue(issues, invalidIndexes, "memoryRevisions", index, "missing_reference", `Memory revision ${index + 1} does not belong to its memory chat.`);
     }

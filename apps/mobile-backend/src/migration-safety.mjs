@@ -76,6 +76,22 @@ export const MOBILE_MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_records_message_role_timeline ON records(type, chatId, role, createdAt, id);
       CREATE INDEX IF NOT EXISTS idx_records_attachment_asset ON records(type, assetId);
     `
+  },
+  {
+    name: "004_bookmark_pagination",
+    sql: `
+      ALTER TABLE records ADD COLUMN isBookmarked INTEGER;
+      UPDATE records SET isBookmarked = COALESCE(json_extract(data, '$.isBookmarked'), 0);
+      CREATE INDEX IF NOT EXISTS idx_records_message_bookmarks ON records(type, chatId, isBookmarked, createdAt, id);
+    `
+  },
+  {
+    name: "005_message_search",
+    sql: `
+      ALTER TABLE records ADD COLUMN content TEXT;
+      UPDATE records SET content = json_extract(data, '$.content');
+      CREATE INDEX IF NOT EXISTS idx_records_message_search_order ON records(type, createdAt, id);
+    `
   }
 ];
 

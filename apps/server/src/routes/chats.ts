@@ -55,6 +55,11 @@ import {
 } from "../services/memoryHistory.js";
 import { searchMessagesPage } from "../services/messageSearch.js";
 import { listMemoryPage } from "../services/memoryPaging.js";
+import {
+  cancelMemoryEmbeddingJob,
+  getMemoryEmbeddingJob,
+  startMemoryEmbeddingJob
+} from "../services/memoryEmbeddingJobs.js";
 
 export const chatsRouter = Router();
 
@@ -639,6 +644,59 @@ chatsRouter.post(
     response.json({ ok: true, data: memories.map(serializeChatMemory) });
   })
 );
+
+chatsRouter.post(
+  "/:id/memories/reindex-jobs",
+  asyncHandler(async (request, response) => {
+    const chatId = requireParam(request, "id");
+    const chat = await prisma.chat.findFirst({
+      where: { id: chatId, deletedAt: null },
+      select: { id: true }
+    });
+    if (!chat) throw new HttpError(404, "Chat not found");
+
+    const total = await prisma.chatMemory.count({
+      where: { chatId, enabled: true, deletedAt: null }
+    });
+    const settings = await getOrCreateSettings();
+    if (total > 0) {
+      try {
+        resolveModuleSettings(settings, "memory_embedding");
+      } catch {
+        throw new HttpError(400, "Configure a compatible memory embedding model before rebuilding the index.");
+      }
+    }
+    response.status(202).json({
+      ok: true,
+      data: startMemoryEmbeddingJob({ chatId, settings, total })
+    });
+  })
+);
+
+chatsRouter.get("/:id/memories/reindex-jobs/:jobId", asyncHandler(async (request, response) => {
+  const job = getMemoryEmbeddingJob(requireParam(request, "id"), requireParam(request, "jobId"));
+  if (!job) throw new HttpError(404, "Memory index rebuild job not found");
+  response.json({ ok: true, data: job });
+}));
+
+chatsRouter.delete("/:id/memories/reindex-jobs/:jobId", asyncHandler(async (request, response) => {
+  const job = cancelMemoryEmbeddingJob(requireParam(request, "id"), requireParam(request, "jobId"));
+  if (!job) throw new HttpError(404, "Memory index rebuild job not found");
+  response.json({ ok: true, data: job });
+}));
+
+chatsRouter.get("/:id/memories/index-summary", asyncHandler(async (request, response) => {
+  const chatId = requireParam(request, "id");
+  const rows = await prisma.chatMemory.groupBy({
+    by: ["embeddingStatus"],
+    where: { chatId, enabled: true, deletedAt: null },
+    _count: { _all: true }
+  });
+  const total = rows.reduce((sum, row) => sum + row._count._all, 0);
+  const ready = rows.find((row) => row.embeddingStatus === "ready")?._count._all ?? 0;
+  const failed = rows.find((row) => row.embeddingStatus === "failed")?._count._all ?? 0;
+  response.json({ ok: true, data: { total, ready, failed, stale: total - ready - failed } });
+}));
 
 chatsRouter.get("/:id/summary", asyncHandler(async (request, response) => {
   const id = requireParam(request, "id");

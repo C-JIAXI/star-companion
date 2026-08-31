@@ -148,6 +148,7 @@ describe("provider connection diagnostics", () => {
 
   it("cancels an in-flight metadata test and returns to a retryable UI state", async () => {
     const settings = makeSettings("openai-compatible");
+    const previousTestId = getConnectionDiagnostic(settings).testId;
     const running = withMockFetch(
       (_url, init) => new Promise<Response>((_resolve, reject) => {
         if (init?.signal?.aborted) {
@@ -161,7 +162,10 @@ describe("provider connection diagnostics", () => {
     let testId: string | null = null;
     for (let attempt = 0; attempt < 20 && !testId; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 5));
-      testId = getConnectionDiagnostic(settings).testId;
+      const diagnostic = getConnectionDiagnostic(settings);
+      testId = diagnostic.status === "checking" && diagnostic.testId !== previousTestId
+        ? diagnostic.testId
+        : null;
     }
     assert.ok(testId);
     assert.equal(cancelConnectionTest(testId), true);
@@ -173,6 +177,7 @@ describe("provider connection diagnostics", () => {
   it("cancels an inference test through the usage ledger without creating messages", async () => {
     const settings = makeSettings("openai-compatible");
     const beforeMessages = await prisma.message.count();
+    const previousTestId = getConnectionDiagnostic(settings).testId;
     const running = withMockFetch(
       (_url, init) => new Promise<Response>((_resolve, reject) => {
         if (init?.signal?.aborted) {
@@ -186,7 +191,10 @@ describe("provider connection diagnostics", () => {
     let testId: string | null = null;
     for (let attempt = 0; attempt < 20 && !testId; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 5));
-      testId = getConnectionDiagnostic(settings).testId;
+      const diagnostic = getConnectionDiagnostic(settings);
+      testId = diagnostic.status === "checking" && diagnostic.testId !== previousTestId
+        ? diagnostic.testId
+        : null;
     }
     assert.ok(testId);
     assert.equal(cancelConnectionTest(testId), true);

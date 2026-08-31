@@ -7,18 +7,20 @@ import { messageIncludeAttachments } from "./messageAttachments.js";
 const ascending = (left: { createdAt: Date; id: string }, right: { createdAt: Date; id: string }) =>
   left.createdAt.getTime() - right.createdAt.getTime() || left.id.localeCompare(right.id);
 
-export const listMessagePage = async ({ chatId, limit, cursor, includeTotal }: { chatId: string; limit: number; cursor?: string; includeTotal: boolean }) => {
-  const decoded = decodeCursor(cursor, { kind: "messages", scope: chatId });
+export const listMessagePage = async ({ chatId, limit, cursor, includeTotal, bookmarkedOnly = false }: { chatId: string; limit: number; cursor?: string; includeTotal: boolean; bookmarkedOnly?: boolean }) => {
+  const scope = bookmarkedOnly ? `${chatId}:bookmarks` : chatId;
+  const decoded = decodeCursor(cursor, { kind: "messages", scope });
   if (decoded && !decoded.createdAt) throw new HttpError(400, "The message cursor is incomplete.");
   const boundary = decoded ? new Date(decoded.createdAt!) : null;
   const where = {
     chatId,
     chat: { deletedAt: null },
+    ...(bookmarkedOnly ? { isBookmarked: true } : {}),
     ...(boundary ? { OR: [{ createdAt: { lt: boundary } }, { createdAt: boundary, id: { lt: decoded!.id } }] } : {})
   };
   const [rows, total] = await Promise.all([
     prisma.message.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: limit + 1, include: messageIncludeAttachments }),
-    includeTotal ? prisma.message.count({ where: { chatId, chat: { deletedAt: null } } }) : Promise.resolve(null)
+    includeTotal ? prisma.message.count({ where: { chatId, chat: { deletedAt: null }, ...(bookmarkedOnly ? { isBookmarked: true } : {}) } }) : Promise.resolve(null)
   ]);
   const hasMore = rows.length > limit;
   const page = rows.slice(0, limit);
@@ -28,7 +30,7 @@ export const listMessagePage = async ({ chatId, limit, cursor, includeTotal }: {
     order: "ascending" as const,
     items: page.reverse().map(serializeMessage),
     hasMore,
-    nextCursor: hasMore && oldest ? encodeCursor({ version: 1, kind: "messages", scope: chatId, createdAt: oldest.createdAt.toISOString(), id: oldest.id }) : null,
+    nextCursor: hasMore && oldest ? encodeCursor({ version: 1, kind: "messages", scope, createdAt: oldest.createdAt.toISOString(), id: oldest.id }) : null,
     total
   };
 };

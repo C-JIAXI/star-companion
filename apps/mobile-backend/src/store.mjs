@@ -178,8 +178,10 @@ export class MobileStore {
           contextIncluded,
           embeddingStatus
           ,assetId
+          ,isBookmarked
+          ,content
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         type,
@@ -204,7 +206,9 @@ export class MobileStore {
         record.draftId ?? null,
         toInteger(record.contextIncluded ?? true),
         record.embeddingStatus ?? null,
-        record.assetId ?? null
+        record.assetId ?? null,
+        toInteger(record.isBookmarked ?? false),
+        record.content ?? null
       ]
     );
 
@@ -335,10 +339,11 @@ export class MobileStore {
 
   listChats() {
     return clone(
-      this.readRecords("chat", "", [], "ORDER BY updatedAt DESC").map((chat) => ({
-        ...chat,
-        messageCount: this.readRecords("message", "AND chatId = ?", [chat.id]).length
-      })).sort((a, b) => {
+      this.select(`
+        SELECT c.data,
+          (SELECT COUNT(*) FROM records m WHERE m.type = 'message' AND m.chatId = c.id) AS messageCount
+        FROM records c WHERE c.type = 'chat' ORDER BY c.updatedAt DESC
+      `).map((row) => ({ ...JSON.parse(String(row.data)), messageCount: Number(row.messageCount) })).sort((a, b) => {
         const trashOrder = Number(Boolean(a.deletedAt)) - Number(Boolean(b.deletedAt));
         const archiveOrder = Number(a.isArchived === true) - Number(b.isArchived === true);
         const pinOrder = Number(b.isPinned === true) - Number(a.isPinned === true);
@@ -505,13 +510,13 @@ export class MobileStore {
     );
   }
 
-  countMessages(chatId) {
+  countMessages(chatId, bookmarkedOnly = false) {
     return Number(
-      this.select("SELECT COUNT(*) AS count FROM records WHERE type = 'message' AND chatId = ?", [chatId])[0]?.count ?? 0
+      this.select(`SELECT COUNT(*) AS count FROM records WHERE type = 'message' AND chatId = ? ${bookmarkedOnly ? "AND isBookmarked = 1" : ""}`, [chatId])[0]?.count ?? 0
     );
   }
 
-  listMessagePage(chatId, limit, before = null) {
+  listMessagePage(chatId, limit, before = null, bookmarkedOnly = false) {
     const boundarySql = before
       ? "AND (createdAt < ? OR (createdAt = ? AND id < ?))"
       : "";
@@ -519,10 +524,39 @@ export class MobileStore {
       ? [chatId, before.createdAt, before.createdAt, before.id, limit + 1]
       : [chatId, limit + 1];
     const rows = this.select(
-      `SELECT data FROM records WHERE type = 'message' AND chatId = ? ${boundarySql} ORDER BY createdAt DESC, id DESC LIMIT ?`,
+      `SELECT data FROM records WHERE type = 'message' AND chatId = ? ${bookmarkedOnly ? "AND isBookmarked = 1" : ""} ${boundarySql} ORDER BY createdAt DESC, id DESC LIMIT ?`,
       params
     ).map((row) => JSON.parse(String(row.data)));
     return { items: clone(rows.slice(0, limit).reverse()), hasMore: rows.length > limit };
+  }
+
+  searchMessagePage(query, { chatId = null, limit = 20, before = null } = {}) {
+    const where = ["m.type = 'message'", "c.type = 'chat'", "c.deletedAt IS NULL", "instr(lower(m.content), lower(?)) > 0"];
+    const params = [query];
+    if (chatId) { where.push("m.chatId = ?"); params.push(chatId); }
+    if (before) {
+      where.push("(m.createdAt < ? OR (m.createdAt = ? AND m.id < ?))");
+      params.push(before.createdAt, before.createdAt, before.id);
+    }
+    const rows = this.select(`
+      SELECT m.data, m.chatId, m.createdAt, m.id,
+        (SELECT COUNT(*) FROM records prior WHERE prior.type = 'message' AND prior.chatId = m.chatId
+          AND (prior.createdAt < m.createdAt OR (prior.createdAt = m.createdAt AND prior.id < m.id))) AS messageIndex
+      FROM records m JOIN records c ON c.id = m.chatId
+      WHERE ${where.join(" AND ")}
+      ORDER BY m.createdAt DESC, m.id DESC LIMIT ?
+    `, [...params, limit + 1]);
+    const totalWhere = where.filter((entry) => !entry.startsWith("(m.createdAt <"));
+    const totalParams = before ? params.slice(0, -3) : params;
+    const total = Number(this.select(`
+      SELECT COUNT(*) AS count FROM records m JOIN records c ON c.id = m.chatId
+      WHERE ${totalWhere.join(" AND ")}
+    `, totalParams)[0]?.count ?? 0);
+    return {
+      items: rows.slice(0, limit).map((row) => ({ message: JSON.parse(String(row.data)), index: Number(row.messageIndex) })),
+      hasMore: rows.length > limit,
+      total
+    };
   }
 
   listMemoryPage(chatId, limit, boundary = null, includeTotal = false) {
@@ -541,6 +575,19 @@ export class MobileStore {
       hasMore: rows.length > limit,
       ...(includeTotal ? { total: Number(this.select("SELECT COUNT(*) AS count FROM records WHERE type = 'memory' AND chatId = ?", [chatId])[0]?.count ?? 0) } : {})
     };
+  }
+
+  getMemoryIndexSummary(chatId) {
+    const rows = this.select(`
+      SELECT embeddingStatus, COUNT(*) AS count FROM records
+      WHERE type = 'memory' AND chatId = ? AND COALESCE(enabled, 1) = 1 AND deletedAt IS NULL
+      GROUP BY embeddingStatus
+    `, [chatId]);
+    const count = (status) => Number(rows.find((row) => row.embeddingStatus === status)?.count ?? 0);
+    const total = rows.reduce((sum, row) => sum + Number(row.count), 0);
+    const ready = count("ready");
+    const failed = count("failed");
+    return { total, ready, failed, stale: total - ready - failed };
   }
 
   listRecentContextMessages(chatId, limit, before = null, excludeIds = []) {
@@ -1310,6 +1357,21 @@ export class MobileStore {
     return clone(memory);
   }
 
+  async updateMemoryEmbeddingsBatch(updates) {
+    if (!updates.length) return;
+    await this.atomicWrite(async () => {
+      for (const update of updates) {
+        const existing = this.readRecord("memory", update.id);
+        if (!existing || existing.chatId !== update.chatId) continue;
+        await this.writeRecord("memory", {
+          ...existing,
+          ...update.data,
+          updatedAt: update.data.updatedAt ?? now()
+        });
+      }
+    });
+  }
+
   async markMemoryEmbeddingsStale() {
     const memories = this.readRecords("memory");
     for (const memory of memories) {
@@ -1661,7 +1723,9 @@ export class MobileStore {
     }
     if (backup.media) {
       const appliedMessageIds = new Set(records.messages.filter((record) => this.shouldApplyBackupRecord(record, backup.mode, resolutions)).flatMap((record) => record.value.id ? [record.value.id] : []));
-      for (const messageId of appliedMessageIds) for (const attachment of this.listMessageAttachments(messageId)) await this.deleteRecord("messageAttachment", attachment.id);
+      if (backup.mode !== "replace") {
+        for (const messageId of appliedMessageIds) for (const attachment of this.listMessageAttachments(messageId)) await this.deleteRecord("messageAttachment", attachment.id);
+      }
       for (const attachment of backup.media.attachments) {
         if (!appliedMessageIds.has(attachment.messageId)) continue;
         const assetId = importedAssetIds.get(attachment.assetId);
@@ -1681,7 +1745,7 @@ export class MobileStore {
 
     // Conflict decisions are per record. Re-align current pointers after applying
     // them so an imported current state can never reference skipped/mismatched history.
-    for (const record of records.memories) {
+    if (backup.mode !== "replace") for (const record of records.memories) {
       if (!this.shouldApplyBackupRecord(record, backup.mode, resolutions) || !record.value.id) continue;
       const memory = this.readRecord("memory", record.value.id);
       if (!memory) continue;
@@ -1708,7 +1772,7 @@ export class MobileStore {
         reasonCode: "import_current_state_baseline", createdAt: memory.updatedAt ?? now()
       });
     }
-    for (const record of records.chats) {
+    if (backup.mode !== "replace") for (const record of records.chats) {
       if (!this.shouldApplyBackupRecord(record, backup.mode, resolutions) || !record.value.id) continue;
       const chat = this.readRecord("chat", record.value.id);
       if (!chat) continue;

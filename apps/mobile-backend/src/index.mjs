@@ -539,7 +539,7 @@ const toEmbeddingIdentity = (settings) =>
 const getConfiguredEmbeddingSource = (settings) =>
   toEmbeddingIdentity(resolveModuleSettings(settings, "memory_embedding"));
 
-const ensureMemoryEmbeddings = async (memories, settings, force = false) => {
+const ensureMemoryEmbeddings = async (memories, settings, force = false, options = {}) => {
   let embeddingSettings;
   try {
     embeddingSettings = resolveModuleSettings(settings, "memory_embedding");
@@ -565,9 +565,11 @@ const ensureMemoryEmbeddings = async (memories, settings, force = false) => {
     return true;
   });
   const pendingIds = new Set(stale.map((memory) => memory.id));
+  options.onProgress?.({ completed: 0, total: stale.length });
 
   try {
     for (let start = 0; start < stale.length; start += EMBEDDING_BATCH_SIZE) {
+      if (options.signal?.aborted) return null;
       const batch = stale.slice(start, start + EMBEDDING_BATCH_SIZE);
       const result = await executeMobileReliableEmbeddings({
         rootSettings: settings,
@@ -575,35 +577,133 @@ const ensureMemoryEmbeddings = async (memories, settings, force = false) => {
         task: "document",
         chatId: batch[0]?.chatId ?? null
       });
+      if (options.signal?.aborted) return null;
       const embeddingUpdatedAt = new Date().toISOString();
+      await store.updateMemoryEmbeddingsBatch(batch.map((memory, index) => {
+        const vector = result.value.vectors[index];
+        return {
+          id: memory.id,
+          chatId: memory.chatId,
+          data: {
+            embedding: vector,
+            embeddingModel,
+            embeddingSource,
+            embeddingDimensions: vector.length,
+            embeddingStatus: "ready",
+            embeddingUpdatedAt
+          }
+        };
+      }));
       for (let index = 0; index < batch.length; index += 1) {
         const memory = batch[index];
         const vector = result.value.vectors[index];
         vectors.set(memory.id, vector);
-        await store.updateMemory(memory.chatId, memory.id, {
-          embedding: vector,
-          embeddingModel,
-          embeddingSource,
-          embeddingDimensions: vector.length,
-          embeddingStatus: "ready",
-          embeddingUpdatedAt
-        });
         pendingIds.delete(memory.id);
       }
+      options.onProgress?.({ completed: Math.min(start + batch.length, stale.length), total: stale.length });
     }
     const dimensions = vectors.values().next().value?.length;
     if (!dimensions || [...vectors.values()].some((vector) => vector.length !== dimensions)) return null;
     return { settings: embeddingSettings, source: embeddingSource, dimensions, vectors };
   } catch {
-    await Promise.all(
-      stale
-        .filter((memory) => pendingIds.has(memory.id))
-        .map((memory) =>
-          store.updateMemory(memory.chatId, memory.id, { embeddingStatus: "failed" })
-        )
-    );
+    if (options.signal?.aborted) return null;
+    await store.updateMemoryEmbeddingsBatch(stale
+      .filter((memory) => pendingIds.has(memory.id))
+      .map((memory) => ({ id: memory.id, chatId: memory.chatId, data: { embeddingStatus: "failed" } })));
     return null;
   }
+};
+
+const memoryEmbeddingJobs = new Map();
+const activeMemoryEmbeddingJobs = new Map();
+const memoryJobTimestamp = () => new Date().toISOString();
+const memoryJobSnapshot = (job) => ({ ...job.status });
+const pruneMemoryEmbeddingJobs = () => {
+  const finished = [...memoryEmbeddingJobs.values()]
+    .filter((job) => !["queued", "running"].includes(job.status.state))
+    .sort((left, right) => left.status.updatedAt.localeCompare(right.status.updatedAt));
+  while (memoryEmbeddingJobs.size > 20 && finished.length) {
+    memoryEmbeddingJobs.delete(finished.shift().status.id);
+  }
+};
+const startMemoryEmbeddingJob = ({ chatId, settings, memories }) => {
+  const active = memoryEmbeddingJobs.get(activeMemoryEmbeddingJobs.get(chatId));
+  if (active && ["queued", "running"].includes(active.status.state)) return memoryJobSnapshot(active);
+  const createdAt = memoryJobTimestamp();
+  const job = {
+    controller: new AbortController(),
+    status: {
+      id: randomUUID(), chatId, state: memories.length ? "queued" : "completed",
+      total: memories.length, completed: 0, failed: 0, createdAt, updatedAt: createdAt,
+      errorCode: null
+    }
+  };
+  memoryEmbeddingJobs.set(job.status.id, job);
+  if (!memories.length) return memoryJobSnapshot(job);
+  activeMemoryEmbeddingJobs.set(chatId, job.status.id);
+  queueMicrotask(() => {
+    void (async () => {
+      if (job.controller.signal.aborted) return;
+      job.status.state = "running";
+      job.status.updatedAt = memoryJobTimestamp();
+      const result = await ensureMemoryEmbeddings(memories, settings, true, {
+        signal: job.controller.signal,
+        onProgress: ({ completed, total }) => {
+          job.status.completed = Math.min(completed, total);
+          job.status.total = total;
+          job.status.updatedAt = memoryJobTimestamp();
+        }
+      });
+      if (job.controller.signal.aborted) {
+        job.status.state = "cancelled";
+      } else if (result) {
+        job.status.state = "completed";
+        job.status.completed = job.status.total;
+      } else {
+        job.status.state = "failed";
+        job.status.failed = Math.max(0, job.status.total - job.status.completed);
+        job.status.errorCode = "embedding_rebuild_failed";
+      }
+      job.status.updatedAt = memoryJobTimestamp();
+      activeMemoryEmbeddingJobs.delete(chatId);
+      pruneMemoryEmbeddingJobs();
+    })().catch(() => {
+      job.status.state = job.controller.signal.aborted ? "cancelled" : "failed";
+      job.status.failed = job.controller.signal.aborted ? 0 : Math.max(0, job.status.total - job.status.completed);
+      job.status.errorCode = job.controller.signal.aborted ? null : "embedding_rebuild_failed";
+      job.status.updatedAt = memoryJobTimestamp();
+      activeMemoryEmbeddingJobs.delete(chatId);
+      pruneMemoryEmbeddingJobs();
+    });
+  });
+  return memoryJobSnapshot(job);
+};
+const getMemoryEmbeddingJob = (chatId, jobId) => {
+  const job = memoryEmbeddingJobs.get(jobId);
+  return job?.status.chatId === chatId ? memoryJobSnapshot(job) : null;
+};
+const cancelMemoryEmbeddingJob = (chatId, jobId) => {
+  const job = memoryEmbeddingJobs.get(jobId);
+  if (!job || job.status.chatId !== chatId) return null;
+  if (["queued", "running"].includes(job.status.state)) {
+    job.controller.abort();
+    job.status.state = "cancelled";
+    job.status.failed = 0;
+    job.status.updatedAt = memoryJobTimestamp();
+    activeMemoryEmbeddingJobs.delete(chatId);
+  }
+  return memoryJobSnapshot(job);
+};
+const cancelAllMemoryEmbeddingJobs = () => {
+  for (const job of memoryEmbeddingJobs.values()) {
+    if (["queued", "running"].includes(job.status.state)) {
+      job.controller.abort();
+      job.status.state = "cancelled";
+      job.status.failed = 0;
+      job.status.updatedAt = memoryJobTimestamp();
+    }
+  }
+  activeMemoryEmbeddingJobs.clear();
 };
 
 const toMatchedMemoryEntry = (memory, score) => ({
@@ -1797,9 +1897,9 @@ const normalizePeerBaseUrl = (raw) => {
   return url.toString().replace(/\/+$/, "");
 };
 
-const requestPeer = async (peerBaseUrl, pathName, options = {}) => {
+const requestPeer = async (peerBaseUrl, pathName, options = {}, timeoutMs = 15_000) => {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(`${peerBaseUrl}${pathName}`, {
@@ -1864,7 +1964,7 @@ const rememberSyncPeer = async (peerBaseUrl, completedAt = null) => {
 
 const runMobilePullSync = async (input) => {
   const peerBaseUrl = normalizePeerBaseUrl(input.peerBaseUrl);
-  const peerBackup = await requestPeer(peerBaseUrl, "/api/backups/export");
+  const peerBackup = await requestPeer(peerBaseUrl, "/api/backups/export", {}, 3 * 60_000);
   const backup = parseBody(backupPreviewRequestSchema, { ...peerBackup, mode: input.mode });
   const preview = store.previewBackup(backup, serializeSettings(store.getSettings()));
   const summary = input.phase === "execute"
@@ -1895,17 +1995,17 @@ const runMobilePushSync = async (input) => {
   const preview = await requestPeer(peerBaseUrl, "/api/backups/preview", {
     method: "POST",
     body: JSON.stringify({ ...localBackup, mode: input.mode })
-  });
+  }, 3 * 60_000);
   const summary = input.phase === "execute"
     ? await requestPeer(peerBaseUrl, "/api/backups/import", {
         method: "POST",
-        body: JSON.stringify({
+      body: JSON.stringify({
           ...localBackup,
           mode: input.mode,
           previewId: input.previewId,
-          conflictResolutions: input.conflictResolutions
-        })
+        conflictResolutions: input.conflictResolutions
       })
+    }, 10 * 60_000)
     : null;
   return {
     direction: "push",
@@ -2510,7 +2610,26 @@ let privacyPasscodeDigest = null;
 let closeMobileSocketsForPrivacy = () => undefined;
 const privacyDigest = (passcode) => createHash("sha256").update(passcode, "utf8").digest();
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json({ limit: "25mb" }));
+// Keep backup/sync envelope capacity aligned with the desktop backend at Large scale.
+app.use(express.json({ limit: "256mb" }));
+
+if (process.env.STAR_COMPANION_PERF_METRICS === "1") {
+  app.get("/api/perf/metrics", (_request, response) => {
+    const memory = process.memoryUsage();
+    response.setHeader("Cache-Control", "no-store");
+    response.json({ ok: true, data: { rssBytes: memory.rss, heapUsedBytes: memory.heapUsed } });
+  });
+  app.get("/api/perf/prompt/:chatId", asyncHandler(async (request, response) => {
+    const context = await getPromptContext({ chatId: requireParam(request, "chatId") });
+    response.setHeader("Cache-Control", "no-store");
+    response.json({ ok: true, data: {
+      historyCount: context.promptBreakdown.includedMessageCount,
+      loreCount: context.matchedLoreEntries.length,
+      memoryCount: context.matchedMemoryEntries.length,
+      promptTokens: context.promptBreakdown.promptTokens
+    } });
+  }));
+}
 
 app.get("/api/privacy/status", (_request, response) => response.json({ ok: true, data: { locked: privacyPasscodeDigest !== null } }));
 app.post("/api/privacy/lock", (request, response) => {
@@ -2520,6 +2639,7 @@ app.post("/api/privacy/lock", (request, response) => {
   mobileThumbnailCache.clear();
   closeMobileSocketsForPrivacy();
   storageHealth.cancelActive();
+  cancelAllMemoryEmbeddingJobs();
   response.json({ ok: true, data: { locked: true } });
 });
 app.post("/api/privacy/unlock", (request, response) => {
@@ -2612,7 +2732,8 @@ app.get(
       .filter((character) =>
         normalizedTag ? toStringArray(character.tags).some((tag) => tag.toLowerCase() === normalizedTag) : true
       );
-    const all = sortCharactersForPage(filtered, store.listChats(), query.sort);
+    const chatStatsRequired = query.sort === "recently_chatted" || query.sort === "most_chats";
+    const all = sortCharactersForPage(filtered, chatStatsRequired ? store.listChats() : [], query.sort);
     const total = all.length;
     const totalPages = Math.max(1, Math.ceil(total / query.pageSize));
     const page = Math.min(query.page, totalPages);
@@ -3094,6 +3215,43 @@ app.post(
 );
 
 app.post(
+  "/api/chats/:id/memories/reindex-jobs",
+  asyncHandler(async (request, response) => {
+    const chatId = requireParam(request, "id");
+    if (!getActiveChat(chatId)) throw notFound("Chat not found");
+    const memories = store.listMemories(chatId)
+      .filter((memory) => memory.enabled !== false && !memory.deletedAt);
+    const settings = store.getSettings();
+    if (memories.length) {
+      try {
+        resolveModuleSettings(settings, "memory_embedding");
+      } catch {
+        throw httpError(400, "Configure a compatible memory embedding model before rebuilding the index.");
+      }
+    }
+    response.status(202).json({ ok: true, data: startMemoryEmbeddingJob({ chatId, settings, memories }) });
+  })
+);
+
+app.get("/api/chats/:id/memories/reindex-jobs/:jobId", (request, response) => {
+  const job = getMemoryEmbeddingJob(requireParam(request, "id"), requireParam(request, "jobId"));
+  if (!job) throw notFound("Memory index rebuild job not found");
+  response.json({ ok: true, data: job });
+});
+
+app.delete("/api/chats/:id/memories/reindex-jobs/:jobId", (request, response) => {
+  const job = cancelMemoryEmbeddingJob(requireParam(request, "id"), requireParam(request, "jobId"));
+  if (!job) throw notFound("Memory index rebuild job not found");
+  response.json({ ok: true, data: job });
+});
+
+app.get("/api/chats/:id/memories/index-summary", (request, response) => {
+  const chatId = requireParam(request, "id");
+  if (!getActiveChat(chatId)) throw notFound("Chat not found");
+  response.json({ ok: true, data: store.getMemoryIndexSummary(chatId) });
+});
+
+app.post(
   "/api/chats/:id/branches",
   asyncHandler(async (request, response) => {
     const chatId = requireParam(request, "id");
@@ -3157,27 +3315,24 @@ app.post(
   })
 );
 
+const mobileMessageSearchScope = (query, chatId = null) =>
+  `${chatId ?? "global"}:${createHash("sha256").update(query.toLocaleLowerCase()).digest("hex").slice(0, 24)}`;
+
 app.get("/api/chats/message-search", (request, response) => {
   const query = parseQuery(chatMessageSearchQuerySchema, request.query);
-  const normalizedQuery = query.q.toLowerCase();
-  const indexesByChat = new Map();
-  const matches = store.listMessages().flatMap((message) => {
-    if (!getActiveChat(message.chatId)) return [];
-    const index = indexesByChat.get(message.chatId) ?? 0;
-    indexesByChat.set(message.chatId, index + 1);
-    if (!String(message.content ?? "").toLowerCase().includes(normalizedQuery)) {
-      return [];
-    }
-    return [{ message, index }];
-  });
-
-  matches.sort((a, b) => String(b.message.createdAt).localeCompare(String(a.message.createdAt)));
+  const scope = mobileMessageSearchScope(query.q);
+  const boundary = decodePageCursor(query.cursor, "message-search", scope);
+  if (boundary && typeof boundary.createdAt !== "string") throw httpError(400, "The search cursor is incomplete.");
+  const page = store.searchMessagePage(query.q, { limit: query.limit, before: boundary });
+  const last = page.items.at(-1)?.message;
   response.json({
     ok: true,
     data: {
       query: query.q,
-      total: matches.length,
-      results: matches.slice(0, query.limit).flatMap(({ message, index }) => {
+      total: page.total,
+      hasMore: page.hasMore,
+      nextCursor: page.hasMore && last ? encodePageCursor({ kind: "message-search", scope, createdAt: last.createdAt, id: last.id }) : null,
+      results: page.items.flatMap(({ message, index }) => {
         const chat = getActiveChat(message.chatId);
         if (!chat) return [];
         return [{
@@ -3201,18 +3356,20 @@ app.get("/api/chats/:id/message-search", (request, response) => {
   const query = parseQuery(chatMessageSearchQuerySchema, request.query);
   if (!getActiveChat(chatId)) throw notFound("Chat not found");
 
-  const normalizedQuery = query.q.toLowerCase();
-  const matches = store
-    .listMessages(chatId)
-    .map((message, index) => ({ message, index }))
-    .filter(({ message }) => String(message.content ?? "").toLowerCase().includes(normalizedQuery));
+  const scope = mobileMessageSearchScope(query.q, chatId);
+  const boundary = decodePageCursor(query.cursor, "message-search", scope);
+  if (boundary && typeof boundary.createdAt !== "string") throw httpError(400, "The search cursor is incomplete.");
+  const page = store.searchMessagePage(query.q, { chatId, limit: query.limit, before: boundary });
+  const last = page.items.at(-1)?.message;
 
   response.json({
     ok: true,
     data: {
       query: query.q,
-      total: matches.length,
-      results: matches.slice(0, query.limit).map(({ message, index }) => ({
+      total: page.total,
+      hasMore: page.hasMore,
+      nextCursor: page.hasMore && last ? encodePageCursor({ kind: "message-search", scope, createdAt: last.createdAt, id: last.id }) : null,
+      results: page.items.map(({ message, index }) => ({
         message: serializeMessage(message),
         index,
         snippet: buildMessageSearchSnippet(message.content, query.q)
@@ -3358,11 +3515,12 @@ app.get("/api/messages", (request, response) => {
 app.get("/api/messages/page", (request, response) => {
   const query = parseQuery(messagePageQuerySchema, request.query);
   if (!getActiveChat(query.chatId)) throw notFound("Chat not found");
-  const boundary = decodePageCursor(query.cursor, "messages", query.chatId);
+  const scope = query.bookmarkedOnly ? `${query.chatId}:bookmarks` : query.chatId;
+  const boundary = decodePageCursor(query.cursor, "messages", scope);
   if (boundary && typeof boundary.createdAt !== "string") {
     throw Object.assign(new Error("The message cursor is incomplete."), { status: 400 });
   }
-  const page = store.listMessagePage(query.chatId, query.limit, boundary);
+  const page = store.listMessagePage(query.chatId, query.limit, boundary, query.bookmarkedOnly);
   const oldest = page.items[0];
   response.json({
     ok: true,
@@ -3370,10 +3528,10 @@ app.get("/api/messages/page", (request, response) => {
       chatId: query.chatId,
       order: "ascending",
       items: page.items.map(serializeMessage),
-      total: query.includeTotal ? store.countMessages(query.chatId) : null,
+      total: query.includeTotal ? store.countMessages(query.chatId, query.bookmarkedOnly) : null,
       hasMore: page.hasMore,
       nextCursor: page.hasMore && oldest
-        ? encodePageCursor({ kind: "messages", scope: query.chatId, createdAt: oldest.createdAt, id: oldest.id })
+        ? encodePageCursor({ kind: "messages", scope, createdAt: oldest.createdAt, id: oldest.id })
         : null
     }
   });

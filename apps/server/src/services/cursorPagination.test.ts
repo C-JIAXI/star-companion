@@ -42,6 +42,16 @@ describe("stable cursor pagination", () => {
     const located = await locateMessagePage({ chatId, messageId: ids[2], radius: 5 });
     assert.equal(located.items.some((item) => item.id === ids[2]), true);
     assert.equal(located.index, 1);
+
+    await prisma.message.updateMany({ where: { id: { in: ids.slice(1) } }, data: { isBookmarked: true } });
+    const bookmarkedFirst = await listMessagePage({ chatId, limit: 2, includeTotal: true, bookmarkedOnly: true });
+    const bookmarkedSecond = await listMessagePage({ chatId, limit: 2, cursor: bookmarkedFirst.nextCursor!, includeTotal: false, bookmarkedOnly: true });
+    assert.equal(bookmarkedFirst.total, 4);
+    assert.equal(bookmarkedFirst.items.some((item) => bookmarkedSecond.items.some((other) => other.id === item.id)), false);
+    await assert.rejects(
+      () => listMessagePage({ chatId, limit: 2, cursor: first.nextCursor!, includeTotal: false, bookmarkedOnly: true }),
+      (error) => error instanceof HttpError && error.status === 400
+    );
   });
 
   it("keeps chat and literal special-character search cursors stable", async () => {
@@ -59,6 +69,11 @@ describe("stable cursor pagination", () => {
     await prisma.message.create({ data: { id: `perf-cursor-message-${runId}-special`, chatId, role: "user", content: "literal %_ query", createdAt: sameUpdatedAt } });
     const literal = await searchMessagesPage({ query: "%_", chatId, limit: 2 });
     assert.equal(literal.total, 1); assert.equal(literal.results[0]?.message.id.endsWith("-special"), true);
+    const indexed = await searchMessagesPage({ query: "literal", chatId, limit: 2 });
+    assert.equal(indexed.total, 1);
+    await prisma.message.update({ where: { id: `perf-cursor-message-${runId}-special` }, data: { content: "replacement trigram content" } });
+    assert.equal((await searchMessagesPage({ query: "literal", chatId, limit: 2 })).total, 0);
+    assert.equal((await searchMessagesPage({ query: "trigram", chatId, limit: 2 })).total, 1);
   });
 
   it("pages same-timestamp memories without loading embedding vectors or duplicating rows", async () => {

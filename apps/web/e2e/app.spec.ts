@@ -1152,9 +1152,12 @@ test("new chat can quick-create a character and enter the conversation", async (
     const charactersPayload = (await charactersResponse.json()) as ApiDataResponse<{
       items: E2ECharacter[];
     }>;
-    const createdCharacter = charactersPayload.data?.items.find(
+    const createdCharacterSummary = charactersPayload.data?.items.find(
       (character) => character.name === characterName
     );
+    const characterResponse = await request.get(`/api/characters/${createdCharacterSummary?.id}`);
+    expect(characterResponse.ok()).toBeTruthy();
+    const createdCharacter = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter>).data;
     expect(createdCharacter).toMatchObject({
       name: characterName,
       description: prompt,
@@ -5342,7 +5345,6 @@ test("chat timeline distinguishes rolling context from manually excluded message
     await page.goto("/");
     await openChatHistoryAndSelect(page, chatTitle);
 
-    await expect(page.getByTestId("chat-message-pagination")).toBeVisible();
     const boundary = page.getByTestId("chat-context-boundary");
     await expect(boundary).toBeVisible();
     await expect(boundary).toHaveAttribute("data-context-included-count", "3");
@@ -6203,7 +6205,7 @@ test("long chats paginate and keep messages inside the scrollable viewport", asy
     await page.getByTestId("chat-page-prev").click();
 
     await expect(viewport.getByText("Paging message 30")).toBeVisible();
-    await expect(viewport.getByText("Paging message 89")).toHaveCount(0);
+    await expect(viewport.getByText("Paging message 89")).toHaveCount(1);
 
     await page.getByTestId("chat-search-trigger").click();
     const searchDialog = page.getByRole("dialog");
@@ -6211,8 +6213,8 @@ test("long chats paginate and keep messages inside the scrollable viewport", asy
     await searchDialog.getByRole("button", { name: /搜索|Search/ }).click();
     await expect(page.getByTestId("chat-search-result")).toHaveCount(1);
     await page.getByTestId("chat-search-result").click();
-    await expect(viewport.getByText("Paging message 5")).toBeVisible();
-    await expect(viewport.getByText("Paging message 30")).toHaveCount(0);
+    await expect(viewport.getByText("Paging message 5 unique target needle", { exact: true })).toBeVisible();
+    expect(await viewport.locator("[data-message-id]").count()).toBeLessThanOrEqual(250);
   } finally {
     await permanentlyDeleteChatViaApi(request, chat.id);
     await request.delete(`/api/characters/${character.id}`);

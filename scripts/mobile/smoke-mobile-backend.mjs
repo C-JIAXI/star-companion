@@ -329,7 +329,7 @@ try {
   const appInfo = await request("/api/app/info");
   assert.match(appInfo.appVersion, /^\d+\.\d+\.\d+/);
   assert.equal(appInfo.platform, "android");
-  assert.equal(appInfo.schemaVersion, "003_cursor_pagination");
+  assert.equal(appInfo.schemaVersion, "005_message_search");
   assert.equal(appInfo.migration.status, "ready");
   assert.equal("apiKey" in appInfo, false);
 
@@ -901,6 +901,11 @@ try {
   });
   assert.equal(excludedUserMessage.contextIncluded, false);
   assert.equal(excludedUserMessage.isBookmarked, true);
+  const bookmarkPage = await request(`/api/messages/page?${new URLSearchParams({
+    chatId: chat.id, limit: "1", includeTotal: "true", bookmarkedOnly: "true"
+  }).toString()}`);
+  assert.equal(bookmarkPage.total, 1);
+  assert.equal(bookmarkPage.items[0]?.id, generatedUserMessage.id);
 
   const globalMessageSearch = await request(
     `/api/chats/message-search?${new URLSearchParams({ q: "blue doors", limit: "5" }).toString()}`
@@ -1001,6 +1006,17 @@ try {
   assert.ok(reindexedMemories.length >= 1);
   assert.ok(reindexedMemories.filter((memory) => !memory.deletedAt && memory.enabled).every((memory) => memory.embeddingStatus === "ready"));
   assert.ok(reindexedMemories.filter((memory) => !memory.deletedAt && memory.enabled).every((memory) => memory.embeddingModel === "openai-compatible:fake-mobile-embedding" && memory.embeddingUpdatedAt));
+
+  let embeddingJob = await request(`/api/chats/${chat.id}/memories/reindex-jobs`, {
+    method: "POST"
+  });
+  for (let attempt = 0; attempt < 100 && ["queued", "running"].includes(embeddingJob.state); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    embeddingJob = await request(`/api/chats/${chat.id}/memories/reindex-jobs/${embeddingJob.id}`);
+  }
+  assert.equal(embeddingJob.state, "completed");
+  assert.equal(embeddingJob.completed, embeddingJob.total);
+  assert.equal("content" in embeddingJob, false);
 
   const semanticMemory = await request(`/api/chats/${chat.id}/memories`, {
     method: "POST",

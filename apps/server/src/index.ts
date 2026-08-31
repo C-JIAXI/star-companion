@@ -24,6 +24,7 @@ import { isPrivacyLocked, lockPrivacy, unlockPrivacy } from "./services/privacyL
 import { cancelActiveStorageScan, registerStorageMutation } from "./services/storageHealth.js";
 import { buildPromptContext } from "./services/promptBuilder.js";
 import { runAutomaticLanSync } from "./services/lanAutoSync.js";
+import { cancelAllMemoryEmbeddingJobs } from "./services/memoryEmbeddingJobs.js";
 
 const APP_NAME = "Star Companion";
 const app = express();
@@ -36,7 +37,10 @@ app.use(
     credentials: true
   })
 );
-app.use(express.json({ limit: "25mb" }));
+// Full local backups and LAN sync envelopes can legitimately exceed ordinary API payloads
+// at the documented Large profile. Zod validation and storage-capacity checks still run
+// before any write, and third-party model payloads remain constructed server-side.
+app.use(express.json({ limit: "256mb" }));
 
 app.get("/api/health", async (_request, response, next) => {
   try {
@@ -85,6 +89,7 @@ app.post("/api/privacy/lock", (request, response) => {
   }
   closeWebSocketsForPrivacy();
   cancelActiveStorageScan();
+  cancelAllMemoryEmbeddingJobs();
   clearMediaThumbnailCache();
   response.json({ ok: true, data: { locked: true } });
 });

@@ -23,20 +23,49 @@ export const searchMessagesPage = async ({ query, limit, cursor, chatId }: { que
   if (decoded && !decoded.createdAt) throw new HttpError(400, "The search cursor is incomplete.");
   const boundary = decoded?.createdAt ? new Date(decoded.createdAt) : null;
   const chatPredicate = chatId ? Prisma.sql`m.chatId = ${chatId}` : Prisma.sql`c.deletedAt IS NULL`;
+  const indexedChatPredicate = chatId ? Prisma.sql`search.chatId = ${chatId}` : Prisma.sql`c.deletedAt IS NULL`;
   const cursorPredicate = boundary
     ? Prisma.sql`AND (m.createdAt < ${boundary} OR (m.createdAt = ${boundary} AND m.id < ${decoded!.id}))`
     : Prisma.empty;
-  const rows = await prisma.$queryRaw<SearchRow[]>(Prisma.sql`
-    SELECT m.id, m.chatId, m.createdAt,
-      (SELECT COUNT(*) FROM Message AS prior INDEXED BY Message_chatId_createdAt_id_idx WHERE prior.chatId = m.chatId AND (prior.createdAt < m.createdAt OR (prior.createdAt = m.createdAt AND prior.id < m.id))) AS messageIndex
-    FROM Message AS m INDEXED BY Message_createdAt_id_idx JOIN Chat c ON c.id = m.chatId
-    WHERE ${chatPredicate} AND instr(lower(m.content), lower(${query})) > 0 ${cursorPredicate}
-    ORDER BY m.createdAt DESC, m.id DESC LIMIT ${limit + 1}
-  `);
-  const totalRows = await prisma.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
-    SELECT COUNT(*) AS count FROM Message AS m NOT INDEXED JOIN Chat c ON c.id = m.chatId
-    WHERE ${chatPredicate} AND instr(lower(m.content), lower(${query})) > 0
-  `);
+  const useTrigramIndex = [...query].length >= 3;
+  const trigramQuery = `"${query.replaceAll('"', '""')}"`;
+  const indexedOverflow = useTrigramIndex
+    ? await prisma.$queryRaw<Array<{ overflow: bigint }>>(Prisma.sql`
+        SELECT EXISTS(
+          SELECT 1 FROM MessageSearch AS search
+          JOIN Chat c ON c.id = search.chatId
+          WHERE ${indexedChatPredicate} AND search.content MATCH ${trigramQuery}
+          LIMIT 1 OFFSET 5000
+        ) AS overflow
+      `)
+    : [];
+  const useTrigramRows = useTrigramIndex && Number(indexedOverflow[0]?.overflow ?? 0) === 0;
+  const totalRows = useTrigramRows
+    ? await prisma.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+        SELECT COUNT(*) AS count FROM MessageSearch AS search
+        JOIN Chat c ON c.id = search.chatId
+        WHERE ${indexedChatPredicate} AND search.content MATCH ${trigramQuery}
+      `)
+    : await prisma.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+        SELECT COUNT(*) AS count FROM Message AS m NOT INDEXED JOIN Chat c ON c.id = m.chatId
+        WHERE ${chatPredicate} AND instr(lower(m.content), lower(${query})) > 0
+      `);
+  const total = Number(totalRows[0]?.count ?? 0);
+  const rows = useTrigramRows
+    ? await prisma.$queryRaw<SearchRow[]>(Prisma.sql`
+        SELECT m.id, m.chatId, m.createdAt,
+          (SELECT COUNT(*) FROM Message AS prior INDEXED BY Message_chatId_createdAt_id_idx WHERE prior.chatId = m.chatId AND (prior.createdAt < m.createdAt OR (prior.createdAt = m.createdAt AND prior.id < m.id))) AS messageIndex
+        FROM MessageSearch AS search JOIN Message AS m ON m.id = search.messageId JOIN Chat c ON c.id = m.chatId
+        WHERE ${chatPredicate} AND search.content MATCH ${trigramQuery} ${cursorPredicate}
+        ORDER BY m.createdAt DESC, m.id DESC LIMIT ${limit + 1}
+      `)
+    : await prisma.$queryRaw<SearchRow[]>(Prisma.sql`
+        SELECT m.id, m.chatId, m.createdAt,
+          (SELECT COUNT(*) FROM Message AS prior INDEXED BY Message_chatId_createdAt_id_idx WHERE prior.chatId = m.chatId AND (prior.createdAt < m.createdAt OR (prior.createdAt = m.createdAt AND prior.id < m.id))) AS messageIndex
+        FROM Message AS m INDEXED BY Message_createdAt_id_idx JOIN Chat c ON c.id = m.chatId
+        WHERE ${chatPredicate} AND instr(lower(m.content), lower(${query})) > 0 ${cursorPredicate}
+        ORDER BY m.createdAt DESC, m.id DESC LIMIT ${limit + 1}
+      `);
   const hasMore = rows.length > limit; const pageRows = rows.slice(0, limit);
   const records = pageRows.length ? await prisma.message.findMany({ where: { id: { in: pageRows.map((row) => row.id) } }, include: { ...messageIncludeAttachments, ...(!chatId ? { chat: { select: { id: true, title: true, characterId: true, isArchived: true } } } : {}) } }) : [];
   const byId = new Map(records.map((record) => [record.id, record]));
@@ -45,5 +74,5 @@ export const searchMessagesPage = async ({ query, limit, cursor, chatId }: { que
     return [{ ...(!chatId && "chat" in message ? { chat: message.chat } : {}), message: serializeMessage(message), index: Number(row.messageIndex), snippet: snippet(message.content, query) }];
   });
   const last = pageRows.at(-1);
-  return { query, total: Number(totalRows[0]?.count ?? 0), results, hasMore, nextCursor: hasMore && last ? encodeCursor({ version: 1, kind: "message-search", scope, createdAt: new Date(last.createdAt).toISOString(), id: last.id }) : null };
+  return { query, total, results, hasMore, nextCursor: hasMore && last ? encodeCursor({ version: 1, kind: "message-search", scope, createdAt: new Date(last.createdAt).toISOString(), id: last.id }) : null };
 };

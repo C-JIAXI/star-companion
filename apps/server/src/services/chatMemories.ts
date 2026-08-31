@@ -18,6 +18,11 @@ const EMBEDDING_BATCH_SIZE = 64;
 const SEMANTIC_SIMILARITY_THRESHOLD = 0.25;
 const embeddingRefreshes = new Map<string, Promise<EmbeddingIndex | null>>();
 
+export type MemoryEmbeddingProgress = {
+  completed: number;
+  total: number;
+};
+
 type EmbeddingIndex = {
   settings: UserSettings;
   source: string;
@@ -180,7 +185,11 @@ export const getConfiguredMemoryEmbeddingSource = (settings: UserSettings) =>
 const ensureMemoryEmbeddings = async (
   memories: ChatMemory[],
   settings: UserSettings,
-  force = false
+  force = false,
+  options: {
+    signal?: AbortSignal;
+    onProgress?: (progress: MemoryEmbeddingProgress) => void;
+  } = {}
 ) => {
   let embeddingSettings: UserSettings;
   try {
@@ -207,34 +216,44 @@ const ensureMemoryEmbeddings = async (
     return true;
   });
   const pendingIds = new Set(stale.map((memory) => memory.id));
+  options.onProgress?.({ completed: 0, total: stale.length });
 
   try {
     for (let start = 0; start < stale.length; start += EMBEDDING_BATCH_SIZE) {
+      if (options.signal?.aborted) return null;
       const batch = stale.slice(start, start + EMBEDDING_BATCH_SIZE);
       const result = await generateEmbeddings({
         settings: embeddingSettings,
         inputs: batch.map(toMemoryEmbeddingText),
         task: "document"
       });
+      if (options.signal?.aborted) return null;
       const updatedAt = new Date();
+
+      await prisma.$transaction(
+        batch.map((memory, index) => {
+          const vector = result.vectors[index];
+          return prisma.chatMemory.update({
+            where: { id: memory.id },
+            data: {
+              embedding: vector as Prisma.InputJsonValue,
+              embeddingModel,
+              embeddingSource,
+              embeddingDimensions: vector.length,
+              embeddingStatus: "ready",
+              embeddingUpdatedAt: updatedAt
+            }
+          });
+        })
+      );
 
       for (let index = 0; index < batch.length; index += 1) {
         const memory = batch[index];
         const vector = result.vectors[index];
         vectors.set(memory.id, vector);
-        await prisma.chatMemory.update({
-          where: { id: memory.id },
-          data: {
-            embedding: vector as Prisma.InputJsonValue,
-            embeddingModel,
-            embeddingSource,
-            embeddingDimensions: vector.length,
-            embeddingStatus: "ready",
-            embeddingUpdatedAt: updatedAt
-          }
-        });
         pendingIds.delete(memory.id);
       }
+      options.onProgress?.({ completed: Math.min(start + batch.length, stale.length), total: stale.length });
     }
 
     const dimensions = vectors.values().next().value?.length;
@@ -243,6 +262,7 @@ const ensureMemoryEmbeddings = async (
     }
     return { settings: embeddingSettings, source: embeddingSource, dimensions, vectors };
   } catch {
+    if (options.signal?.aborted) return null;
     if (pendingIds.size) {
       await prisma.chatMemory.updateMany({
         where: { id: { in: [...pendingIds] } },
@@ -256,11 +276,15 @@ const ensureMemoryEmbeddings = async (
 export const refreshChatMemoryEmbeddings = async ({
   chatId,
   settings,
-  force = false
+  force = false,
+  signal,
+  onProgress
 }: {
   chatId: string;
   settings: UserSettings;
   force?: boolean;
+  signal?: AbortSignal;
+  onProgress?: (progress: MemoryEmbeddingProgress) => void;
 }) => {
   const existing = embeddingRefreshes.get(chatId);
   if (existing) {
@@ -272,7 +296,7 @@ export const refreshChatMemoryEmbeddings = async ({
       where: { chatId, enabled: true, deletedAt: null },
       orderBy: { updatedAt: "desc" }
     });
-    return ensureMemoryEmbeddings(memories, settings, force);
+    return ensureMemoryEmbeddings(memories, settings, force, { signal, onProgress });
   })().finally(() => embeddingRefreshes.delete(chatId));
   embeddingRefreshes.set(chatId, refresh);
   return refresh;

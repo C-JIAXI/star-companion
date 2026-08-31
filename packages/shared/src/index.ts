@@ -1125,6 +1125,32 @@ export interface ChatMemoryDTO {
 
 export type ChatMemoryPageDTO = CursorPageDTO<ChatMemoryDTO>;
 
+export type MemoryEmbeddingJobState =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface MemoryEmbeddingJobStatusDTO {
+  id: string;
+  chatId: string;
+  state: MemoryEmbeddingJobState;
+  total: number;
+  completed: number;
+  failed: number;
+  createdAt: string;
+  updatedAt: string;
+  errorCode: "embedding_rebuild_failed" | null;
+}
+
+export interface MemoryIndexSummaryDTO {
+  total: number;
+  ready: number;
+  stale: number;
+  failed: number;
+}
+
 export interface MessageAttachmentDTO {
   id: string;
   assetId: string;

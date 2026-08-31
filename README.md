@@ -42,6 +42,8 @@ Current scope:
 - Continue the latest assistant reply in place when a response is truncated or the scene needs to carry on; continuation keeps the current message and variant instead of creating a fake user turn.
 - Generate a concise AI title draft from included chat messages, then review and save it explicitly; title suggestions never overwrite chat history automatically.
 - Default `New Chat` conversations receive one automatic AI title after the first user/assistant exchange; manually named chats are never overwritten.
+- Large collections use stable, filter-scoped pagination. A chat opens with the latest 50 messages and keeps at most 250 rendered turns while older pages preserve the visible anchor; bookmarks and memory panels page independently. Vector-index rebuilds run in cancellable 64-item batches with content-free progress, and timeline images use protected lazy thumbnails before loading an original preview.
+- Optional automatic LAN sync can pull-and-merge from the last successfully used peer at startup. It always performs the ordinary read-only preview first and writes only when the preview is valid and conflict-free; conflicts pause for manual review, replace mode is never automatic, and API keys remain device-local.
 
 ## Local Development
 
@@ -65,6 +67,8 @@ Settings → Model configuration diagnostics validates saved configuration witho
 
 Automated server contracts and the desktop/mobile API smoke suites use loopback mock providers. They do not contact paid model services and never require real API keys, real chat content, or image fixtures containing user data.
 
+Deterministic Small, Medium, Large, and Mobile-large performance fixtures and repeatable server/browser/mobile benchmarks are documented in [Performance and scale verification](docs/performance.md). The scripts accept only explicit temporary data paths, capture p50/p95/max latency and memory evidence, and provide report and like-for-like regression comparison commands.
+
 Common safe codes include `configuration_incomplete`, `invalid_url`, `connection_failed`, `tls_failed`, `timeout`, `authentication`, `permission_denied`, `model_not_found`, `unsupported_capability`, `rate_limited`, `quota_exceeded`, `budget_blocked`, `cancelled`, `provider_unavailable`, and `malformed_response`. Fix URL/key/model/capability errors in Provider Management, budget errors in Usage & Budgets, and transient failures by retrying the explicit connection check. Local unauthenticated services may use localhost, loopback, RFC1918, or `.local` HTTP(S) endpoints; other URLs still require safe HTTP(S) syntax and cannot embed credentials, secret query parameters, or fragments. A plain text chat needs text-generation capability; image attachment additionally requires `vision_input`. Local estimates and diagnostics are not provider billing records or an official provider status page.
 
 ## Data protection and recoverable sync
@@ -72,6 +76,8 @@ Common safe codes include `configuration_incomplete`, `invalid_url`, `connection
 Backup import and LAN pull/push use a two-phase preview/execute contract. Preflight validates schemaVersion 1, ISO dates, duplicate IDs, and character–chat–message–memory references without writing data. The preview reports additions, updates, skips, conflicts, invalid records, and replace-mode deletions. Merge never overwrites a different record with the same ID until every conflict has an explicit keep-existing, use-incoming, or skip choice. Replace remains a separately confirmed danger operation.
 
 Before an import overwrites or deletes existing data, the backend stores a local recovery point containing characters, chats, messages, long-term memories, and non-key settings. Recovery points are transactionally restorable, capped at 10, and pruned after 30 days. A restore creates its own pre-restore safety point, and a failed restore leaves the current dataset unchanged. API keys are excluded from backup, recovery-transfer, and LAN-sync payloads; provider keys already stored on a target device are preserved.
+
+Large schemaVersion 1 backup/sync JSON bodies are accepted up to 256 MB on desktop and mobile, while record/media validation and free-space checks still apply. Peer export/preview may run for up to three minutes and execute for up to ten minutes. A deterministic 200,000-message server fixture verified a 156 MB replace preview, automatic recovery point, transactional replace, safety point, and exact restore; these operations can take several minutes and temporarily use substantial memory, so keep the app open. Measured evidence and reproducible commands are in [Performance and scale verification](docs/performance.md).
 
 Assistant messages keep a compact generation summary with the actual provider/model, token usage, local cost estimate, fallback state, and incomplete state. That summary follows the message through schemaVersion 1 backups, LAN sync, and structured chat archives. The global `ModelRequest`/`ModelUsageAttempt` ledger and active budget reservations remain device-local and are excluded from those payloads. Clearing the local ledger requires confirmation and does not remove messages or change the provider's bill.
 
