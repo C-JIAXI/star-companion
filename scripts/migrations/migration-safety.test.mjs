@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -107,7 +108,7 @@ test("the bundled Prisma SQL catalog initializes a fresh desktop database determ
     appVersion: "1.0.2"
   });
   assert.equal(report.appliedMigrations.length > 20, true);
-  assert.equal(report.schemaVersion, "20260812000200_add_memory_history");
+  assert.equal(report.schemaVersion, "20260813000300_add_appearance_preferences");
   const db = open(databasePath);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='RecoveryPoint'").get().count, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='ModelRequest'").get().count, 1);
@@ -115,6 +116,44 @@ test("the bundled Prisma SQL catalog initializes a fresh desktop database determ
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='MemoryRevision'").get().count, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='MemoryOperation'").get().count, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='ProfileSummaryRevision'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('UserSettings') WHERE name='appearancePreferences'").get().count, 1);
   db.close();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("the development bootstrap upgrades an existing database instead of silently skipping it", () => {
+  const root = makeWorkspace();
+  const databasePath = path.join(root, "dev.db");
+  const recoveryDirectory = path.join(root, "upgrade-recovery");
+  const migrationsDirectory = writeCatalog(root, 2);
+  const firstMigrationOnly = writeCatalog(root, 1);
+  runProtectedMigrations({
+    databasePath,
+    migrationsDirectory: firstMigrationOnly,
+    recoveryDirectory,
+    appVersion: "1.0.0"
+  });
+  let db = open(databasePath);
+  db.prepare('INSERT INTO "Example" (id, value) VALUES (?, ?)').run("preserved", "safe");
+  db.close();
+
+  const result = spawnSync(process.execPath, [path.resolve("scripts/dev/ensure-dev-db.mjs")], {
+    cwd: path.resolve("."),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      STAR_COMPANION_DEV_DATABASE_PATH: databasePath,
+      STAR_COMPANION_DEV_MIGRATIONS_PATH: migrationsDirectory,
+      STAR_COMPANION_DEV_RECOVERY_PATH: recoveryDirectory
+    }
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+  db = open(databasePath);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('Example') WHERE name='createdAt'").get().count, 1);
+  assert.equal(db.prepare('SELECT value FROM "Example" WHERE id=?').get("preserved").value, "safe");
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM "_prisma_migrations"').get().count, 2);
+  db.close();
+  assert.ok(fs.readdirSync(recoveryDirectory).some((name) => name.endsWith(".db")));
   fs.rmSync(root, { recursive: true, force: true });
 });

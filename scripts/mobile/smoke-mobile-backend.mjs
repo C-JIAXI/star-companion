@@ -413,6 +413,23 @@ try {
   assert.equal("key" in savedModelSettings.providers[0], false);
   assert.equal(savedModelSettings.providers[0]?.hasKey, true);
 
+  const mobileReadinessBeforeCharacters = await request("/api/readiness");
+  assert.equal(mobileReadinessBeforeCharacters.serverReachable, true);
+  assert.equal(mobileReadinessBeforeCharacters.configurationValid, true);
+  assert.equal(mobileReadinessBeforeCharacters.hasCharacter, false);
+  assert.equal(mobileReadinessBeforeCharacters.connectionStatus.status, "untested");
+  assert.equal("apiKey" in mobileReadinessBeforeCharacters, false);
+  const mobileMetadataRequestCount = fakeModelServer.getChatCompletionRequests();
+  const mobileMetadataTest = await request("/api/readiness/connection-tests", {
+    method: "POST",
+    body: { mode: "metadata" }
+  });
+  assert.equal(mobileMetadataTest.status, "succeeded");
+  assert.equal(mobileMetadataTest.mode, "metadata");
+  assert.equal(mobileMetadataTest.mayIncurCost, false);
+  assert.equal(fakeModelServer.getChatCompletionRequests(), mobileMetadataRequestCount);
+  assert.equal((await request("/api/readiness")).connectionStatus.status, "succeeded");
+
   const switchedModelSettings = await request("/api/settings", {
     method: "PUT",
     body: {
@@ -1196,6 +1213,11 @@ try {
 
   assert.equal((await request("/api/privacy/status")).locked, false);
   assert.equal((await request("/api/privacy/lock", { method: "POST", body: { passcode: "2468" } })).locked, true);
+  const lockedReadinessResponse = await fetch(`http://127.0.0.1:${port}/api/readiness`);
+  assert.equal(lockedReadinessResponse.status, 423);
+  assert.equal("data" in await lockedReadinessResponse.json(), false);
+  const lockedStorageResponse = await fetch(`http://127.0.0.1:${port}/api/storage-health/summary`);
+  assert.equal(lockedStorageResponse.status, 423);
   const lockedMediaResponse = await fetch(`http://127.0.0.1:${port}${imageMessage.attachments[0].url}`);
   assert.equal(lockedMediaResponse.status, 423);
   assert.doesNotMatch(await lockedMediaResponse.text(), /iVBOR|mobile-smoke/i);
@@ -1208,6 +1230,22 @@ try {
   assert.equal(failedUnlockResponse.status, 401);
   assert.doesNotMatch(await failedUnlockResponse.text(), /blue doors|user likes/i);
   assert.equal((await request("/api/privacy/unlock", { method: "POST", body: { passcode: "2468" } })).locked, false);
+
+  const storageSummary = await request("/api/storage-health/summary");
+  assert.equal(storageSummary.platform, "android");
+  assert.equal(storageSummary.capabilities.vacuum, false);
+  assert.ok(storageSummary.categories.some((entry) => entry.id === "media_orphans"));
+  assert.equal(JSON.stringify(storageSummary).includes(dataDir), false);
+  let deepScan = await request("/api/storage-health/deep-scans", { method: "POST" });
+  for (let attempt = 0; attempt < 100 && deepScan.state === "running"; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    deepScan = await request(`/api/storage-health/deep-scans/${deepScan.id}`);
+  }
+  assert.equal(deepScan.state, "completed");
+  const unsupportedPlan = await request("/api/storage-health/cleanup-plans", { method: "POST", body: { actions: ["vacuum_database"] } });
+  assert.equal(unsupportedPlan.items[0].supported, false);
+  const unsupportedResult = await request(`/api/storage-health/cleanup-plans/${unsupportedPlan.id}/execute`, { method: "POST", body: { confirm: "EXECUTE_STORAGE_CLEANUP" } });
+  assert.equal(unsupportedResult.items[0].errorCode, "unsupported_on_mobile");
 
   const recoveryBeforePreview = await request("/api/backups/recovery-points");
   const replacePreview = await request("/api/backups/preview", {

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { createHash } from "node:crypto";
 import { asyncHandler, parseBody } from "../lib/http.js";
 import {
   attachmentDraftIdSchema,
@@ -23,6 +24,7 @@ import {
 import { generateImage, createSpeechAudio, transcribeAudio } from "../services/media.js";
 import { resolveModuleSettings } from "../services/moduleModels.js";
 import { getOrCreateSettings } from "./settings.js";
+import { validateStoredImage } from "../services/imageNormalization.js";
 
 export const mediaRouter = Router();
 
@@ -85,15 +87,20 @@ mediaRouter.get(
   asyncHandler(async (request, response) => {
     const asset = await prisma.mediaAsset.findFirst({
       where: { id: requireParam(request, "assetId"), attachments: { some: {} } },
-      select: { mimeType: true, data: true, contentHash: true }
+      select: { mimeType: true, data: true, contentHash: true, byteSize: true, width: true, height: true }
     });
     if (!asset) throw new HttpError(404, "Image not found.");
+    const data = Buffer.from(asset.data);
+    try {
+      if (data.length !== asset.byteSize || createHash("sha256").update(data).digest("hex") !== asset.contentHash) throw new Error("mismatch");
+      validateStoredImage({ data, mimeType: asset.mimeType as "image/png" | "image/jpeg", width: asset.width, height: asset.height });
+    } catch { throw new HttpError(410, "Image unavailable."); }
     response.setHeader("Content-Type", asset.mimeType);
     response.setHeader("Cache-Control", "private, no-store");
     response.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("ETag", `\"sha256-${asset.contentHash}\"`);
-    response.send(Buffer.from(asset.data));
+    response.send(data);
   })
 );
 

@@ -2,6 +2,7 @@ import { Prisma, type UserSettings } from "@prisma/client";
 import { createHash } from "node:crypto";
 import type { z } from "zod";
 import { prisma } from "../db.js";
+import { assertStorageCapacity } from "./storageHealth.js";
 import { HttpError } from "../lib/http.js";
 import type { backupExecuteSchema, backupPreviewRequestSchema } from "../schemas.js";
 import { backupImportSchema } from "../schemas.js";
@@ -592,8 +593,9 @@ const applyBackup = async (
   };
 };
 
-export const importBackup = async (input: BackupExecuteInput) =>
-  prisma.$transaction(async (tx) => {
+export const importBackup = async (input: BackupExecuteInput) => {
+  await assertStorageCapacity(Buffer.byteLength(JSON.stringify(input)));
+  return prisma.$transaction(async (tx) => {
     const current = await readBackup(tx);
     const analysis = analyzeBackupCandidate(input as BackupExecuteInput & { mode: BackupMode }, current);
     const resolutions = resolutionMap(input);
@@ -609,6 +611,7 @@ export const importBackup = async (input: BackupExecuteInput) =>
       completedAt: new Date().toISOString()
     };
   });
+};
 
 export const restoreRecoveryPoint = async (id: string) =>
   prisma.$transaction(async (tx) => {

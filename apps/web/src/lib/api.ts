@@ -61,6 +61,8 @@ import type {
   VoiceTranscriptionRequestDTO,
   PaginatedCharactersDTO,
   PublicUserSettingsDTO,
+  ReadinessDTO,
+  ConnectionDiagnosticDTO,
   RecoveryPointDTO,
   RecoveryPointRestoreResultDTO,
   AppInfoDTO,
@@ -104,7 +106,7 @@ const getFallbackErrorMessage = (response: Response) =>
     ? `Request failed: ${response.status} ${response.statusText}`
     : `Request failed: ${response.status}`;
 
-const request = async <T>(path: string, options: RequestOptions = {}): Promise<T> => {
+export const request = async <T>(path: string, options: RequestOptions = {}): Promise<T> => {
   const response = await fetchWithStartupRetry(resolveApiUrl(path), {
     method: options.method ?? "GET",
     headers: options.body ? { "Content-Type": "application/json" } : undefined,
@@ -159,6 +161,23 @@ export const api = {
   },
   app: {
     info: () => request<AppInfoDTO>("/api/app/info")
+  },
+  readiness: {
+    get: () => request<ReadinessDTO>("/api/readiness"),
+    testConnection: (
+      mode: "metadata" | "inference" = "metadata",
+      confirmCost = false,
+      signal?: AbortSignal
+    ) => request<ConnectionDiagnosticDTO>("/api/readiness/connection-tests", {
+      method: "POST",
+      body: { mode, confirmCost },
+      signal
+    }),
+    cancelConnectionTest: (testId: string) =>
+      request<{ cancelled: boolean; testId: string }>(
+        `/api/readiness/connection-tests/${encodeURIComponent(testId)}`,
+        { method: "DELETE" }
+      )
   },
   characters: {
     list: () => request<CharacterDTO[]>("/api/characters"),

@@ -971,3 +971,27 @@ export const lanSyncRequestSchema = z.object({
   previewId: z.string().min(16).max(128).optional(),
   conflictResolutions: z.array(backupConflictResolutionSchema).max(20_000).default([])
 });
+
+export const storageCleanupActionSchema = z.enum([
+  "expired_drafts",
+  "orphan_media",
+  "clear_embeddings",
+  "expired_recovery_points",
+  "old_upgrade_recovery",
+  "usage_ledger",
+  "app_temp_cache",
+  "rebuild_database_indexes",
+  "vacuum_database"
+]);
+
+export const storageCleanupPlanRequestSchema = z.object({
+  actions: z.array(storageCleanupActionSchema).min(1).max(9).transform((actions) => [...new Set(actions)])
+}).strict().superRefine((value, context) => {
+  if (value.actions.includes("vacuum_database") && value.actions.length > 1) {
+    context.addIssue({ code: "custom", path: ["actions"], message: "Database compaction must be previewed and executed as a separate operation." });
+  }
+});
+
+export const storageCleanupExecuteSchema = z.object({
+  confirm: z.literal("EXECUTE_STORAGE_CLEANUP")
+}).strict();

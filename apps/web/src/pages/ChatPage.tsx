@@ -341,6 +341,8 @@ export function ChatPage({
   const showMessageAvatars = useAppStore((state) => state.showMessageAvatars);
   const showMessageTimestamps = useAppStore((state) => state.showMessageTimestamps);
   const characterStyle = useAppStore((state) => state.appearancePreferences.characterStyle);
+  const readiness = useAppStore((state) => state.readiness);
+  const refreshReadiness = useAppStore((state) => state.refreshReadiness);
   const [characters, setCharacters] = useState<CharacterDTO[]>([]);
   const [activeChat, setActiveChat] = useState<ChatWithMessagesDTO | null>(null);
   const [draft, setDraft] = useState("");
@@ -418,6 +420,7 @@ export function ChatPage({
   const [characterTotal, setCharacterTotal] = useState<number | null>(null);
   const [expandedDialogProviderId, setExpandedDialogProviderId] = useState<string | null>(null);
   const [runtimeSettings, setRuntimeSettings] = useState<PublicUserSettingsDTO | null>(null);
+
   const [autoSummarizeUser, setAutoSummarizeUser] = useState(true);
   const [showUserConfigDialog, setShowUserConfigDialog] = useState(false);
   const [showUserProfileDialog, setShowUserProfileDialog] = useState(false);
@@ -430,6 +433,10 @@ export function ChatPage({
   const [transcriptIncludeTimestamps, setTranscriptIncludeTimestamps] = useState(true);
   const [transcriptExportedAt, setTranscriptExportedAt] = useState(() => new Date().toISOString());
   const [showReadinessDialog, setShowReadinessDialog] = useState(false);
+
+  useEffect(() => {
+    if (showReadinessDialog) void refreshReadiness();
+  }, [refreshReadiness, showReadinessDialog]);
   const [showContextBudgetDialog, setShowContextBudgetDialog] = useState(false);
   const [showStoryNavigator, setShowStoryNavigator] = useState(false);
   const [storyChats, setStoryChats] = useState<ChatDTO[]>([]);
@@ -794,6 +801,14 @@ export function ChatPage({
       }
 
       if (msg.type === "generation_done" || msg.type === "generation_stopped") {
+        if (msg.type === "generation_done") {
+          try {
+            window.localStorage.setItem("star-companion:onboarding:v1", JSON.stringify({ completed: true, dismissed: true, lastStep: 4 }));
+          } catch {
+            // Completion persistence is best-effort when browser storage is unavailable.
+          }
+          window.dispatchEvent(new Event("star-companion:onboarding-completed"));
+        }
         if (pendingGenerationDraftRef.current?.requestId === msg.requestId) {
           pendingGenerationDraftRef.current = null;
         }
@@ -1152,11 +1167,14 @@ export function ChatPage({
         | "provider"
         | "api-key"
         | "model"
+        | "usage"
         | `module-${AiModuleId}`
     ) => {
       const path =
         section === "chat"
           ? "/"
+          : section === "settings" && settingsFocus === "usage"
+            ? "/settings?section=usage"
           : section === "settings" && settingsFocus
             ? `/settings?section=providers&focus=${settingsFocus}`
             : `/${section}`;
@@ -1177,16 +1195,9 @@ export function ChatPage({
     [activeProviderId, settingsProviders]
   );
 
-  const hasConfiguredProvider = Boolean(
-    activeProviderProfile ||
-      settingsProviders.length > 0 ||
-      (runtimeSettings?.activeProvider.trim() && runtimeSettings.apiBaseUrl.trim())
-  );
-  const hasEffectiveApiKey = hasApiKey || Boolean(activeProviderProfile?.key?.trim());
-  const hasConfiguredModel = Boolean(
-    activeProviderProfile?.models.some((model) => model.id === activeModelId) ||
-      runtimeSettings?.model.trim()
-  );
+  const hasConfiguredProvider = readiness?.hasProvider ?? Boolean(activeProviderProfile || settingsProviders.length > 0 || (runtimeSettings?.activeProvider.trim() && runtimeSettings.apiBaseUrl.trim()));
+  const hasEffectiveApiKey = readiness ? !readiness.issues.some((issue) => issue.code === "api_key_missing") : hasApiKey || Boolean(activeProviderProfile?.key?.trim());
+  const hasConfiguredModel = readiness?.chatModelSupportsText ?? Boolean(activeProviderProfile?.models.some((model) => model.id === activeModelId) || runtimeSettings?.model.trim());
   const canTranscribe = runtimeSettings
     ? hasCompatibleModuleModel(runtimeSettings, "voice_transcription")
     : true;
@@ -1196,7 +1207,7 @@ export function ChatPage({
   const canGenerateImage = runtimeSettings
     ? hasCompatibleModuleModel(runtimeSettings, "image_generation")
     : true;
-  const hasAnyCharacter = (characterTotal ?? characters.length) > 0;
+  const hasAnyCharacter = readiness?.hasAvailableCharacter ?? (characterTotal ?? characters.length) > 0;
   const readinessItems = useMemo<
     {
       id: string;
@@ -1251,6 +1262,28 @@ export function ChatPage({
         detail: activeChat ? t("chat.readinessChatReady") : t("chat.readinessChatMissing"),
         actionLabel: hasAnyCharacter ? t("chat.newChat") : undefined,
         onAction: hasAnyCharacter ? onNewChat : undefined
+      },
+      {
+        id: "connection",
+        ready: readiness?.connectionStatus.status === "succeeded",
+        title: language === "zh-CN" ? "供应商连接" : "Provider connection",
+        detail: readiness?.connectionStatus.status === "succeeded"
+          ? (language === "zh-CN" ? "已显式验证当前保存配置。" : "The current saved configuration was explicitly verified.")
+          : readiness?.connectionStatus.status === "failed"
+            ? (language === "zh-CN" ? `上次检查未通过：${readiness.connectionStatus.errorCode ?? "connection_failed"}` : `The last check failed: ${readiness.connectionStatus.errorCode ?? "connection_failed"}`)
+            : (language === "zh-CN" ? "尚未测试；可在设置中运行通常无推理费的元数据检查。" : "Untested. Run the normally no-inference metadata check in Settings."),
+        actionLabel: t("chat.readinessOpenSettings"),
+        onAction: () => navigateToSection("settings", "provider")
+      },
+      {
+        id: "budget",
+        ready: readiness?.budgetAllowsChat ?? true,
+        title: language === "zh-CN" ? "本机预算护栏" : "Local budget guardrail",
+        detail: readiness?.budgetAllowsChat === false
+          ? (language === "zh-CN" ? "当前硬预算会阻止新的模型调用。" : "The current hard budget blocks new model calls.")
+          : (language === "zh-CN" ? "当前预算允许聊天调用；实际费用仍以供应商账单为准。" : "The current budget allows chat calls; provider billing remains authoritative."),
+        actionLabel: t("chat.readinessOpenSettings"),
+        onAction: () => navigateToSection("settings", "provider")
       }
     ],
     [
@@ -1261,18 +1294,21 @@ export function ChatPage({
       hasConfiguredModel,
       hasConfiguredProvider,
       hasEffectiveApiKey,
+      language,
       navigateToSection,
       onNewChat,
+      readiness,
       t
     ]
   );
   const readinessIssueCount = readinessItems.filter((item) => !item.ready).length;
 
   const ensureChatGenerationReady = () => {
-    if (hasConfiguredProvider && hasConfiguredModel) {
+    if ((readiness?.ready ?? (hasConfiguredProvider && hasConfiguredModel)) && activeChat) {
       return true;
     }
 
+    void refreshReadiness();
     setShowReadinessDialog(true);
     return false;
   };
@@ -4134,8 +4170,11 @@ export function ChatPage({
                         <span className="font-semibold text-slate-100">{modelError.code}</span>
                         <span>{language === "zh-CN" ? `诊断标识 ${modelError.diagnosticId}` : `Diagnostic ${modelError.diagnosticId}`}</span>
                         {modelError.receivedOutputTokens ? <span className="text-amber-200">{language === "zh-CN" ? "未完成回复已保留；可继续或重新生成。" : "The incomplete reply was kept; continue it or regenerate."}</span> : null}
-                        {modelError.code === "authentication" || modelError.code === "model_not_found" || modelError.code === "unsupported_capability" ? <button className="font-semibold text-ember-200 underline" type="button" onClick={() => navigateToSection("settings", "provider")}>{language === "zh-CN" ? "检查模型设置" : "Check model settings"}</button> : null}
+                        {modelError.code === "authentication" || modelError.code === "permission_denied" || modelError.code === "model_not_found" || modelError.code === "unsupported_capability" || modelError.code === "invalid_url" || modelError.code === "tls_failed" || modelError.code === "configuration_incomplete" ? <button className="font-semibold text-ember-200 underline" type="button" onClick={() => navigateToSection("settings", "provider")}>{language === "zh-CN" ? "检查模型设置" : "Check model settings"}</button> : null}
                         {modelError.code === "context_overflow" ? <span>{language === "zh-CN" ? "请缩短本轮输入或降低保留轮数；应用不会自动删除历史。" : "Shorten this input or lower retained turns; the app will not delete history automatically."}</span> : null}
+                        {modelError.code === "budget_blocked" ? <button className="font-semibold text-ember-200 underline" type="button" onClick={() => navigateToSection("settings", "usage")}>{language === "zh-CN" ? "查看预算护栏" : "Review budget guardrails"}</button> : null}
+                        {modelError.retryable ? <button className="font-semibold text-ember-200 underline" type="button" onClick={() => void refreshReadiness()}>{language === "zh-CN" ? "刷新就绪状态" : "Refresh readiness"}</button> : null}
+                        <button className="font-semibold text-ember-200 underline" type="button" onClick={() => void navigator.clipboard.writeText(JSON.stringify({ errorCode: modelError.code, diagnosticId: modelError.diagnosticId, providerKind: modelError.provider, module: "chat", occurredAt: new Date().toISOString(), retryable: modelError.retryable, suggestedAction: modelError.code === "budget_blocked" ? "review_budget" : modelError.retryable ? "retry_connection" : "configure_provider" }))}>{language === "zh-CN" ? "复制安全诊断" : "Copy safe diagnostic"}</button>
                       </div>
                     ) : null}
 
@@ -4882,7 +4921,7 @@ export function ChatPage({
                                   <p className="text-xs font-semibold text-slate-200">{action.title}</p>
                                   <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-slate-400">{action.content}</p>
                                 </div>
-                                <button className="shrink-0 rounded-md bg-ember-500 px-2 py-1 text-xs font-semibold text-ink-950 disabled:cursor-not-allowed disabled:opacity-60" data-testid={`agent-action-${action.id}`} disabled={agentLoading} type="button" onClick={() => {
+                                <button className="shrink-0 rounded-md bg-ember-500 px-2 py-1 text-xs font-semibold text-accentForeground disabled:cursor-not-allowed disabled:opacity-60" data-testid={`agent-action-${action.id}`} disabled={agentLoading} type="button" onClick={() => {
                                   if (action.kind === "reply_draft") {
                                     void applyAgentAction(action);
                                   } else {
@@ -6294,7 +6333,9 @@ export function ChatPage({
 
               {chatMemories.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-white/10 bg-ink-950/25 px-4 py-6 text-center text-sm text-slate-500">
-                  {t("chat.memoryEmpty")}
+                  <p>{t("chat.memoryEmpty")}</p>
+                  <p className="mx-auto mt-2 max-w-lg text-xs leading-5 text-slate-500">{language === "zh-CN" ? "长期记忆只来自你手动保存，或你确认后的记忆整理；模型不会因为一次聊天就自动永久记住。" : "Long-term memories come only from items you save manually or confirm after memory maintenance. A single conversation is not automatically remembered forever."}</p>
+                  <Button className="mt-3" variant="secondary" onClick={() => { setEditingMemory("new"); setMemoryForm(emptyMemoryForm); }}>{language === "zh-CN" ? "手动添加记忆" : "Add a memory manually"}</Button>
                 </div>
               ) : (
                 <div className="max-h-80 space-y-2 overflow-y-auto pr-1">

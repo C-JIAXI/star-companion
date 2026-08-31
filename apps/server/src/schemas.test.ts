@@ -24,6 +24,8 @@ import {
   messageUpdateSchema,
   regenerateRequestSchema,
   settingsUpdateSchema,
+  storageCleanupExecuteSchema,
+  storageCleanupPlanRequestSchema,
   voiceTranscriptionSchema
 } from "./schemas.js";
 
@@ -52,6 +54,15 @@ describe("chatAgentDraftSchema", () => {
         focus: "x".repeat(1001)
       })
     );
+  });
+});
+
+describe("storage cleanup schemas", () => {
+  it("accepts allow-listed actions without accepting client paths", () => {
+    assert.deepEqual(parseBody(storageCleanupPlanRequestSchema, { actions: ["orphan_media", "orphan_media"] }), { actions: ["orphan_media"] });
+    assert.throws(() => parseBody(storageCleanupPlanRequestSchema, { actions: ["app_temp_cache"], path: "../../outside" }));
+    assert.throws(() => parseBody(storageCleanupPlanRequestSchema, { actions: ["vacuum_database", "orphan_media"] }));
+    assert.deepEqual(parseBody(storageCleanupExecuteSchema, { confirm: "EXECUTE_STORAGE_CLEANUP" }), { confirm: "EXECUTE_STORAGE_CLEANUP" });
   });
 });
 

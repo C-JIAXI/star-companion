@@ -142,6 +142,123 @@ export interface AvailableModelsDTO {
   checkedAt: string;
 }
 
+export type ReadinessConnectionStatusCode =
+  | "untested"
+  | "checking"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export type ReadinessOverallStatusCode =
+  | "ready"
+  | "ready_with_limited_capabilities"
+  | "needs_configuration"
+  | "configuration_untested"
+  | "connection_failed"
+  | "budget_blocked"
+  | "locked"
+  | "server_unreachable";
+
+export type ReadinessActionCode =
+  | "unlock_app"
+  | "create_character"
+  | "select_character"
+  | "configure_provider"
+  | "add_api_key"
+  | "fix_base_url"
+  | "select_chat_model"
+  | "configure_model_capabilities"
+  | "review_fallbacks"
+  | "review_pricing"
+  | "review_budget"
+  | "test_connection"
+  | "retry_connection"
+  | "create_chat"
+  | "continue_chat"
+  | "send_message"
+  | "retry_server";
+
+export type ConfigurationDiagnosticCode =
+  | "provider_missing"
+  | "active_provider_missing"
+  | "api_key_missing"
+  | "base_url_invalid"
+  | "base_url_protocol"
+  | "base_url_credentials"
+  | "base_url_sensitive_query"
+  | "base_url_fragment"
+  | "active_model_missing"
+  | "chat_model_missing"
+  | "chat_model_unsupported"
+  | "module_preference_dangling"
+  | "fallback_too_many"
+  | "fallback_duplicate"
+  | "fallback_self_reference"
+  | "fallback_dangling"
+  | "fallback_unsupported"
+  | "fallback_vision_gap"
+  | "pricing_unknown"
+  | "budget_blocked";
+
+export interface ConfigurationDiagnosticIssueDTO {
+  code: ConfigurationDiagnosticCode;
+  severity: "error" | "warning" | "info";
+  field:
+    | "provider"
+    | "apiKey"
+    | "apiBaseUrl"
+    | "model"
+    | "capabilities"
+    | "modulePreferences"
+    | "fallbacks"
+    | "pricing"
+    | "budget";
+  action: ReadinessActionCode;
+  providerId?: string;
+  modelId?: string;
+  module?: AiModuleId;
+}
+
+export interface ConnectionDiagnosticDTO {
+  status: ReadinessConnectionStatusCode;
+  mode: "metadata" | "inference" | null;
+  testId: string | null;
+  providerKind: "openai-compatible" | "anthropic" | "google-gemini" | null;
+  providerId: string | null;
+  modelId: string | null;
+  checkedAt: string | null;
+  errorCode: ModelErrorCode | null;
+  diagnosticId: string | null;
+  summary: string | null;
+  retryable: boolean;
+  suggestedAction: ReadinessActionCode | null;
+  mayIncurCost: boolean;
+}
+
+export interface ReadinessDTO {
+  serverReachable: boolean;
+  appLocked: boolean;
+  hasCharacter: boolean;
+  hasAvailableCharacter: boolean;
+  hasChat: boolean;
+  hasProvider: boolean;
+  hasApiKey: boolean;
+  hasActiveModel: boolean;
+  chatModuleAssigned: boolean;
+  chatModelSupportsText: boolean;
+  visionAvailable: boolean;
+  budgetAllowsChat: boolean;
+  configurationValid: boolean;
+  ready: boolean;
+  overallStatus: ReadinessOverallStatusCode;
+  connectionStatus: ConnectionDiagnosticDTO;
+  nextRecommendedAction: ReadinessActionCode;
+  issues: ConfigurationDiagnosticIssueDTO[];
+  characterCount: number;
+  chatCount: number;
+  computedAt: string;
+}
+
 export interface CharacterLoreEntryDTO {
   id: string;
   keys: string[];
@@ -431,7 +548,10 @@ export interface UsageBudgetSettingsDTO {
 }
 
 export type ModelErrorCode =
+  | "configuration_incomplete"
+  | "invalid_url"
   | "authentication"
+  | "permission_denied"
   | "model_not_found"
   | "unsupported_capability"
   | "rate_limited"
@@ -440,6 +560,7 @@ export type ModelErrorCode =
   | "invalid_request"
   | "safety_blocked"
   | "timeout"
+  | "tls_failed"
   | "connection_failed"
   | "provider_unavailable"
   | "malformed_response"
@@ -1337,6 +1458,104 @@ export interface RecoveryPointRestoreResultDTO {
   safetyRecoveryPointId: string;
   completedAt: string;
   summary: BackupImportSummaryDTO;
+}
+
+export type StorageMeasurementKind = "exact" | "estimated" | "unavailable";
+export type StorageHealthSeverity = "info" | "warning" | "error";
+export type StorageHealthScanState = "idle" | "running" | "completed" | "cancelled" | "failed";
+export type StorageCleanupAction =
+  | "expired_drafts"
+  | "orphan_media"
+  | "clear_embeddings"
+  | "expired_recovery_points"
+  | "old_upgrade_recovery"
+  | "usage_ledger"
+  | "app_temp_cache"
+  | "rebuild_database_indexes"
+  | "vacuum_database";
+
+export interface StorageCategoryDTO {
+  id: string;
+  label: string;
+  count: number | null;
+  bytes: number | null;
+  measurement: StorageMeasurementKind;
+  reclaimableBytes: number | null;
+}
+
+export interface StorageHealthIssueDTO {
+  code: string;
+  severity: StorageHealthSeverity;
+  category: string;
+  message: string;
+  count?: number;
+  chatId?: string;
+  messageId?: string;
+  messageIndex?: number;
+  repairAction?: StorageCleanupAction;
+}
+
+export interface StorageHealthCapabilitiesDTO {
+  deepScan: boolean;
+  fileSystemInspection: boolean;
+  upgradeRecoveryCleanup: boolean;
+  appTempCleanup: boolean;
+  vacuum: boolean;
+}
+
+export interface StorageHealthSnapshotDTO {
+  generatedAt: string;
+  platform: AppPlatform;
+  databaseBytes: number | null;
+  reclaimableDatabaseBytes: number | null;
+  freeDiskBytes: number | null;
+  categories: StorageCategoryDTO[];
+  issues: StorageHealthIssueDTO[];
+  overall: "healthy" | "attention" | "error";
+  capabilities: StorageHealthCapabilitiesDTO;
+  activeDeepScanId: string | null;
+}
+
+export interface StorageDeepScanDTO {
+  id: string;
+  state: StorageHealthScanState;
+  startedAt: string;
+  completedAt: string | null;
+  progress: number;
+  checkedItems: number;
+  totalItems: number;
+  issues: StorageHealthIssueDTO[];
+  errorCode: string | null;
+}
+
+export interface StorageCleanupPlanItemDTO {
+  action: StorageCleanupAction;
+  count: number;
+  estimatedBytes: number | null;
+  supported: boolean;
+  warning: string | null;
+}
+
+export interface StorageCleanupPlanDTO {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  items: StorageCleanupPlanItemDTO[];
+  fingerprint: string;
+}
+
+export interface StorageCleanupResultItemDTO {
+  action: StorageCleanupAction;
+  status: "completed" | "skipped" | "failed";
+  count: number;
+  reclaimedBytes: number | null;
+  errorCode: string | null;
+}
+
+export interface StorageCleanupResultDTO {
+  planId: string;
+  completedAt: string;
+  items: StorageCleanupResultItemDTO[];
 }
 
 export type AppPlatform = "web" | "windows" | "android" | "server";

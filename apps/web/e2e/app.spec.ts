@@ -85,6 +85,36 @@ type ApiDataResponse<T> = {
   data?: T;
 };
 
+const readinessFixture = (overrides: Record<string, unknown> = {}) => ({
+  serverReachable: true,
+  appLocked: false,
+  hasCharacter: false,
+  hasAvailableCharacter: false,
+  hasChat: false,
+  hasProvider: false,
+  hasApiKey: false,
+  hasActiveModel: false,
+  chatModuleAssigned: false,
+  chatModelSupportsText: false,
+  visionAvailable: false,
+  budgetAllowsChat: true,
+  configurationValid: false,
+  ready: false,
+  overallStatus: "needs_configuration",
+  connectionStatus: {
+    status: "untested", mode: null, testId: null, providerKind: null,
+    providerId: null, modelId: null, checkedAt: null, errorCode: null,
+    diagnosticId: null, summary: null, retryable: false,
+    suggestedAction: "test_connection", mayIncurCost: false
+  },
+  nextRecommendedAction: "create_character",
+  issues: [],
+  characterCount: 0,
+  chatCount: 0,
+  computedAt: new Date().toISOString(),
+  ...overrides
+});
+
 const importBackupViaApi = async (request: APIRequestContext, data: Record<string, unknown>) => {
   const previewResponse = await request.post("/api/backups/preview", { data });
   expect(previewResponse.ok()).toBeTruthy();
@@ -212,6 +242,13 @@ const createPrivateCharacterCardFile = async (name: string, password: string) =>
     filePath
   };
 };
+
+test.beforeEach(async ({ page }, testInfo) => {
+  if (testInfo.title === "chat readiness surfaces missing first-run setup and links to settings") return;
+  await page.addInitScript(() => {
+    window.localStorage.setItem("star-companion:onboarding:v1", JSON.stringify({ dismissed: true, completed: false, lastStep: 0 }));
+  });
+});
 
 test("changing language does not immediately reload stale server settings", async ({ page }) => {
   let settingsGetCount = 0;
@@ -373,6 +410,11 @@ test("appearance preferences preview, persist, reset, and bootstrap without a th
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page.locator("html")).toHaveAttribute("data-font-size", "large");
   await expect(page.locator("html")).toHaveAttribute("data-motion", "reduced");
+  const lightContrast = await new AxeBuilder({ page })
+    .include("#main-content")
+    .withRules(["color-contrast"])
+    .analyze();
+  expect(lightContrast.violations, "light theme text contrast").toEqual([]);
   await expect(page.getByTestId("appearance-settings")).toHaveScreenshot("appearance-settings-light.png", { animations: "disabled" });
   await page.getByTestId("settings-save").click();
   await expect.poll(() => settings.appearancePreferences).toEqual(expect.objectContaining({ themeMode: "light", fontSize: "large", motion: "reduced", characterStyle: "restricted" }));
@@ -404,14 +446,17 @@ test("appearance preferences preview, persist, reset, and bootstrap without a th
 });
 
 test("critical navigation and settings controls pass automated accessibility checks", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
   for (const pathName of ["/", "/characters", "/settings", "/docs"]) {
     await page.goto(pathName);
+    await expect(page.getByTestId("workspace-loading")).toHaveCount(0);
     if (pathName === "/settings") await page.getByTestId("settings-section-appearance").click();
     const results = await new AxeBuilder({ page }).withRules([
       "aria-allowed-attr",
       "aria-required-attr",
       "aria-valid-attr-value",
       "button-name",
+      "color-contrast",
       "document-title",
       "html-has-lang",
       "label",
@@ -442,8 +487,51 @@ test("invalid appearance bootstrap data falls back before the server responds", 
   expect(await page.locator("html").evaluate((element) => getComputedStyle(element).getPropertyValue("--chat-background-overlay").trim())).toBe("0.55");
 });
 
+test("storage health previews every cleanup and remains usable on mobile", async ({ page }) => {
+  const generatedAt = new Date().toISOString();
+  const summary = {
+    generatedAt, platform: "server", databaseBytes: 4096, reclaimableDatabaseBytes: 1024, freeDiskBytes: 2_000_000_000,
+    categories: [
+      { id: "database", label: "SQLite database", count: 1, bytes: 4096, measurement: "exact", reclaimableBytes: 1024 },
+      { id: "media_orphans", label: "Unreferenced media assets", count: 2, bytes: 800, measurement: "exact", reclaimableBytes: 800 }
+    ],
+    issues: [{ code: "orphan_media", severity: "info", category: "media", message: "Unreferenced image assets can be safely removed.", count: 2, repairAction: "orphan_media" }],
+    overall: "healthy", capabilities: { deepScan: true, fileSystemInspection: true, upgradeRecoveryCleanup: true, appTempCleanup: true, vacuum: true }, activeDeepScanId: null
+  };
+  let scanPolls = 0;
+  await page.route("**/api/storage-health/summary", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: summary }) }));
+  await page.route("**/api/storage-health/deep-scans", (route) => route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ ok: true, data: { id: "scan-e2e", state: "running", startedAt: generatedAt, completedAt: null, progress: 0, checkedItems: 0, totalItems: 2, issues: [], errorCode: null } }) }));
+  await page.route("**/api/storage-health/deep-scans/scan-e2e", (route) => { scanPolls += 1; return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: { id: "scan-e2e", state: scanPolls > 1 ? "completed" : "running", startedAt: generatedAt, completedAt: scanPolls > 1 ? generatedAt : null, progress: scanPolls > 1 ? 100 : 50, checkedItems: scanPolls > 1 ? 2 : 1, totalItems: 2, issues: [], errorCode: null } }) }); });
+  await page.route("**/api/storage-health/cleanup-plans", (route) => route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ ok: true, data: { id: "plan-e2e", createdAt: generatedAt, expiresAt: new Date(Date.now() + 300_000).toISOString(), fingerprint: "safe-plan", items: [{ action: "orphan_media", count: 2, estimatedBytes: 800, supported: true, warning: null }] } }) }));
+  await page.route("**/api/storage-health/cleanup-plans/plan-e2e/execute", async (route) => {
+    expect(route.request().postDataJSON()).toEqual({ confirm: "EXECUTE_STORAGE_CLEANUP" });
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: { planId: "plan-e2e", completedAt: generatedAt, items: [{ action: "orphan_media", status: "completed", count: 2, reclaimedBytes: 800, errorCode: null }] } }) });
+  });
+
+  await page.setViewportSize({ width: 390, height: 760 });
+  await page.goto("/settings?section=storage");
+  await page.getByTestId("settings-section-storage").click();
+  const center = page.getByTestId("storage-health-center");
+  await expect(center).toBeVisible();
+  await expect(center.getByTestId("storage-category-database")).toContainText("4.00 KB");
+  const checkboxes = center.getByRole("checkbox");
+  await expect(checkboxes).toHaveCount(9);
+  for (let index = 0; index < 9; index += 1) await expect(checkboxes.nth(index)).not.toBeChecked();
+  await center.getByRole("button", { name: /运行深度检查|Run deep check/ }).click();
+  await expect(center.getByText(/completed/)).toBeVisible({ timeout: 5000 });
+  await checkboxes.nth(1).check();
+  await center.getByRole("button", { name: /生成清理预览|Preview selected actions/ }).click();
+  await expect(page.getByText(/计划将在 5 分钟后过期|plan expires in 5 minutes/)).toBeVisible();
+  await page.getByRole("button", { name: /确认执行计划|Confirm plan execution/ }).click();
+  await expect(page.getByRole("status").filter({ hasText: /维护完成|Maintenance finished/ })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  const accessibility = await new AxeBuilder({ page }).include('[data-testid="storage-health-center"]').withRules(["button-name", "color-contrast", "label"]).analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 test("usage and reliability panel hides all details behind the session privacy lock", async ({ page }) => {
   const now = new Date().toISOString();
+  let privacyLocked = false;
   const settings = {
     id: "usage-settings-e2e",
     activeProvider: "openai-compatible",
@@ -487,6 +575,33 @@ test("usage and reliability panel hides all details behind the session privacy l
     hasApiKey: true
   };
   let clearRequested = false;
+  await page.route("**/api/privacy/status", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ ok: true, data: { locked: privacyLocked } })
+  }));
+  await page.route("**/api/privacy/lock", async (route) => {
+    privacyLocked = true;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, data: { locked: true } })
+    });
+  });
+  await page.route("**/api/privacy/unlock", async (route) => {
+    const body = route.request().postDataJSON() as { passcode?: string };
+    if (body.passcode !== "2468") {
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: false, error: "Incorrect unlock code." })
+      });
+      return;
+    }
+    privacyLocked = false;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, data: { locked: false } })
+    });
+  });
   await page.route("**/api/settings", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: settings }) }));
   await page.route("**/api/usage/summary**", (route) => route.fulfill({
     contentType: "application/json",
@@ -723,6 +838,9 @@ test("dialogs trap keyboard focus and restore their trigger", async ({ page }) =
   await expect(dialog).toHaveAttribute("aria-modal", "true");
   await expect(dialog.locator(":focus")).toHaveCount(1);
 
+  // The focus trap must also recover when mounting timing leaves focus on the
+  // dialog surface itself instead of one of its controls.
+  await dialog.focus();
   await page.keyboard.press("Shift+Tab");
   await expect(dialog.locator(":focus")).toHaveCount(1);
   await page.keyboard.press("Escape");
@@ -733,6 +851,49 @@ test("dialogs trap keyboard focus and restore their trigger", async ({ page }) =
 
 test("chat readiness surfaces missing first-run setup and links to settings", async ({ page }) => {
   const now = new Date().toISOString();
+  await page.route("**/api/readiness", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          serverReachable: true,
+          appLocked: false,
+          hasCharacter: false,
+          hasAvailableCharacter: false,
+          hasChat: false,
+          hasProvider: false,
+          hasApiKey: false,
+          hasActiveModel: false,
+          chatModuleAssigned: false,
+          chatModelSupportsText: false,
+          visionAvailable: false,
+          budgetAllowsChat: true,
+          configurationValid: false,
+          ready: false,
+          overallStatus: "needs_configuration",
+          connectionStatus: {
+            status: "untested", mode: null, testId: null, providerKind: null,
+            providerId: null, modelId: null, checkedAt: null, errorCode: null,
+            diagnosticId: null, summary: null, retryable: false,
+            suggestedAction: "test_connection", mayIncurCost: false
+          },
+          nextRecommendedAction: "create_character",
+          issues: [
+            { code: "provider_missing", severity: "error", field: "provider", action: "configure_provider" },
+            { code: "chat_model_missing", severity: "error", field: "modulePreferences", action: "select_chat_model", module: "chat" }
+          ],
+          characterCount: 0,
+          chatCount: 0,
+          computedAt: now
+        }
+      })
+    });
+  });
 
   await page.route("**/api/settings", async (route) => {
     if (route.request().method() !== "GET") {
@@ -796,6 +957,17 @@ test("chat readiness surfaces missing first-run setup and links to settings", as
   });
 
   await page.goto("/");
+  await expect(page.getByTestId("onboarding-dialog")).toBeVisible();
+  await expect(page.getByTestId("onboarding-dialog")).toContainText("Your data stays local by default");
+  await page.getByRole("button", { name: "Continue later" }).click();
+  await page.goto("/docs");
+  const reopenGuide = page.getByTestId("docs-open-onboarding");
+  await reopenGuide.click();
+  await expect(page.getByTestId("onboarding-dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("onboarding-dialog")).toHaveCount(0);
+  await expect(reopenGuide).toBeFocused();
+  await page.goto("/");
   await expect(page.getByTestId("chat-new-empty-action")).toContainText("Open Characters");
   const newChatTrigger =
     (page.viewportSize()?.width ?? 1280) < 1024
@@ -830,6 +1002,119 @@ test("chat readiness surfaces missing first-run setup and links to settings", as
     "data-setup-focused",
     "true"
   );
+});
+
+test("reopened guide derives completed character, model, and connection steps", async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("app-language", "en"));
+  await page.route("**/api/readiness", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, data: readinessFixture({
+        hasCharacter: true,
+        hasAvailableCharacter: true,
+        hasProvider: true,
+        hasApiKey: true,
+        hasActiveModel: true,
+        chatModuleAssigned: true,
+        chatModelSupportsText: true,
+        configurationValid: true,
+        ready: true,
+        overallStatus: "ready_with_limited_capabilities",
+        connectionStatus: {
+          status: "succeeded", mode: "metadata", testId: "connection-safe-e2e",
+          providerKind: "openai-compatible", providerId: "provider-safe-e2e",
+          modelId: "model-safe-e2e", checkedAt: new Date().toISOString(),
+          errorCode: null, diagnosticId: "mdl_safe_e2e", summary: "Metadata verified.",
+          retryable: false, suggestedAction: "create_chat", mayIncurCost: false
+        },
+        nextRecommendedAction: "create_chat",
+        characterCount: 1
+      }) })
+    });
+  });
+
+  await page.goto("/docs");
+  await page.getByTestId("docs-open-onboarding").click();
+  const dialog = page.getByTestId("onboarding-dialog");
+  await expect(dialog).toBeVisible();
+  await dialog.locator('button[aria-label^="2."]').click();
+  await expect(dialog).toContainText(/1 character\(s\) are available|已有 1 个可用角色/);
+  await dialog.locator('button[aria-label^="3."]').click();
+  await expect(dialog).toContainText(/passed static checks|通过静态检查/);
+  await dialog.locator('button[aria-label^="4."]').click();
+  await expect(dialog).toContainText(/verified without model inference|未调用模型推理/);
+});
+
+test("authentication diagnostics locate saved settings and can be retested safely", async ({ page }) => {
+  const now = new Date().toISOString();
+  const provider = {
+    id: "provider-auth-e2e",
+    label: "Auth recovery provider",
+    provider: "openai-compatible",
+    apiBaseUrl: "https://provider.invalid/v1",
+    hasKey: true,
+    models: [{
+      id: "model-auth-e2e",
+      label: "Auth recovery model",
+      model: "auth-model",
+      capabilities: ["text_generation"],
+      pricing: { inputMicrosPerMillion: 1, outputMicrosPerMillion: 1, currency: "USD", updatedAt: now, source: "user" }
+    }]
+  };
+  let connectionSucceeded = false;
+  let testPayload: Record<string, unknown> | null = null;
+  const connection = () => connectionSucceeded ? {
+    status: "succeeded", mode: "metadata", testId: "connection-auth-e2e",
+    providerKind: "openai-compatible", providerId: provider.id, modelId: provider.models[0].id,
+    checkedAt: now, errorCode: null, diagnosticId: "mdl_auth_fixed_e2e",
+    summary: "Metadata verified.", retryable: false, suggestedAction: "create_chat", mayIncurCost: false
+  } : {
+    status: "failed", mode: "metadata", testId: "connection-auth-e2e",
+    providerKind: "openai-compatible", providerId: provider.id, modelId: provider.models[0].id,
+    checkedAt: now, errorCode: "authentication", diagnosticId: "mdl_auth_failed_e2e",
+    summary: "Authentication failed.", retryable: false, suggestedAction: "add_api_key", mayIncurCost: false
+  };
+
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: {
+      id: "settings-auth-e2e", activeProvider: provider.provider, apiBaseUrl: provider.apiBaseUrl,
+      model: provider.models[0].model, temperature: 0.8, maxTokens: 800, topP: 1, language: "en",
+      providers: [provider], activeProviderId: provider.id, activeModelId: provider.models[0].id,
+      moduleModelPreferences: {}, modelReliability: { retry: { enabled: false, maxRetries: 0 }, fallback: {} },
+      usageBudgets: { dailySoftMicros: null, dailyHardMicros: null, monthlySoftMicros: null, monthlyHardMicros: null, allowUnknownPricing: true },
+      usageTimezone: "UTC", userPersonaPresets: [], userProfileSummary: "", autoSummarizeUser: false,
+      showMessageAvatars: true, showMessageTimestamps: false, appearancePreferences: {},
+      ttsVoice: "alloy", ttsPlaybackRate: 1, ttsAutoPlay: false, userProfileUpdatedAt: null,
+      createdAt: now, updatedAt: now, hasApiKey: true
+    } }) });
+  });
+  await page.route("**/api/readiness", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: readinessFixture({
+      hasCharacter: true, hasAvailableCharacter: true, hasProvider: true, hasApiKey: true,
+      hasActiveModel: true, chatModuleAssigned: true, chatModelSupportsText: true,
+      configurationValid: true, ready: true,
+      overallStatus: connectionSucceeded ? "ready_with_limited_capabilities" : "connection_failed",
+      connectionStatus: connection(), nextRecommendedAction: connectionSucceeded ? "create_chat" : "retry_connection",
+      characterCount: 1
+    }) }) });
+  });
+  await page.route("**/api/readiness/connection-tests", async (route) => {
+    testPayload = route.request().postDataJSON() as Record<string, unknown>;
+    connectionSucceeded = true;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: connection() }) });
+  });
+
+  await page.goto("/settings");
+  await expect(page.getByTestId("connection-diagnostic-result")).toContainText("authentication");
+  await page.getByTestId("connection-diagnostic-fix").click();
+  await expect(page.getByTestId("settings-section-providers")).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Test metadata (normally no inference cost)" }).click();
+  await expect(page.getByTestId("connection-diagnostic-result")).toContainText("Connection check passed");
+  expect(testPayload).toEqual({ mode: "metadata", confirmCost: false });
+  expect(JSON.stringify(testPayload)).not.toContain("key");
+  await page.getByRole("button", { name: "Create a chat" }).click();
+  await expect(page).toHaveURL(/\/$/);
 });
 
 test("new chat can quick-create a character and enter the conversation", async ({
@@ -969,6 +1254,7 @@ test("chat image attachments preview, send, reload, view, and unmount when locke
     await page.locator('#chat-primary-action[data-chat-action="send"]').click();
     await expect(page.locator('[data-chat-message="user"]')).toHaveCount(1);
     await expect(page.getByTestId("chat-message-viewport").getByText(visionReply)).toBeVisible();
+    await expect.poll(() => page.evaluate(() => JSON.parse(window.localStorage.getItem("star-companion:onboarding:v1") || "{}"))).toMatchObject({ completed: true });
     const requestPayload = await page.evaluate(() => (window as unknown as { __visionRequest: { content: string; draftId: string } }).__visionRequest);
     expect(requestPayload.content).toBe("");
     expect(requestPayload.draftId).toMatch(/^draft_/);
@@ -1003,6 +1289,7 @@ test("chat image attachments preview, send, reload, view, and unmount when locke
     await editor.getByRole("button", { name: /移除图片|Remove image/ }).click();
     await editor.locator("textarea").fill("Edited without image");
     await editor.getByRole("button", { name: /保存修改|Save Edit/ }).click();
+    await expect(editor).toBeHidden();
     await expect(page.getByTestId("message-image-gallery")).toHaveCount(0);
     await expect(page.locator('[data-chat-message="user"]')).toContainText("Edited without image");
 
@@ -1608,6 +1895,24 @@ test("resending a historical user message confirms its impact and waits for serv
   const followingAssistant = `Keep this visible until resend starts ${suffix}`;
   let characterId: string | null = null;
   let chatId: string | null = null;
+
+  await page.route("**/api/readiness", async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ ok: true, data: readinessFixture({
+      hasCharacter: true, hasAvailableCharacter: true, hasChat: true,
+      hasProvider: true, hasApiKey: true, hasActiveModel: true,
+      chatModuleAssigned: true, chatModelSupportsText: true,
+      configurationValid: true, ready: true, overallStatus: "ready_with_limited_capabilities",
+      connectionStatus: {
+        status: "succeeded", mode: "metadata", testId: "connection-resend-e2e",
+        providerKind: "openai-compatible", providerId: "provider-resend-e2e",
+        modelId: "model-resend-e2e", checkedAt: new Date().toISOString(), errorCode: null,
+        diagnosticId: "mdl_resend_e2e", summary: "Metadata verified.", retryable: false,
+        suggestedAction: "continue_chat", mayIncurCost: false
+      },
+      nextRecommendedAction: "continue_chat", characterCount: 1, chatCount: 1
+    }) })
+  }));
 
   try {
     const characterResponse = await request.post("/api/characters", {

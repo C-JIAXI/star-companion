@@ -28,6 +28,9 @@ const loadDocsPage = () =>
   import("./pages/DocsPage").then((module) => ({ default: module.DocsPage }));
 const loadSettingsPage = () =>
   import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage }));
+const OnboardingDialog = lazy(() =>
+  import("./components/OnboardingDialog").then((module) => ({ default: module.OnboardingDialog }))
+);
 
 const ChatPage = lazy(loadChatPage);
 const CharactersPage = lazy(loadCharactersPage);
@@ -118,7 +121,7 @@ const sectionFromLocation = () => {
 };
 
 export function App() {
-  const { activeSection, setActiveSection, setLanguage, setShowMessageAvatars, isPrivacyLocked, unlockPrivacy } = useAppStore();
+  const { activeSection, setActiveSection, setLanguage, setShowMessageAvatars, isPrivacyLocked, unlockPrivacy, readiness, refreshReadiness } = useAppStore();
   const { t, language } = useI18n();
   const appName = t("app.name");
   const active = sectionMeta[activeSection];
@@ -258,6 +261,11 @@ export function App() {
   const [selectedChatId, setSelectedChatId] = useState<string | null>(getStoredSelectedChatId);
   const [chatRefreshKey, setChatRefreshKey] = useState(0);
 
+  useEffect(() => {
+    if (!privacyStatusReady || isPrivacyLocked) return;
+    void refreshReadiness();
+  }, [chatRefreshKey, activeSection, isPrivacyLocked, privacyStatusReady, refreshReadiness]);
+
   const handleSelectChat = useCallback(
     (id: string | null) => {
       setSelectedChatId(id);
@@ -272,6 +280,7 @@ export function App() {
 
   const triggerChatRefresh = useCallback(() => {
     setChatRefreshKey((current) => current + 1);
+    void useAppStore.getState().refreshReadiness();
   }, []);
 
   const isNavItemSelected = useCallback(
@@ -291,6 +300,7 @@ export function App() {
       setSelectedChatId(chat.id);
       storeSelectedChatId(chat.id);
       setChatRefreshKey((current) => current + 1);
+      void useAppStore.getState().refreshReadiness();
       navigate("chat");
     },
     [navigate]
@@ -357,7 +367,7 @@ export function App() {
             onChange={(event) => setUnlockPasscode(event.target.value)}
           />
           {unlockError ? <p className="mt-2 text-sm text-rose-300" role="alert">{unlockError}</p> : null}
-          <button className="mt-4 min-h-11 w-full rounded-md bg-ember-500 px-4 text-sm font-semibold text-ink-950 hover:bg-ember-400" data-testid="privacy-unlock-submit" type="submit">
+          <button className="mt-4 min-h-11 w-full rounded-md bg-ember-500 px-4 text-sm font-semibold text-accentForeground hover:bg-ember-400" data-testid="privacy-unlock-submit" type="submit">
             {language === "zh-CN" ? "解锁" : "Unlock"}
           </button>
         </form>
@@ -371,6 +381,12 @@ export function App() {
         {language === "zh-CN" ? "跳到主要内容" : "Skip to main content"}
       </a>
       <ErrorNotice message={chatCreationError} />
+      {readiness?.overallStatus === "server_unreachable" ? (
+        <div className="fixed left-1/2 top-4 z-[80] flex w-[min(92vw,42rem)] -translate-x-1/2 flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-400/30 bg-ink-900 px-4 py-3 text-sm text-rose-100 shadow-2xl" data-testid="backend-unreachable" role="alert">
+          <span>{language === "zh-CN" ? "本地后端暂时不可达。数据仍保留在本机；请确认本地服务已启动后重试。" : "The local backend is unreachable. Your local data remains in place; make sure the local service is running, then retry."}</span>
+          <button className="min-h-9 rounded-md border border-rose-300/30 px-3 font-semibold hover:bg-white/5" type="button" onClick={() => void refreshReadiness()}>{language === "zh-CN" ? "重试" : "Retry"}</button>
+        </div>
+      ) : null}
       {upgradeNotice ? (
         <div className="fixed left-1/2 top-4 z-[80] flex w-[min(92vw,42rem)] -translate-x-1/2 items-start justify-between gap-3 rounded-lg border border-emerald-400/25 bg-ink-900 px-4 py-3 text-sm text-emerald-100 shadow-2xl" data-testid="upgrade-launch-notice" role="status">
           <span>{language === "zh-CN" ? `版本升级与数据迁移已安全完成${upgradeNotice.previous ? `（来自 ${upgradeNotice.previous}）` : ""}，共应用 ${upgradeNotice.count} 项迁移。` : `Version upgrade and data migration completed safely${upgradeNotice.previous ? ` from ${upgradeNotice.previous}` : ""}; ${upgradeNotice.count} migration(s) applied.`}</span>
@@ -416,7 +432,7 @@ export function App() {
               })}
             </nav>
             <button
-              className="mt-3 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-md border border-ember-400/20 bg-ember-500 px-3 text-sm font-semibold text-ink-950 transition-colors hover:bg-ember-400"
+              className="mt-3 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-md border border-ember-400/20 bg-ember-500 px-3 text-sm font-semibold text-accentForeground transition-colors hover:bg-ember-400"
               data-testid="new-chat-trigger-drawer"
               type="button"
               onClick={() => {
@@ -504,7 +520,7 @@ export function App() {
           </nav>
 
           <button
-            className="mx-3 mt-3 flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-md border border-ember-400/20 bg-ember-500 px-3 text-sm font-semibold text-ink-950 transition-colors hover:bg-ember-400"
+            className="mx-3 mt-3 flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-md border border-ember-400/20 bg-ember-500 px-3 text-sm font-semibold text-accentForeground transition-colors hover:bg-ember-400"
             data-testid="new-chat-trigger-desktop"
             type="button"
             onClick={() => setShowNewChatDialog(true)}
@@ -639,6 +655,13 @@ export function App() {
           navigate("characters");
         }}
       />
+      <Suspense fallback={null}>
+        <OnboardingDialog
+          language={language}
+          onNavigate={navigate}
+          onNewChat={() => setShowNewChatDialog(true)}
+        />
+      </Suspense>
     </div>
   );
 }

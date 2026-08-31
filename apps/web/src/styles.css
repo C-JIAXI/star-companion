@@ -29,6 +29,19 @@
     --slate-800: 30 41 59;
     --slate-900: 15 23 42;
     --slate-950: 2 6 23;
+    --ember-50: 239 252 249;
+    --ember-100: 213 247 239;
+    --ember-200: 174 238 223;
+    --ember-300: 120 222 201;
+    --ember-400: 69 203 178;
+    --ember-500: 39 182 157;
+    --ember-600: 26 145 126;
+    --ember-700: 25 116 101;
+    --ember-800: 25 93 83;
+    --ember-900: 23 77 69;
+    --ember-950: 8 45 41;
+    --accent-foreground: 10 14 13;
+    --muted-label: #788783;
     --surface: #121716;
     --surface-subtle: #0f1312;
     --border-muted: rgb(255 255 255 / 0.08);
@@ -57,9 +70,9 @@
     --ink-100: 35 48 45;
     --ink-200: 57 73 69;
     --ink-300: 78 96 92;
-    --ink-400: 100 117 113;
-    --ink-500: 126 142 138;
-    --ink-600: 163 176 172;
+    --ink-400: 73 91 86;
+    --ink-500: 69 86 82;
+    --ink-600: 65 81 77;
     --ink-700: 201 211 208;
     --ink-800: 226 233 231;
     --ink-900: 240 245 243;
@@ -69,12 +82,25 @@
     --slate-200: 51 65 85;
     --slate-300: 71 85 105;
     --slate-400: 90 105 125;
-    --slate-500: 112 128 148;
-    --slate-600: 148 163 184;
+    --slate-500: 75 91 111;
+    --slate-600: 70 86 105;
     --slate-700: 203 213 225;
     --slate-800: 226 232 240;
     --slate-900: 241 245 249;
     --slate-950: 248 250 252;
+    --ember-50: 6 78 59;
+    --ember-100: 6 95 70;
+    --ember-200: 4 120 87;
+    --ember-300: 4 120 87;
+    --ember-400: 15 118 110;
+    --ember-500: 39 182 157;
+    --ember-600: 26 145 126;
+    --ember-700: 25 116 101;
+    --ember-800: 25 93 83;
+    --ember-900: 23 77 69;
+    --ember-950: 8 45 41;
+    --accent-foreground: 7 41 35;
+    --muted-label: #52645f;
     --surface: #ffffff;
     --surface-subtle: #eff5f3;
     --border-muted: rgb(23 33 31 / 0.16);
@@ -256,12 +282,58 @@
   }
 
   .section-kicker {
-    color: #788783;
+    color: var(--muted-label);
     font-size: 0.6875rem;
     font-weight: 600;
     letter-spacing: 0;
     text-transform: uppercase;
   }
+}
+
+:root[data-theme="light"] [class~="text-ember-50"] { color: rgb(var(--ember-50)); }
+:root[data-theme="light"] [class~="text-ember-100"] { color: rgb(var(--ember-100)); }
+:root[data-theme="light"] [class~="text-ember-200"] { color: rgb(var(--ember-200)); }
+:root[data-theme="light"] [class~="text-ember-300"] { color: rgb(var(--ember-300)); }
+:root[data-theme="light"] [class~="text-ember-400"] { color: rgb(var(--ember-400)); }
+
+:root[data-theme="light"] :is(
+  [class~="text-amber-100"],
+  [class~="text-amber-100/80"],
+  [class~="text-amber-200"],
+  [class~="text-amber-200/80"],
+  [class~="text-amber-300"],
+  [class~="text-amber-300/80"],
+  [class~="text-amber-300/90"]
+) { color: #854d0e; }
+
+:root[data-theme="light"] :is(
+  [class~="text-emerald-100"],
+  [class~="text-emerald-200"],
+  [class~="text-emerald-300"],
+  [class~="text-emerald-300/80"]
+) { color: #047857; }
+
+:root[data-theme="light"] :is(
+  [class~="text-rose-100"],
+  [class~="text-rose-200"],
+  [class~="text-rose-300"],
+  [class~="text-rose-300/60"],
+  [class~="text-rose-300/70"],
+  [class~="text-rose-300/80"],
+  [class~="text-rose-400"],
+  [class~="text-red-200"],
+  [class~="text-red-400"]
+) { color: #be123c; }
+
+:root[data-theme="light"] :is(
+  [class~="text-sky-100"],
+  [class~="text-sky-200"],
+  [class~="text-sky-200/75"],
+  [class~="text-sky-300"]
+) { color: #0369a1; }
+
+:root[data-theme="light"] .bg-ember-500.text-white {
+  color: rgb(var(--accent-foreground));
 }
 
 .skip-link {

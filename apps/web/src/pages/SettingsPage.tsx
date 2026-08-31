@@ -1,6 +1,7 @@
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
+  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -14,6 +15,7 @@ import {
   RefreshCw,
   Save,
   ServerCog,
+  ShieldCheck,
   Trash2,
   Wifi,
   X
@@ -27,6 +29,8 @@ import {
   normalizeAppearancePreferences
 } from "@local-roleplay/shared";
 import { AboutUpdatesPanel } from "../components/AboutUpdatesPanel";
+import { StorageHealthPanel } from "../components/StorageHealthPanel";
+import { reopenOnboarding } from "../components/OnboardingDialog";
 import { languageOptions, useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { readFileText, saveJsonFile } from "../lib/files";
@@ -48,6 +52,8 @@ import type {
   ProviderModel,
   ProviderProfile,
   PublicUserSettingsDTO,
+  ConnectionDiagnosticDTO,
+  ConfigurationDiagnosticIssueDTO,
   RecoveryPointDTO,
   SettingsInput,
   UsageSummaryDTO
@@ -554,7 +560,7 @@ const getPageCopy = (language: AppLanguage) =>
         noPendingChanges: "No pending changes"
       };
 
-type SettingsSection = "appearance" | "runtime" | "providers" | "usage" | "backup" | "about";
+type SettingsSection = "appearance" | "runtime" | "providers" | "usage" | "backup" | "storage" | "about";
 type SettingsSetupFocus = "provider" | "api-key" | "model";
 type SettingsModuleFocus = `module-${AiModuleId}`;
 type SettingsFocus = SettingsSetupFocus | SettingsModuleFocus;
@@ -582,7 +588,7 @@ const readSettingsLocation = () => {
     .find((value) => value === focus);
 
   return {
-    section: section === "appearance" || section === "providers" || section === "usage" || section === "backup" || section === "about" ? section : "runtime",
+    section: section === "appearance" || section === "providers" || section === "usage" || section === "backup" || section === "storage" || section === "about" ? section : "runtime",
     focus:
       focus === "provider" || focus === "api-key" || focus === "model"
         ? focus
@@ -662,6 +668,9 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const setShowMessageAvatars = useAppStore((state) => state.setShowMessageAvatars);
   const setShowMessageTimestamps = useAppStore((state) => state.setShowMessageTimestamps);
   const setAppearancePreferences = useAppStore((state) => state.setAppearancePreferences);
+  const readiness = useAppStore((state) => state.readiness);
+  const readinessLoading = useAppStore((state) => state.readinessLoading);
+  const refreshReadiness = useAppStore((state) => state.refreshReadiness);
 
   const [form, setForm] = useState<SettingsInput>(defaultForm);
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -670,6 +679,10 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [connectionTesting, setConnectionTesting] = useState(false);
+  const [connectionResult, setConnectionResult] = useState<ConnectionDiagnosticDTO | null>(null);
+  const [activeConnectionTestId, setActiveConnectionTestId] = useState<string | null>(null);
+  const [confirmingInferenceTest, setConfirmingInferenceTest] = useState(false);
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
   const [syncMode, setSyncMode] = useState<"merge" | "replace">("merge");
   const [syncPeerUrl, setSyncPeerUrl] = useState("");
@@ -1085,6 +1098,8 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       setShowMessageTimestamps(settings.showMessageTimestamps);
       setAppearancePreferences(settings.appearancePreferences);
       setStatus(t("settings.saved"));
+      setConnectionResult(null);
+      await refreshReadiness();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("settings.failedSave"));
     } finally {
@@ -1092,19 +1107,73 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     }
   };
 
-  const testBackend = async () => {
-    setLoading(true);
+  const testBackend = async (mode: "metadata" | "inference" = "metadata") => {
+    setConnectionTesting(true);
     setError(null);
     setStatus(null);
-
+    setConnectionResult(null);
+    const discoverTestId = window.setTimeout(() => {
+      void refreshReadiness().then((current) => setActiveConnectionTestId(current.connectionStatus.testId));
+    }, 120);
     try {
-      const result = await api.settings.test();
-      setStatus(t("settings.modelReachable", { model: result.model }));
+      const result = await api.readiness.testConnection(mode, mode === "inference");
+      setConnectionResult(result);
+      if (result.status === "succeeded") {
+        setStatus(language === "zh-CN" ? (mode === "metadata" ? "无推理连接检查已通过" : "最小推理检查已通过") : (mode === "metadata" ? "No-inference connection check passed" : "Minimal inference check passed"));
+      }
+      await refreshReadiness();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("settings.connectionFailed"));
     } finally {
-      setLoading(false);
+      window.clearTimeout(discoverTestId);
+      setConnectionTesting(false);
+      setActiveConnectionTestId(null);
     }
+  };
+
+  const cancelConnectionTest = async () => {
+    if (!activeConnectionTestId) return;
+    await api.readiness.cancelConnectionTest(activeConnectionTestId).catch(() => undefined);
+  };
+
+  const diagnosticCopy = (entry: ConfigurationDiagnosticIssueDTO) => {
+    const labels: Record<ConfigurationDiagnosticIssueDTO["code"], [string, string]> = {
+      provider_missing: ["尚未保存供应商", "No provider is saved"],
+      active_provider_missing: ["当前供应商已不存在", "The active provider no longer exists"],
+      api_key_missing: ["当前远程供应商缺少 API Key", "The active remote provider has no API key"],
+      base_url_invalid: ["Base URL 格式无效", "The base URL is malformed"],
+      base_url_protocol: ["Base URL 必须使用 HTTP 或 HTTPS", "The base URL must use HTTP or HTTPS"],
+      base_url_credentials: ["Base URL 不得内嵌用户名或密码", "The base URL must not embed credentials"],
+      base_url_sensitive_query: ["Base URL 查询参数疑似包含密钥", "The base URL query appears to contain a secret"],
+      base_url_fragment: ["Base URL 不应包含片段", "The base URL must not contain a fragment"],
+      active_model_missing: ["当前模型已不存在", "The active model no longer exists"],
+      chat_model_missing: ["聊天模块尚未分配可用模型", "The chat module has no available model"],
+      chat_model_unsupported: ["聊天模型未声明文本生成能力", "The chat model lacks text-generation capability"],
+      module_preference_dangling: ["模块指向已删除的模型", "A module points to a deleted model"],
+      fallback_too_many: ["备用链超过 3 个模型", "A fallback chain exceeds three models"],
+      fallback_duplicate: ["备用链包含重复模型", "A fallback chain contains duplicate models"],
+      fallback_self_reference: ["备用链重复引用主模型", "A fallback chain repeats its primary model"],
+      fallback_dangling: ["备用链引用已删除的模型", "A fallback chain points to a deleted model"],
+      fallback_unsupported: ["备用模型不支持目标模块", "A fallback model does not support its module"],
+      fallback_vision_gap: ["图片聊天备用模型缺少视觉能力", "An image-chat fallback lacks vision capability"],
+      pricing_unknown: ["模型价格未知；不会按 0 费用处理", "Model pricing is unknown and is not treated as zero"],
+      budget_blocked: ["当前硬预算会阻止聊天调用", "The current hard budget blocks chat calls"]
+    };
+    return labels[entry.code][language === "zh-CN" ? 0 : 1];
+  };
+
+  const openDiagnosticAction = (issue: ConfigurationDiagnosticIssueDTO) => {
+    setActiveSection(issue.field === "budget" || issue.field === "pricing" ? "usage" : "providers");
+    if (issue.providerId) setExpandedProviderId(issue.providerId);
+  };
+
+  const openConnectionRecovery = (action: ConnectionDiagnosticDTO["suggestedAction"] | undefined) => {
+    if (action === "review_budget") {
+      setActiveSection("usage");
+      return;
+    }
+    setActiveSection("providers");
+    if (form.activeProviderId) setExpandedProviderId(form.activeProviderId);
   };
 
   const exportBackup = async () => {
@@ -1174,6 +1243,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       setBackupPreview(null);
       setConfirmingImport(false);
       await loadRecoveryPoints();
+      await refreshReadiness();
       setStatus(
         t("settings.backupImported", {
           characters: summary.characters,
@@ -1265,6 +1335,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       setSyncPreview(null);
       setConfirmingSync(false);
       await loadRecoveryPoints();
+      await refreshReadiness();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : copy.syncFailed);
     } finally {
@@ -1281,6 +1352,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       setPendingRestorePoint(null);
       applyLoadedSettings(await api.settings.get());
       await loadRecoveryPoints();
+      await refreshReadiness();
       setStatus(copy.restoreComplete);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : copy.restoreFailed);
@@ -1614,16 +1686,80 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
               </Button>
               <Button
                 className="w-full"
-                disabled={loading}
+                disabled={loading || connectionTesting || hasUnsavedChanges || !readiness?.configurationValid}
                 variant="secondary"
                 onClick={() => void testBackend()}
               >
-                <ServerCog size={16} />
-                {t("settings.testModel")}
+                {connectionTesting ? <RefreshCw className="animate-spin" size={16} /> : <ServerCog size={16} />}
+                {language === "zh-CN" ? "无推理连接检查" : "No-inference connection check"}
               </Button>
             </div>
           </div>
         </div>
+      </section>
+
+      <section className={`rounded-lg p-4 sm:p-5 ${settingsSurfaceClassName}`} data-testid="configuration-diagnostics">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className={`mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-full ${readiness?.configurationValid ? "bg-emerald-500/10 text-emerald-300" : "bg-amber-500/10 text-amber-200"}`}>
+              {readiness?.configurationValid ? <ShieldCheck size={18} /> : <AlertTriangle size={18} />}
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-ink-50">{language === "zh-CN" ? "模型配置诊断" : "Model configuration diagnostics"}</h3>
+              <p className="mt-1 text-xs font-semibold text-ember-200" data-testid="readiness-overall-status">{language === "zh-CN" ? ({ ready: "可以开始聊天", ready_with_limited_capabilities: "可以聊天，但部分能力不可用", needs_configuration: "需要配置", configuration_untested: "配置可能有效但尚未测试", connection_failed: "连接失败", budget_blocked: "被本机预算阻止", locked: "应用已锁定", server_unreachable: "本地后端不可达" } as const)[readiness?.overallStatus ?? "server_unreachable"] : ({ ready: "Ready to chat", ready_with_limited_capabilities: "Ready with limited capabilities", needs_configuration: "Configuration needed", configuration_untested: "Configuration may work but is untested", connection_failed: "Connection failed", budget_blocked: "Blocked by local budget", locked: "App locked", server_unreachable: "Local backend unreachable" } as const)[readiness?.overallStatus ?? "server_unreachable"]}</p>
+              <p className="mt-1 text-sm leading-6 text-ink-400">
+                {hasUnsavedChanges
+                  ? (language === "zh-CN" ? "以下结果仅对应已保存配置。请先保存更改，再重新检查；未保存的密钥不会参与诊断。" : "These results describe the saved configuration only. Save changes before checking again; unsaved keys are not inspected.")
+                  : readinessLoading
+                    ? (language === "zh-CN" ? "正在读取后端权威状态…" : "Reading authoritative backend state…")
+                    : readiness?.configurationValid
+                      ? (language === "zh-CN" ? "静态检查已通过。连接状态仍需通过显式测试确认。" : "Static checks passed. Connection state still requires an explicit test.")
+                      : (language === "zh-CN" ? "发现需要处理的已保存配置问题。诊断不会显示 API Key、聊天内容或供应商原始响应。" : "The saved configuration has actionable issues. Diagnostics never display API keys, chat content, or raw provider responses.")}
+              </p>
+            </div>
+          </div>
+          <Button variant="ghost" data-testid="settings-open-onboarding" onClick={reopenOnboarding}>
+            {language === "zh-CN" ? "重新打开引导" : "Reopen guide"}
+          </Button>
+        </div>
+
+        {readiness?.issues.length ? (
+          <ul className="mt-4 grid gap-2 sm:grid-cols-2" data-testid="configuration-issue-list">
+            {readiness.issues.map((issue, index) => (
+              <li className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-white/[0.08] bg-ink-950/40 px-3 py-2.5 text-sm" key={`${issue.code}-${issue.module ?? "global"}-${index}`}>
+                <span className={issue.severity === "error" ? "text-rose-200" : "text-amber-100"}>{diagnosticCopy(issue)}</span>
+                <button className="shrink-0 font-semibold text-ember-200 underline-offset-2 hover:underline" type="button" onClick={() => openDiagnosticAction(issue)}>{language === "zh-CN" ? "处理" : "Fix"}</button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/[0.08] pt-4">
+          <span className="w-full text-xs text-ink-400">{language === "zh-CN" ? `测试已保存配置：${activeProviderName || "未选择供应商"} / ${activeModelName || "未选择模型"}` : `Testing saved configuration: ${activeProviderName || "no provider"} / ${activeModelName || "no model"}`}</span>
+          <Button disabled={connectionTesting || hasUnsavedChanges || !readiness?.configurationValid} onClick={() => void testBackend("metadata")}>
+            {connectionTesting ? <RefreshCw className="animate-spin" size={16} /> : <Wifi size={16} />}
+            {language === "zh-CN" ? "测试元数据（通常无推理费）" : "Test metadata (normally no inference cost)"}
+          </Button>
+          <Button variant="secondary" disabled={connectionTesting || hasUnsavedChanges || !readiness?.configurationValid} onClick={() => setConfirmingInferenceTest(true)}>
+            <ServerCog size={16} />
+            {language === "zh-CN" ? "可选：最小推理测试" : "Optional: minimal inference test"}
+          </Button>
+          {connectionTesting && activeConnectionTestId ? <Button variant="ghost" onClick={() => void cancelConnectionTest()}><X size={16} />{language === "zh-CN" ? "取消测试" : "Cancel test"}</Button> : null}
+          <button className="min-h-10 px-2 text-sm font-semibold text-ink-300 hover:text-ink-50" type="button" onClick={() => void refreshReadiness()}>{language === "zh-CN" ? "刷新诊断" : "Refresh diagnostics"}</button>
+        </div>
+
+        {connectionResult || (readiness?.connectionStatus.status !== "untested" && readiness?.connectionStatus.status !== "checking") ? (
+          <div className={`mt-3 rounded-md border px-3 py-2.5 text-sm ${((connectionResult ?? readiness?.connectionStatus)?.status === "succeeded") ? "border-emerald-400/25 bg-emerald-500/[0.06] text-emerald-100" : "border-rose-400/25 bg-rose-500/[0.06] text-rose-100"}`} role="status" data-testid="connection-diagnostic-result">
+            {((connectionResult ?? readiness?.connectionStatus)?.status === "succeeded")
+              ? (language === "zh-CN" ? "连接检查通过。现在可以创建或继续聊天。" : "Connection check passed. You can now create or continue a chat.")
+              : (language === "zh-CN" ? `连接检查未通过：${(connectionResult ?? readiness?.connectionStatus)?.errorCode ?? "connection_failed"}。诊断标识 ${(connectionResult ?? readiness?.connectionStatus)?.diagnosticId ?? "—"}。` : `Connection check failed: ${(connectionResult ?? readiness?.connectionStatus)?.errorCode ?? "connection_failed"}. Diagnostic ${(connectionResult ?? readiness?.connectionStatus)?.diagnosticId ?? "—"}.`)}
+            <div className="mt-2 flex flex-wrap gap-3">
+              <button className="font-semibold underline-offset-2 hover:underline" type="button" onClick={() => void copyTextWithFallback(JSON.stringify({ errorCode: (connectionResult ?? readiness?.connectionStatus)?.errorCode, diagnosticId: (connectionResult ?? readiness?.connectionStatus)?.diagnosticId, providerKind: (connectionResult ?? readiness?.connectionStatus)?.providerKind, module: "chat", occurredAt: (connectionResult ?? readiness?.connectionStatus)?.checkedAt, retryable: (connectionResult ?? readiness?.connectionStatus)?.retryable, suggestedAction: (connectionResult ?? readiness?.connectionStatus)?.suggestedAction }))}>{language === "zh-CN" ? "复制安全诊断" : "Copy safe diagnostic"}</button>
+              {((connectionResult ?? readiness?.connectionStatus)?.status === "failed") ? <button className="font-semibold underline-offset-2 hover:underline" data-testid="connection-diagnostic-fix" type="button" onClick={() => openConnectionRecovery((connectionResult ?? readiness?.connectionStatus)?.suggestedAction)}>{(connectionResult ?? readiness?.connectionStatus)?.suggestedAction === "review_budget" ? (language === "zh-CN" ? "检查预算" : "Review budget") : (language === "zh-CN" ? "打开相关模型设置" : "Open relevant model settings")}</button> : null}
+              {((connectionResult ?? readiness?.connectionStatus)?.status === "succeeded") ? <button className="font-semibold underline-offset-2 hover:underline" type="button" onClick={() => { window.history.pushState({}, "", "/"); window.dispatchEvent(new PopStateEvent("popstate")); }}>{readiness?.hasChat ? (language === "zh-CN" ? "返回聊天" : "Return to chat") : (language === "zh-CN" ? "创建聊天" : "Create a chat")}</button> : null}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <div className="border-b border-white/[0.08]">
@@ -1634,6 +1770,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
             ["providers", copy.providersTitle],
             ["usage", language === "zh-CN" ? "使用量与预算" : "Usage & budgets"],
             ["backup", copy.backupTitle],
+            ["storage", language === "zh-CN" ? "存储与健康" : "Storage & health"],
             ["about", copy.aboutTitle]
           ] as const).map(([section, label]) => {
             const active = activeSection === section;
@@ -2942,6 +3079,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                 ? "这里显示本机后端记录的调用与估算费用。它不是供应商账单；清除本地历史也不会影响供应商侧账单。"
                 : "This shows calls and estimated cost recorded by the local backend. It is not a provider bill, and deleting it does not affect provider billing."}
             </p>
+            {usageSummary && usageSummary.recent.length === 0 ? <div className={`rounded-lg border-dashed p-5 text-center ${settingsSurfaceClassName}`} data-testid="usage-empty-state"><p className="text-sm font-semibold text-slate-200">{language === "zh-CN" ? "尚无本机调用记录" : "No local usage records yet"}</p><p className="mt-2 text-xs leading-5 text-slate-500">{language === "zh-CN" ? "只有经过本机后端的实际模型调用才会出现在这里。没有记录不代表供应商账单为零，也不会显示虚假的零费用趋势。" : "Only actual model calls through the local backend appear here. No records does not mean the provider bill is zero, and no artificial zero-cost trend is shown."}</p></div> : null}
             <div className={`space-y-3 rounded-lg p-4 ${settingsSurfaceClassName}`} data-testid="privacy-lock-controls">
               <SettingsSectionHeading
                 title={language === "zh-CN" ? "会话隐私锁" : "Session privacy lock"}
@@ -3070,6 +3208,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       ) : null}
 
       {activeSection === "about" ? <AboutUpdatesPanel language={language} /> : null}
+      {activeSection === "storage" ? <StorageHealthPanel language={language} /> : null}
 
       {confirmingAppearanceReset ? (
         <ConfirmDialog
@@ -3081,6 +3220,22 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
           onConfirm={() => {
             setForm((current) => ({ ...current, appearancePreferences: { ...defaultAppearancePreferences } }));
             setConfirmingAppearanceReset(false);
+          }}
+        />
+      ) : null}
+
+      {confirmingInferenceTest ? (
+        <ConfirmDialog
+          cancelLabel={t("common.cancel")}
+          confirmLabel={language === "zh-CN" ? "确认并测试" : "Confirm and test"}
+          loading={connectionTesting}
+          message={language === "zh-CN" ? "该操作会向当前供应商发送固定、中性且不含用户内容的最小测试指令，最多请求 4 个输出 token，可能产生少量费用，并会进入本机调用账本与预算检查。不会发送或展示角色、聊天、persona、用户画像或测试指令正文。" : "This sends a fixed neutral minimal instruction containing no user content to the active provider and requests at most 4 output tokens. It may incur a small cost and is recorded in the local usage ledger with budget enforcement. Character, chat, persona, profile, and test-instruction content are neither sent from user data nor displayed."}
+          title={language === "zh-CN" ? "运行最小推理测试？" : "Run a minimal inference test?"}
+          variant="primary"
+          onCancel={() => setConfirmingInferenceTest(false)}
+          onConfirm={() => {
+            setConfirmingInferenceTest(false);
+            void testBackend("inference");
           }}
         />
       ) : null}

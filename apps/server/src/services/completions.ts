@@ -1,6 +1,7 @@
 import type { UserSettings } from "@prisma/client";
 import { decryptApiKey } from "./apiKeyVault.js";
 import {
+  createModelError,
   malformedModelResponse,
   modelErrorFromPayload,
   modelErrorFromResponse,
@@ -389,28 +390,78 @@ export const testModelConnection = async (settings: UserSettings): Promise<Conne
   };
 };
 
-export const fetchAvailableModels = async (settings: UserSettings): Promise<AvailableModelsResult> => {
-  const provider = normalizeProvider(settings.activeProvider);
-  let response: Response;
-  const modelUrl = joinApiPath(settings.apiBaseUrl, "models");
-
+const validateDiagnosticUrl = (value: string, provider: ProviderKind, modelId: string) => {
+  let url: URL;
   try {
-    response = await fetch(modelUrl, {
-      method: "GET",
-      headers: authHeaders(settings, provider)
-    });
-  } catch (error) {
-    throw normalizeModelError(error, { provider, modelId: settings.model });
+    url = new URL(value);
+  } catch {
+    throw createModelError({ code: "invalid_url", provider, modelId });
   }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username ||
+    url.password ||
+    url.hash ||
+    [...url.searchParams.keys()].some((key) => /(?:api[-_]?key|token|secret|authorization|credential|password)/i.test(key))
+  ) {
+    throw createModelError({ code: "invalid_url", provider, modelId });
+  }
+  return url;
+};
+
+const fetchModelMetadata = async (settings: UserSettings, signal?: AbortSignal) => {
+  const provider = normalizeProvider(settings.activeProvider);
+  let url = validateDiagnosticUrl(joinApiPath(settings.apiBaseUrl, "models"), provider, settings.model);
+  for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "GET",
+        headers: authHeaders(settings, provider),
+        redirect: "manual",
+        signal: callSignal(signal)
+      });
+    } catch (error) {
+      throw normalizeModelError(error, {
+        provider,
+        modelId: settings.model,
+        cancelled: signal?.aborted
+      });
+    }
+    if (response.status < 300 || response.status >= 400) return response;
+    const location = response.headers.get("location");
+    if (!location || redirectCount === 3) {
+      throw createModelError({ code: "invalid_url", provider, modelId: settings.model });
+    }
+    const nextUrl = validateDiagnosticUrl(new URL(location, url).toString(), provider, settings.model);
+    if (nextUrl.origin !== url.origin) {
+      throw createModelError({ code: "invalid_url", provider, modelId: settings.model });
+    }
+    url = nextUrl;
+  }
+  throw createModelError({ code: "invalid_url", provider, modelId: settings.model });
+};
+
+export const fetchAvailableModels = async (
+  settings: UserSettings,
+  signal?: AbortSignal
+): Promise<AvailableModelsResult> => {
+  const provider = normalizeProvider(settings.activeProvider);
+  const response = await fetchModelMetadata(settings, signal);
 
   if (!response.ok) {
     throw await responseError(response, settings);
   }
 
-  const payload = (await response.json()) as {
+  let payload: {
     data?: Array<{ id?: string }>;
     models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
   };
+  try {
+    payload = await response.json() as typeof payload;
+  } catch {
+    throw malformedModelResponse(provider, settings.model);
+  }
   const models =
     provider === "google-gemini"
       ? (payload.models ?? [])

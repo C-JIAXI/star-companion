@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   type LucideIcon
 } from "lucide-react";
+import { reopenOnboarding } from "../components/OnboardingDialog";
 import { useMemo, useState } from "react";
 import { Button } from "../components/ui";
 import { useI18n } from "../i18n";
@@ -148,7 +149,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           items: [
             {
               title: "连接模型服务",
-              body: "从聊天就绪状态点击缺项可直接进入供应商管理的对应步骤。依次添加模型服务、填写 API Key（本机无鉴权服务可省略）、选择聊天模型，保存后运行真实模型连接测试。"
+              body: "从聊天就绪状态点击缺项可直接进入供应商管理。依次添加模型服务、填写 API Key（本机无鉴权服务可省略）、选择并声明聊天模型能力，然后保存。先运行通常不产生推理费用的元数据检查；只有在确认固定测试文本、最多 4 个输出 token、预算与本机记账影响后，才运行可选最小推理测试。"
             },
             {
               title: "创建原创角色",
@@ -274,6 +275,10 @@ const getDocsCopy = (language: string): DocsCopy => {
               body: "从模板快速添加模型服务，或自定义创建。每个服务可以单独保存地址、API Key 和模型列表。"
             },
             {
+              title: "就绪状态与安全诊断",
+              body: "设置页会对已保存的供应商、Base URL、密钥是否存在、聊天模型/能力、备用链、价格和本机预算做只读静态检查。默认连接测试只读取供应商模型元数据，通常不会产生推理费；可选最小推理测试使用固定文本、最多 4 个输出 token，并在确认后进入本机调用账本和预算。常见安全码包括 invalid_url、tls_failed、authentication、permission_denied、model_not_found、rate_limited、quota_exceeded、budget_blocked 和 provider_unavailable。诊断不包含密钥、聊天内容或供应商正文，也不等同于供应商账单或官方状态页。localhost、回环/RFC1918 和 .local 可配置为本机无鉴权服务，但仍只允许安全的 HTTP(S) URL。普通聊天只要求文本能力，图片聊天另需 vision_input。"
+            },
+            {
               title: "模型切换",
               body: "在设置页选择模型即可切换聊天使用的模型，聊天页也支持快速切换。"
             },
@@ -284,6 +289,10 @@ const getDocsCopy = (language: string): DocsCopy => {
             {
               title: "使用量、费用与预算",
               body: "使用量面板记录每次实际调用的模型、状态、token 和价格快照，并按模块、供应商、模型及聊天汇总。金额是本机根据供应商返回或估算 token 计算的 USD 参考值，不是供应商账单；无法可靠计价会显示“费用未知”，不会按零费用处理。软预算只提醒，硬预算由后端在每次调用前执行。"
+            },
+            {
+              title: "本地存储与数据健康",
+              body: "设置页中的存储中心按准确、估算或不可用标记数据库、角色/聊天/消息、记忆历史、聊天媒体及其引用、本地 data URL 图片、向量、恢复点、升级副本、回收站、用量账本和应用私有临时文件。快速检查和可取消深度检查都只读；深检验证 SQLite、引用、媒体哈希/长度/格式/尺寸/解码、向量维度、记忆版本与保留规则。清理必须逐项选择并先由后端生成五分钟有效、一次性且执行前重校验的计划；VACUUM 是独立操作，移动端不能保证安全时会明确显示不支持。异常或仍被消息/恢复点引用的媒体不会自动删除。安全诊断不含本地路径、完整媒体哈希、聊天正文、画像或 API Key。"
             },
             {
               title: "会话隐私锁",
@@ -443,7 +452,7 @@ const getDocsCopy = (language: string): DocsCopy => {
         items: [
           {
             title: "Connect a model service",
-            body: "Open a missing item from Chat Readiness to jump directly to the matching Provider Management step. Add a service, enter its API key (optional for unauthenticated local services), choose a chat model, save, then run the real model connection test."
+            body: "Open a missing item from Chat Readiness to jump to Provider Management. Add a service, enter its API key (optional for unauthenticated local services), choose and declare chat-model capabilities, then save. Start with the metadata check, which normally incurs no inference cost. Run the optional minimal inference test only after confirming its fixed input, four-token output limit, budget check, and local ledger impact."
           },
           {
             title: "Create an original character",
@@ -596,6 +605,10 @@ const getDocsCopy = (language: string): DocsCopy => {
             body: "Add model services from templates or create custom ones. Each service can keep its own address, API key, and model list."
           },
           {
+            title: "Readiness and safe diagnostics",
+            body: "Settings statically checks the saved provider, base URL, key presence, chat model/capabilities, fallback chain, pricing, and local budget without contacting a provider. The default connection test reads model metadata and normally incurs no inference cost. The optional minimal inference test uses fixed text and at most four output tokens, then enters the local ledger and budget lifecycle after confirmation. Common safe codes include invalid_url, tls_failed, authentication, permission_denied, model_not_found, rate_limited, quota_exceeded, budget_blocked, and provider_unavailable. Diagnostics contain no key, chat content, or provider body and are not a provider bill or status page. Localhost, loopback/RFC1918, and .local services may run without authentication but still require safe HTTP(S) URLs. Text chat needs text capability; image chat separately needs vision_input."
+          },
+          {
             title: "Model switching",
             body: "Choose a model in Settings to switch what chat uses. The chat page also supports quick model switching."
           },
@@ -606,6 +619,10 @@ const getDocsCopy = (language: string): DocsCopy => {
           {
             title: "Usage, cost, and budgets",
             body: "The usage panel records the actual model, status, tokens, and price snapshot for every real call, with module, provider, model, and chat summaries. USD amounts are local estimates based on provider-reported or estimated tokens, not a provider bill. Unreliably priced work is marked cost unknown rather than zero. Soft budgets warn; hard budgets are enforced by the backend before every call."
+          },
+          {
+            title: "Local storage and data health",
+            body: "The Settings storage center labels database, character/chat/message data, memory history, chat media and references, local data-URL images, embeddings, recovery points, upgrade copies, trash, usage ledger, and app-private temporary files as exact, estimated, or unavailable. Fast and cancellable deep checks are read-only. Deep checks validate SQLite, references, media hashes/length/type/dimensions/decode, embedding dimensions, memory revision monotonicity, and retention. Cleanup is selected per action and requires a server-generated five-minute, one-use plan that is revalidated before execution. VACUUM is separate and mobile reports it unsupported when safe atomicity cannot be guaranteed. Referenced or abnormal media is never auto-deleted. Safe diagnostics exclude local paths, full media hashes, chat text, profiles, and API keys."
           },
           {
             title: "Session privacy lock",
@@ -869,11 +886,16 @@ export function DocsPage() {
       data-testid="docs-page-root"
     >
       <section className="border-b border-white/[0.08] pb-6">
-        <div className="min-w-0">
+        <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
           <p className="section-kicker text-ember-300">
             {copy.eyebrow}
           </p>
           <p className="mt-3 max-w-4xl text-sm leading-7 text-slate-300">{copy.intro}</p>
+          </div>
+          <Button variant="secondary" data-testid="docs-open-onboarding" onClick={reopenOnboarding}>
+            {language === "zh-CN" ? "打开首次使用引导" : "Open first-use guide"}
+          </Button>
         </div>
         <div className="mt-5 grid divide-y divide-white/[0.08] border-y border-white/[0.08] md:grid-cols-3 md:divide-x md:divide-y-0">
           {copy.quickFacts.map((fact) => (

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { prisma } from "../db.js";
 import { HttpError } from "../lib/http.js";
 import { ImageValidationError, MAX_MESSAGE_IMAGE_BYTES, normalizeUploadedImage as normalizeImage, type SupportedImageMime } from "./imageNormalization.js";
+import { assertStorageCapacity } from "./storageHealth.js";
 
 export { MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, MAX_MESSAGE_IMAGE_BYTES } from "./imageNormalization.js";
 export const normalizeUploadedImage = (input: Parameters<typeof normalizeImage>[0]) => {
@@ -57,6 +58,7 @@ export const uploadDraftImage = async (input: {
   mimeType: SupportedMime;
   originalFilename?: string;
 }) => {
+  await assertStorageCapacity(Math.ceil(input.dataBase64.length * 0.75));
   const normalized = normalizeUploadedImage(input);
   const contentHash = createHash("sha256").update(normalized.data).digest("hex");
   return prisma.$transaction(async (tx) => {

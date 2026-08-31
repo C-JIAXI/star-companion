@@ -67,6 +67,7 @@ export class MobileStore {
     this.writeQueue = Promise.resolve();
     this.transactionQueue = Promise.resolve();
     this.migrationReport = null;
+    this.mutationVersion = 0;
   }
 
   async load() {
@@ -96,6 +97,7 @@ export class MobileStore {
       await writeFile(this.filePath, Buffer.from(this.db.export()));
     });
     await this.writeQueue;
+    this.mutationVersion += 1;
   }
 
   async atomicWrite(operation) {

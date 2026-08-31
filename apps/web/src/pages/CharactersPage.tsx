@@ -31,6 +31,7 @@ import { MarkdownEditor } from "../components/MarkdownEditor";
 import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
+import { useAppStore } from "../store/useAppStore";
 import { readFileAsDataUrl, readFileText, saveJsonFile } from "../lib/files";
 import { usePlaceholderSrc } from "../placeholderImages";
 import { checkCharacterQuality, type CharacterQualityIssue } from "@local-roleplay/shared";
@@ -401,6 +402,7 @@ export function CharactersPage({
   const [draftLoading, setDraftLoading] = useState(false);
   const [draftApplyAllConfirm, setDraftApplyAllConfirm] = useState(false);
   const draftAbortRef = useRef<AbortController | null>(null);
+  const characterImportInputRef = useRef<HTMLInputElement | null>(null);
   const [batchMode, setBatchMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batchTagDialogOpen, setBatchTagDialogOpen] = useState(false);
@@ -851,6 +853,7 @@ export function CharactersPage({
         );
       } else {
         const created = await api.characters.create(toInput(form));
+        void useAppStore.getState().refreshReadiness();
         setIsCreating(false);
         setSearchQuery("");
         setSelectedTag("");
@@ -989,6 +992,7 @@ export function CharactersPage({
         selected.id,
         `${selected.name} ${t("characters.copySuffix")}`
       );
+      void useAppStore.getState().refreshReadiness();
       setSearchQuery("");
       setSelectedTag("");
       setFavoriteOnly(false);
@@ -1014,6 +1018,7 @@ export function CharactersPage({
     setStatus(null);
     try {
       await api.characters.remove(selected.id);
+      void useAppStore.getState().refreshReadiness();
       setDeleteConfirmOpen(false);
       setSelectedId(null);
       setSelectedCharacter(null);
@@ -1038,6 +1043,7 @@ export function CharactersPage({
     try {
       const ids = Array.from(selectedIds);
       await api.characters.batchRemove(ids);
+      void useAppStore.getState().refreshReadiness();
       setBatchDeleteConfirmOpen(false);
       setSelectedIds(new Set());
       setBatchMode(false);
@@ -1198,6 +1204,7 @@ export function CharactersPage({
     try {
       const parsed = JSON.parse(await readFileText(file)) as CharacterCardImportInput;
       const imported = await api.characters.import(parsed);
+      void useAppStore.getState().refreshReadiness();
       setIsCreating(false);
       delete unlockedPasswordRef.current[imported.id];
       setSearchQuery("");
@@ -1354,6 +1361,7 @@ export function CharactersPage({
           <FileUp size={14} />
           {t("common.import")}
           <input
+            ref={characterImportInputRef}
             className="sr-only"
             disabled={hasUnsavedChanges}
             type="file"
@@ -1387,7 +1395,7 @@ export function CharactersPage({
                       type="button"
                       className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
                         exportMode === mode
-                          ? "bg-ember-500 text-ink-950"
+                          ? "bg-ember-500 text-accentForeground"
                           : "text-slate-300 hover:bg-white/10 hover:text-slate-100"
                       }`}
                       onClick={() => setExportMode(mode)}
@@ -1424,7 +1432,7 @@ export function CharactersPage({
                 </div>
                 <div className="flex gap-1 rounded-md border border-white/10 bg-ink-950 p-1" data-testid="character-editor-mode">
                   {(["basic", "advanced"] as CharacterEditorMode[]).map((mode) => (
-                    <button key={mode} type="button" aria-pressed={editorMode === mode} className={`min-h-[44px] rounded px-4 text-sm font-medium ${editorMode === mode ? "bg-ember-500 text-ink-950" : "text-slate-300 hover:bg-white/5"}`} onClick={() => switchEditorMode(mode)}>
+                    <button key={mode} type="button" aria-pressed={editorMode === mode} className={`min-h-[44px] rounded px-4 text-sm font-medium ${editorMode === mode ? "bg-ember-500 text-accentForeground" : "text-slate-300 hover:bg-white/5"}`} onClick={() => switchEditorMode(mode)}>
                       {mode === "basic" ? (language === "zh-CN" ? "基础模式" : "Basic") : (language === "zh-CN" ? "高级模式" : "Advanced")}
                     </button>
                   ))}
@@ -1805,7 +1813,7 @@ export function CharactersPage({
                               <ScopedHtmlRenderer content={previewMarkup} htmlCss={form.htmlCss} />
                             </article>
                             <div
-                              className="order-2 grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-md border border-ember-300/30 bg-ink-950/20 text-xs font-bold text-ink-950"
+                              className="order-2 grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-md border border-ember-300/30 bg-ink-950/20 text-xs font-bold text-accentForeground"
                               title={form.name || t("common.unknown")}
                             >
                               {form.avatar ? (
@@ -2481,11 +2489,30 @@ export function CharactersPage({
           !selectedTag &&
           !favoriteOnly ? (
             <div className="flex items-center justify-center py-16">
-              <EmptyState>{t("characters.noCharacters")}</EmptyState>
+              <EmptyState>
+                <div className="flex max-w-md flex-col items-center gap-3">
+                  <p className="font-medium text-ink-100">{t("characters.noCharacters")}</p>
+                  <p className="text-xs leading-5 text-ink-400">{language === "zh-CN" ? "从空白创建原创角色，或导入你拥有的 JSON 角色卡；应用不会自动添加默认内容。" : "Create an original character from scratch or import a JSON character card you own. The app never adds default content automatically."}</p>
+                  <div className="flex flex-wrap justify-center gap-2">
+                    <Button data-testid="characters-empty-create" onClick={() => requestEditorExit("new")}><Plus size={15} />{t("characters.create")}</Button>
+                    <Button variant="secondary" onClick={() => characterImportInputRef.current?.click()}><FileUp size={15} />{t("common.import")}</Button>
+                    <Button variant="secondary" onClick={() => {
+                      window.history.pushState({}, "", "/docs#quick-start");
+                      window.dispatchEvent(new PopStateEvent("popstate"));
+                    }}>{language === "zh-CN" ? "查看应用内指南" : "View in-app guide"}</Button>
+                  </div>
+                </div>
+              </EmptyState>
             </div>
           ) : characters.length === 0 ? (
             <div className="flex items-center justify-center py-16">
-              <EmptyState>{t("characters.noSearchResults")}</EmptyState>
+              <EmptyState>
+                <div className="flex max-w-md flex-col items-center gap-3">
+                  <p className="font-medium text-ink-100">{t("characters.noSearchResults")}</p>
+                  <p className="text-xs text-ink-400">{language === "zh-CN" ? `当前筛选：${searchQuery.trim() || selectedTag || (favoriteOnly ? "仅收藏" : "—")}` : `Current filter: ${searchQuery.trim() || selectedTag || (favoriteOnly ? "favorites only" : "—")}`}</p>
+                  <Button variant="secondary" onClick={() => { setSearchQuery(""); setSelectedTag(""); setFavoriteOnly(false); setCharacterPage(1); }}>{language === "zh-CN" ? "清除筛选" : "Clear filters"}</Button>
+                </div>
+              </EmptyState>
             </div>
           ) : (
             <>

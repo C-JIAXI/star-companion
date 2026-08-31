@@ -90,7 +90,7 @@ export function NewChatDialog({
   onCreate: (characterId: string) => Promise<void>;
   onOpenCharacters: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [result, setResult] = useState<PaginatedCharactersDTO | null>(null);
@@ -367,7 +367,11 @@ export function NewChatDialog({
                           {t("chat.newChatAdvancedEditor")}
                         </Button>
                       </div>
-                    ) : null}
+                    ) : (
+                      <Button variant="secondary" onClick={() => { setQuery(""); setPage(1); }}>
+                        {language === "zh-CN" ? "清除搜索" : "Clear search"}
+                      </Button>
+                    )}
                   </div>
                 </EmptyState>
               ) : (

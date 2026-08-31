@@ -41,6 +41,8 @@ apps/web/playwright-report
 apps/web/test-results
 apps/server/prisma/dev.db
 apps/server/prisma/dev.db*
+apps/server/prisma/.tmp/
+apps/server/prisma/upgrade-recovery/
 packages/shared/src/*.js
 packages/shared/src/*.d.ts
 packages/shared/src/*.map

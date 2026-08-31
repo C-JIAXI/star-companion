@@ -27,7 +27,7 @@ import { queueChatMessageJump } from "../lib/messageNavigation";
 import { usePlaceholderSrc } from "../placeholderImages";
 import type { CharacterDTO, ChatArchiveDTO, ChatDTO, GlobalChatMessageSearchDTO } from "../types";
 import { ChatGroupHeader } from "./ChatGroupHeader";
-import { ConfirmDialog, EmptyState, ErrorNotice, Modal, TextInput } from "./ui";
+import { Button, ConfirmDialog, EmptyState, ErrorNotice, Modal, TextInput } from "./ui";
 
 interface CharacterGroup {
   characterId: string;
@@ -887,7 +887,7 @@ export function ChatHistoryList({
                       aria-pressed={searchMode === mode}
                       className={`min-h-[34px] rounded-md px-3 text-xs font-medium transition-colors ${
                         searchMode === mode
-                          ? "bg-ember-500 text-ink-950"
+                          ? "bg-ember-500 text-accentForeground"
                           : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
                       }`}
                       key={mode}
@@ -1190,15 +1190,18 @@ export function ChatHistoryList({
                   ) : groups.length === 0 ? (
                     <div className="py-8 text-center">
                       <EmptyState>
-                        {searchQuery.trim()
-                          ? language === "zh-CN"
-                            ? "没有匹配的对话"
-                            : "No matching chats"
-                          : chatScope === "archived"
-                            ? t("chat.noArchivedChats")
-                            : chatScope === "trash"
-                              ? t("chat.noTrashedChats")
-                              : t("chat.noChats")}
+                        <div className="flex flex-col items-center gap-3">
+                          <p>{searchQuery.trim()
+                            ? language === "zh-CN"
+                              ? `没有匹配“${searchQuery.trim()}”的对话`
+                              : `No chats match “${searchQuery.trim()}”`
+                            : chatScope === "archived"
+                              ? t("chat.noArchivedChats")
+                              : chatScope === "trash"
+                                ? t("chat.noTrashedChats")
+                                : t("chat.noChats")}</p>
+                          {searchQuery.trim() ? <Button variant="secondary" onClick={() => setSearchQuery("")}>{language === "zh-CN" ? "清除搜索" : "Clear search"}</Button> : chatScope !== "active" ? <Button variant="secondary" onClick={() => setChatScope("active")}>{language === "zh-CN" ? "返回全部聊天" : "Back to all chats"}</Button> : <Button variant="secondary" onClick={onOpenDocs}>{language === "zh-CN" ? "查看聊天指南" : "View chat guide"}</Button>}
+                        </div>
                       </EmptyState>
                     </div>
                   ) : (
@@ -1253,7 +1256,7 @@ export function ChatHistoryList({
                                       <span
                                         className={`grid h-4 w-4 shrink-0 place-items-center rounded border transition-colors ${
                                           isSelected
-                                            ? "border-ember-500 bg-ember-500 text-ink-950"
+                                            ? "border-ember-500 bg-ember-500 text-accentForeground"
                                             : "border-white/20 bg-ink-900 text-transparent"
                                         }`}
                                       >
@@ -1611,7 +1614,7 @@ export function ChatHistoryList({
                     {t("common.cancel")}
                   </button>
                   <button
-                    className="min-h-9 rounded-md bg-ember-500 px-3 text-sm font-semibold text-ink-950 transition-colors hover:bg-ember-400 disabled:opacity-50"
+                    className="min-h-9 rounded-md bg-ember-500 px-3 text-sm font-semibold text-accentForeground transition-colors hover:bg-ember-400 disabled:opacity-50"
                     disabled={loading}
                     type="button"
                     onClick={() => void saveFolder()}
@@ -1660,7 +1663,7 @@ export function ChatHistoryList({
                     {t("common.cancel")}
                   </button>
                   <button
-                    className="min-h-9 rounded-md bg-ember-500 px-3 text-sm font-semibold text-ink-950 transition-colors hover:bg-ember-400 disabled:opacity-50"
+                    className="min-h-9 rounded-md bg-ember-500 px-3 text-sm font-semibold text-accentForeground transition-colors hover:bg-ember-400 disabled:opacity-50"
                     disabled={loading}
                     type="button"
                     onClick={() => void saveBatchFolder()}
@@ -1708,7 +1711,7 @@ export function ChatHistoryList({
                     {t("common.cancel")}
                   </button>
                   <button
-                    className="min-h-9 rounded-md bg-ember-500 px-3 text-sm font-semibold text-ink-950 transition-colors hover:bg-ember-400 disabled:opacity-50"
+                    className="min-h-9 rounded-md bg-ember-500 px-3 text-sm font-semibold text-accentForeground transition-colors hover:bg-ember-400 disabled:opacity-50"
                     disabled={loading}
                     type="button"
                     onClick={() => void saveFolderRename()}

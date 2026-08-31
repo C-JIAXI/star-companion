@@ -56,7 +56,9 @@ import {
   voiceSpeechSchema,
   voiceTranscriptionSchema,
   settingsUpdateSchema,
-  lanSyncRequestSchema
+  lanSyncRequestSchema,
+  storageCleanupPlanRequestSchema,
+  storageCleanupExecuteSchema
 } from "../server-dist/schemas.js";
 import { normalizeUploadedImage, validateStoredImage } from "../server-dist/services/imageNormalization.js";
 import { buildCharacterDraftMessages, getCharacterDraftMeta, parseCharacterDraftItems } from "../server-dist/services/characterDraftProtocol.js";
@@ -94,6 +96,7 @@ import {
 } from "./privateCharacters.mjs";
 import { MobileStore } from "./store.mjs";
 import { mobileBuildType, mobileExternalUpdateUrl } from "./build-info.mjs";
+import { createMobileStorageHealth } from "./storage-health.mjs";
 
 const APP_NAME = "Star Companion Mobile Backend";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -122,6 +125,7 @@ const resolveDataDir = () => {
 const dataDir = resolveDataDir();
 const store = new MobileStore(path.join(dataDir, "mobile-backend.json"));
 const exportDir = path.join(dataDir, "exports");
+const storageHealth = createMobileStorageHealth({ store, dataDir, validateStoredImage });
 
 const parseBody = (schema, body) => {
   const parsed = schema.safeParse(body);
@@ -2327,6 +2331,7 @@ app.post("/api/privacy/lock", (request, response) => {
   if (passcode.length < 4 || passcode.length > 128) return response.status(400).json({ ok: false, error: "Unlock code must contain 4 to 128 characters." });
   privacyPasscodeDigest = privacyDigest(passcode);
   closeMobileSocketsForPrivacy();
+  storageHealth.cancelActive();
   response.json({ ok: true, data: { locked: true } });
 });
 app.post("/api/privacy/unlock", (request, response) => {
@@ -2339,6 +2344,11 @@ app.use("/api", (_request, response, next) => {
   if (privacyPasscodeDigest) return response.status(423).json({ ok: false, error: "App is locked." });
   next();
 });
+app.use("/api", (request, _response, next) => {
+  const readOnlyPost = request.method === "POST" && (request.path === "/backups/preview" || (request.path.startsWith("/sync/") && request.body?.phase === "preview"));
+  if (request.method !== "GET" && !request.path.startsWith("/storage-health/") && !readOnlyPost) storageHealth.registerMutation();
+  next();
+});
 
 app.get("/api/health", (_request, response) => {
   response.json({
@@ -2348,6 +2358,27 @@ app.get("/api/health", (_request, response) => {
     timestamp: new Date().toISOString()
   });
 });
+
+app.get("/api/storage-health/summary", asyncHandler(async (_request, response) => {
+  response.json({ ok: true, data: await storageHealth.summary() });
+}));
+app.post("/api/storage-health/deep-scans", (_request, response) => {
+  response.status(202).json({ ok: true, data: storageHealth.startScan() });
+});
+app.get("/api/storage-health/deep-scans/:id", (request, response) => {
+  response.json({ ok: true, data: storageHealth.getScan(requireParam(request, "id")) });
+});
+app.delete("/api/storage-health/deep-scans/:id", (request, response) => {
+  response.json({ ok: true, data: storageHealth.cancelScan(requireParam(request, "id")) });
+});
+app.post("/api/storage-health/cleanup-plans", asyncHandler(async (request, response) => {
+  const body = parseBody(storageCleanupPlanRequestSchema, request.body);
+  response.status(201).json({ ok: true, data: await storageHealth.createPlan(body.actions) });
+}));
+app.post("/api/storage-health/cleanup-plans/:id/execute", asyncHandler(async (request, response) => {
+  parseBody(storageCleanupExecuteSchema, request.body);
+  response.json({ ok: true, data: await storageHealth.executePlan(requireParam(request, "id")) });
+}));
 
 const getMobileAppInfo = () => {
   const info = getAppInfo();
@@ -3139,6 +3170,7 @@ app.post(
   "/api/media/chat-images/drafts",
   asyncHandler(async (request, response) => {
     const body = parseBody(imageAttachmentUploadSchema, request.body);
+    await storageHealth.assertCapacity(Math.ceil(body.dataBase64.length * 0.75));
     const normalized = normalizeUploadedImage(body);
     const contentHash = createHash("sha256").update(normalized.data).digest("hex");
     const result = await store.createDraftAttachment({
@@ -3186,12 +3218,190 @@ app.delete("/api/media/chat-images/drafts/:draftId", asyncHandler(async (request
 app.get("/api/media/chat-images/:assetId", (request, response) => {
   const asset = store.getMediaAsset(requireParam(request, "assetId"));
   if (!asset || !store.readRecords("messageAttachment").some((item) => item.assetId === asset.id)) throw notFound("Image not found");
+  const data = Buffer.from(asset.dataBase64, "base64");
+  try {
+    if (data.length !== asset.byteSize || createHash("sha256").update(data).digest("hex") !== asset.contentHash) throw new Error("mismatch");
+    validateStoredImage({ data, mimeType: asset.mimeType, width: asset.width, height: asset.height });
+  } catch { throw httpError(410, "Image unavailable."); }
   response.setHeader("Content-Type", asset.mimeType);
   response.setHeader("Content-Length", String(asset.byteSize));
   response.setHeader("Cache-Control", "private, no-store");
   response.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
   response.setHeader("X-Content-Type-Options", "nosniff");
-  response.send(Buffer.from(asset.dataBase64, "base64"));
+  response.send(data);
+});
+
+const mobileReadinessFingerprint = (settings) => createHash("sha256").update(JSON.stringify({
+  activeProvider: settings.activeProvider,
+  apiBaseUrl: settings.apiBaseUrl,
+  apiKey: settings.apiKey,
+  model: settings.model,
+  activeProviderId: settings.activeProviderId,
+  activeModelId: settings.activeModelId,
+  providers: settings.providers,
+  moduleModelPreferences: settings.moduleModelPreferences,
+  modelReliability: settings.modelReliability
+})).digest("hex");
+
+let mobileConnectionRecord = null;
+const mobileConnectionTests = new Map();
+
+const mobileEmptyConnection = () => ({
+  status: "untested", mode: null, testId: null, providerKind: null, providerId: null,
+  modelId: null, checkedAt: null, errorCode: null, diagnosticId: null, summary: null,
+  retryable: false, suggestedAction: "test_connection", mayIncurCost: false
+});
+
+const mobileLocalHost = (hostname) => {
+  const value = String(hostname).toLowerCase().replace(/^\[|\]$/g, "");
+  if (["localhost", "::1"].includes(value) || value.endsWith(".local")) return true;
+  if (/^(?:127\.|10\.|192\.168\.)/.test(value)) return true;
+  const match = value.match(/^172\.(\d{1,2})\./);
+  return Boolean(match && Number(match[1]) >= 16 && Number(match[1]) <= 31);
+};
+
+const inspectMobileConfiguration = (settings) => {
+  const issues = [];
+  const add = (code, severity, field, action, details = {}) => issues.push({ code, severity, field, action, ...details });
+  const providers = Array.isArray(settings.providers) ? settings.providers : [];
+  if (!providers.length) add("provider_missing", "error", "provider", "configure_provider");
+  const provider = providers.find((entry) => entry.id === settings.activeProviderId);
+  if (providers.length && !provider) add("active_provider_missing", "error", "provider", "configure_provider");
+  if (provider) {
+    try {
+      const url = new URL(provider.apiBaseUrl);
+      if (!["http:", "https:"].includes(url.protocol)) add("base_url_protocol", "error", "apiBaseUrl", "fix_base_url", { providerId: provider.id });
+      if (url.username || url.password) add("base_url_credentials", "error", "apiBaseUrl", "fix_base_url", { providerId: provider.id });
+      if (url.hash) add("base_url_fragment", "error", "apiBaseUrl", "fix_base_url", { providerId: provider.id });
+      if ([...url.searchParams.keys()].some((key) => /(?:api[-_]?key|token|secret|authorization|credential|password)/i.test(key))) add("base_url_sensitive_query", "error", "apiBaseUrl", "fix_base_url", { providerId: provider.id });
+      if (!hasStoredApiKey(provider.key) && !hasStoredApiKey(settings.apiKey) && !mobileLocalHost(url.hostname)) add("api_key_missing", "error", "apiKey", "add_api_key", { providerId: provider.id });
+    } catch {
+      add("base_url_invalid", "error", "apiBaseUrl", "fix_base_url", { providerId: provider.id });
+    }
+  }
+  const activeModel = provider?.models?.find((entry) => entry.id === settings.activeModelId);
+  if (provider && !activeModel) add("active_model_missing", "error", "model", "select_chat_model", { providerId: provider.id });
+  const preference = settings.moduleModelPreferences?.chat;
+  const chatProvider = preference ? providers.find((entry) => entry.id === preference.providerId) : provider;
+  const chatModel = preference ? chatProvider?.models?.find((entry) => entry.id === preference.modelId) : activeModel;
+  if (!chatProvider || !chatModel) add("chat_model_missing", "error", "modulePreferences", "select_chat_model", { providerId: preference?.providerId, modelId: preference?.modelId, module: "chat" });
+  else if (!supportsModule(chatProvider, chatModel, "chat")) add("chat_model_unsupported", "error", "capabilities", "configure_model_capabilities", { providerId: chatProvider.id, modelId: chatModel.id, module: "chat" });
+  for (const moduleId of Object.keys(moduleCapabilities)) {
+    const selected = settings.moduleModelPreferences?.[moduleId];
+    if (selected) {
+      const selectedProvider = providers.find((entry) => entry.id === selected.providerId);
+      const selectedModel = selectedProvider?.models?.find((entry) => entry.id === selected.modelId);
+      if (!selectedProvider || !selectedModel) add("module_preference_dangling", "error", "modulePreferences", "select_chat_model", { ...selected, module: moduleId });
+    }
+    const chain = settings.modelReliability?.fallback?.[moduleId]?.chain;
+    if (!Array.isArray(chain)) continue;
+    if (chain.length > 3) add("fallback_too_many", "error", "fallbacks", "review_fallbacks", { module: moduleId });
+    const primary = settings.moduleModelPreferences?.[moduleId] ?? { providerId: settings.activeProviderId, modelId: settings.activeModelId };
+    const seen = new Set();
+    for (const reference of chain) {
+      const key = `${reference?.providerId}\0${reference?.modelId}`;
+      if (seen.has(key)) add("fallback_duplicate", "error", "fallbacks", "review_fallbacks", { ...reference, module: moduleId });
+      seen.add(key);
+      if (reference?.providerId === primary.providerId && reference?.modelId === primary.modelId) add("fallback_self_reference", "error", "fallbacks", "review_fallbacks", { ...reference, module: moduleId });
+      const fallbackProvider = providers.find((entry) => entry.id === reference?.providerId);
+      const fallbackModel = fallbackProvider?.models?.find((entry) => entry.id === reference?.modelId);
+      if (!fallbackProvider || !fallbackModel) add("fallback_dangling", "error", "fallbacks", "review_fallbacks", { ...reference, module: moduleId });
+      else if (!supportsModule(fallbackProvider, fallbackModel, moduleId)) add("fallback_unsupported", "error", "fallbacks", "review_fallbacks", { ...reference, module: moduleId });
+      else if (moduleId === "chat" && !getModelCapabilities(fallbackModel).includes("vision_input")) add("fallback_vision_gap", "warning", "fallbacks", "review_fallbacks", { ...reference, module: moduleId });
+    }
+  }
+  if (chatModel && !chatModel.pricing) add("pricing_unknown", "warning", "pricing", "review_pricing", { providerId: chatProvider?.id, modelId: chatModel.id });
+  return issues;
+};
+
+const mobileBudgetAllowsChat = (settings) => {
+  const budgets = settings.usageBudgets ?? {};
+  const identity = mobileModelIdentity(settings);
+  if (!identity.pricing) return budgets.allowUnknownPricing !== false;
+  const maximum = mobileEstimatedCost({ promptTokens: 0, completionTokens: settings.maxTokens ?? 800 }, identity.pricing);
+  if (maximum == null) return true;
+  const rows = store.listUsageAttempts();
+  const dateParts = new Intl.DateTimeFormat("en-CA", { timeZone: settings.usageTimezone || "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const datePart = (type) => dateParts.find((entry) => entry.type === type)?.value ?? "";
+  const date = `${datePart("year")}-${datePart("month")}-${datePart("day")}`;
+  const month = date.slice(0, 7);
+  const committed = (key, value) => rows.filter((row) => row[key] === value).reduce((total, row) => total + (row.estimatedCostMicros ?? 0) + (row.reservedCostMicros ?? 0), 0);
+  return !(Number.isSafeInteger(budgets.dailyHardMicros) && committed("reservationDay", date) + maximum > budgets.dailyHardMicros) &&
+    !(Number.isSafeInteger(budgets.monthlyHardMicros) && committed("reservationMonth", month) + maximum > budgets.monthlyHardMicros);
+};
+
+const loadMobileReadiness = () => {
+  const settings = store.getSettings();
+  const issues = inspectMobileConfiguration(settings);
+  const budgetAllowsChat = mobileBudgetAllowsChat(settings);
+  if (!budgetAllowsChat && !issues.some((entry) => entry.code === "budget_blocked")) issues.push({ code: "budget_blocked", severity: "error", field: "budget", action: "review_budget" });
+  const characters = store.listCharacters();
+  const chats = store.listChats().filter((chat) => !chat.deletedAt && !chat.isCheckpoint);
+  const connection = mobileConnectionRecord?.fingerprint === mobileReadinessFingerprint(settings) ? { ...mobileConnectionRecord } : mobileEmptyConnection();
+  delete connection.fingerprint;
+  const configurationValid = !issues.some((entry) => entry.severity === "error" && entry.code !== "budget_blocked");
+  const ready = characters.length > 0 && configurationValid && budgetAllowsChat;
+  const chatPreference = settings.moduleModelPreferences?.chat;
+  const chatProvider = chatPreference ? settings.providers?.find((entry) => entry.id === chatPreference.providerId) : settings.providers?.find((entry) => entry.id === settings.activeProviderId);
+  const chatModel = chatPreference ? chatProvider?.models?.find((entry) => entry.id === chatPreference.modelId) : chatProvider?.models?.find((entry) => entry.id === settings.activeModelId);
+  const visionAvailable = Boolean(chatModel && getModelCapabilities(chatModel).includes("vision_input"));
+  let overallStatus = !budgetAllowsChat ? "budget_blocked" : !configurationValid || !characters.length ? "needs_configuration" : connection.status === "failed" ? "connection_failed" : connection.status !== "succeeded" ? "configuration_untested" : !visionAvailable || issues.some((entry) => entry.severity === "warning") ? "ready_with_limited_capabilities" : "ready";
+  const nextRecommendedAction = !characters.length ? "create_character" : !configurationValid ? (issues.find((entry) => entry.severity === "error")?.action ?? "configure_provider") : !budgetAllowsChat ? "review_budget" : connection.status === "failed" ? "retry_connection" : connection.status !== "succeeded" ? "test_connection" : chats.length ? "continue_chat" : "create_chat";
+  const provider = settings.providers?.find((entry) => entry.id === settings.activeProviderId);
+  const model = provider?.models?.find((entry) => entry.id === settings.activeModelId);
+  return {
+    serverReachable: true, appLocked: false, hasCharacter: characters.length > 0, hasAvailableCharacter: characters.length > 0,
+    hasChat: chats.length > 0, hasProvider: Boolean(provider), hasApiKey: !issues.some((entry) => entry.code === "api_key_missing"),
+    hasActiveModel: Boolean(model), chatModuleAssigned: !issues.some((entry) => entry.code === "chat_model_missing"),
+    chatModelSupportsText: !issues.some((entry) => ["chat_model_missing", "chat_model_unsupported"].includes(entry.code)),
+    visionAvailable, budgetAllowsChat, configurationValid,
+    ready, overallStatus, connectionStatus: connection, nextRecommendedAction, issues,
+    characterCount: characters.length, chatCount: chats.length, computedAt: new Date().toISOString()
+  };
+};
+
+const mobileConnectionAction = (code) => code === "authentication" ? "add_api_key" : code === "invalid_url" ? "fix_base_url" : ["model_not_found", "unsupported_capability"].includes(code) ? "select_chat_model" : code === "budget_blocked" ? "review_budget" : "retry_connection";
+
+app.get("/api/readiness", (_request, response) => response.json({ ok: true, data: loadMobileReadiness() }));
+
+app.post("/api/readiness/connection-tests", asyncHandler(async (request, response) => {
+  const settings = store.getSettings();
+  const readiness = loadMobileReadiness();
+  if (!readiness.configurationValid) throw httpError(400, "The saved model configuration is incomplete.");
+  const mode = request.body?.mode === "inference" ? "inference" : "metadata";
+  if (mode === "inference" && request.body?.confirmCost !== true) throw httpError(400, "Explicit inference-cost confirmation is required.");
+  const fingerprint = mobileReadinessFingerprint(settings);
+  if ([...mobileConnectionTests.values()].some((item) => item.fingerprint === fingerprint)) throw httpError(409, "A connection test is already running for this saved configuration.");
+  const testId = `connection_${randomUUID()}`;
+  const controller = new AbortController();
+  mobileConnectionTests.set(testId, { fingerprint, controller });
+  mobileConnectionRecord = { ...mobileEmptyConnection(), fingerprint, status: "checking", mode, testId, providerKind: normalizeProviderKind(settings.activeProvider), providerId: settings.activeProviderId || null, modelId: settings.activeModelId || settings.model || null, summary: "Connection check in progress.", suggestedAction: null, mayIncurCost: mode === "inference" };
+  try {
+    if (mode === "metadata") {
+      const resolved = resolveModuleSettings(settings, "chat");
+      const result = await fetchAvailableModels(resolved, controller.signal);
+      const selected = String(resolved.model).replace(/^models\//, "");
+      if (!result.models.some((modelId) => String(modelId).replace(/^models\//, "") === selected)) throw new ModelCallError({ code: "model_not_found", retryable: false, receivedOutputTokens: false, provider: normalizeProviderKind(settings.activeProvider), modelId: settings.model, attempt: 1, summary: "The configured model was not found.", diagnosticId: `mdl_${randomUUID().replaceAll("-", "").slice(0, 16)}` });
+    } else {
+      await executeMobileReliableText({ rootSettings: settings, module: "chat", operation: "connection_test", messages: [{ role: "user", content: "Reply with OK." }], requestId: testId, signal: controller.signal, maxTokens: 4, temperature: 0 });
+    }
+    mobileConnectionRecord = { ...mobileConnectionRecord, status: "succeeded", checkedAt: new Date().toISOString(), diagnosticId: `mdl_${randomUUID().replaceAll("-", "").slice(0, 16)}`, summary: mode === "metadata" ? "Provider metadata verified the saved model configuration." : "A minimal provider inference completed successfully.", retryable: false, suggestedAction: "create_chat" };
+  } catch (caught) {
+    const normalized = caught instanceof ModelCallError ? caught : normalizeModelError(caught, { provider: normalizeProviderKind(settings.activeProvider), modelId: settings.model, cancelled: controller.signal.aborted });
+    mobileConnectionRecord = { ...mobileConnectionRecord, status: normalized.safe.code === "cancelled" ? "cancelled" : "failed", checkedAt: new Date().toISOString(), errorCode: normalized.safe.code, diagnosticId: normalized.safe.diagnosticId, summary: normalized.safe.summary, retryable: normalized.safe.retryable, suggestedAction: mobileConnectionAction(normalized.safe.code) };
+  } finally {
+    mobileConnectionTests.delete(testId);
+  }
+  const result = { ...mobileConnectionRecord };
+  delete result.fingerprint;
+  response.json({ ok: true, data: result });
+}));
+
+app.delete("/api/readiness/connection-tests/:testId", (request, response) => {
+  const active = mobileConnectionTests.get(requireParam(request, "testId"));
+  if (!active) throw notFound("Connection test is no longer running.");
+  active.controller.abort(new DOMException("Cancelled", "AbortError"));
+  response.json({ ok: true, data: { cancelled: true, testId: requireParam(request, "testId") } });
 });
 
 app.get("/api/settings", (_request, response) => {
@@ -3499,6 +3709,7 @@ app.post(
   "/api/backups/import",
   asyncHandler(async (request, response) => {
     const backup = parseBody(backupExecuteSchema, request.body);
+    await storageHealth.assertCapacity(Buffer.byteLength(JSON.stringify(backup)));
     response.json({
       ok: true,
       data: await store.importBackup(backup, serializeSettings(store.getSettings()))

@@ -316,11 +316,11 @@ export function UserMessageBubble({
         showAvatar={showAvatar}
       />
       <article
-        className={`order-1 relative ${bubbleWidthClassName} rounded-lg rounded-bl-sm border border-ember-300/20 bg-ember-500 p-3 text-sm text-ink-950 sm:p-4`}
+        className={`order-1 relative ${bubbleWidthClassName} rounded-lg rounded-bl-sm border border-ember-300/20 bg-ember-500 p-3 text-sm text-accentForeground sm:p-4`}
         data-chat-bubble=""
       >
         {userName ? (
-          <p className="mb-1.5 text-xs font-semibold text-ink-950/65" data-chat-user-name="">
+          <p className="mb-1.5 text-xs font-semibold text-accentForeground/70" data-chat-user-name="">
             {userName}
           </p>
         ) : null}
@@ -328,7 +328,7 @@ export function UserMessageBubble({
         {message.content.trim() ? <MessageBody align="left" content={message.content} renderHtml={false} /> : <span className="sr-only">{language === "zh-CN" ? "图片消息" : "Image message"}</span>}
         {message.contextIncluded === false ? (
           <div
-            className="mt-3 inline-flex items-center gap-1.5 rounded border border-ink-950/15 px-2 py-1 text-xs font-medium text-ink-950/75"
+            className="mt-3 inline-flex items-center gap-1.5 rounded border border-accentForeground/20 px-2 py-1 text-xs font-medium text-accentForeground/80"
             data-testid="message-context-excluded"
           >
             <EyeOff size={12} />
@@ -357,7 +357,7 @@ export function UserMessageBubble({
           <button
             aria-pressed={message.isBookmarked}
             className={`inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium active:opacity-70 ${
-              message.isBookmarked ? "text-ink-950" : "text-ink-900/70"
+              message.isBookmarked ? "text-accentForeground" : "text-accentForeground/70"
             }`}
             data-chat-action="bookmark"
             type="button"

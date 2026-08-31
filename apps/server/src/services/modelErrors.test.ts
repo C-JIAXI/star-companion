@@ -23,8 +23,8 @@ describe("provider-independent model errors", () => {
   it("normalizes representative OpenAI-compatible, Anthropic, and Gemini HTTP contracts", async () => {
     const cases: Array<[string, number, unknown, string]> = [
       ["openai-compatible", 401, { error: { code: "invalid_api_key", message: "secret" } }, "authentication"],
-      ["anthropic", 403, { error: { type: "permission_error", message: "forbidden" } }, "authentication"],
-      ["google-gemini", 403, { error: { status: "PERMISSION_DENIED" } }, "authentication"],
+      ["anthropic", 403, { error: { type: "permission_error", message: "forbidden" } }, "permission_denied"],
+      ["google-gemini", 403, { error: { status: "PERMISSION_DENIED" } }, "permission_denied"],
       ["openai-compatible", 404, { error: { code: "model_not_found" } }, "model_not_found"],
       ["anthropic", 404, { error: { type: "not_found_error", message: "model not found" } }, "model_not_found"],
       ["google-gemini", 404, { error: { status: "NOT_FOUND", message: "model not found" } }, "model_not_found"],
@@ -49,6 +49,12 @@ describe("provider-independent model errors", () => {
     });
     assert.equal(timeout.safe.code, "timeout");
     assert.equal(timeout.safe.summary.includes("private"), false);
+    const tlsFailure = Object.assign(new Error("certificate detail"), { code: "CERT_HAS_EXPIRED" });
+    const tls = normalizeModelError(tlsFailure, {
+      provider: "openai-compatible", modelId: "safe-model"
+    });
+    assert.equal(tls.safe.code, "tls_failed");
+    assert.equal(tls.safe.summary.includes("certificate detail"), false);
     const malformed = malformedModelResponse("anthropic", "safe-model");
     assert.equal(malformed.safe.code, "malformed_response");
     assert.equal(malformed.safe.retryable, false);

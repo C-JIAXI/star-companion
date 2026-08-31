@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 export type ModelErrorCode =
+  | "configuration_incomplete"
+  | "invalid_url"
   | "authentication"
+  | "permission_denied"
   | "model_not_found"
   | "unsupported_capability"
   | "rate_limited"
@@ -10,6 +13,7 @@ export type ModelErrorCode =
   | "invalid_request"
   | "safety_blocked"
   | "timeout"
+  | "tls_failed"
   | "connection_failed"
   | "provider_unavailable"
   | "malformed_response"
@@ -38,7 +42,10 @@ const retryableCodes = new Set<ModelErrorCode>([
 ]);
 
 const summaries: Record<ModelErrorCode, string> = {
+  configuration_incomplete: "The saved model configuration is incomplete. Review the highlighted settings.",
+  invalid_url: "The configured model service URL is invalid or unsafe.",
   authentication: "The model provider rejected the saved credentials. Check the local provider settings.",
+  permission_denied: "The saved credentials do not have permission to use this provider resource.",
   model_not_found: "The selected model is unavailable for this provider account.",
   unsupported_capability: "The selected model does not support this feature.",
   rate_limited: "The model provider is temporarily rate limiting requests.",
@@ -47,6 +54,7 @@ const summaries: Record<ModelErrorCode, string> = {
   invalid_request: "The provider could not accept this request. Check the model settings.",
   safety_blocked: "The provider safety policy blocked this request.",
   timeout: "The model provider did not respond in time.",
+  tls_failed: "A secure TLS connection to the model provider could not be established.",
   connection_failed: "A secure connection to the model provider could not be established.",
   provider_unavailable: "The model provider is temporarily unavailable.",
   malformed_response: "The model provider returned an unreadable response.",
@@ -76,9 +84,10 @@ const classifyBody = (status: number, provider: string, body: unknown): ModelErr
     if (/quota|billing|credit|balance|spend|resource_exhausted.*quota/.test(serialized)) return "quota_exceeded";
     return "rate_limited";
   }
-  if (status === 401 || status === 403 || /authentication|invalid_api_key|api key|permission_denied/.test(serialized)) {
+  if (status === 401 || /authentication|invalid_api_key|api key/.test(serialized)) {
     return "authentication";
   }
+  if (status === 403 || /permission_denied|forbidden|insufficient permission/.test(serialized)) return "permission_denied";
   if (status === 404 || /model_not_found|not found.*model|model.*not found/.test(serialized)) return "model_not_found";
   if (/context_length|context window|maximum context|too many tokens|input token count|prompt is too long/.test(serialized)) {
     return "context_overflow";
@@ -191,7 +200,10 @@ export const normalizeModelError = (error: unknown, input: {
   if (name.includes("timeout") || code === "ETIMEDOUT") {
     return createModelError({ code: "timeout", provider: input.provider, modelId: input.modelId, attempt: input.attempt });
   }
-  if (["ECONNRESET", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "CERT_HAS_EXPIRED", "ERR_TLS_CERT_ALTNAME_INVALID"].includes(code) || error instanceof TypeError) {
+  if (["CERT_HAS_EXPIRED", "ERR_TLS_CERT_ALTNAME_INVALID", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "DEPTH_ZERO_SELF_SIGNED_CERT"].includes(code)) {
+    return createModelError({ code: "tls_failed", provider: input.provider, modelId: input.modelId, attempt: input.attempt });
+  }
+  if (["ECONNRESET", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"].includes(code) || error instanceof TypeError) {
     return createModelError({ code: "connection_failed", provider: input.provider, modelId: input.modelId, attempt: input.attempt });
   }
   return createModelError({ code: "unknown", provider: input.provider, modelId: input.modelId, attempt: input.attempt });

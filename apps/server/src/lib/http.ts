@@ -81,10 +81,11 @@ export const errorMiddleware = (
 
   if (error instanceof ModelCallError) {
     const status = error.safe.code === "authentication" ? 401
+      : error.safe.code === "permission_denied" ? 403
       : error.safe.code === "model_not_found" ? 404
         : error.safe.code === "rate_limited" ? 429
           : error.safe.code === "budget_blocked" ? 409
-            : error.safe.code === "invalid_request" || error.safe.code === "context_overflow" || error.safe.code === "unsupported_capability" ? 400
+            : error.safe.code === "invalid_request" || error.safe.code === "invalid_url" || error.safe.code === "configuration_incomplete" || error.safe.code === "context_overflow" || error.safe.code === "unsupported_capability" ? 400
               : 502;
     response.status(status).json({ ok: false, error: error.safe.summary, modelError: error.safe });
     return;

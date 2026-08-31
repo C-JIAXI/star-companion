@@ -610,6 +610,23 @@ const main = async () => {
     );
     assert.deepEqual(importedProviderModels.models, ["fake-agent-model"]);
 
+    const readinessBeforeCharacters = await requestData(baseUrl, "/api/readiness");
+    assert.equal(readinessBeforeCharacters.serverReachable, true);
+    assert.equal(readinessBeforeCharacters.configurationValid, true);
+    assert.equal(readinessBeforeCharacters.hasCharacter, false);
+    assert.equal(readinessBeforeCharacters.connectionStatus.status, "untested");
+    assert.equal("apiKey" in readinessBeforeCharacters, false);
+    const metadataRequestCountBefore = fakeModelServer.getChatCompletionRequests();
+    const metadataConnectionTest = await requestData(baseUrl, "/api/readiness/connection-tests", {
+      method: "POST",
+      body: { mode: "metadata" }
+    });
+    assert.equal(metadataConnectionTest.status, "succeeded");
+    assert.equal(metadataConnectionTest.mode, "metadata");
+    assert.equal(metadataConnectionTest.mayIncurCost, false);
+    assert.equal(fakeModelServer.getChatCompletionRequests(), metadataRequestCountBefore);
+    assert.equal((await requestData(baseUrl, "/api/readiness")).connectionStatus.status, "succeeded");
+
     const profileSettings = await requestData(baseUrl, "/api/settings/user-profile", {
       method: "PUT",
       body: {
@@ -1631,6 +1648,11 @@ const main = async () => {
     log("Verifying session privacy lock API isolation");
     assert.equal((await requestData(baseUrl, "/api/privacy/status")).locked, false);
     assert.equal((await requestData(baseUrl, "/api/privacy/lock", { method: "POST", body: { passcode: "2468" } })).locked, true);
+    const lockedReadiness = await request(baseUrl, "/api/readiness", { expectedStatus: 423 });
+    assert.equal(lockedReadiness.ok, false);
+    assert.equal("data" in lockedReadiness, false);
+    const lockedStorage = await request(baseUrl, "/api/storage-health/summary", { expectedStatus: 423 });
+    assert.equal(lockedStorage.ok, false);
     const lockedMedia = await request(baseUrl, imageMessage.attachments[0].url, { expectedStatus: 423 });
     assert.equal(lockedMedia.ok, false);
     assert.doesNotMatch(JSON.stringify(lockedMedia), /iVBOR|smoke\.png/i);
@@ -1641,6 +1663,24 @@ const main = async () => {
     assert.equal(wrongUnlock.ok, false, "wrong unlock response must be denied");
     assert.doesNotMatch(JSON.stringify(wrongUnlock), /smoke path|nominal/i);
     assert.equal((await requestData(baseUrl, "/api/privacy/unlock", { method: "POST", body: { passcode: "2468" } })).locked, false);
+
+    log("Verifying storage statistics, deep health, and one-use maintenance plans");
+    const storageSummary = await requestData(baseUrl, "/api/storage-health/summary");
+    assert.ok(storageSummary.categories.some((entry) => entry.id === "media_orphans"));
+    assert.equal(JSON.stringify(storageSummary).includes(tempDbPath), false);
+    assert.doesNotMatch(JSON.stringify(storageSummary), /smoke path|nominal|fake-api-key/i);
+    let deepScan = await requestData(baseUrl, "/api/storage-health/deep-scans", { method: "POST", expectedStatus: 202 });
+    for (let attempt = 0; attempt < 100 && deepScan.state === "running"; attempt += 1) {
+      await delay(20);
+      deepScan = await requestData(baseUrl, `/api/storage-health/deep-scans/${deepScan.id}`);
+    }
+    assert.equal(deepScan.state, "completed");
+    const maintenancePlan = await requestData(baseUrl, "/api/storage-health/cleanup-plans", { method: "POST", expectedStatus: 201, body: { actions: ["rebuild_database_indexes"] } });
+    assert.equal(maintenancePlan.items[0].action, "rebuild_database_indexes");
+    const maintenanceResult = await requestData(baseUrl, `/api/storage-health/cleanup-plans/${maintenancePlan.id}/execute`, { method: "POST", body: { confirm: "EXECUTE_STORAGE_CLEANUP" } });
+    assert.equal(maintenanceResult.items[0].status, "completed");
+    const reusedPlan = await request(baseUrl, `/api/storage-health/cleanup-plans/${maintenancePlan.id}/execute`, { method: "POST", expectedStatus: 409, body: { confirm: "EXECUTE_STORAGE_CLEANUP" } });
+    assert.equal(reusedPlan.ok, false);
 
     const recoveryPointsBeforePreview = await requestData(baseUrl, "/api/backups/recovery-points");
     const replacePreview = await requestData(baseUrl, "/api/backups/preview", {

@@ -14,11 +14,14 @@ import { mediaRouter } from "./routes/media.js";
 import { settingsRouter } from "./routes/settings.js";
 import { syncRouter } from "./routes/sync.js";
 import { usageRouter } from "./routes/usage.js";
+import { readinessRouter } from "./routes/readiness.js";
+import { storageHealthRouter } from "./routes/storageHealth.js";
 import { attachChatSocket } from "./realtime/chatSocket.js";
 import { getAppInfo } from "./services/appInfo.js";
 import { recoverInterruptedModelCalls } from "./services/modelUsage.js";
 import { cleanupExpiredDraftAttachments } from "./services/messageAttachments.js";
 import { isPrivacyLocked, lockPrivacy, unlockPrivacy } from "./services/privacyLock.js";
+import { cancelActiveStorageScan, registerStorageMutation } from "./services/storageHealth.js";
 
 const APP_NAME = "Star Companion";
 const app = express();
@@ -72,6 +75,7 @@ app.post("/api/privacy/lock", (request, response) => {
     return;
   }
   closeWebSocketsForPrivacy();
+  cancelActiveStorageScan();
   response.json({ ok: true, data: { locked: true } });
 });
 app.post("/api/privacy/unlock", (request, response) => {
@@ -89,6 +93,14 @@ app.use("/api", (_request, response, next) => {
   }
   next();
 });
+app.use("/api", (request, _response, next) => {
+  const readOnlyPost = request.method === "POST" && (
+    request.path === "/backups/preview" ||
+    (request.path.startsWith("/sync/") && request.body?.phase === "preview")
+  );
+  if (request.method !== "GET" && !request.path.startsWith("/storage-health/") && !readOnlyPost) registerStorageMutation();
+  next();
+});
 
 app.use("/api/characters", charactersRouter);
 app.use("/api/chats", chatsRouter);
@@ -98,6 +110,8 @@ app.use("/api/settings", settingsRouter);
 app.use("/api/backups", backupsRouter);
 app.use("/api/sync", syncRouter);
 app.use("/api/usage", usageRouter);
+app.use("/api/readiness", readinessRouter);
+app.use("/api/storage-health", storageHealthRouter);
 
 if (serverConfig.webDistDir) {
   app.use(express.static(serverConfig.webDistDir));

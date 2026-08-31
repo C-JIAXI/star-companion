@@ -32,7 +32,7 @@ export function ChatImageGallery({ attachments, language }: { attachments: Messa
   }, [selected, attachments.length]);
   if (!attachments.length) return null;
   const label = language === "zh-CN" ? "图片消息" : "Image message";
-  const failedLabel = language === "zh-CN" ? "图片加载失败" : "Image failed to load";
+  const failedLabel = language === "zh-CN" ? "图片不可用" : "Image unavailable";
   return <>
     <div className={`mb-2 grid gap-1.5 ${attachments.length === 1 ? "grid-cols-1" : "grid-cols-2"}`} data-testid="message-image-gallery">
       {attachments.map((attachment, index) => <button className="relative min-h-20 overflow-hidden rounded-md bg-black/15 focus:outline-none focus:ring-2 focus:ring-white" key={attachment.id} type="button" aria-label={`${label} ${index + 1}/${attachments.length}`} onClick={(event) => { openerRef.current = event.currentTarget; setSelected(index); }}>

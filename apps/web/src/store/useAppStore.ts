@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { AppearancePreferencesDTO } from "@local-roleplay/shared";
-import type { AppLanguage, AppSection } from "../types";
+import type { AppLanguage, AppSection, ReadinessDTO } from "../types";
 import { api } from "../lib/api";
 import { applyAppearancePreferences, readAppearanceMirror } from "../lib/appearance";
 
@@ -24,12 +24,15 @@ interface AppState {
   showMessageTimestamps: boolean;
   appearancePreferences: AppearancePreferencesDTO;
   isPrivacyLocked: boolean;
+  readiness: ReadinessDTO | null;
+  readinessLoading: boolean;
   setActiveSection: (section: AppSection) => void;
   setLanguage: (language: AppLanguage) => void;
   setShowMessageAvatars: (showMessageAvatars: boolean) => void;
   setShowMessageTimestamps: (showMessageTimestamps: boolean) => void;
   setAppearancePreferences: (appearancePreferences: AppearancePreferencesDTO) => void;
   setPrivacyLocked: (locked: boolean) => void;
+  refreshReadiness: () => Promise<ReadinessDTO>;
   lockPrivacy: (passcode: string) => Promise<boolean>;
   unlockPrivacy: (passcode: string) => Promise<boolean>;
 }
@@ -41,6 +44,8 @@ export const useAppStore = create<AppState>((set) => ({
   showMessageTimestamps: false,
   appearancePreferences: readAppearanceMirror(),
   isPrivacyLocked: false,
+  readiness: null,
+  readinessLoading: false,
   setActiveSection: (activeSection) => set({ activeSection }),
   setLanguage: (language) => {
     window.localStorage.setItem("app-language", language);
@@ -53,7 +58,20 @@ export const useAppStore = create<AppState>((set) => ({
     const appearancePreferences = applyAppearancePreferences(value);
     set({ appearancePreferences });
   },
-  setPrivacyLocked: (isPrivacyLocked) => set({ isPrivacyLocked }),
+  setPrivacyLocked: (isPrivacyLocked) => set({ isPrivacyLocked, ...(isPrivacyLocked ? { readiness: null } : {}) }),
+  refreshReadiness: async () => {
+    set({ readinessLoading: true });
+    try {
+      const readiness = await api.readiness.get();
+      set({ readiness, readinessLoading: false });
+      return readiness;
+    } catch {
+      const { createUnavailableReadiness } = await import("../lib/unavailableReadiness");
+      const readiness = createUnavailableReadiness();
+      set({ readiness, readinessLoading: false });
+      return readiness;
+    }
+  },
   lockPrivacy: async (passcode) => {
     if (passcode.length < 4 || passcode.length > 128) return false;
     try { await api.privacy.lock(passcode); set({ isPrivacyLocked: true }); return true; } catch { return false; }

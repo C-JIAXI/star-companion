@@ -45,6 +45,7 @@ The mobile backend currently covers the core local API surface:
 
 - health
 - settings, including local API key encryption
+- authoritative first-use/readiness status, static saved-configuration diagnostics, metadata-first connection checks, and separately confirmed minimal inference checks
 - characters CRUD, public/private import/export, private-card unlock, batch fetch/delete
 - chats CRUD, archive, recoverable Trash, restore, and separately confirmed permanent deletion
 - messages CRUD, including transactional timeline cleanup that writes audited memory-disable revisions
@@ -82,6 +83,12 @@ The local backend must keep the existing product boundary:
 - API keys stored in app-private local storage, never in frontend state
 
 The shared WebView also uses the same global appearance and accessibility contract as desktop: system/light/dark theme, reading size and spacing, high contrast, motion preference, chat background masking, and full/restricted/off character CSS. Only an allow-listed, non-sensitive appearance mirror is read before first paint. Android's browser zoom remains enabled, theme color follows the resolved theme, and the embedded mobile backend persists and transfers these non-key settings through backup/recovery/LAN sync exactly like the desktop backend.
+
+The first-use guide is also device-local UI state: it is not backed up or synchronized and does not contain readiness results, API keys, content, or diagnostics. `/api/readiness` recomputes the same desktop contract from the embedded database and saved settings after character/chat changes, imports, restores, sync, and model edits. The privacy lock protects this endpoint with `423`, so the WebView unmounts the workspace instead of rendering onboarding behind the lock.
+
+The default connection check uses provider model metadata and does not create a usage attempt or inference charge. The optional minimal inference test uses a fixed neutral instruction containing no user content, a four-token output cap, explicit cost confirmation, and the embedded request/attempt budget lifecycle. All OpenAI-compatible, Anthropic, and Gemini paths return only stable safe codes and opaque diagnostic IDs. Local unauthenticated HTTP(S) endpoints remain supported; URLs with unsafe protocols, embedded credentials, sensitive query parameters, fragments, or unsafe redirects are rejected. These local estimates and diagnostics are not provider billing records or official status pages.
+
+The mobile smoke suite and server contract tests use isolated loopback mock providers only. They never call a paid endpoint or load real API keys, conversations, profiles, or user images.
 
 LAN sync is intentionally manual. The settings page lets a user enter a peer
 backend address on the same local network and choose pull or push with either
@@ -121,6 +128,17 @@ Trash, permanent deletion, chat archive, full backup, recovery, pull, and push.
 Archive/backup media manifests contain each binary once and validate SHA-256,
 byte length, MIME, dimensions, and references before a transaction writes. App
 lock unmounts previews and returns `423` from the protected media route.
+
+The mobile backend exposes the same `/api/storage-health` summary, deep-scan,
+cleanup-plan, and one-use execution contract as desktop. Counts and logical
+sizes come from the app-private WASM SQLite store; app-private `temp` and
+`cache` directories are inspected without following links. Mobile explicitly
+reports upgrade-recovery cleanup and `VACUUM` as unsupported because this
+runtime cannot guarantee the same atomic file replacement and exclusive-access
+semantics as desktop. It never claims those bytes were released. Privacy lock
+returns `423` for the health API and cancels an active deep scan. Low free space
+blocks backup imports and image uploads, while safe diagnostic export remains
+available.
 
 Memory history is bounded to 30 revisions per memory and 100 operations per
 chat. Snapshots keep only the memory fields needed for diff/restore and source

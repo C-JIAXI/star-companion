@@ -106,10 +106,11 @@ function useDialogFocus<T extends HTMLElement>({
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       const activeElement = document.activeElement;
-      if (event.shiftKey && (activeElement === first || !surface.contains(activeElement))) {
+      const activeIndex = focusable.indexOf(activeElement as HTMLElement);
+      if (event.shiftKey && activeIndex <= 0) {
         event.preventDefault();
         last.focus({ preventScroll: true });
-      } else if (!event.shiftKey && (activeElement === last || !surface.contains(activeElement))) {
+      } else if (!event.shiftKey && (activeIndex === -1 || activeElement === last)) {
         event.preventDefault();
         first.focus({ preventScroll: true });
       }
@@ -161,7 +162,7 @@ export function Button({
 }) {
   const variants = {
     primary:
-      "border border-ember-400/20 bg-ember-500 text-ink-950 hover:bg-ember-400 focus:ring-ember-400/40",
+      "border border-ember-400/20 bg-ember-500 text-accentForeground hover:bg-ember-400 focus:ring-ember-400/40",
     secondary:
       "border border-white/[0.09] bg-ink-800 text-ink-100 hover:border-white/[0.14] hover:bg-ink-700 focus:ring-white/15",
     ghost:
