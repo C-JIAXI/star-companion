@@ -165,9 +165,21 @@ export class MobileStore {
           enabled,
           importance,
           createdAt,
-          updatedAt
+          updatedAt,
+          isPinned,
+          isArchived,
+          isCheckpoint,
+          deletedAt,
+          folder,
+          title,
+          name,
+          messageId,
+          draftId,
+          contextIncluded,
+          embeddingStatus
+          ,assetId
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         type,
@@ -180,7 +192,19 @@ export class MobileStore {
         toInteger(record.enabled),
         toInteger(record.importance),
         record.createdAt ?? null,
-        record.updatedAt ?? null
+        record.updatedAt ?? null,
+        toInteger(record.isPinned),
+        toInteger(record.isArchived),
+        toInteger(record.isCheckpoint),
+        record.deletedAt ?? null,
+        record.folder ?? null,
+        record.title ?? null,
+        record.name ?? null,
+        record.messageId ?? null,
+        record.draftId ?? null,
+        toInteger(record.contextIncluded ?? true),
+        record.embeddingStatus ?? null,
+        record.assetId ?? null
       ]
     );
 
@@ -481,16 +505,171 @@ export class MobileStore {
     );
   }
 
+  countMessages(chatId) {
+    return Number(
+      this.select("SELECT COUNT(*) AS count FROM records WHERE type = 'message' AND chatId = ?", [chatId])[0]?.count ?? 0
+    );
+  }
+
+  listMessagePage(chatId, limit, before = null) {
+    const boundarySql = before
+      ? "AND (createdAt < ? OR (createdAt = ? AND id < ?))"
+      : "";
+    const params = before
+      ? [chatId, before.createdAt, before.createdAt, before.id, limit + 1]
+      : [chatId, limit + 1];
+    const rows = this.select(
+      `SELECT data FROM records WHERE type = 'message' AND chatId = ? ${boundarySql} ORDER BY createdAt DESC, id DESC LIMIT ?`,
+      params
+    ).map((row) => JSON.parse(String(row.data)));
+    return { items: clone(rows.slice(0, limit).reverse()), hasMore: rows.length > limit };
+  }
+
+  listMemoryPage(chatId, limit, boundary = null, includeTotal = false) {
+    const where = ["type = 'memory'", "chatId = ?"];
+    const params = [chatId];
+    if (boundary) {
+      where.push("(updatedAt < ? OR (updatedAt = ? AND id < ?))");
+      params.push(boundary.updatedAt, boundary.updatedAt, boundary.id);
+    }
+    const rows = this.select(
+      `SELECT data FROM records WHERE ${where.join(" AND ")} ORDER BY updatedAt DESC, id DESC LIMIT ?`,
+      [...params, limit + 1]
+    ).map((row) => JSON.parse(String(row.data)));
+    return {
+      items: clone(rows.slice(0, limit)),
+      hasMore: rows.length > limit,
+      ...(includeTotal ? { total: Number(this.select("SELECT COUNT(*) AS count FROM records WHERE type = 'memory' AND chatId = ?", [chatId])[0]?.count ?? 0) } : {})
+    };
+  }
+
+  listRecentContextMessages(chatId, limit, before = null, excludeIds = []) {
+    const where = ["type = 'message'", "chatId = ?", "COALESCE(contextIncluded, 1) = 1"];
+    const params = [chatId];
+    if (before) { where.push("createdAt < ?"); params.push(before.toISOString()); }
+    if (excludeIds.length) {
+      where.push(`id NOT IN (${excludeIds.map(() => "?").join(",")})`);
+      params.push(...excludeIds);
+    }
+    const rows = this.select(
+      `SELECT data FROM records WHERE ${where.join(" AND ")} ORDER BY createdAt DESC, id DESC LIMIT ?`,
+      [...params, limit]
+    ).map((row) => JSON.parse(String(row.data)));
+    return clone(rows.reverse());
+  }
+
+  listRecentRoleMessages(chatId, role, limit) {
+    const rows = this.select(
+      "SELECT data FROM records WHERE type = 'message' AND chatId = ? AND role = ? ORDER BY createdAt DESC, id DESC LIMIT ?",
+      [chatId, role, limit]
+    ).map((row) => JSON.parse(String(row.data)));
+    return clone(rows.reverse());
+  }
+
+  listMemoryRecallCandidates(chatId, tokens, embeddingSource, keywordLimit = 256, vectorLimit = 1000) {
+    const keywordRows = tokens.length
+      ? this.select(
+          `SELECT data FROM records WHERE type = 'memory' AND chatId = ? AND COALESCE(enabled, 1) = 1 AND deletedAt IS NULL AND (${tokens.map(() => "(instr(lower(COALESCE(title, '')), ?) > 0 OR instr(lower(json_extract(data, '$.content')), ?) > 0 OR instr(lower(json_extract(data, '$.keywords')), ?) > 0)").join(" OR ")}) ORDER BY importance DESC, updatedAt DESC, id DESC LIMIT ?`,
+          [chatId, ...tokens.flatMap((token) => [token, token, token]), keywordLimit]
+        )
+      : [];
+    const vectorRows = embeddingSource
+      ? this.select(
+          "SELECT data FROM records WHERE type = 'memory' AND chatId = ? AND COALESCE(enabled, 1) = 1 AND deletedAt IS NULL AND embeddingStatus = 'ready' AND json_extract(data, '$.embeddingSource') = ? ORDER BY importance DESC, updatedAt DESC, id DESC LIMIT ?",
+          [chatId, embeddingSource, vectorLimit]
+        )
+      : [];
+    const byId = new Map([...keywordRows, ...vectorRows].map((row) => {
+      const memory = JSON.parse(String(row.data));
+      return [memory.id, memory];
+    }));
+    return clone([...byId.values()]);
+  }
+
+  locateMessageWindow(chatId, messageId, radius) {
+    const target = this.readRecord("message", messageId);
+    if (!target || target.chatId !== chatId) return null;
+    const boundary = [chatId, target.createdAt, target.createdAt, target.id];
+    const older = this.select(
+      "SELECT data FROM records WHERE type = 'message' AND chatId = ? AND (createdAt < ? OR (createdAt = ? AND id < ?)) ORDER BY createdAt DESC, id DESC LIMIT ?",
+      [...boundary, radius]
+    ).map((row) => JSON.parse(String(row.data)));
+    const newer = this.select(
+      "SELECT data FROM records WHERE type = 'message' AND chatId = ? AND (createdAt > ? OR (createdAt = ? AND id > ?)) ORDER BY createdAt ASC, id ASC LIMIT ?",
+      [...boundary, radius]
+    ).map((row) => JSON.parse(String(row.data)));
+    const index = Number(this.select(
+      "SELECT COUNT(*) AS count FROM records WHERE type = 'message' AND chatId = ? AND (createdAt < ? OR (createdAt = ? AND id < ?))",
+      boundary
+    )[0]?.count ?? 0);
+    const total = this.countMessages(chatId);
+    const items = [...older, target, ...newer].sort(
+      (left, right) => String(left.createdAt).localeCompare(String(right.createdAt)) || String(left.id).localeCompare(String(right.id))
+    );
+    return {
+      items: clone(items),
+      index,
+      total,
+      hasOlder: index > older.length,
+      hasNewer: total - index - 1 > newer.length
+    };
+  }
+
+  listChatPage({ scope, folder, q, limit, boundary }) {
+    const baseWhere = ["c.type = 'chat'", "COALESCE(c.isCheckpoint, 0) = 0"];
+    const baseParams = [];
+    if (scope === "active") baseWhere.push("c.deletedAt IS NULL", "COALESCE(c.isArchived, 0) = 0");
+    else if (scope === "archived") baseWhere.push("c.deletedAt IS NULL", "COALESCE(c.isArchived, 0) = 1");
+    else if (scope === "trash") baseWhere.push("c.deletedAt IS NOT NULL");
+    if (folder !== undefined) { baseWhere.push("COALESCE(c.folder, '') = ?"); baseParams.push(folder); }
+    if (q) {
+      baseWhere.push("(instr(lower(COALESCE(c.title, '')), lower(?)) > 0 OR EXISTS (SELECT 1 FROM records character WHERE character.type = 'character' AND character.id = c.characterId AND instr(lower(COALESCE(character.name, '')), lower(?)) > 0))");
+      baseParams.push(q, q);
+    }
+    const total = Number(this.select(
+      `SELECT COUNT(*) AS count FROM records c WHERE ${baseWhere.join(" AND ")}`,
+      baseParams
+    )[0]?.count ?? 0);
+    const where = [...baseWhere];
+    const params = [...baseParams];
+    if (boundary) {
+      where.push(boundary.pinned
+        ? "(COALESCE(c.isPinned, 0) = 0 OR (COALESCE(c.isPinned, 0) = 1 AND (c.updatedAt < ? OR (c.updatedAt = ? AND c.id < ?))))"
+        : "(COALESCE(c.isPinned, 0) = 0 AND (c.updatedAt < ? OR (c.updatedAt = ? AND c.id < ?)))");
+      params.push(boundary.updatedAt, boundary.updatedAt, boundary.id);
+    }
+    const rows = this.select(`
+      SELECT c.data,
+        (SELECT COUNT(*) FROM records message WHERE message.type = 'message' AND message.chatId = c.id) AS messageCount,
+        (SELECT message.data FROM records message WHERE message.type = 'message' AND message.chatId = c.id AND message.role IN ('user', 'assistant') ORDER BY message.createdAt DESC, message.id DESC LIMIT 1) AS lastMessage
+      FROM records c WHERE ${where.join(" AND ")}
+      ORDER BY COALESCE(c.isPinned, 0) DESC, c.updatedAt DESC, c.id DESC LIMIT ?
+    `, [...params, limit + 1]);
+    return {
+      items: rows.slice(0, limit).map((row) => ({
+        ...JSON.parse(String(row.data)),
+        messageCount: Number(row.messageCount ?? 0),
+        _lastMessage: row.lastMessage ? JSON.parse(String(row.lastMessage)) : null
+      })),
+      hasMore: rows.length > limit,
+      total
+    };
+  }
+
   listMessageAttachments(messageId) {
-    return clone(this.readRecords("messageAttachment").filter((item) => item.messageId === messageId).sort((a, b) => a.sortOrder - b.sortOrder));
+    return clone(this.readRecords("messageAttachment", "AND messageId = ?", [messageId]).sort((a, b) => a.sortOrder - b.sortOrder));
   }
 
   listDraftAttachments(draftId) {
-    return clone(this.readRecords("messageAttachment").filter((item) => item.draftId === draftId && !item.messageId).sort((a, b) => a.sortOrder - b.sortOrder));
+    return clone(this.readRecords("messageAttachment", "AND draftId = ? AND messageId IS NULL", [draftId]).sort((a, b) => a.sortOrder - b.sortOrder));
   }
 
   getMediaAsset(id) {
     return clone(this.readRecord("mediaAsset", id));
+  }
+
+  hasMediaAssetReference(assetId) {
+    return Boolean(this.select("SELECT 1 AS found FROM records WHERE type = 'messageAttachment' AND assetId = ? LIMIT 1", [assetId])[0]);
   }
 
   async createDraftAttachment({ draftId, asset, originalFilename }) {

@@ -329,7 +329,7 @@ try {
   const appInfo = await request("/api/app/info");
   assert.match(appInfo.appVersion, /^\d+\.\d+\.\d+/);
   assert.equal(appInfo.platform, "android");
-  assert.equal(appInfo.schemaVersion, "002_message_image_assets");
+  assert.equal(appInfo.schemaVersion, "003_cursor_pagination");
   assert.equal(appInfo.migration.status, "ready");
   assert.equal("apiKey" in appInfo, false);
 
@@ -685,10 +685,29 @@ try {
     body: { chatId: chat.id, role: "user", content: "Mobile image context", draftId: imageDraftId }
   });
   assert.equal(imageMessage.attachments.length, 1);
+  const messagePage = await request(`/api/messages/page?${new URLSearchParams({ chatId: chat.id, limit: "1", includeTotal: "true" })}`);
+  assert.equal(messagePage.order, "ascending");
+  assert.equal(messagePage.items[0].id, imageMessage.id);
+  assert.equal(messagePage.total, 1);
+  const locatedMessage = await request(`/api/messages/locate?${new URLSearchParams({ chatId: chat.id, messageId: imageMessage.id, radius: "5" })}`);
+  assert.equal(locatedMessage.messageId, imageMessage.id);
+  assert.equal(locatedMessage.index, 0);
+  assert.equal(locatedMessage.hasOlder, false);
+  assert.equal(locatedMessage.hasNewer, false);
+  const chatSummary = await request(`/api/chats/${chat.id}/summary`);
+  assert.equal(chatSummary.messageCount, 1);
+  assert.equal("messages" in chatSummary, false);
+  const mobileChatPage = await request(`/api/chats/page?${new URLSearchParams({ scope: "active", q: "Mobile smoke", limit: "1", includeTotal: "true" })}`);
+  assert.equal(mobileChatPage.items[0].id, chat.id);
+  assert.ok(mobileChatPage.total >= 1);
   const mediaResponse = await fetch(`http://127.0.0.1:${port}${imageMessage.attachments[0].url}`);
   assert.equal(mediaResponse.status, 200);
   assert.equal(mediaResponse.headers.get("cache-control"), "private, no-store");
   assert.equal(Buffer.from(await mediaResponse.arrayBuffer()).length, uploadedImage.byteSize);
+  const thumbnailResponse = await fetch(`http://127.0.0.1:${port}${imageMessage.attachments[0].url}/thumbnail`);
+  assert.equal(thumbnailResponse.status, 200);
+  assert.match(thumbnailResponse.headers.get("cache-control") ?? "", /private/);
+  assert.ok(Buffer.from(await thumbnailResponse.arrayBuffer()).length > 0);
   const editDraftId = "draft_mobile_smoke_edit_0001";
   const stagedImages = await request(`/api/media/chat-images/messages/${imageMessage.id}/edit-draft`, { method: "POST", body: { draftId: editDraftId } });
   assert.equal(stagedImages.length, 1);
@@ -1018,6 +1037,12 @@ try {
     method: "POST",
     body: { title: "Timeline-bound memory", content: "Must be disabled when its source timeline is removed.", sourceMessageIds: [timelineSource.id] }
   });
+  const firstMemoryPage = await request(`/api/chats/${chat.id}/memories/page?limit=2&includeTotal=true`);
+  assert.equal(firstMemoryPage.items.length, 2);
+  assert.ok(firstMemoryPage.total >= 3);
+  assert.equal(firstMemoryPage.hasMore, true);
+  const secondMemoryPage = await request(`/api/chats/${chat.id}/memories/page?limit=2&cursor=${encodeURIComponent(firstMemoryPage.nextCursor)}`);
+  assert.equal(secondMemoryPage.items.some((memory) => firstMemoryPage.items.some((first) => first.id === memory.id)), false);
   const timelineCleanup = await request(`/api/messages/${timelineSource.id}/timeline`, { method: "DELETE" });
   assert.equal(timelineCleanup.deletedCount, 1);
   assert.equal(timelineCleanup.disabledMemoryCount, 1);
@@ -1343,6 +1368,9 @@ try {
   assert.equal(syncInfo.localUrl, peerBaseUrl);
   assert.equal(Array.isArray(syncInfo.lanUrls), true);
   assert.equal(syncInfo.listeningHost, "0.0.0.0");
+  const initialAutoSync = await request("/api/sync/auto");
+  assert.equal(initialAutoSync.enabled, false);
+  assert.equal(initialAutoSync.state, "disabled");
 
   const pulledSyncPreview = await request("/api/sync/pull", {
     method: "POST",
@@ -1386,6 +1414,23 @@ try {
   });
   assert.equal(pushedSyncSummary.direction, "push");
   assert.ok(pushedSyncSummary.summary.skipped > 0);
+
+  const enabledAutoSync = await request("/api/sync/auto", {
+    method: "PUT",
+    body: { enabled: true }
+  });
+  assert.equal(enabledAutoSync.enabled, true);
+  assert.equal(enabledAutoSync.lastPeerBaseUrl, peerBaseUrl);
+  const automaticSync = await request("/api/sync/auto/run", { method: "POST" });
+  assert.equal(automaticSync.state, "succeeded");
+  assert.equal(automaticSync.conflictCount, 0);
+  assert.ok(automaticSync.lastAttemptAt);
+  assert.ok(automaticSync.lastSuccessAt);
+  const disabledAutoSync = await request("/api/sync/auto", {
+    method: "PUT",
+    body: { enabled: false }
+  });
+  assert.equal(disabledAutoSync.state, "disabled");
 
   console.log("Mobile backend smoke passed");
 } finally {

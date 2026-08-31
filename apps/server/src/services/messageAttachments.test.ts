@@ -10,6 +10,7 @@ import {
   removeDraftAttachment,
   uploadDraftImage
 } from "./messageAttachments.js";
+import { createImageThumbnail } from "./imageNormalization.js";
 
 const png = (width = 2, height = 2) => {
   const image = new PNG({ width, height });
@@ -54,6 +55,14 @@ test("normalizes JPEG EXIF orientation and strips metadata", () => {
   const valid = normalizeUploadedImage({ dataBase64: jpegWithOrientation(6).toString("base64"), mimeType: "image/jpeg" });
   assert.deepEqual([valid.width, valid.height], [3, 2]);
   assert.equal(valid.data.includes(Buffer.from("Exif\0\0", "ascii")), false);
+});
+
+test("creates bounded timeline thumbnails without changing the stored original", () => {
+  const original = normalizeUploadedImage({ dataBase64: png(640, 320), mimeType: "image/png" });
+  const thumbnail = createImageThumbnail(original, 480);
+  const decoded = PNG.sync.read(thumbnail.data);
+  assert.deepEqual([decoded.width, decoded.height], [480, 240]);
+  assert.deepEqual([original.width, original.height], [640, 320]);
 });
 
 test("deduplicates content, atomically attaches drafts, and deletes only unreferenced assets", async () => {

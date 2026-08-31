@@ -24,9 +24,16 @@ import {
 import { generateImage, createSpeechAudio, transcribeAudio } from "../services/media.js";
 import { resolveModuleSettings } from "../services/moduleModels.js";
 import { getOrCreateSettings } from "./settings.js";
-import { validateStoredImage } from "../services/imageNormalization.js";
+import { createImageThumbnail, validateStoredImage } from "../services/imageNormalization.js";
 
 export const mediaRouter = Router();
+const thumbnailCache = new Map<string, { data: Buffer; mimeType: string; etag: string }>();
+export const clearMediaThumbnailCache = () => thumbnailCache.clear();
+const cacheThumbnail = (key: string, value: { data: Buffer; mimeType: string; etag: string }) => {
+  thumbnailCache.delete(key);
+  thumbnailCache.set(key, value);
+  while (thumbnailCache.size > 64) thumbnailCache.delete(thumbnailCache.keys().next().value!);
+};
 
 mediaRouter.post(
   "/chat-images/messages/:messageId/edit-draft",
@@ -79,6 +86,34 @@ mediaRouter.delete(
     const draftId = attachmentDraftIdSchema.parse(requireParam(request, "draftId"));
     await discardDraftAttachments(draftId);
     response.status(204).send();
+  })
+);
+
+mediaRouter.get(
+  "/chat-images/:assetId/thumbnail",
+  asyncHandler(async (request, response) => {
+    const assetId = requireParam(request, "assetId");
+    let thumbnail = thumbnailCache.get(assetId);
+    if (!thumbnail) {
+      const asset = await prisma.mediaAsset.findFirst({
+        where: { id: assetId, attachments: { some: {} } },
+        select: { mimeType: true, data: true, contentHash: true, byteSize: true, width: true, height: true }
+      });
+      if (!asset) throw new HttpError(404, "Image not found.");
+      const data = Buffer.from(asset.data);
+      if (data.length !== asset.byteSize || createHash("sha256").update(data).digest("hex") !== asset.contentHash) throw new HttpError(410, "Image unavailable.");
+      try {
+        const generated = createImageThumbnail({ data, mimeType: asset.mimeType as "image/png" | "image/jpeg", width: asset.width, height: asset.height });
+        thumbnail = { ...generated, etag: `"thumb-${asset.contentHash}"` };
+        cacheThumbnail(assetId, thumbnail);
+      } catch { throw new HttpError(410, "Image unavailable."); }
+    }
+    response.setHeader("Content-Type", thumbnail.mimeType);
+    response.setHeader("Cache-Control", "private, max-age=300, must-revalidate");
+    response.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.setHeader("ETag", thumbnail.etag);
+    response.send(thumbnail.data);
   })
 );
 

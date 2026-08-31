@@ -125,6 +125,35 @@ export const validateStoredImage = (input: { data: Buffer; mimeType: SupportedIm
   }
 };
 
+export const createImageThumbnail = (
+  input: { data: Buffer; mimeType: SupportedImageMime; width: number; height: number },
+  maximumDimension = 480
+) => {
+  validateStoredImage(input);
+  if (input.width <= maximumDimension && input.height <= maximumDimension) return { data: input.data, mimeType: input.mimeType };
+  const decoded = input.mimeType === "image/png"
+    ? PNG.sync.read(input.data, { checkCRC: true, skipRescale: false })
+    : jpeg.decode(input.data, { useTArray: true, formatAsRGBA: true, maxMemoryUsageInMB: 160 });
+  const scale = Math.min(maximumDimension / decoded.width, maximumDimension / decoded.height);
+  const width = Math.max(1, Math.round(decoded.width * scale));
+  const height = Math.max(1, Math.round(decoded.height * scale));
+  const pixels = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    const sourceY = Math.min(decoded.height - 1, Math.floor(y / scale));
+    for (let x = 0; x < width; x += 1) {
+      const sourceX = Math.min(decoded.width - 1, Math.floor(x / scale));
+      const sourceOffset = (sourceY * decoded.width + sourceX) * 4;
+      pixels.set(decoded.data.subarray(sourceOffset, sourceOffset + 4), (y * width + x) * 4);
+    }
+  }
+  if (input.mimeType === "image/png") {
+    const thumbnail = new PNG({ width, height });
+    thumbnail.data = Buffer.from(pixels);
+    return { data: PNG.sync.write(thumbnail), mimeType: "image/png" as const };
+  }
+  return { data: Buffer.from(jpeg.encode({ width, height, data: pixels }, 82).data), mimeType: "image/jpeg" as const };
+};
+
 export const normalizeUploadedImage = (input: { dataBase64: string; mimeType: SupportedImageMime }) => {
   const bytes = Buffer.from(input.dataBase64, "base64");
   if (!bytes.length || bytes.toString("base64").replace(/=+$/, "") !== input.dataBase64.replace(/\s+/g, "").replace(/=+$/, "")) throw new ImageValidationError(400, "The image data is not valid base64.");

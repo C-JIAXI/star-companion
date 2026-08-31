@@ -14,8 +14,10 @@ import {
   chatCreateSchema,
   chatMemoryCreateSchema,
   chatMessageSearchQuerySchema,
+  chatPageQuerySchema,
   chatMemoryUpdateSchema,
   memoryPurgeSchema,
+  memoryPageQuerySchema,
   memoryRestoreExecuteSchema,
   memoryRevisionParamsSchema,
   memoryUndoExecuteSchema,
@@ -24,6 +26,7 @@ import {
 } from "../schemas.js";
 import { serializeChat, serializeChatMemory, serializeMessage } from "../serializers.js";
 import { createChatAgentDraft } from "../services/chatAgent.js";
+import { listChatPage } from "../services/chatPaging.js";
 import { createChatOpeningMessage } from "../services/chatOpening.js";
 import { deleteUnreferencedAssets, messageIncludeAttachments } from "../services/messageAttachments.js";
 import { createChatTitleSuggestion } from "../services/chatTitle.js";
@@ -50,23 +53,14 @@ import {
   updateManualMemory,
   updateProfileSummaryInTransaction
 } from "../services/memoryHistory.js";
+import { searchMessagesPage } from "../services/messageSearch.js";
+import { listMemoryPage } from "../services/memoryPaging.js";
 
 export const chatsRouter = Router();
 
-const buildMessageSearchSnippet = (content: string, query: string) => {
-  const normalizedContent = content.toLowerCase();
-  const normalizedQuery = query.toLowerCase();
-  const matchIndex = normalizedContent.indexOf(normalizedQuery);
-  if (matchIndex < 0) {
-    return content.slice(0, 160);
-  }
-
-  const start = Math.max(0, matchIndex - 60);
-  const end = Math.min(content.length, matchIndex + query.length + 100);
-  const prefix = start > 0 ? "..." : "";
-  const suffix = end < content.length ? "..." : "";
-  return `${prefix}${content.slice(start, end)}${suffix}`;
-};
+chatsRouter.get("/page", asyncHandler(async (request, response) => {
+  response.json({ ok: true, data: await listChatPage(parseQuery(chatPageQuerySchema, request.query)) });
+}));
 
 const buildChatListPreview = (content: string) => {
   const normalized = content.replace(/\s+/g, " ").trim();
@@ -416,36 +410,7 @@ chatsRouter.get(
   "/message-search",
   asyncHandler(async (request, response) => {
     const query = parseQuery(chatMessageSearchQuerySchema, request.query);
-    const messages = await prisma.message.findMany({
-      where: { chat: { deletedAt: null } },
-      include: { chat: { select: { id: true, title: true, characterId: true, isArchived: true } } },
-      orderBy: [{ chatId: "asc" }, { createdAt: "asc" }]
-    });
-    const normalizedQuery = query.q.toLowerCase();
-    const indexesByChat = new Map<string, number>();
-    const matches = messages.flatMap((message) => {
-      const index = indexesByChat.get(message.chatId) ?? 0;
-      indexesByChat.set(message.chatId, index + 1);
-      if (!message.content.toLowerCase().includes(normalizedQuery)) {
-        return [];
-      }
-      return [{ message, index }];
-    });
-
-    matches.sort((a, b) => b.message.createdAt.getTime() - a.message.createdAt.getTime());
-    response.json({
-      ok: true,
-      data: {
-        query: query.q,
-        total: matches.length,
-        results: matches.slice(0, query.limit).map(({ message, index }) => ({
-          chat: message.chat,
-          message: serializeMessage(message),
-          index,
-          snippet: buildMessageSearchSnippet(message.content, query.q)
-        }))
-      }
-    });
+    response.json({ ok: true, data: await searchMessagesPage({ query: query.q, limit: query.limit, cursor: query.cursor }) });
   })
 );
 
@@ -463,27 +428,7 @@ chatsRouter.get(
       throw new HttpError(404, "Chat not found");
     }
 
-    const messages = await prisma.message.findMany({
-      where: { chatId },
-      orderBy: { createdAt: "asc" }
-    });
-    const normalizedQuery = query.q.toLowerCase();
-    const matches = messages
-      .map((message, index) => ({ message, index }))
-      .filter(({ message }) => message.content.toLowerCase().includes(normalizedQuery));
-
-    response.json({
-      ok: true,
-      data: {
-        query: query.q,
-        total: matches.length,
-        results: matches.slice(0, query.limit).map(({ message, index }) => ({
-          message: serializeMessage(message),
-          index,
-          snippet: buildMessageSearchSnippet(message.content, query.q)
-        }))
-      }
-    });
+    response.json({ ok: true, data: await searchMessagesPage({ query: query.q, limit: query.limit, cursor: query.cursor, chatId }) });
   })
 );
 
@@ -507,6 +452,13 @@ chatsRouter.get(
     response.json({ ok: true, data: memories.map(serializeChatMemory) });
   })
 );
+
+chatsRouter.get("/:id/memories/page", asyncHandler(async (request, response) => {
+  const chatId = requireParam(request, "id");
+  const chat = await prisma.chat.findFirst({ where: { id: chatId, deletedAt: null }, select: { id: true } });
+  if (!chat) throw new HttpError(404, "Chat not found");
+  response.json({ ok: true, data: await listMemoryPage(chatId, parseQuery(memoryPageQuerySchema, request.query)) });
+}));
 
 chatsRouter.post(
   "/:id/memories",
@@ -687,6 +639,16 @@ chatsRouter.post(
     response.json({ ok: true, data: memories.map(serializeChatMemory) });
   })
 );
+
+chatsRouter.get("/:id/summary", asyncHandler(async (request, response) => {
+  const id = requireParam(request, "id");
+  const chat = await prisma.chat.findFirst({
+    where: { id, deletedAt: null },
+    include: { _count: { select: { messages: true } } }
+  });
+  if (!chat) throw new HttpError(404, "Chat not found");
+  response.json({ ok: true, data: serializeChat(chat, chat._count.messages) });
+}));
 
 chatsRouter.get(
   "/:id",

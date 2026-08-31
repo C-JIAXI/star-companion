@@ -73,6 +73,8 @@ model Character {
 
   chats    Chat[]
   messages Message[]
+
+  @@index([isFavorite, updatedAt, id])
 }
 
 model Chat {
@@ -119,6 +121,8 @@ model Chat {
   @@index([characterId])
   @@index([parentChatId])
   @@index([deletedAt, isArchived, folder, isPinned, updatedAt])
+  @@index([deletedAt, isArchived, isCheckpoint, isPinned, updatedAt, id])
+  @@index([deletedAt, isArchived, isCheckpoint, folder, isPinned, updatedAt, id])
 }
 
 model ChatMemory {
@@ -152,6 +156,7 @@ model ChatMemory {
   @@index([chatId])
   @@index([chatId, deletedAt, enabled])
   @@index([chatId, updatedAt])
+  @@index([chatId, updatedAt, id])
 }
 
 /// Immutable, content-minimal audit event for one ChatMemory state transition.
@@ -174,6 +179,8 @@ model MemoryRevision {
 
   @@unique([memoryId, revision])
   @@index([chatId, createdAt])
+  @@index([chatId, createdAt, id])
+  @@index([createdAt, id])
   @@index([memoryId, createdAt])
   @@index([operationId, createdAt])
 }
@@ -254,6 +261,8 @@ model Message {
   @@index([chatId])
   @@index([chatId, createdAt])
   @@index([chatId, isBookmarked, createdAt])
+  @@index([chatId, contextIncluded, createdAt, id])
+  @@index([chatId, isBookmarked, createdAt, id])
   @@index([characterId])
 }
 
@@ -361,6 +370,7 @@ model ModelUsageAttempt {
 
   @@unique([requestId, attemptNumber])
   @@index([startedAt])
+  @@index([startedAt, id])
   @@index([module, startedAt])
   @@index([providerId, modelId, startedAt])
   @@index([chatId, startedAt])
@@ -379,6 +389,7 @@ model RecoveryPoint {
   mediaAssets RecoveryPointMediaAsset[]
 
   @@index([createdAt])
+  @@index([createdAt, id])
 }
 
 /// Keeps deduplicated media alive for a bounded recovery point without copying bytes into JSON snapshots.

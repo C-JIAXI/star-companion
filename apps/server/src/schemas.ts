@@ -452,6 +452,12 @@ export const memoryRevisionParamsSchema = z.object({
   revision: z.coerce.number().int().min(1)
 });
 
+export const memoryPageQuerySchema = z.object({
+  cursor: z.string().max(1000).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  includeTotal: z.preprocess((value) => value === "true" || value === true, z.boolean()).default(false)
+});
+
 export const memoryRestoreExecuteSchema = z.object({
   revision: z.number().int().min(1),
   expectedCurrentRevision: z.number().int().min(0),
@@ -527,13 +533,34 @@ export const messageUpdateSchema = z
   .refine((value) => Object.keys(value).length > 0, "At least one field is required")
   .refine((value) => value.draftId === undefined || value.replaceAttachments === true, "draftId requires replaceAttachments");
 
-export const messageListQuerySchema = z.object({
-  chatId: idSchema.optional()
+export const messageListQuerySchema = z.object({ chatId: idSchema.optional() });
+
+export const messagePageQuerySchema = z.object({
+  chatId: idSchema,
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().trim().min(1).max(1000).optional(),
+  includeTotal: z.preprocess((value) => value === "true" || value === true, z.boolean()).default(false)
+});
+
+export const messageLocateQuerySchema = z.object({
+  chatId: idSchema,
+  messageId: idSchema,
+  radius: z.coerce.number().int().min(5).max(50).default(20)
+});
+
+export const chatPageQuerySchema = z.object({
+  scope: z.enum(["active", "archived", "trash", "all"]).default("active"),
+  folder: z.string().trim().max(120).optional(),
+  q: z.string().trim().max(120).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().trim().min(1).max(1000).optional(),
+  includeTotal: z.preprocess((value) => value === "true" || value === true, z.boolean()).default(false)
 });
 
 export const chatMessageSearchQuerySchema = z.object({
   q: z.string().trim().min(1).max(200),
-  limit: z.coerce.number().int().min(1).max(50).default(20)
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  cursor: z.string().trim().min(1).max(1000).optional()
 });
 
 const providerModelSchema = z.object({
@@ -971,6 +998,11 @@ export const lanSyncRequestSchema = z.object({
   previewId: z.string().min(16).max(128).optional(),
   conflictResolutions: z.array(backupConflictResolutionSchema).max(20_000).default([])
 });
+
+export const lanAutoSyncSettingsSchema = z.object({
+  enabled: z.boolean(),
+  peerBaseUrl: z.string().trim().max(300).optional()
+}).strict();
 
 export const storageCleanupActionSchema = z.enum([
   "expired_drafts",

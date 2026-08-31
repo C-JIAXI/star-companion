@@ -39,6 +39,43 @@ export const MOBILE_MIGRATIONS = [
     sql: `
       CREATE INDEX IF NOT EXISTS idx_records_type_role ON records(type, role);
     `
+  },
+  {
+    name: "003_cursor_pagination",
+    sql: `
+      ALTER TABLE records ADD COLUMN isPinned INTEGER;
+      ALTER TABLE records ADD COLUMN isArchived INTEGER;
+      ALTER TABLE records ADD COLUMN isCheckpoint INTEGER;
+      ALTER TABLE records ADD COLUMN deletedAt TEXT;
+      ALTER TABLE records ADD COLUMN folder TEXT;
+      ALTER TABLE records ADD COLUMN title TEXT;
+      ALTER TABLE records ADD COLUMN name TEXT;
+      ALTER TABLE records ADD COLUMN messageId TEXT;
+      ALTER TABLE records ADD COLUMN draftId TEXT;
+      ALTER TABLE records ADD COLUMN contextIncluded INTEGER;
+      ALTER TABLE records ADD COLUMN embeddingStatus TEXT;
+      ALTER TABLE records ADD COLUMN assetId TEXT;
+      UPDATE records SET
+        isPinned = json_extract(data, '$.isPinned'),
+        isArchived = json_extract(data, '$.isArchived'),
+        isCheckpoint = json_extract(data, '$.isCheckpoint'),
+        deletedAt = json_extract(data, '$.deletedAt'),
+        folder = json_extract(data, '$.folder'),
+        title = json_extract(data, '$.title'),
+        name = json_extract(data, '$.name'),
+        messageId = json_extract(data, '$.messageId'),
+        draftId = json_extract(data, '$.draftId'),
+        contextIncluded = COALESCE(json_extract(data, '$.contextIncluded'), 1),
+        embeddingStatus = json_extract(data, '$.embeddingStatus'),
+        assetId = json_extract(data, '$.assetId');
+      CREATE INDEX IF NOT EXISTS idx_records_message_timeline ON records(type, chatId, createdAt, id);
+      CREATE INDEX IF NOT EXISTS idx_records_chat_page ON records(type, deletedAt, isArchived, isCheckpoint, isPinned, updatedAt, id);
+      CREATE INDEX IF NOT EXISTS idx_records_message_attachment ON records(type, messageId);
+      CREATE INDEX IF NOT EXISTS idx_records_draft_attachment ON records(type, draftId);
+      CREATE INDEX IF NOT EXISTS idx_records_memory_recall ON records(type, chatId, enabled, deletedAt, importance, updatedAt);
+      CREATE INDEX IF NOT EXISTS idx_records_message_role_timeline ON records(type, chatId, role, createdAt, id);
+      CREATE INDEX IF NOT EXISTS idx_records_attachment_asset ON records(type, assetId);
+    `
   }
 ];
 

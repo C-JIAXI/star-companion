@@ -8,6 +8,8 @@ import { resolveModuleSettings } from "./moduleModels.js";
 import { createMemoryInTransaction, pruneMemoryOperations, updateMemoryInTransaction } from "./memoryHistory.js";
 
 const KEYWORD_CANDIDATE_LIMIT = 12;
+const MEMORY_KEYWORD_SCAN_LIMIT = 256;
+const MEMORY_VECTOR_SCAN_LIMIT = 1_000;
 const RERANKED_MEMORY_LIMIT = 5;
 const AUTO_MEMORY_THROTTLE_MS = 30_000;
 const RECENT_MESSAGE_LIMIT = 6;
@@ -424,20 +426,49 @@ export const recallChatMemories = async ({
     return [];
   }
 
-  const memories = await prisma.chatMemory.findMany({
-    where: { chatId, enabled: true, deletedAt: null },
-    orderBy: [{ importance: "desc" }, { updatedAt: "desc" }]
-  });
   const queryTokens = new Set(tokenize(queryText));
   let embeddingIndex: EmbeddingIndex | null = null;
+  let embeddingSettings: UserSettings | null = null;
+  let embeddingSource: string | null = null;
   try {
-    const embeddingSettings = resolveModuleSettings(settings, "memory_embedding");
-    const source = getMemoryEmbeddingSource(embeddingSettings);
+    embeddingSettings = resolveModuleSettings(settings, "memory_embedding");
+    embeddingSource = getMemoryEmbeddingSource(embeddingSettings);
+  } catch {
+    embeddingSettings = null;
+    embeddingSource = null;
+  }
+
+  const searchableTokens = [...queryTokens];
+  const keywordSql = searchableTokens.length
+    ? `SELECT id FROM "ChatMemory" WHERE "chatId" = ? AND "enabled" = 1 AND "deletedAt" IS NULL AND (${searchableTokens.map(() => `(instr(lower("title"), ?) > 0 OR instr(lower("content"), ?) > 0 OR instr(lower(CAST("keywords" AS TEXT)), ?) > 0)`).join(" OR ")}) ORDER BY "importance" DESC, "updatedAt" DESC, "id" DESC LIMIT ?`
+    : null;
+  const keywordIds = keywordSql
+    ? await prisma.$queryRawUnsafe<Array<{ id: string }>>(
+        keywordSql,
+        chatId,
+        ...searchableTokens.flatMap((token) => [token, token, token]),
+        MEMORY_KEYWORD_SCAN_LIMIT
+      )
+    : [];
+  const vectorRows = embeddingSource
+    ? await prisma.chatMemory.findMany({
+        where: { chatId, enabled: true, deletedAt: null, embeddingStatus: "ready", embeddingSource },
+        select: { id: true },
+        orderBy: [{ importance: "desc" }, { updatedAt: "desc" }, { id: "desc" }],
+        take: MEMORY_VECTOR_SCAN_LIMIT
+      })
+    : [];
+  const candidateIds = [...new Set([...keywordIds.map((row) => row.id), ...vectorRows.map((row) => row.id)])];
+  if (!candidateIds.length) return [];
+  const memories = await prisma.chatMemory.findMany({
+    where: { id: { in: candidateIds }, chatId, enabled: true, deletedAt: null }
+  });
+  if (embeddingSettings && embeddingSource) {
     const readyVectors = memories
       .map((memory) => ({ memory, vector: toNumberArray(memory.embedding) }))
       .filter(({ memory, vector }) =>
         memory.embeddingStatus === "ready" &&
-        memory.embeddingSource === source &&
+        memory.embeddingSource === embeddingSource &&
         memory.embeddingDimensions === vector?.length &&
         Boolean(vector)
       );
@@ -445,13 +476,11 @@ export const recallChatMemories = async ({
     if (dimensions && readyVectors.every(({ vector }) => vector?.length === dimensions)) {
       embeddingIndex = {
         settings: embeddingSettings,
-        source,
+        source: embeddingSource,
         dimensions,
         vectors: new Map(readyVectors.map(({ memory, vector }) => [memory.id, vector!]))
       };
     }
-  } catch {
-    embeddingIndex = null;
   }
   let queryVector: number[] | null = null;
   if (embeddingIndex) {

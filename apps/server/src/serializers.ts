@@ -1,6 +1,6 @@
 import type { Character, Chat, ChatMemory, MediaAsset, MemoryOperation, MemoryRevision, Message, MessageAttachment, Prisma, ProfileSummaryRevision, UserSettings } from "@prisma/client";
 import { serializeAttachment } from "./services/messageAttachments.js";
-import { resolveCharacterRecord } from "./services/characterCards.js";
+import { isStoredPrivateCharacterRecord, resolveCharacterRecord } from "./services/characterCards.js";
 
 interface ProviderModel {
   id: string;
@@ -539,6 +539,21 @@ export const serializeCharacter = (character: Character, password?: string) => {
   };
 };
 
+export const serializeCharacterSummary = (
+  character: Pick<Character, "id" | "name" | "avatar" | "description" | "tags" | "loreEntries" | "isFavorite" | "createdAt" | "updatedAt">
+) => ({
+  id: character.id,
+  name: character.name,
+  avatar: character.avatar,
+  description: character.description,
+  tags: toStringArray(character.tags),
+  isFavorite: character.isFavorite,
+  visibility: isStoredPrivateCharacterRecord(character.loreEntries) ? "private" as const : "public" as const,
+  canViewPrompt: !isStoredPrivateCharacterRecord(character.loreEntries),
+  createdAt: toIso(character.createdAt),
+  updatedAt: toIso(character.updatedAt)
+});
+
 export const serializeChat = (
   chat: Chat,
   messageCount?: number,
@@ -568,7 +583,12 @@ export const serializeChat = (
   updatedAt: toIso(chat.updatedAt)
 });
 
-export const serializeChatMemory = (memory: ChatMemory) => ({
+export const serializeChatMemory = (memory: Pick<ChatMemory,
+  "id" | "chatId" | "title" | "content" | "keywords" | "importance" | "enabled" | "deletedAt" |
+  "currentRevision" | "lastActor" | "lastAction" | "sourceMessageIds" | "embeddingModel" |
+  "embeddingSource" | "embeddingDimensions" | "embeddingStatus" | "embeddingUpdatedAt" |
+  "lastMatchedAt" | "createdAt" | "updatedAt"
+>) => ({
   id: memory.id,
   chatId: memory.chatId,
   title: memory.title,

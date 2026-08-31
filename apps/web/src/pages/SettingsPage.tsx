@@ -49,6 +49,7 @@ import type {
   LanSyncDirection,
   LanSyncInfoDTO,
   LanSyncSummaryDTO,
+  LanAutoSyncStatusDTO,
   ProviderModel,
   ProviderProfile,
   PublicUserSettingsDTO,
@@ -438,6 +439,18 @@ const getPageCopy = (language: AppLanguage) =>
         syncRecordLegend: "角色 / 聊天 / 消息 / 记忆",
         syncNoRecords: "还没有同步记录。",
         syncPeerUrlRequired: "请输入同一局域网中的对端后端地址。",
+        autoSyncTitle: "打开应用时自动同步",
+        autoSyncHelp: "自动从上一次成功连接的设备执行合并预检。仅在没有冲突且数据有效时写入；遇到冲突会暂停并等待你选择，永不自动替换。",
+        autoSyncEnabled: "已开启",
+        autoSyncDisabled: "已关闭",
+        autoSyncRunNow: "立即检查",
+        autoSyncReview: "查看冲突",
+        autoSyncLastPeer: "上次设备",
+        autoSyncLastAttempt: "最近检查",
+        autoSyncLastSuccess: "最近成功",
+        autoSyncNever: "暂无",
+        autoSyncState: (state: LanAutoSyncStatusDTO["state"]) => ({ disabled: "未启用", idle: "等待下次启动", running: "正在预检", succeeded: "同步成功", conflicts: "发现冲突，未写入", failed: "检查失败，未写入" })[state],
+        autoSyncUpdated: "自动同步设置已更新。",
         syncFailed: "同步失败",
         syncPreviewAction: "生成差异预览",
         confirmSync: "确认执行同步",
@@ -541,6 +554,18 @@ const getPageCopy = (language: AppLanguage) =>
         syncRecordLegend: "characters / chats / messages / memories",
         syncNoRecords: "No sync records yet.",
         syncPeerUrlRequired: "Enter a peer backend address on the same LAN.",
+        autoSyncTitle: "Auto-sync when the app opens",
+        autoSyncHelp: "Runs a merge preflight against the last successfully connected device. It writes only valid, conflict-free data; conflicts pause for your choice and replace is never automatic.",
+        autoSyncEnabled: "Enabled",
+        autoSyncDisabled: "Disabled",
+        autoSyncRunNow: "Check now",
+        autoSyncReview: "Review conflicts",
+        autoSyncLastPeer: "Last device",
+        autoSyncLastAttempt: "Latest check",
+        autoSyncLastSuccess: "Latest success",
+        autoSyncNever: "None yet",
+        autoSyncState: (state: LanAutoSyncStatusDTO["state"]) => ({ disabled: "Not enabled", idle: "Waiting for next launch", running: "Running preflight", succeeded: "Sync succeeded", conflicts: "Conflicts found; nothing written", failed: "Check failed; nothing written" })[state],
+        autoSyncUpdated: "Automatic sync setting updated.",
         syncFailed: "Sync failed",
         syncPreviewAction: "Generate Difference Preview",
         confirmSync: "Confirm Sync",
@@ -687,6 +712,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   const [syncMode, setSyncMode] = useState<"merge" | "replace">("merge");
   const [syncPeerUrl, setSyncPeerUrl] = useState("");
   const [syncInfo, setSyncInfo] = useState<LanSyncInfoDTO | null>(null);
+  const [autoSync, setAutoSync] = useState<LanAutoSyncStatusDTO | null>(null);
   const [syncInfoLoading, setSyncInfoLoading] = useState(false);
   const [syncRecords, setSyncRecords] = useState<SyncRecord[]>([]);
   const [pendingSyncDirection, setPendingSyncDirection] = useState<LanSyncDirection | null>(null);
@@ -847,9 +873,20 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     }
   }, []);
 
+  const loadAutoSync = useCallback(async () => {
+    try {
+      const next = await api.sync.auto.get();
+      setAutoSync(next);
+      if (next.lastPeerBaseUrl) setSyncPeerUrl((current) => current || next.lastPeerBaseUrl);
+    } catch {
+      setAutoSync(null);
+    }
+  }, []);
+
   useEffect(() => {
     void loadSyncInfo();
-  }, [loadSyncInfo]);
+    void loadAutoSync();
+  }, [loadAutoSync, loadSyncInfo]);
 
   useEffect(() => {
     if (!status) {
@@ -1277,8 +1314,14 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     }
   };
 
-  const prepareLanSync = async (direction: LanSyncDirection) => {
-    if (!syncPeerUrl.trim()) {
+  const prepareLanSync = async (
+    direction: LanSyncDirection,
+    peerOverride?: string,
+    modeOverride?: "merge" | "replace"
+  ) => {
+    const peerBaseUrl = peerOverride?.trim() || syncPeerUrl.trim();
+    const selectedMode = modeOverride ?? syncMode;
+    if (!peerBaseUrl) {
       setError(copy.syncPeerUrlRequired);
       return;
     }
@@ -1290,13 +1333,49 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
     try {
       const result =
         direction === "pull"
-          ? await api.sync.pull({ peerBaseUrl: syncPeerUrl, mode: syncMode, phase: "preview" })
-          : await api.sync.push({ peerBaseUrl: syncPeerUrl, mode: syncMode, phase: "preview" });
+          ? await api.sync.pull({ peerBaseUrl, mode: selectedMode, phase: "preview" })
+          : await api.sync.push({ peerBaseUrl, mode: selectedMode, phase: "preview" });
 
+      setSyncPeerUrl(peerBaseUrl);
+      setSyncMode(selectedMode);
       setPendingSyncDirection(direction);
       setSyncPreview(result);
       setSyncResolutions({});
       setConfirmingSync(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : copy.syncFailed);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateAutoSync = async (enabled: boolean) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const next = await api.sync.auto.update({ enabled, peerBaseUrl: syncPeerUrl.trim() || undefined });
+      setAutoSync(next);
+      if (next.lastPeerBaseUrl) setSyncPeerUrl(next.lastPeerBaseUrl);
+      setStatus(copy.autoSyncUpdated);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : copy.syncFailed);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const runAutoSyncNow = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const next = await api.sync.auto.run();
+      setAutoSync(next);
+      if (next.state === "succeeded") {
+        applyLoadedSettings(await api.settings.get());
+        await loadRecoveryPoints();
+        await refreshReadiness();
+      }
+      setStatus(copy.autoSyncState(next.state));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : copy.syncFailed);
     } finally {
@@ -1325,6 +1404,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
         : await api.sync.push(input);
 
       addSyncRecord(result);
+      await loadAutoSync();
 
       if (pendingSyncDirection === "pull") {
         applyLoadedSettings(await api.settings.get());
@@ -2902,6 +2982,47 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                     ))}
                   </div>
                 )}
+              </div>
+
+              <div className={`mb-4 rounded-lg p-4 ${settingsSurfaceClassName}`} data-testid="lan-auto-sync-settings">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold text-slate-100">{copy.autoSyncTitle}</span>
+                      {autoSync ? <SettingsBadge>{copy.autoSyncState(autoSync.state)}</SettingsBadge> : null}
+                    </div>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">{copy.autoSyncHelp}</p>
+                  </div>
+                  <label className="flex min-h-11 shrink-0 cursor-pointer items-center gap-2 text-sm text-slate-200">
+                    <input
+                      checked={autoSync?.enabled ?? false}
+                      data-testid="lan-auto-sync-toggle"
+                      disabled={loading || !autoSync}
+                      role="switch"
+                      type="checkbox"
+                      onChange={(event) => void updateAutoSync(event.target.checked)}
+                    />
+                    {autoSync?.enabled ? copy.autoSyncEnabled : copy.autoSyncDisabled}
+                  </label>
+                </div>
+                {autoSync ? (
+                  <div className="mt-3 grid gap-2 text-xs text-slate-400 sm:grid-cols-3">
+                    <div><span className="text-slate-500">{copy.autoSyncLastPeer}: </span><span className="break-all font-mono">{autoSync.lastPeerBaseUrl || copy.autoSyncNever}</span></div>
+                    <div><span className="text-slate-500">{copy.autoSyncLastAttempt}: </span>{autoSync.lastAttemptAt ? new Date(autoSync.lastAttemptAt).toLocaleString(language === "zh-CN" ? "zh-CN" : "en-US") : copy.autoSyncNever}</div>
+                    <div><span className="text-slate-500">{copy.autoSyncLastSuccess}: </span>{autoSync.lastSuccessAt ? new Date(autoSync.lastSuccessAt).toLocaleString(language === "zh-CN" ? "zh-CN" : "en-US") : copy.autoSyncNever}</div>
+                  </div>
+                ) : null}
+                {autoSync?.message ? <p className={`mt-3 text-xs ${autoSync.state === "failed" || autoSync.state === "conflicts" ? "text-amber-300" : "text-emerald-300"}`}>{copy.autoSyncState(autoSync.state)}{autoSync.conflictCount ? ` · ${autoSync.conflictCount}` : ""}</p> : null}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button className="!min-h-[34px] !px-3 text-xs" disabled={loading || !autoSync?.enabled} variant="ghost" onClick={() => void runAutoSyncNow()}>
+                    <RefreshCw size={14} />{copy.autoSyncRunNow}
+                  </Button>
+                  {autoSync?.state === "conflicts" ? (
+                    <Button className="!min-h-[34px] !px-3 text-xs" disabled={loading} variant="secondary" onClick={() => void prepareLanSync("pull", autoSync.lastPeerBaseUrl, "merge")}>
+                      {copy.autoSyncReview}
+                    </Button>
+                  ) : null}
+                </div>
               </div>
 
               <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">

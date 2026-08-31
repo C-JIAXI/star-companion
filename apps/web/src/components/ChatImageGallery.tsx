@@ -33,10 +33,11 @@ export function ChatImageGallery({ attachments, language }: { attachments: Messa
   if (!attachments.length) return null;
   const label = language === "zh-CN" ? "图片消息" : "Image message";
   const failedLabel = language === "zh-CN" ? "图片不可用" : "Image unavailable";
+  const thumbnailUrl = (attachment: MessageAttachmentDTO) => resolveApiUrl(`${attachment.url}/thumbnail`);
   return <>
     <div className={`mb-2 grid gap-1.5 ${attachments.length === 1 ? "grid-cols-1" : "grid-cols-2"}`} data-testid="message-image-gallery">
       {attachments.map((attachment, index) => <button className="relative min-h-20 overflow-hidden rounded-md bg-black/15 focus:outline-none focus:ring-2 focus:ring-white" key={attachment.id} type="button" aria-label={`${label} ${index + 1}/${attachments.length}`} onClick={(event) => { openerRef.current = event.currentTarget; setSelected(index); }}>
-        {failed.has(attachment.id) ? <span className="grid min-h-24 place-items-center px-3 text-xs font-medium">{failedLabel}</span> : <img alt={`${label} ${index + 1}`} className="max-h-72 w-full object-contain" loading="lazy" src={resolveApiUrl(attachment.url)} onError={() => setFailed((value) => new Set(value).add(attachment.id))} />}
+        {failed.has(attachment.id) ? <span className="grid min-h-24 place-items-center px-3 text-xs font-medium">{failedLabel}</span> : <img alt={`${label} ${index + 1}`} className="max-h-72 w-full object-contain" decoding="async" loading="lazy" style={{ aspectRatio: `${attachment.width} / ${attachment.height}` }} src={thumbnailUrl(attachment)} onError={() => setFailed((value) => new Set(value).add(attachment.id))} />}
       </button>)}
     </div>
     {selected !== null ? <div ref={dialogRef} aria-label={language === "zh-CN" ? "图片查看器" : "Image viewer"} aria-modal="true" className="fixed inset-0 z-[120] flex items-center justify-center bg-black/90 p-4" role="dialog">

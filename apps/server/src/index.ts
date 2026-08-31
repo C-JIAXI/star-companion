@@ -4,13 +4,13 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { WebSocketServer } from "ws";
 import { serverConfig } from "./config.js";
-import { connectDatabase, disconnectDatabase, prisma } from "./db.js";
+import { connectDatabase, disconnectDatabase, getLocalPerformanceMetrics, prisma } from "./db.js";
 import { errorMiddleware } from "./lib/http.js";
 import { backupsRouter } from "./routes/backups.js";
 import { charactersRouter } from "./routes/characters.js";
 import { chatsRouter } from "./routes/chats.js";
 import { messagesRouter } from "./routes/messages.js";
-import { mediaRouter } from "./routes/media.js";
+import { clearMediaThumbnailCache, mediaRouter } from "./routes/media.js";
 import { settingsRouter } from "./routes/settings.js";
 import { syncRouter } from "./routes/sync.js";
 import { usageRouter } from "./routes/usage.js";
@@ -22,6 +22,8 @@ import { recoverInterruptedModelCalls } from "./services/modelUsage.js";
 import { cleanupExpiredDraftAttachments } from "./services/messageAttachments.js";
 import { isPrivacyLocked, lockPrivacy, unlockPrivacy } from "./services/privacyLock.js";
 import { cancelActiveStorageScan, registerStorageMutation } from "./services/storageHealth.js";
+import { buildPromptContext } from "./services/promptBuilder.js";
+import { runAutomaticLanSync } from "./services/lanAutoSync.js";
 
 const APP_NAME = "Star Companion";
 const app = express();
@@ -50,6 +52,13 @@ app.get("/api/health", async (_request, response, next) => {
   }
 });
 
+if (process.env.STAR_COMPANION_PERF_METRICS === "1") {
+  app.get("/api/perf/metrics", (_request, response) => {
+    response.setHeader("Cache-Control", "no-store");
+    response.json({ ok: true, data: getLocalPerformanceMetrics() });
+  });
+}
+
 app.get("/api/app/info", async (_request, response) => {
   const info = getAppInfo();
   if (!process.env.STAR_COMPANION_MIGRATION_REPORT) {
@@ -76,6 +85,7 @@ app.post("/api/privacy/lock", (request, response) => {
   }
   closeWebSocketsForPrivacy();
   cancelActiveStorageScan();
+  clearMediaThumbnailCache();
   response.json({ ok: true, data: { locked: true } });
 });
 app.post("/api/privacy/unlock", (request, response) => {
@@ -101,6 +111,22 @@ app.use("/api", (request, _response, next) => {
   if (request.method !== "GET" && !request.path.startsWith("/storage-health/") && !readOnlyPost) registerStorageMutation();
   next();
 });
+
+if (process.env.STAR_COMPANION_PERF_METRICS === "1") {
+  app.get("/api/perf/prompt/:chatId", async (request, response, next) => {
+    try {
+      const result = await buildPromptContext({ chatId: request.params.chatId });
+      response.setHeader("Cache-Control", "no-store");
+      response.json({ ok: true, data: {
+        messageCount: result.messages.length,
+        historyCount: result.promptBreakdown.includedMessageCount,
+        loreCount: result.matchedLoreEntries.length,
+        memoryCount: result.matchedMemoryEntries.length,
+        promptTokens: result.promptBreakdown.promptTokens
+      } });
+    } catch (error) { next(error); }
+  });
+}
 
 app.use("/api/characters", charactersRouter);
 app.use("/api/chats", chatsRouter);
@@ -140,6 +166,8 @@ const start = async () => {
 
   httpServer.listen(serverConfig.port, () => {
     console.log(`${APP_NAME} server listening on http://localhost:${serverConfig.port}`);
+    const autoSyncTimer = setTimeout(() => { void runAutomaticLanSync().catch(() => undefined); }, 1_500);
+    autoSyncTimer.unref();
   });
 };
 

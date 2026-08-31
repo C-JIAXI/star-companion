@@ -38,6 +38,7 @@ interface CharacterGroup {
 
 type HistorySearchMode = "chats" | "messages";
 type ChatHistoryScope = "active" | "archived" | "trash";
+const CHAT_HISTORY_PAGE_SIZE = 100;
 
 const compareChats = (a: ChatDTO, b: ChatDTO) => {
   const pinOrder = Number(b.isPinned) - Number(a.isPinned);
@@ -156,6 +157,16 @@ export function ChatHistoryList({
   const { t, language } = useI18n();
   const [open, setOpen] = useState(false);
   const [chats, setChats] = useState<ChatDTO[]>([]);
+  const [scopeTotals, setScopeTotals] = useState<Record<ChatHistoryScope, number>>({ active: 0, archived: 0, trash: 0 });
+  const [scopeCursors, setScopeCursors] = useState<Record<ChatHistoryScope, string | null>>({ active: null, archived: null, trash: null });
+  const [scopeHasMore, setScopeHasMore] = useState<Record<ChatHistoryScope, boolean>>({ active: false, archived: false, trash: false });
+  const [filteredPage, setFilteredPage] = useState<{
+    key: string;
+    items: ChatDTO[];
+    total: number;
+    cursor: string | null;
+    hasMore: boolean;
+  } | null>(null);
   const [characterCache, setCharacterCache] = useState<Map<string, CharacterDTO>>(new Map());
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMode, setSearchMode] = useState<HistorySearchMode>("chats");
@@ -184,49 +195,87 @@ export function ChatHistoryList({
   const historyTriggerRef = useRef<HTMLButtonElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const focusSearchOnOpenRef = useRef(false);
+  const filteredPageAbortRef = useRef<AbortController | null>(null);
+
+  const cacheCharactersForChats = async (chatData: ChatDTO[]) => {
+    const allCharacterIds = new Set(chatData.flatMap((chat) => chat.characterId ? [chat.characterId] : []));
+    const uncachedIds = [...allCharacterIds].filter((id) => !characterCache.has(id));
+    if (!uncachedIds.length) return;
+    try {
+      const batches = Array.from({ length: Math.ceil(uncachedIds.length / 50) }, (_, index) =>
+        uncachedIds.slice(index * 50, index * 50 + 50)
+      );
+      const fetchedCharacters = (await Promise.all(batches.map((ids) => api.characters.batchFetch(ids)))).flat();
+      const fetchedIds = new Set(fetchedCharacters.map((character) => character.id));
+      setCharacterCache((previous) => {
+        const next = new Map(previous);
+        for (const character of fetchedCharacters) next.set(character.id, character);
+        return next;
+      });
+      const missingIds = new Set(uncachedIds.filter((id) => !fetchedIds.has(id)));
+      if (missingIds.size) {
+        setChats((previous) => previous.map((chat) => chat.characterId && missingIds.has(chat.characterId) ? { ...chat, characterId: null } : chat));
+      }
+    } catch {
+      // Character decoration is optional; chat navigation remains available.
+    }
+  };
 
   const loadChats = async () => {
     try {
-      const chatData = await api.chats.list();
+      const scopes: ChatHistoryScope[] = ["active", "archived", "trash"];
+      const pages = await Promise.all(scopes.map((scope) => api.chats.page({
+        scope,
+        limit: CHAT_HISTORY_PAGE_SIZE,
+        includeTotal: true
+      })));
+      const chatData = pages.flatMap((page) => page.items);
       setChats(chatData);
-
-      const allCharacterIds = new Set<string>();
-      for (const chat of chatData) {
-        if (chat.characterId) {
-          allCharacterIds.add(chat.characterId);
-        }
-      }
-
-      const uncachedIds = [...allCharacterIds].filter((id) => !characterCache.has(id));
-      if (uncachedIds.length > 0) {
-        try {
-          const fetchedCharacters = await api.characters.batchFetch(uncachedIds);
-          const fetchedIds = new Set(fetchedCharacters.map((c) => c.id));
-
-          setCharacterCache((prev) => {
-            const next = new Map(prev);
-            for (const char of fetchedCharacters) {
-              next.set(char.id, char);
-            }
-            return next;
-          });
-
-          const missingIds = uncachedIds.filter((id) => !fetchedIds.has(id));
-          if (missingIds.length > 0) {
-            setChats((prev) =>
-              prev.map((chat) =>
-                chat.characterId && missingIds.includes(chat.characterId)
-                  ? { ...chat, characterId: null }
-                  : chat
-              )
-            );
-          }
-        } catch {
-          // Batch fetch failed, fall back to no character data
-        }
-      }
+      setScopeTotals(Object.fromEntries(pages.map((page) => [page.scope, page.total ?? page.items.length])) as Record<ChatHistoryScope, number>);
+      setScopeCursors(Object.fromEntries(pages.map((page) => [page.scope, page.nextCursor])) as Record<ChatHistoryScope, string | null>);
+      setScopeHasMore(Object.fromEntries(pages.map((page) => [page.scope, page.hasMore])) as Record<ChatHistoryScope, boolean>);
+      await cacheCharactersForChats(chatData);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedLoad"));
+    }
+  };
+
+  const loadMoreChats = async () => {
+    const filterKey = `${chatScope}:${folderFilter}:${searchQuery.trim().toLocaleLowerCase()}`;
+    const activeFilter = filteredPage?.key === filterKey ? filteredPage : null;
+    const cursor = activeFilter?.cursor ?? scopeCursors[chatScope];
+    const hasMore = activeFilter?.hasMore ?? scopeHasMore[chatScope];
+    if (!cursor || !hasMore || loading) return;
+    setLoading(true);
+    try {
+      const page = await api.chats.page({
+        scope: chatScope,
+        folder: folderFilter === "all" ? undefined : folderFilter === "unfiled" ? "" : folderFilter,
+        q: searchQuery.trim() || undefined,
+        limit: CHAT_HISTORY_PAGE_SIZE,
+        cursor,
+        includeTotal: false
+      });
+      if (activeFilter) {
+        setFilteredPage((current) => current?.key === filterKey ? {
+          ...current,
+          items: [...current.items, ...page.items],
+          cursor: page.nextCursor,
+          hasMore: page.hasMore
+        } : current);
+      } else {
+        setChats((current) => {
+          const ids = new Set(current.map((chat) => chat.id));
+          return [...current, ...page.items.filter((chat) => !ids.has(chat.id))];
+        });
+        setScopeCursors((current) => ({ ...current, [chatScope]: page.nextCursor }));
+        setScopeHasMore((current) => ({ ...current, [chatScope]: page.hasMore }));
+      }
+      await cacheCharactersForChats(page.items);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedLoad"));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -234,7 +283,43 @@ export function ChatHistoryList({
     void loadChats();
   }, [refreshKey]);
 
+  useEffect(() => {
+    if (!open || searchMode !== "chats") return;
+    const q = searchQuery.trim();
+    if (!q && folderFilter === "all") {
+      setFilteredPage(null);
+      return;
+    }
+    filteredPageAbortRef.current?.abort();
+    const controller = new AbortController();
+    filteredPageAbortRef.current = controller;
+    const key = `${chatScope}:${folderFilter}:${q.toLocaleLowerCase()}`;
+    const timeout = window.setTimeout(() => {
+      void api.chats.page({
+        scope: chatScope,
+        folder: folderFilter === "unfiled" ? "" : folderFilter === "all" ? undefined : folderFilter,
+        q: q || undefined,
+        limit: CHAT_HISTORY_PAGE_SIZE,
+        includeTotal: true
+      }, controller.signal).then((page) => {
+        if (controller.signal.aborted) return;
+        setFilteredPage({ key, items: page.items, total: page.total ?? page.items.length, cursor: page.nextCursor, hasMore: page.hasMore });
+        void cacheCharactersForChats(page.items);
+      }).catch((caught: unknown) => {
+        if (!(caught instanceof DOMException && caught.name === "AbortError")) {
+          setError(caught instanceof Error ? caught.message : t("chat.failedLoad"));
+        }
+      });
+    }, 180);
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [chatScope, folderFilter, open, searchMode, searchQuery]);
+
   const filteredChats = useMemo(() => {
+    const filterKey = `${chatScope}:${folderFilter}:${searchQuery.trim().toLocaleLowerCase()}`;
+    if (filteredPage?.key === filterKey) return filteredPage.items;
     const scopedChats = chats.filter((chat) => {
       if (chatScope === "trash") {
         return Boolean(chat.deletedAt);
@@ -259,7 +344,12 @@ export function ChatHistoryList({
           ?.name.toLowerCase()
           .includes(q)
     );
-  }, [chats, searchQuery, characterCache, chatScope, folderFilter]);
+  }, [chats, searchQuery, characterCache, chatScope, folderFilter, filteredPage]);
+
+  const activeFilterKey = `${chatScope}:${folderFilter}:${searchQuery.trim().toLocaleLowerCase()}`;
+  const activeFilteredPage = filteredPage?.key === activeFilterKey ? filteredPage : null;
+  const displayTotal = activeFilteredPage?.total ?? scopeTotals[chatScope];
+  const displayHasMore = activeFilteredPage?.hasMore ?? scopeHasMore[chatScope];
 
   const folderOptions = useMemo(() => {
     const folders = new Set(
@@ -275,14 +365,7 @@ export function ChatHistoryList({
     return [...folders].sort((a, b) => a.localeCompare(b, language === "zh-CN" ? "zh-CN" : "en"));
   }, [chats, chatScope, language]);
 
-  const scopeCounts = useMemo(
-    () => ({
-      active: chats.filter((chat) => !chat.deletedAt && !chat.isArchived).length,
-      archived: chats.filter((chat) => !chat.deletedAt && chat.isArchived).length,
-      trash: chats.filter((chat) => Boolean(chat.deletedAt)).length
-    }),
-    [chats]
-  );
+  const scopeCounts = scopeTotals;
   const activeChats = useMemo(
     () => chats.filter((chat) => !chat.deletedAt && !chat.isArchived).sort(compareChats),
     [chats]
@@ -832,14 +915,14 @@ export function ChatHistoryList({
               />
             ))}
           </div>
-          {activeChats.length > recentChats.length ? (
+          {scopeTotals.active > recentChats.length ? (
             <button
               className="mt-1 flex min-h-8 w-full items-center justify-center rounded-md px-2 text-[11px] font-medium text-ink-500 transition-colors hover:bg-white/[0.045] hover:text-ink-200"
               data-testid="chat-recent-view-all"
               type="button"
               onClick={() => handleOpen()}
             >
-              {t("chat.viewAllHistory", { count: activeChats.length - recentChats.length })}
+              {t("chat.viewAllHistory", { count: scopeTotals.active - recentChats.length })}
             </button>
           ) : null}
         </div>
@@ -1205,7 +1288,8 @@ export function ChatHistoryList({
                       </EmptyState>
                     </div>
                   ) : (
-                    groups.map((group) => {
+                    <>
+                    {groups.map((group) => {
                       const isExpanded = expandedGroups.has(group.characterId);
 
                       return (
@@ -1536,15 +1620,31 @@ export function ChatHistoryList({
                           ) : null}
                         </div>
                       );
-                    })
+                    })}
+                    {displayHasMore ? (
+                      <Button
+                        className="w-full"
+                        data-testid="chat-history-load-more"
+                        disabled={loading}
+                        variant="secondary"
+                        onClick={() => void loadMoreChats()}
+                      >
+                        {loading
+                          ? language === "zh-CN" ? "加载中…" : "Loading…"
+                          : language === "zh-CN"
+                            ? `加载更多（已显示 ${filteredChats.length} / ${displayTotal}）`
+                            : `Load more (${filteredChats.length} of ${displayTotal} shown)`}
+                      </Button>
+                    ) : null}
+                    </>
                   )}
                 </div>
 
                 {searchMode === "chats" && filteredChats.length > 0 ? (
                   <p className="text-center text-xs text-slate-500">
                     {language === "zh-CN"
-                      ? `共 ${filteredChats.length} 条对话 · ${groups.length} 个角色`
-                      : `${filteredChats.length} chat(s) · ${groups.length} character(s)`}
+                      ? `已显示 ${filteredChats.length} / ${displayTotal} 条对话 · ${groups.length} 个角色`
+                      : `${filteredChats.length} of ${displayTotal} chat(s) shown · ${groups.length} character(s)`}
                   </p>
                 ) : null}
               </div>

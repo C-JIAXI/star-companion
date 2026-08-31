@@ -12,7 +12,6 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { api } from "./lib/api";
 import { useI18n, type TranslationKey } from "./i18n";
-import { ChatHistoryList } from "./components/ChatHistoryList";
 import { NewChatDialog } from "./components/NewChatDialog";
 import { ConfirmDialog, Drawer, ErrorNotice } from "./components/ui";
 import { useAppStore } from "./store/useAppStore";
@@ -30,6 +29,9 @@ const loadSettingsPage = () =>
   import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage }));
 const OnboardingDialog = lazy(() =>
   import("./components/OnboardingDialog").then((module) => ({ default: module.OnboardingDialog }))
+);
+const ChatHistoryList = lazy(() =>
+  import("./components/ChatHistoryList").then((module) => ({ default: module.ChatHistoryList }))
 );
 
 const ChatPage = lazy(loadChatPage);
@@ -445,13 +447,15 @@ export function App() {
             </button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto border-t border-white/[0.08] pt-4">
-            <ChatHistoryList
-              globalSearchRequest={globalSearchRequest}
-              selectedChatId={selectedChatId}
-              onSelectChat={handleSelectChat}
-              onOpenDocs={() => navigate("docs")}
-              refreshKey={chatRefreshKey}
-            />
+            <Suspense fallback={null}>
+              <ChatHistoryList
+                globalSearchRequest={globalSearchRequest}
+                selectedChatId={selectedChatId}
+                onSelectChat={handleSelectChat}
+                onOpenDocs={() => navigate("docs")}
+                refreshKey={chatRefreshKey}
+              />
+            </Suspense>
           </div>
         </div>
       </Drawer>
@@ -530,13 +534,15 @@ export function App() {
           </button>
 
           <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto border-t border-white/[0.08] px-3 pt-4">
-            <ChatHistoryList
-              globalSearchRequest={globalSearchRequest}
-              selectedChatId={selectedChatId}
-              onSelectChat={handleSelectChat}
-              onOpenDocs={() => navigate("docs")}
-              refreshKey={chatRefreshKey}
-            />
+            <Suspense fallback={null}>
+              <ChatHistoryList
+                globalSearchRequest={globalSearchRequest}
+                selectedChatId={selectedChatId}
+                onSelectChat={handleSelectChat}
+                onOpenDocs={() => navigate("docs")}
+                refreshKey={chatRefreshKey}
+              />
+            </Suspense>
           </div>
         </aside>
 

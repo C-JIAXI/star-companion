@@ -301,7 +301,7 @@ const decryptPayload = (encrypted: { iv: string; tag: string; ciphertext: string
   ) as EncryptedPromptPayload;
 };
 
-const isStoredPrivateCharacterRecord = (value: Prisma.JsonValue): value is StoredPrivateCharacterRecord => {
+export const isStoredPrivateCharacterRecord = (value: Prisma.JsonValue): value is StoredPrivateCharacterRecord => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }

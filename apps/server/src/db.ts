@@ -1,7 +1,21 @@
 import "dotenv/config";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 
-export const prisma = new PrismaClient();
+const performanceMetricsEnabled = process.env.STAR_COMPANION_PERF_METRICS === "1";
+let performanceQueryCount = 0;
+const prismaOptions: Prisma.PrismaClientOptions = performanceMetricsEnabled
+  ? { log: [{ emit: "event", level: "query" }] }
+  : {};
+
+export const prisma = new PrismaClient(prismaOptions) as PrismaClient<Prisma.PrismaClientOptions, "query">;
+if (performanceMetricsEnabled) prisma.$on("query", () => { performanceQueryCount += 1; });
+
+export const getLocalPerformanceMetrics = () => ({
+  enabled: performanceMetricsEnabled,
+  queryCount: performanceQueryCount,
+  rssBytes: process.memoryUsage().rss,
+  heapUsedBytes: process.memoryUsage().heapUsed
+});
 
 const repairDanglingCharacterRefs = async () => {
   await prisma.$executeRawUnsafe(`

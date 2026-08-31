@@ -39,6 +39,7 @@ import type {
   CharacterCardImportInput,
   CharacterBatchTagsRequestDTO,
   CharacterDTO,
+  CharacterSummaryDTO,
   CharacterDraftResponseDTO,
   CharacterDraftTask,
   CharacterExportMode,
@@ -350,7 +351,7 @@ const formatCharacterDate = (value: string, language: string) => {
 };
 
 const emptyCharacterPage = {
-  items: [] as CharacterDTO[],
+  items: [] as CharacterSummaryDTO[],
   total: 0,
   page: 1,
   pageSize: CHARACTER_PAGE_SIZE,
@@ -366,7 +367,7 @@ export function CharactersPage({
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { language, t } = useI18n();
-  const [characters, setCharacters] = useState<CharacterDTO[]>([]);
+  const [characters, setCharacters] = useState<CharacterSummaryDTO[]>([]);
   const [characterPage, setCharacterPage] = useState(1);
   const [pagination, setPagination] = useState(emptyCharacterPage);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -615,17 +616,16 @@ export function CharactersPage({
       ? t("characters.noSearchResults")
       : `${characterRange.start}-${characterRange.end} / ${pagination.total}`;
 
-  const resolveCharacterDetail = async (character: CharacterDTO) => {
+  const resolveCharacterDetail = async (character: CharacterSummaryDTO) => {
     const password = unlockedPasswordRef.current[character.id];
-    if (character.visibility !== "private" || character.canViewPrompt || !password) {
-      return character;
-    }
+    const detail = await api.characters.get(character.id);
+    if (character.visibility !== "private" || detail.canViewPrompt || !password) return detail;
 
     try {
       return await api.characters.unlock(character.id, password);
     } catch {
       delete unlockedPasswordRef.current[character.id];
-      return character;
+      return detail;
     }
   };
 
@@ -726,7 +726,7 @@ export function CharactersPage({
     [onDirtyChange]
   );
 
-  const selectCharacter = (character: CharacterDTO) => {
+  const selectCharacter = (character: CharacterSummaryDTO) => {
     setIsCreating(false);
     setSelectedId(character.id);
     setError(null);
@@ -736,7 +736,7 @@ export function CharactersPage({
     });
   };
 
-  const toggleFavorite = async (character: CharacterDTO) => {
+  const toggleFavorite = async (character: CharacterSummaryDTO) => {
     if (favoritePendingId) {
       return;
     }

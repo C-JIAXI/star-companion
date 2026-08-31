@@ -1,10 +1,10 @@
 import { CalendarDays, Lock, Settings, Sparkles, Star, Tag } from "lucide-react";
-import type { CharacterDTO } from "../types";
+import type { CharacterSummaryDTO } from "../types";
 import { usePlaceholderSrc } from "../placeholderImages";
 import { Button } from "./ui";
 
 interface CharacterCardProps {
-  character: CharacterDTO;
+  character: CharacterSummaryDTO;
   noDescriptionLabel: string;
   privateSummaryLabel: string;
   createdAtLabel: string;
@@ -15,8 +15,8 @@ interface CharacterCardProps {
   favoriteLabel: string;
   unfavoriteLabel: string;
   onPlay: (id: string) => void;
-  onEdit: (character: CharacterDTO) => void;
-  onToggleFavorite: (character: CharacterDTO) => void;
+  onEdit: (character: CharacterSummaryDTO) => void;
+  onToggleFavorite: (character: CharacterSummaryDTO) => void;
   favoritePending?: boolean;
   selectable?: boolean;
   selected?: boolean;

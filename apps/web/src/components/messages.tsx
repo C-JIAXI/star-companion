@@ -21,7 +21,6 @@ import {
 } from "lucide-react";
 import { Marked } from "marked";
 import { memo, useCallback, useMemo } from "react";
-import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { usePlaceholderSrc } from "../placeholderImages";
 import type { MessageDTO, TokenUsageDTO } from "../types";
@@ -29,8 +28,6 @@ import { ScopedHtmlRenderer, containsRenderableHtml } from "./ScopedHtmlRenderer
 import { ChatImageGallery } from "./ChatImageGallery";
 
 type TokenUsageFormatter = (usage: TokenUsageDTO | null) => string;
-
-const FLUSH_INTERVAL_MS = 40;
 
 const MARKDOWN_PATTERN = /(?:^|\n)```/;
 
@@ -680,13 +677,11 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
 export function StreamingBubble({
   characterAvatar,
   showAvatar,
-  htmlCss,
   content,
   contextSummary
 }: {
   characterAvatar?: string | null;
   showAvatar: boolean;
-  htmlCss?: string;
   content: string;
   contextSummary?: {
     loreCount: number;
@@ -694,33 +689,7 @@ export function StreamingBubble({
   };
 }) {
   const { t } = useI18n();
-  const [displayedContent, setDisplayedContent] = useState("");
-  const bufferRef = useRef("");
-  const displayedLengthRef = useRef(0);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const bubbleWidthClassName = getBubbleWidthClassName(showAvatar);
-
-  useEffect(() => {
-    if (content.length > displayedLengthRef.current) {
-      bufferRef.current += content.slice(displayedLengthRef.current);
-      displayedLengthRef.current = content.length;
-    }
-  }, [content]);
-
-  useEffect(() => {
-    timerRef.current = setInterval(() => {
-      if (bufferRef.current) {
-        setDisplayedContent((prev) => prev + bufferRef.current);
-        bufferRef.current = "";
-      }
-    }, FLUSH_INTERVAL_MS);
-
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-    };
-  }, []);
 
   return (
     <div
@@ -731,8 +700,10 @@ export function StreamingBubble({
         className={`order-1 self-start ${bubbleWidthClassName} animate-fade-in overflow-hidden rounded-lg rounded-br-sm border border-ember-400/25 bg-ink-800 p-3 text-sm text-ink-50 sm:p-4`}
         data-chat-bubble=""
       >
-        {displayedContent ? (
-          <MessageBody content={displayedContent} htmlCss={htmlCss} />
+        {content ? (
+          <div className="whitespace-pre-wrap break-words leading-relaxed" data-stream-renderer="plain-text">
+            {content}
+          </div>
         ) : (
           <div className="flex items-center gap-1 py-1">
             <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-ember-400/60 [animation-delay:0ms]"></span>

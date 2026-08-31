@@ -13,7 +13,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../lib/api";
 import { usePlaceholderSrc } from "../placeholderImages";
-import type { CharacterDTO, PaginatedCharactersDTO } from "../types";
+import type { CharacterDTO, CharacterSummaryDTO, PaginatedCharactersDTO } from "../types";
 import { Button, EmptyState, ErrorNotice, Field, Modal, TextArea, TextInput } from "./ui";
 
 const PAGE_SIZE = 8;
@@ -25,7 +25,7 @@ function CharacterChoice({
   creating,
   onSelect
 }: {
-  character: CharacterDTO;
+  character: CharacterSummaryDTO;
   disabled: boolean;
   creating: boolean;
   onSelect: () => void;

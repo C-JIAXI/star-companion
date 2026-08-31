@@ -62,6 +62,9 @@ describe("listCharactersPage", () => {
     assert.equal(result.pageSize, 2);
     assert.equal(result.totalPages, 3);
     assert.deepEqual(result.availableTags, ["needle-tag"]);
+    assert.equal("prompt" in result.items[0]!, false);
+    assert.equal("loreEntries" in result.items[0]!, false);
+    assert.equal("quickReplies" in result.items[0]!, false);
   });
 
   it("searches name and description fields without matching prompt content", async () => {

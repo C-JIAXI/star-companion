@@ -32,6 +32,7 @@ import type {
   CharacterInput,
   CharacterSortMode,
   ChatMemoryDTO,
+  ChatMemoryPageDTO,
   ChatMemoryInput,
   MemoryOperationDTO,
   MemoryRestorePreviewDTO,
@@ -46,7 +47,10 @@ import type {
   ChatInput,
   ChatTitleSuggestionDTO,
   ChatWithMessagesDTO,
+  ChatPageDTO,
   LanSyncInfoDTO,
+  LanAutoSyncSettingsInputDTO,
+  LanAutoSyncStatusDTO,
   LanSyncRequestDTO,
   LanSyncSummaryDTO,
   ImageGenerationDTO,
@@ -79,6 +83,14 @@ type RequestOptions = {
 };
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const withQuery = (path: string, values: Record<string, string | undefined>) => {
+  const params = new URLSearchParams(
+    Object.entries(values).filter((entry): entry is [string, string] => entry[1] !== undefined)
+  );
+  const suffix = params.toString();
+  return suffix ? `${path}?${suffix}` : path;
+};
 
 const fetchWithStartupRetry = async (url: string, init: RequestInit) => {
   const attempts = import.meta.env.VITE_API_BASE_URL ? 8 : 1;
@@ -192,27 +204,14 @@ export const api = {
         pageSize?: number;
       } = {}
     ) => {
-      const params = new URLSearchParams();
-      if (query.q?.trim()) {
-        params.set("q", query.q.trim());
-      }
-      if (query.tag?.trim()) {
-        params.set("tag", query.tag.trim());
-      }
-      if (query.favoriteOnly) {
-        params.set("favoriteOnly", "true");
-      }
-      if (query.sort) {
-        params.set("sort", query.sort);
-      }
-      if (query.page !== undefined) {
-        params.set("page", String(query.page));
-      }
-      if (query.pageSize !== undefined) {
-        params.set("pageSize", String(query.pageSize));
-      }
-      const suffix = params.toString();
-      return request<PaginatedCharactersDTO>(`/api/characters/page${suffix ? `?${suffix}` : ""}`);
+      return request<PaginatedCharactersDTO>(withQuery("/api/characters/page", {
+        q: query.q?.trim() || undefined,
+        tag: query.tag?.trim() || undefined,
+        favoriteOnly: query.favoriteOnly ? "true" : undefined,
+        sort: query.sort,
+        page: query.page === undefined ? undefined : String(query.page),
+        pageSize: query.pageSize === undefined ? undefined : String(query.pageSize)
+      }));
     },
     create: (input: CharacterInput) =>
       request<CharacterDTO>("/api/characters", { method: "POST", body: input }),
@@ -263,6 +262,16 @@ export const api = {
   },
   chats: {
     list: () => request<ChatDTO[]>("/api/chats"),
+    page: (input: { scope?: "active" | "archived" | "trash" | "all"; folder?: string; q?: string; limit?: number; cursor?: string; includeTotal?: boolean } = {}, signal?: AbortSignal) => {
+      return request<ChatPageDTO>(withQuery("/api/chats/page", {
+        scope: input.scope,
+        folder: input.folder,
+        q: input.q,
+        limit: input.limit ? String(input.limit) : undefined,
+        cursor: input.cursor,
+        includeTotal: input.includeTotal === undefined ? undefined : String(input.includeTotal)
+      }), { signal });
+    },
     create: (input: ChatInput) => request<ChatDTO>("/api/chats", { method: "POST", body: input }),
     get: (id: string) => request<ChatWithMessagesDTO>(`/api/chats/${id}`),
     update: (id: string, input: Partial<ChatInput>) =>
@@ -330,6 +339,12 @@ export const api = {
       ),
     memories: {
       list: (chatId: string) => request<ChatMemoryDTO[]>(`/api/chats/${chatId}/memories`),
+      page: (chatId: string, cursor?: string, includeTotal = false) =>
+        request<ChatMemoryPageDTO>(withQuery(`/api/chats/${chatId}/memories/page`, {
+          limit: "100",
+          cursor,
+          includeTotal: includeTotal ? "true" : undefined
+        })),
       create: (chatId: string, input: ChatMemoryInput) =>
         request<ChatMemoryDTO>(`/api/chats/${chatId}/memories`, {
           method: "POST",
@@ -367,8 +382,6 @@ export const api = {
     }
   },
   messages: {
-    list: (chatId?: string) =>
-      request<MessageDTO[]>(chatId ? `/api/messages?chatId=${encodeURIComponent(chatId)}` : "/api/messages"),
     create: (input: MessageInput) =>
       request<MessageDTO>("/api/messages", { method: "POST", body: input }),
     update: (id: string, input: Partial<MessageInput>) =>
@@ -460,6 +473,12 @@ export const api = {
   },
   sync: {
     info: () => request<LanSyncInfoDTO>("/api/sync/info"),
+    auto: {
+      get: () => request<LanAutoSyncStatusDTO>("/api/sync/auto"),
+      update: (input: LanAutoSyncSettingsInputDTO) =>
+        request<LanAutoSyncStatusDTO>("/api/sync/auto", { method: "PUT", body: input }),
+      run: () => request<LanAutoSyncStatusDTO>("/api/sync/auto/run", { method: "POST" })
+    },
     pull: (input: LanSyncRequestDTO) =>
       request<LanSyncSummaryDTO>("/api/sync/pull", { method: "POST", body: input }),
     push: (input: LanSyncRequestDTO) =>

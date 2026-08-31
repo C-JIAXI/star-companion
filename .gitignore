@@ -42,6 +42,10 @@ apps/web/test-results
 apps/server/prisma/dev.db
 apps/server/prisma/dev.db*
 apps/server/prisma/.tmp/
+perf-results/*.json
+perf-results/*.md
+perf-results/*.cpuprofile
+perf-results/*.heapsnapshot
 apps/server/prisma/upgrade-recovery/
 packages/shared/src/*.js
 packages/shared/src/*.d.ts

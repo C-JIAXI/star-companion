@@ -349,7 +349,10 @@ export const resolveChatCharacterId = async (
   chatId: string,
   requestedCharacterId?: string | null
 ) => {
-  const chat = await prisma.chat.findFirst({ where: { id: chatId, deletedAt: null } });
+  const chat = await prisma.chat.findFirst({
+    where: { id: chatId, deletedAt: null },
+    select: { characterId: true }
+  });
   return resolvePromptCharacterId(chat, requestedCharacterId);
 };
 
@@ -375,7 +378,10 @@ export const buildPromptContext = async ({
   matchedMemoryEntries: MatchedMemoryEntry[];
   promptBreakdown: PromptBreakdown;
 }> => {
-  const chat = await prisma.chat.findFirst({ where: { id: chatId, deletedAt: null } });
+  const chat = await prisma.chat.findFirst({
+    where: { id: chatId, deletedAt: null },
+    select: { characterId: true, memoryTurns: true, userPersona: true, userProfileSummary: true }
+  });
   const resolvedCharacterId = resolvePromptCharacterId(chat, characterId);
   const character = resolvedCharacterId
     ? await prisma.character.findUnique({ where: { id: resolvedCharacterId } })
@@ -388,7 +394,7 @@ export const buildPromptContext = async ({
       contextIncluded: true,
       ...(before ? { createdAt: { lt: before } } : {})
     },
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: contextMessageLimit,
     include: { attachments: { include: { asset: true }, orderBy: { sortOrder: "asc" } } }
   });
@@ -403,7 +409,7 @@ export const buildPromptContext = async ({
     )
   ];
   const characters = speakerCharacterIds.length
-    ? await prisma.character.findMany({ where: { id: { in: speakerCharacterIds } } })
+    ? await prisma.character.findMany({ where: { id: { in: speakerCharacterIds } }, select: { id: true, name: true } })
     : [];
   const characterNames = new Map(characters.map((item) => [item.id, item.name]));
   const promptFields = character ? resolveCharacterPromptFields(character) : null;

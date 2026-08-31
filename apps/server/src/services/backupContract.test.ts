@@ -80,6 +80,23 @@ describe("backup preflight contract", () => {
     assert.deepEqual(candidate, beforeCandidate);
   });
 
+  it("keeps the preview token stable when only the peer export timestamp changes", () => {
+    const current = emptyCurrent();
+    const candidate = {
+      schemaVersion: 1,
+      exportedAt: "2026-08-10T01:00:00.000Z",
+      mode: "merge" as const,
+      characters: [character()],
+      chats: [],
+      messages: [],
+      memories: []
+    };
+    const first = analyzeBackupCandidate(candidate, current);
+    const second = analyzeBackupCandidate({ ...candidate, exportedAt: "2026-08-10T01:00:01.000Z" }, current);
+
+    assert.equal(first.preview.previewId, second.preview.previewId);
+  });
+
   it("marks different records with the same ID as explicit conflicts", () => {
     const current = backupImportSchema.parse({
       ...emptyCurrent(),

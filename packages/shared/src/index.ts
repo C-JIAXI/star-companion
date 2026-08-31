@@ -1,6 +1,28 @@
 export type MessageRole = "user" | "assistant" | "system";
 export * from "./characterQuality.js";
 export type AppLanguage = "zh-CN" | "en";
+
+export class OrderedTextChunkBuffer {
+  #pending = "";
+
+  get hasPending() {
+    return this.#pending.length > 0;
+  }
+
+  push(chunk: string) {
+    this.#pending += chunk;
+  }
+
+  drain() {
+    const value = this.#pending;
+    this.#pending = "";
+    return value;
+  }
+
+  clear() {
+    this.#pending = "";
+  }
+}
 export type CharacterVisibility = "public" | "private";
 
 export type ThemeMode = "system" | "light" | "dark";
@@ -355,6 +377,19 @@ export interface PublicCharacterCardDTO {
   cardId: string;
   exportedAt: string;
   character: CharacterCardContentDTO;
+}
+
+export interface CharacterSummaryDTO {
+  id: string;
+  name: string;
+  avatar: string | null;
+  description: string;
+  tags: string[];
+  isFavorite: boolean;
+  visibility: CharacterVisibility;
+  canViewPrompt: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type CharacterDraftTask =
@@ -742,7 +777,7 @@ export interface PrivateCharacterCardDTO {
 export type CharacterCardDTO = PublicCharacterCardDTO | PrivateCharacterCardDTO;
 
 export interface PaginatedCharactersDTO {
-  items: CharacterDTO[];
+  items: CharacterSummaryDTO[];
   total: number;
   page: number;
   pageSize: number;
@@ -934,6 +969,33 @@ export interface ChatWithMessagesDTO extends ChatDTO {
   memories?: ChatMemoryDTO[];
 }
 
+export interface CursorPageDTO<T> {
+  items: T[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  total: number | null;
+}
+
+export interface MessagePageDTO extends CursorPageDTO<MessageDTO> {
+  chatId: string;
+  order: "ascending";
+}
+
+export interface MessageLocationDTO {
+  chatId: string;
+  messageId: string;
+  index: number;
+  total: number;
+  items: MessageDTO[];
+  olderCursor: string | null;
+  hasOlder: boolean;
+  hasNewer: boolean;
+}
+
+export interface ChatPageDTO extends CursorPageDTO<ChatDTO> {
+  scope: "active" | "archived" | "trash" | "all";
+}
+
 export interface ChatBranchRequestDTO {
   messageId: string;
   title?: string;
@@ -950,6 +1012,8 @@ export interface ChatMessageSearchDTO {
   query: string;
   total: number;
   results: ChatMessageSearchResultDTO[];
+  nextCursor?: string | null;
+  hasMore?: boolean;
 }
 
 export interface GlobalChatMessageSearchResultDTO extends ChatMessageSearchResultDTO {
@@ -960,6 +1024,8 @@ export interface GlobalChatMessageSearchDTO {
   query: string;
   total: number;
   results: GlobalChatMessageSearchResultDTO[];
+  nextCursor?: string | null;
+  hasMore?: boolean;
 }
 
 export type PromptBreakdownSectionId =
@@ -1056,6 +1122,8 @@ export interface ChatMemoryDTO {
   createdAt: string;
   updatedAt: string;
 }
+
+export type ChatMemoryPageDTO = CursorPageDTO<ChatMemoryDTO>;
 
 export interface MessageAttachmentDTO {
   id: string;
@@ -1628,6 +1696,24 @@ export interface LanSyncInfoDTO {
   listeningHost: string;
   lanReachable: boolean;
   checkedAt: string;
+}
+
+export type LanAutoSyncState = "disabled" | "idle" | "running" | "succeeded" | "conflicts" | "failed";
+
+export interface LanAutoSyncStatusDTO {
+  enabled: boolean;
+  lastPeerBaseUrl: string;
+  state: LanAutoSyncState;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  conflictCount: number;
+  errorCode: string | null;
+  message: string | null;
+}
+
+export interface LanAutoSyncSettingsInputDTO {
+  enabled: boolean;
+  peerBaseUrl?: string;
 }
 
 export type GenerationClientMessage =

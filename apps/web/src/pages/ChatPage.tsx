@@ -35,6 +35,7 @@ import {
 import {
   emptyUserCustomConfig,
   modelSupportsAiModule,
+  OrderedTextChunkBuffer,
   parseUserCustomConfig,
   serializeUserCustomConfig,
   type AiModuleId,
@@ -47,6 +48,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
 import { api } from "../lib/api";
+import { timelineApi } from "../lib/timelineApi";
 import {
   buildChatTranscript,
   safeChatTranscriptName,
@@ -113,7 +115,8 @@ import { ProfileHistoryPanel } from "../components/ProfileHistoryPanel";
 import { normalizeChatImageFile } from "../lib/chatImages";
 import { resolveApiUrl } from "../lib/appBackend";
 
-const MESSAGES_PER_PAGE = 30;
+const MESSAGE_PAGE_SIZE = 50;
+const MAX_RENDERED_MESSAGES = 250;
 const preferredScrollBehavior = (): ScrollBehavior =>
   document.documentElement.dataset.motion === "reduced" ? "auto" : "smooth";
 const CHAT_DRAFT_STORAGE_PREFIX = "star-companion:chat-draft:";
@@ -381,6 +384,9 @@ export function ChatPage({
   const [memorySettingsOpen, setMemorySettingsOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState("12");
   const [chatMemories, setChatMemories] = useState<ChatMemoryDTO[]>([]);
+  const [memoryCursor, setMemoryCursor] = useState<string | null>(null);
+  const [memoryHasMore, setMemoryHasMore] = useState(false);
+  const [memoryTotal, setMemoryTotal] = useState(0);
   const [memoryOperations, setMemoryOperations] = useState<MemoryOperationDTO[]>([]);
   const [memoryRevisions, setMemoryRevisions] = useState<MemoryRevisionDTO[]>([]);
   const [selectedMemoryHistoryId, setSelectedMemoryHistoryId] = useState<string | null>(null);
@@ -506,13 +512,17 @@ export function ChatPage({
   const [titleDraft, setTitleDraft] = useState("");
   const [titleSuggestionLoading, setTitleSuggestionLoading] = useState(false);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
-  const [messagePage, setMessagePage] = useState(1);
+  const [messageCursor, setMessageCursor] = useState<string | null>(null);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [hasNewerMessages, setHasNewerMessages] = useState(false);
+  const [messageWindowStart, setMessageWindowStart] = useState(0);
+  const [messageWindowLoading, setMessageWindowLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [latestMemoryOperationId, setLatestMemoryOperationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
-  const streamingBufferRef = useRef("");
+  const streamingBufferRef = useRef(new OrderedTextChunkBuffer());
   const draftChatIdRef = useRef<string | null>(null);
   const queuedChatIdRef = useRef<string | null>(null);
   const queuedMessagesRef = useRef<QueuedChatMessage[]>([]);
@@ -528,11 +538,8 @@ export function ChatPage({
   const refreshChatAfterReconnectRef = useRef<string | null>(null);
   const draftTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
+  const loadChatAbortRef = useRef<AbortController | null>(null);
   const backgroundFileInputRef = useRef<HTMLInputElement | null>(null);
-  const paginationStateRef = useRef<{ chatId: string | null; totalPages: number }>({
-    chatId: null,
-    totalPages: 1
-  });
   const hasMessagesRef = useRef(false);
   const autoTitleChatIdsRef = useRef(new Set<string>());
   const tRef = useRef(t);
@@ -572,9 +579,20 @@ export function ChatPage({
         };
       }
 
+      if (hasNewerMessages) {
+        return { ...current, messageCount: current.messageCount + 1 };
+      }
+
+      const appended = [...current.messages, message];
+      const overflow = Math.max(0, appended.length - MAX_RENDERED_MESSAGES);
+      if (overflow > 0) {
+        setMessageWindowStart((value) => value + overflow);
+        setHasOlderMessages(true);
+      }
       return {
         ...current,
-        messages: [...current.messages, message]
+        messageCount: current.messageCount + 1,
+        messages: overflow ? appended.slice(overflow) : appended
       };
     });
   };
@@ -646,7 +664,7 @@ export function ChatPage({
       }
 
       if (msg.type === "token") {
-        streamingBufferRef.current += msg.content;
+        streamingBufferRef.current.push(msg.content);
         return;
       }
 
@@ -654,7 +672,7 @@ export function ChatPage({
         setStreamingCharacterId(msg.characterId);
         setStreamingContent("");
         setStreamingContextCounts(null);
-        streamingBufferRef.current = "";
+        streamingBufferRef.current.clear();
         return;
       }
 
@@ -682,7 +700,7 @@ export function ChatPage({
         setStreamingContent("");
         setStreamingCharacterId(null);
         setStreamingContextCounts(null);
-        streamingBufferRef.current = "";
+        streamingBufferRef.current.clear();
         return;
       }
 
@@ -707,7 +725,7 @@ export function ChatPage({
         setStreamingContent("");
         setStreamingCharacterId(null);
         setStreamingContextCounts(null);
-        streamingBufferRef.current = "";
+        streamingBufferRef.current.clear();
         return;
       }
 
@@ -752,10 +770,8 @@ export function ChatPage({
           setPendingBudgetOverride(request);
         }
         if (request.chatId) {
-          void api.chats.get(request.chatId).then((chat) => {
-            if (draftChatIdRef.current === request.chatId) setActiveChat(chat);
-            onMessageHandlersRef.current.chatsChanged();
-          });
+          if (draftChatIdRef.current === request.chatId) void loadChat(request.chatId);
+          onMessageHandlersRef.current.chatsChanged();
         }
         return;
       }
@@ -823,7 +839,7 @@ export function ChatPage({
         setStreamingContent("");
         setStreamingCharacterId(null);
         setStreamingContextCounts(null);
-        streamingBufferRef.current = "";
+        streamingBufferRef.current.clear();
         setLoading(false);
         setRetryDeadline(null);
         setRetrySeconds(0);
@@ -860,7 +876,7 @@ export function ChatPage({
         setStreamingContent("");
         setStreamingCharacterId(null);
         setStreamingContextCounts(null);
-        streamingBufferRef.current = "";
+        streamingBufferRef.current.clear();
         setLoading(false);
         setRetryDeadline(null);
         setRetrySeconds(0);
@@ -887,9 +903,8 @@ export function ChatPage({
     }
 
     const intervalId = setInterval(() => {
-      if (streamingBufferRef.current) {
-        setStreamingContent((prev) => prev + streamingBufferRef.current);
-        streamingBufferRef.current = "";
+      if (streamingBufferRef.current.hasPending) {
+        setStreamingContent((prev) => prev + streamingBufferRef.current.drain());
       }
     }, 40);
 
@@ -944,7 +959,7 @@ export function ChatPage({
     refreshChatAfterReconnectRef.current = generationChatId ?? draftChatIdRef.current;
     resendRequestRef.current = null;
     interruptForQueueRef.current = false;
-    streamingBufferRef.current = "";
+    streamingBufferRef.current.clear();
     setStreamingContent("");
     setStreamingCharacterId(null);
     setStreamingContextCounts(null);
@@ -1344,24 +1359,12 @@ export function ChatPage({
     return usage.estimated ? `${detail} · ${t("chat.tokensEstimated")}` : detail;
   };
 
-  const totalMessagePages = useMemo(() => {
-    const totalMessages = activeChat?.messages.length ?? 0;
-    return Math.max(1, Math.ceil(totalMessages / MESSAGES_PER_PAGE));
-  }, [activeChat?.messages.length]);
-
-  const safeMessagePage = Math.min(messagePage, totalMessagePages);
-
   const pagedMessages = useMemo(() => {
-    if (!activeChat) {
-      return [];
-    }
-
-    const startIndex = (safeMessagePage - 1) * MESSAGES_PER_PAGE;
-    return activeChat.messages.slice(startIndex, startIndex + MESSAGES_PER_PAGE);
-  }, [activeChat, safeMessagePage]);
+    return activeChat?.messages ?? [];
+  }, [activeChat?.messages]);
 
   const nextReplyContext = useMemo(() => {
-    if (!activeChat) {
+    if (!activeChat || hasNewerMessages) {
       return null;
     }
 
@@ -1377,28 +1380,28 @@ export function ChatPage({
       includedCount: includedMessages.length,
       outsideCount: Math.max(0, eligibleMessages.length - includedMessages.length)
     };
-  }, [activeChat]);
+  }, [activeChat, hasNewerMessages]);
 
   const bookmarkedMessages = useMemo(
     () =>
       (activeChat?.messages ?? [])
-        .map((message, index) => ({ message, index }))
+        .map((message, index) => ({ message, index: messageWindowStart + index }))
         .filter(({ message }) => message.isBookmarked)
         .reverse(),
-    [activeChat?.messages]
+    [activeChat?.messages, messageWindowStart]
   );
 
   const pageRange = useMemo(() => {
-    const totalMessages = activeChat?.messages.length ?? 0;
+    const totalMessages = activeChat?.messageCount ?? 0;
 
     if (totalMessages === 0) {
       return { start: 0, end: 0, total: 0 };
     }
 
-    const start = (safeMessagePage - 1) * MESSAGES_PER_PAGE + 1;
+    const start = messageWindowStart + 1;
     const end = Math.min(start + pagedMessages.length - 1, totalMessages);
     return { start, end, total: totalMessages };
-  }, [activeChat?.messages.length, pagedMessages.length, safeMessagePage]);
+  }, [activeChat?.messageCount, messageWindowStart, pagedMessages.length]);
 
   const pendingDeleteImpact = useMemo(() => {
     if (!pendingDeleteMessage) {
@@ -1409,17 +1412,18 @@ export function ChatPage({
     const targetIndex = messages.findIndex(
       (message) => message.id === pendingDeleteMessage.id
     );
-    const affectedMessages =
-      pendingDeleteMessage.role === "user" && targetIndex >= 0
-        ? messages.slice(targetIndex)
-        : [pendingDeleteMessage];
+    const absoluteIndex = targetIndex >= 0 ? messageWindowStart + targetIndex : -1;
+    const total = activeChat?.messageCount ?? messages.length;
+    const affectedCount = pendingDeleteMessage.role === "user" && absoluteIndex >= 0
+      ? Math.max(1, total - absoluteIndex)
+      : 1;
 
     return {
-      total: affectedMessages.length,
-      following: Math.max(0, affectedMessages.length - 1),
+      total: affectedCount,
+      following: Math.max(0, affectedCount - 1),
       preview: getMessagePreview(pendingDeleteMessage.content)
     };
-  }, [activeChat?.messages, pendingDeleteMessage]);
+  }, [activeChat?.messageCount, activeChat?.messages, messageWindowStart, pendingDeleteMessage]);
 
   const pendingResendImpact = useMemo(() => {
     if (!pendingResendMessage) {
@@ -1428,26 +1432,29 @@ export function ChatPage({
 
     const messages = activeChat?.messages ?? [];
     const targetIndex = messages.findIndex((message) => message.id === pendingResendMessage.id);
+    const absoluteIndex = targetIndex >= 0 ? messageWindowStart + targetIndex : -1;
     return {
-      following: targetIndex >= 0 ? Math.max(0, messages.length - targetIndex - 1) : 0,
+      following: absoluteIndex >= 0
+        ? Math.max(0, (activeChat?.messageCount ?? messages.length) - absoluteIndex - 1)
+        : 0,
       preview: getMessagePreview(pendingResendMessage.content)
     };
-  }, [activeChat?.messages, pendingResendMessage]);
+  }, [activeChat?.messageCount, activeChat?.messages, messageWindowStart, pendingResendMessage]);
 
   const paginationCopy =
     language === "zh-CN"
       ? {
-          previous: "上一页",
-          next: "下一页",
-          newest: "最新页",
-          page: `第 ${safeMessagePage} / ${totalMessagePages} 页`,
+          previous: "加载更早",
+          next: "回到最新",
+          newest: "已在最新",
+          page: "有界消息窗口",
           range: `显示 ${pageRange.start}-${pageRange.end} / ${pageRange.total}`
         }
       : {
-          previous: "Previous",
-          next: "Next",
-          newest: "Newest",
-          page: `Page ${safeMessagePage} / ${totalMessagePages}`,
+          previous: "Load older",
+          next: "Return to latest",
+          newest: "At latest",
+          page: "Bounded message window",
           range: `Showing ${pageRange.start}-${pageRange.end} of ${pageRange.total}`
         };
 
@@ -1560,10 +1567,12 @@ export function ChatPage({
   const loadReadinessCharacters = async () => {
     const page = await api.characters.page({ page: 1, pageSize: 1 });
     setCharacterTotal(page.total);
-    mergeCharacterCache(page.items);
   };
 
   const loadChat = async (id: string | null) => {
+    loadChatAbortRef.current?.abort();
+    const loadController = new AbortController();
+    loadChatAbortRef.current = loadController;
     const previousChatId = draftChatIdRef.current;
     if (previousChatId && previousChatId !== id) {
       saveStoredChatDraft(previousChatId, draft);
@@ -1580,6 +1589,7 @@ export function ChatPage({
     }
 
     if (!id) {
+      loadController.abort();
       draftChatIdRef.current = null;
       queuedChatIdRef.current = null;
       queuedMessagesRef.current = [];
@@ -1589,6 +1599,10 @@ export function ChatPage({
       hasMessagesRef.current = false;
       setChatMemories([]);
       setAgentDraft(null);
+      setMessageCursor(null);
+      setHasOlderMessages(false);
+      setHasNewerMessages(false);
+      setMessageWindowStart(0);
       return;
     }
 
@@ -1598,27 +1612,66 @@ export function ChatPage({
     queuedMessagesRef.current = storedQueue;
     setQueuedMessages(storedQueue);
     setDraft(readStoredChatDraft(id));
-    const chat = await api.chats.get(id);
+    const pendingMessageJump = takeChatMessageJump(id);
+    const [chat, memories] = await Promise.all([
+      timelineApi.summary(id, loadController.signal),
+      api.chats.memories.list(id)
+    ]);
+    let messageWindow;
+    if (pendingMessageJump) {
+      try {
+        messageWindow = await timelineApi.locate(
+          id,
+          pendingMessageJump.messageId,
+          Math.floor(MESSAGE_PAGE_SIZE / 2),
+          loadController.signal
+        );
+      } catch (caught) {
+        if (loadController.signal.aborted) throw caught;
+        setStatus(language === "zh-CN" ? "目标消息已不可用，已返回最新消息。" : "The target message is unavailable. Showing the latest messages.");
+        messageWindow = await timelineApi.page(id, { limit: MESSAGE_PAGE_SIZE, includeTotal: false }, loadController.signal);
+      }
+    } else {
+      messageWindow = await timelineApi.page(id, { limit: MESSAGE_PAGE_SIZE, includeTotal: false }, loadController.signal);
+    }
     if (draftChatIdRef.current !== id) {
       return;
     }
-    setActiveChat(chat);
+    let windowStart: number;
+    let olderCursor: string | null;
+    let olderAvailable: boolean;
+    let newerAvailable: boolean;
+    if ("messageId" in messageWindow) {
+      const targetOffset = Math.max(0, messageWindow.items.findIndex((message) => message.id === messageWindow.messageId));
+      windowStart = Math.max(0, messageWindow.index - targetOffset);
+      olderCursor = messageWindow.olderCursor;
+      olderAvailable = messageWindow.hasOlder;
+      newerAvailable = messageWindow.hasNewer;
+    } else {
+      windowStart = Math.max(0, chat.messageCount - messageWindow.items.length);
+      olderCursor = messageWindow.nextCursor;
+      olderAvailable = messageWindow.hasMore;
+      newerAvailable = false;
+    }
+    setActiveChat({ ...chat, messages: messageWindow.items, memories });
     setAgentDraft(null);
-    setChatMemories(chat.memories ?? []);
+    setChatMemories(memories);
     setAutoMemoryEnabled(chat.autoMemoryEnabled);
-    hasMessagesRef.current = chat.messages.length > 0;
+    hasMessagesRef.current = chat.messageCount > 0;
     setMemoryDraft(String(chat.memoryTurns));
-    setMessagePage(1);
+    setMessageCursor(olderCursor);
+    setHasOlderMessages(olderAvailable);
+    setHasNewerMessages(newerAvailable);
+    setMessageWindowStart(windowStart);
     setHighlightedMessageId(null);
 
-    const pendingMessageJump = takeChatMessageJump(chat.id);
-    if (pendingMessageJump) {
-      setMessagePage(Math.max(1, Math.floor(pendingMessageJump.index / MESSAGES_PER_PAGE) + 1));
+    if (pendingMessageJump && "messageId" in messageWindow) {
       setHighlightedMessageId(pendingMessageJump.messageId);
       setTimeout(() => {
-        document
-          .querySelector(`[data-message-id="${pendingMessageJump.messageId}"]`)
-          ?.scrollIntoView({ block: "center", behavior: preferredScrollBehavior() });
+        const target = document.querySelector<HTMLElement>(`[data-message-id="${pendingMessageJump.messageId}"]`);
+        target?.scrollIntoView({ block: "center", behavior: preferredScrollBehavior() });
+        target?.setAttribute("tabindex", "-1");
+        target?.focus({ preventScroll: true });
       }, 50);
       window.setTimeout(() => {
         setHighlightedMessageId((current) =>
@@ -1667,6 +1720,7 @@ export function ChatPage({
 
   useEffect(() => {
     void loadChat(selectedChatId).catch((caught: unknown) => {
+      if (caught instanceof DOMException && caught.name === "AbortError") return;
       const message = caught instanceof Error ? caught.message : tRef.current("chat.failedLoadChat");
       if (selectedChatId && /chat not found/i.test(message)) {
         onSelectChat(null);
@@ -1674,6 +1728,7 @@ export function ChatPage({
       }
       setError(message);
     });
+    return () => loadChatAbortRef.current?.abort();
   }, [onSelectChat, selectedChatId]);
 
   useEffect(() => {
@@ -1685,49 +1740,12 @@ export function ChatPage({
   }, [draft, selectedChatId]);
 
   useEffect(() => {
-    const chatId = activeChat?.id ?? null;
-    const totalPages = Math.max(
-      1,
-      Math.ceil((activeChat?.messages.length ?? 0) / MESSAGES_PER_PAGE)
-    );
-    const previous = paginationStateRef.current;
-
-    setMessagePage((current) => {
-      if (!chatId) {
-        return 1;
-      }
-
-      if (previous.chatId !== chatId) {
-        return totalPages;
-      }
-
-      if (current > totalPages) {
-        return totalPages;
-      }
-
-      if (current === previous.totalPages && totalPages > previous.totalPages) {
-        return totalPages;
-      }
-
-      return current;
-    });
-
-    paginationStateRef.current = { chatId, totalPages };
-  }, [activeChat?.id, activeChat?.messages.length]);
-
-  useEffect(() => {
     const viewport = messageViewportRef.current;
     if (!viewport) {
       return;
     }
-
-    if (safeMessagePage >= totalMessagePages) {
-      viewport.scrollTop = viewport.scrollHeight;
-      return;
-    }
-
-    viewport.scrollTop = 0;
-  }, [activeChat?.id, safeMessagePage, totalMessagePages]);
+    if (!hasNewerMessages) viewport.scrollTop = viewport.scrollHeight;
+  }, [activeChat?.id]);
 
   useEffect(() => {
     const viewport = messageViewportRef.current;
@@ -1829,6 +1847,79 @@ export function ChatPage({
       setError(caught instanceof Error ? caught.message : t("chat.failedUpdateUserConfig"));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadOlderMessages = async () => {
+    if (!activeChat || !hasOlderMessages || !messageCursor || messageWindowLoading) return;
+    const chatId = activeChat.id;
+    const viewport = messageViewportRef.current;
+    const viewportTop = viewport?.getBoundingClientRect().top ?? 0;
+    const anchorElement = viewport
+      ? [...viewport.querySelectorAll<HTMLElement>("[data-message-id]")].find((element) => element.getBoundingClientRect().bottom > viewportTop + 1)
+      : null;
+    const anchor = anchorElement
+      ? { id: anchorElement.dataset.messageId ?? "", offset: anchorElement.getBoundingClientRect().top - viewportTop }
+      : null;
+    setMessageWindowLoading(true);
+    try {
+      const page = await timelineApi.page(chatId, {
+        limit: MESSAGE_PAGE_SIZE,
+        cursor: messageCursor,
+        includeTotal: false
+      });
+      if (draftChatIdRef.current !== chatId) return;
+      setActiveChat((current) => {
+        if (!current || current.id !== chatId) return current;
+        const currentIds = new Set(current.messages.map((message) => message.id));
+        const prepended = page.items.filter((message) => !currentIds.has(message.id));
+        const combined = [...prepended, ...current.messages];
+        const overflow = Math.max(0, combined.length - MAX_RENDERED_MESSAGES);
+        if (overflow > 0) setHasNewerMessages(true);
+        return { ...current, messages: overflow ? combined.slice(0, MAX_RENDERED_MESSAGES) : combined };
+      });
+      setMessageWindowStart((value) => Math.max(0, value - page.items.length));
+      setMessageCursor(page.nextCursor);
+      setHasOlderMessages(page.hasMore);
+      window.requestAnimationFrame(() => {
+        if (!viewport || !anchor?.id) return;
+        const currentAnchor = viewport.querySelector<HTMLElement>(`[data-message-id="${anchor.id}"]`);
+        if (currentAnchor) {
+          const previousScrollBehavior = viewport.style.scrollBehavior;
+          viewport.style.scrollBehavior = "auto";
+          viewport.scrollTop += currentAnchor.getBoundingClientRect().top - viewport.getBoundingClientRect().top - anchor.offset;
+          window.requestAnimationFrame(() => { viewport.style.scrollBehavior = previousScrollBehavior; });
+        }
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedLoadChat"));
+    } finally {
+      setMessageWindowLoading(false);
+    }
+  };
+
+  const loadLatestMessages = async () => {
+    if (!activeChat || messageWindowLoading) return;
+    const chatId = activeChat.id;
+    setMessageWindowLoading(true);
+    try {
+      const [summary, page] = await Promise.all([
+        timelineApi.summary(chatId),
+        timelineApi.page(chatId, { limit: MESSAGE_PAGE_SIZE, includeTotal: false })
+      ]);
+      if (draftChatIdRef.current !== chatId) return;
+      setActiveChat((current) => current && current.id === chatId
+        ? { ...current, ...summary, messages: page.items }
+        : current);
+      setMessageWindowStart(Math.max(0, summary.messageCount - page.items.length));
+      setMessageCursor(page.nextCursor);
+      setHasOlderMessages(page.hasMore);
+      setHasNewerMessages(false);
+      window.requestAnimationFrame(scrollToBottom);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedLoadChat"));
+    } finally {
+      setMessageWindowLoading(false);
     }
   };
 
@@ -2094,15 +2185,23 @@ export function ChatPage({
     setShowModelDialog(false);
   };
 
-  const loadChatMemories = async () => {
+  const loadChatMemories = async (append = false) => {
     if (!activeChat) {
       return;
     }
 
     try {
-      const [memories, operations] = await Promise.all([api.chats.memories.list(activeChat.id), api.chats.memoryOperations.list(activeChat.id)]);
-      setChatMemories(memories);
-      setMemoryOperations(operations);
+      const [page, operations] = await Promise.all([
+        api.chats.memories.page(activeChat.id, append ? memoryCursor ?? undefined : undefined, !append),
+        append ? Promise.resolve(null) : api.chats.memoryOperations.list(activeChat.id)
+      ]);
+      setChatMemories((current) => append
+        ? [...new Map([...current, ...page.items].map((memory) => [memory.id, memory])).values()]
+        : page.items);
+      setMemoryCursor(page.nextCursor);
+      setMemoryHasMore(page.hasMore);
+      if (page.total !== null) setMemoryTotal(page.total);
+      if (operations) setMemoryOperations(operations);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedLoadMemories"));
     }
@@ -2114,6 +2213,9 @@ export function ChatPage({
     setEditingMemory(null);
     setMemoryForm(emptyMemoryForm);
     setShowMemoryDialog(true);
+    setMemoryCursor(null);
+    setMemoryHasMore(false);
+    setMemoryTotal(0);
     setMemorySettingsOpen(false);
     void loadChatMemories();
   };
@@ -2150,11 +2252,8 @@ export function ChatPage({
   const jumpToMemorySource = async (messageId: string) => {
     if (!activeChat) return;
     try {
-      const chat = await api.chats.get(activeChat.id);
-      const index = chat.messages.findIndex((message) => message.id === messageId);
-      if (index < 0) { setStatus(language === "zh-CN" ? "来源消息已删除。" : "The source message was deleted."); return; }
       setShowMemoryDialog(false);
-      jumpToMessage(chat.messages[index], index);
+      await jumpToMessage(messageId);
     } catch (caught) { setError(caught instanceof Error ? caught.message : t("chat.failedLoad")); }
   };
 
@@ -2371,28 +2470,46 @@ export function ChatPage({
     }
   };
 
-  const jumpToMessage = (message: MessageDTO, index: number) => {
-    const targetPage = Math.max(1, Math.floor(index / MESSAGES_PER_PAGE) + 1);
-    setMessagePage(targetPage);
-    setHighlightedMessageId(message.id);
+  const jumpToMessage = async (messageId: string) => {
+    if (!activeChat) return;
+    const chatId = activeChat.id;
+    const existingIndex = activeChat.messages.findIndex((message) => message.id === messageId);
+    if (existingIndex < 0) {
+      const location = await timelineApi.locate(chatId, messageId, Math.floor(MESSAGE_PAGE_SIZE / 2));
+      if (draftChatIdRef.current !== chatId) return;
+      const targetOffset = Math.max(0, location.items.findIndex((message) => message.id === messageId));
+      setActiveChat((current) => current && current.id === chatId
+        ? { ...current, messageCount: location.total, messages: location.items }
+        : current);
+      setMessageWindowStart(Math.max(0, location.index - targetOffset));
+      setMessageCursor(location.olderCursor);
+      setHasOlderMessages(location.hasOlder);
+      setHasNewerMessages(location.hasNewer);
+    }
+    setHighlightedMessageId(messageId);
     setTimeout(() => {
-      document
-        .querySelector(`[data-message-id="${message.id}"]`)
-        ?.scrollIntoView({ block: "center", behavior: preferredScrollBehavior() });
+      const target = document.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
+      target?.scrollIntoView({ block: "center", behavior: preferredScrollBehavior() });
+      target?.setAttribute("tabindex", "-1");
+      target?.focus({ preventScroll: true });
     }, 50);
     window.setTimeout(() => {
-      setHighlightedMessageId((current) => (current === message.id ? null : current));
+      setHighlightedMessageId((current) => (current === messageId ? null : current));
     }, 2400);
   };
 
   const jumpToMessageSearchResult = (result: ChatMessageSearchDTO["results"][number]) => {
     setMessageSearchOpen(false);
-    jumpToMessage(result.message, result.index);
+    void jumpToMessage(result.message.id).catch((caught: unknown) =>
+      setError(caught instanceof Error ? caught.message : t("chat.failedLoad"))
+    );
   };
 
-  const jumpToBookmarkedMessage = (message: MessageDTO, index: number) => {
+  const jumpToBookmarkedMessage = (message: MessageDTO) => {
     setShowBookmarksDialog(false);
-    jumpToMessage(message, index);
+    void jumpToMessage(message.id).catch((caught: unknown) =>
+      setError(caught instanceof Error ? caught.message : t("chat.failedLoad"))
+    );
   };
 
   const updateUserConfigDraft = (field: keyof UserCustomConfigDTO, value: string) => {
@@ -2729,7 +2846,7 @@ export function ChatPage({
       setStreamingContent("");
       setStreamingCharacterId(null);
       setStreamingContextCounts(null);
-      streamingBufferRef.current = "";
+      streamingBufferRef.current.clear();
       pendingGenerationDraftRef.current = {
         requestId,
         chatId,
@@ -3043,7 +3160,7 @@ export function ChatPage({
       setStreamingContent("");
       setStreamingCharacterId(message.characterId);
       setStreamingContextCounts(null);
-      streamingBufferRef.current = "";
+      streamingBufferRef.current.clear();
       if (!sendWs(payload)) {
         throw new Error(t("chat.websocketFailed"));
       }
@@ -3133,7 +3250,7 @@ export function ChatPage({
       setStreamingContent("");
       setStreamingCharacterId(message.characterId);
       setStreamingContextCounts(null);
-      streamingBufferRef.current = "";
+      streamingBufferRef.current.clear();
       if (!sendWs(payload)) {
         throw new Error(t("chat.websocketFailed"));
       }
@@ -3237,16 +3354,13 @@ export function ChatPage({
     setStoryNavigatorError(null);
 
     try {
-      const parentChat = await api.chats.get(parentChatId);
+      await timelineApi.summary(parentChatId);
       if (sourceMessageId) {
-        const sourceIndex = parentChat.messages.findIndex((message) => message.id === sourceMessageId);
-        if (sourceIndex >= 0) {
-          queueChatMessageJump({
-            chatId: parentChatId,
-            messageId: sourceMessageId,
-            index: sourceIndex
-          });
-        }
+        queueChatMessageJump({
+          chatId: parentChatId,
+          messageId: sourceMessageId,
+          index: 0
+        });
       }
       setShowStoryNavigator(false);
       onSelectChat(parentChatId);
@@ -3575,7 +3689,7 @@ export function ChatPage({
       setStreamingContent("");
       setStreamingCharacterId(null);
       setStreamingContextCounts(null);
-      streamingBufferRef.current = "";
+      streamingBufferRef.current.clear();
       setIsNearBottom(true);
       if (!sendWs(payload)) {
         throw new Error(t("chat.websocketFailed"));
@@ -4193,11 +4307,11 @@ export function ChatPage({
                             className="mx-auto w-full p-2 sm:p-5"
                           id="chat-message-list"
                         >
-                          {activeChat.messages.length > MESSAGES_PER_PAGE ? (
+                          {activeChat.messageCount > activeChat.messages.length || hasOlderMessages || hasNewerMessages ? (
                             <div
                               id="chat-pagination"
                               data-testid="chat-message-pagination"
-                              className="sticky top-0 z-10 -mx-2 -mt-2 mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] bg-ink-900/95 px-2 pb-2 pt-1.5 backdrop-blur-sm sm:-mx-5 sm:-mt-5 sm:mb-5 sm:gap-3 sm:px-5 sm:pb-3 sm:pt-5"
+                              className="-mx-2 -mt-2 mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] bg-ink-900/95 px-2 pb-2 pt-1.5 sm:-mx-5 sm:-mt-5 sm:mb-5 sm:gap-3 sm:px-5 sm:pb-3 sm:pt-5"
                             >
                               <div className="min-w-0">
                                 <p className="text-xs font-semibold text-slate-200">
@@ -4211,11 +4325,9 @@ export function ChatPage({
                                 <Button
                                   className="!min-h-[36px] !px-2.5 sm:!min-h-[48px] sm:!px-3 text-xs"
                                   data-testid="chat-page-prev"
-                                  disabled={safeMessagePage <= 1}
+                                  disabled={!hasOlderMessages || !messageCursor || messageWindowLoading}
                                   variant="secondary"
-                                  onClick={() =>
-                                    setMessagePage((current) => Math.max(1, current - 1))
-                                  }
+                                  onClick={() => void loadOlderMessages()}
                                 >
                                   <ChevronLeft size={14} />
                                   {paginationCopy.previous}
@@ -4223,15 +4335,11 @@ export function ChatPage({
                                 <Button
                                   className="!min-h-[36px] !px-2.5 sm:!min-h-[48px] sm:!px-3 text-xs"
                                   data-testid="chat-page-next"
-                                  disabled={safeMessagePage >= totalMessagePages}
+                                  disabled={!hasNewerMessages || messageWindowLoading}
                                   variant="secondary"
-                                  onClick={() =>
-                                    setMessagePage((current) =>
-                                      Math.min(totalMessagePages, current + 1)
-                                    )
-                                  }
+                                  onClick={() => void loadLatestMessages()}
                                 >
-                                  {safeMessagePage >= totalMessagePages
+                                  {!hasNewerMessages
                                     ? paginationCopy.newest
                                     : paginationCopy.next}
                                   <ChevronRight size={14} />
@@ -4425,7 +4533,7 @@ export function ChatPage({
                           {activeRequestId &&
                           generationChatId === activeChat.id &&
                           streamingCharacterId &&
-                          safeMessagePage >= totalMessagePages ? (
+                          !hasNewerMessages ? (
                             <StreamingBubble
                               key="streaming"
                               characterAvatar={
@@ -4434,11 +4542,6 @@ export function ChatPage({
                                   : null
                               }
                               showAvatar={showMessageAvatars}
-                              htmlCss={
-                                streamingCharacterId
-                                  ? characterMap.get(streamingCharacterId)?.htmlCss
-                                  : undefined
-                              }
                               content={streamingContent}
                               contextSummary={
                                 streamingContextCounts
@@ -5398,7 +5501,7 @@ export function ChatPage({
                       className="rounded-lg border border-white/10 bg-ink-800/65 p-3 text-left transition hover:border-ember-400/50 hover:bg-ember-500/[0.08]"
                       data-testid="chat-bookmark-result"
                       type="button"
-                      onClick={() => jumpToBookmarkedMessage(message, index)}
+                      onClick={() => jumpToBookmarkedMessage(message)}
                     >
                       <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                         <Bookmark className="text-ember-300" fill="currentColor" size={13} />
@@ -6467,6 +6570,11 @@ export function ChatPage({
                       </div>
                     </div>
                   ))}
+                  {memoryHasMore ? (
+                    <Button className="w-full" disabled={loading} variant="ghost" onClick={() => void loadChatMemories(true)}>
+                      {language === "zh-CN" ? `加载更多（已显示 ${chatMemories.length} / ${memoryTotal || "?"}）` : `Load more (${chatMemories.length} / ${memoryTotal || "?"} shown)`}
+                    </Button>
+                  ) : null}
                 </div>
               )}
               <MemoryAuditPanel

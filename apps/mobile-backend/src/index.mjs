@@ -32,9 +32,11 @@ import {
   chatBranchSchema,
   chatCreateSchema,
   chatMemoryCreateSchema,
+  chatPageQuerySchema,
   chatMessageSearchQuerySchema,
   chatMemoryUpdateSchema,
   memoryPurgeSchema,
+  memoryPageQuerySchema,
   memoryRestoreExecuteSchema,
   memoryUndoExecuteSchema,
   profileSummaryRestoreExecuteSchema,
@@ -47,6 +49,8 @@ import {
   generationRequestSchema,
   messageCreateSchema,
   messageListQuerySchema,
+  messageLocateQuerySchema,
+  messagePageQuerySchema,
   messageUpdateSchema,
   regenerateRequestSchema,
   resendRequestSchema,
@@ -56,11 +60,12 @@ import {
   voiceSpeechSchema,
   voiceTranscriptionSchema,
   settingsUpdateSchema,
+  lanAutoSyncSettingsSchema,
   lanSyncRequestSchema,
   storageCleanupPlanRequestSchema,
   storageCleanupExecuteSchema
 } from "../server-dist/schemas.js";
-import { normalizeUploadedImage, validateStoredImage } from "../server-dist/services/imageNormalization.js";
+import { createImageThumbnail, normalizeUploadedImage, validateStoredImage } from "../server-dist/services/imageNormalization.js";
 import { buildCharacterDraftMessages, getCharacterDraftMeta, parseCharacterDraftItems } from "../server-dist/services/characterDraftProtocol.js";
 import { applyCharacterTagOperation } from "../server-dist/services/characterTags.js";
 import {
@@ -103,6 +108,24 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const port = Number(process.env.MOBILE_BACKEND_PORT ?? process.env.SERVER_PORT ?? 4110);
 const host = process.env.MOBILE_BACKEND_HOST ?? "0.0.0.0";
+const encodePageCursor = (value) => Buffer.from(JSON.stringify({ version: 1, ...value }), "utf8").toString("base64url");
+const decodePageCursor = (cursor, kind, scope) => {
+  if (!cursor) return null;
+  try {
+    const value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+    const allowed = new Set(["version", "kind", "scope", "id", "createdAt", "updatedAt", "pinned"]);
+    if (Object.keys(value).some((key) => !allowed.has(key)) || value.version !== 1 || value.kind !== kind || value.scope !== scope || typeof value.id !== "string" || !value.id || value.id.length > 200) throw new Error();
+    for (const key of ["createdAt", "updatedAt"]) {
+      if (value[key] !== undefined && (typeof value[key] !== "string" || !Number.isFinite(Date.parse(value[key])) || new Date(value[key]).toISOString() !== value[key])) throw new Error();
+    }
+    if (value.pinned !== undefined && typeof value.pinned !== "boolean") throw new Error();
+    return value;
+  } catch {
+    const error = new Error("The pagination cursor is invalid or belongs to another request.");
+    error.status = 400;
+    throw error;
+  }
+};
 const resolveDataDir = () => {
   if (process.env.MOBILE_BACKEND_DATA_DIR) {
     return process.env.MOBILE_BACKEND_DATA_DIR;
@@ -126,6 +149,7 @@ const dataDir = resolveDataDir();
 const store = new MobileStore(path.join(dataDir, "mobile-backend.json"));
 const exportDir = path.join(dataDir, "exports");
 const storageHealth = createMobileStorageHealth({ store, dataDir, validateStoredImage });
+const mobileThumbnailCache = new Map();
 
 const parseBody = (schema, body) => {
   const parsed = schema.safeParse(body);
@@ -656,11 +680,19 @@ const recallChatMemories = async ({ chatId, query, recentMessages, settings }) =
   if (!queryText) return [];
 
   const queryTokens = new Set(tokenize(queryText));
-  const memories = store.listMemories(chatId).filter((memory) => memory.enabled !== false && !memory.deletedAt);
   let embeddingIndex = null;
+  let embeddingSettings = null;
+  let source = null;
   try {
-    const embeddingSettings = resolveModuleSettings(settings, "memory_embedding");
-    const source = toEmbeddingIdentity(embeddingSettings);
+    embeddingSettings = resolveModuleSettings(settings, "memory_embedding");
+    source = toEmbeddingIdentity(embeddingSettings);
+  } catch {
+    embeddingSettings = null;
+    source = null;
+  }
+  const memories = store.listMemoryRecallCandidates(chatId, [...queryTokens], source);
+  if (memories.length === 0) return [];
+  if (embeddingSettings && source) {
     const readyVectors = memories
       .map((memory) => ({ memory, vector: toNumberArray(memory.embedding) }))
       .filter(({ memory, vector }) =>
@@ -678,8 +710,6 @@ const recallChatMemories = async ({ chatId, query, recentMessages, settings }) =
         vectors: new Map(readyVectors.map(({ memory, vector }) => [memory.id, vector]))
       };
     }
-  } catch {
-    embeddingIndex = null;
   }
   let queryVector = null;
   if (embeddingIndex) {
@@ -770,10 +800,7 @@ const updateUserProfileFromChat = async ({ chatId, settings }) => {
   const chat = getActiveChat(chatId);
   if (!chat) return null;
 
-  const recentUserMessages = store
-    .listMessages(chatId)
-    .filter((message) => message.role === "user")
-    .slice(-RECENT_PROFILE_MESSAGE_LIMIT);
+  const recentUserMessages = store.listRecentRoleMessages(chatId, "user", RECENT_PROFILE_MESSAGE_LIMIT);
   const recentContents = recentUserMessages.map((message) => message.content.trim()).filter(Boolean);
   if (recentContents.length === 0) return null;
 
@@ -892,7 +919,7 @@ const updateChatMemoriesFromTurn = async ({ chatId, settings, force = false }) =
     return null;
   }
 
-  const recentMessages = store.listMessages(chatId).slice(-RECENT_MEMORY_MESSAGE_LIMIT);
+  const recentMessages = store.listRecentContextMessages(chatId, RECENT_MEMORY_MESSAGE_LIMIT);
   if (recentMessages.length === 0) return null;
 
   const existingMemories = store.listMemories(chatId).filter((memory) => !memory.deletedAt).slice(0, EXISTING_MEMORY_LIMIT);
@@ -1040,6 +1067,22 @@ const serializeCharacter = (character, password) => {
     isFavorite: character.isFavorite === true,
     visibility: resolved.visibility,
     canViewPrompt: resolved.canViewPrompt
+  };
+};
+
+const serializeCharacterSummary = (character) => {
+  const resolved = resolveCharacterRecord(character);
+  return {
+    id: character.id,
+    name: resolved.name,
+    avatar: resolved.avatar,
+    description: resolved.description,
+    tags: toCharacterTags(character.tags),
+    isFavorite: character.isFavorite === true,
+    visibility: resolved.visibility,
+    canViewPrompt: resolved.canViewPrompt,
+    createdAt: character.createdAt,
+    updatedAt: character.updatedAt
   };
 };
 
@@ -1781,6 +1824,150 @@ const requestPeer = async (peerBaseUrl, pathName, options = {}) => {
   }
 };
 
+const AUTO_SYNC_RECORD_ID = "lan-auto-sync";
+let autoSyncRuntime = { state: "disabled", conflictCount: 0, errorCode: null, message: null };
+let activeAutoSyncRun = null;
+const defaultAutoSyncSettings = () => ({
+  id: AUTO_SYNC_RECORD_ID,
+  version: 1,
+  enabled: false,
+  lastPeerBaseUrl: "",
+  lastAttemptAt: null,
+  lastSuccessAt: null
+});
+const readAutoSyncSettings = () => {
+  const saved = store.readRecord("deviceSetting", AUTO_SYNC_RECORD_ID);
+  return saved?.version === 1 ? { ...defaultAutoSyncSettings(), ...saved, id: AUTO_SYNC_RECORD_ID } : defaultAutoSyncSettings();
+};
+const autoSyncStatus = (settings = readAutoSyncSettings()) => ({
+  enabled: settings.enabled === true,
+  lastPeerBaseUrl: settings.lastPeerBaseUrl || "",
+  state: settings.enabled ? autoSyncRuntime.state : "disabled",
+  lastAttemptAt: settings.lastAttemptAt ?? null,
+  lastSuccessAt: settings.lastSuccessAt ?? null,
+  conflictCount: autoSyncRuntime.conflictCount,
+  errorCode: autoSyncRuntime.errorCode,
+  message: autoSyncRuntime.message
+});
+const writeAutoSyncSettings = async (settings) => {
+  await store.writeRecord("deviceSetting", { ...settings, id: AUTO_SYNC_RECORD_ID, version: 1 }, true);
+  return autoSyncStatus(settings);
+};
+const rememberSyncPeer = async (peerBaseUrl, completedAt = null) => {
+  const current = readAutoSyncSettings();
+  return writeAutoSyncSettings({
+    ...current,
+    lastPeerBaseUrl: normalizePeerBaseUrl(peerBaseUrl),
+    ...(completedAt ? { lastSuccessAt: completedAt } : {})
+  });
+};
+
+const runMobilePullSync = async (input) => {
+  const peerBaseUrl = normalizePeerBaseUrl(input.peerBaseUrl);
+  const peerBackup = await requestPeer(peerBaseUrl, "/api/backups/export");
+  const backup = parseBody(backupPreviewRequestSchema, { ...peerBackup, mode: input.mode });
+  const preview = store.previewBackup(backup, serializeSettings(store.getSettings()));
+  const summary = input.phase === "execute"
+    ? await store.importBackup(
+        parseBody(backupExecuteSchema, {
+          ...backup,
+          previewId: input.previewId,
+          conflictResolutions: input.conflictResolutions
+        }),
+        serializeSettings(store.getSettings())
+      )
+    : null;
+  return {
+    direction: "pull",
+    phase: input.phase,
+    mode: input.mode,
+    peerBaseUrl,
+    peerExportedAt: peerBackup.exportedAt ?? null,
+    completedAt: summary?.completedAt ?? null,
+    preview,
+    summary
+  };
+};
+
+const runMobilePushSync = async (input) => {
+  const peerBaseUrl = normalizePeerBaseUrl(input.peerBaseUrl);
+  const localBackup = store.exportBackup(serializeSettings(store.getSettings()));
+  const preview = await requestPeer(peerBaseUrl, "/api/backups/preview", {
+    method: "POST",
+    body: JSON.stringify({ ...localBackup, mode: input.mode })
+  });
+  const summary = input.phase === "execute"
+    ? await requestPeer(peerBaseUrl, "/api/backups/import", {
+        method: "POST",
+        body: JSON.stringify({
+          ...localBackup,
+          mode: input.mode,
+          previewId: input.previewId,
+          conflictResolutions: input.conflictResolutions
+        })
+      })
+    : null;
+  return {
+    direction: "push",
+    phase: input.phase,
+    mode: input.mode,
+    peerBaseUrl,
+    peerExportedAt: null,
+    completedAt: summary?.completedAt ?? null,
+    preview,
+    summary
+  };
+};
+
+const runMobileAutomaticSync = async () => {
+  if (activeAutoSyncRun) return activeAutoSyncRun;
+  activeAutoSyncRun = (async () => {
+    let settings = readAutoSyncSettings();
+    if (!settings.enabled) return autoSyncStatus(settings);
+    if (!settings.lastPeerBaseUrl) throw httpError(409, "No previous LAN peer is available for automatic sync.");
+    if (privacyPasscodeDigest) throw httpError(423, "Unlock the app before automatic sync can run.");
+    settings = { ...settings, lastAttemptAt: new Date().toISOString() };
+    await writeAutoSyncSettings(settings);
+    autoSyncRuntime = { state: "running", conflictCount: 0, errorCode: null, message: null };
+    try {
+      const previewResult = await runMobilePullSync({
+        peerBaseUrl: settings.lastPeerBaseUrl,
+        mode: "merge",
+        phase: "preview",
+        conflictResolutions: []
+      });
+      if (!previewResult.preview.canExecute) {
+        autoSyncRuntime = { state: "failed", conflictCount: previewResult.preview.conflicts.length, errorCode: "preview_blocked", message: "Automatic sync preview found invalid or incompatible data. Review it manually." };
+        return autoSyncStatus(settings);
+      }
+      if (previewResult.preview.conflicts.length) {
+        autoSyncRuntime = { state: "conflicts", conflictCount: previewResult.preview.conflicts.length, errorCode: null, message: "Automatic sync paused because conflicts require your choice." };
+        return autoSyncStatus(settings);
+      }
+      const result = await runMobilePullSync({
+        peerBaseUrl: settings.lastPeerBaseUrl,
+        mode: "merge",
+        phase: "execute",
+        previewId: previewResult.preview.previewId,
+        conflictResolutions: []
+      });
+      settings = { ...settings, lastSuccessAt: result.completedAt ?? new Date().toISOString() };
+      await writeAutoSyncSettings(settings);
+      autoSyncRuntime = { state: "succeeded", conflictCount: 0, errorCode: null, message: "Automatic LAN sync completed." };
+      return autoSyncStatus(settings);
+    } catch (error) {
+      autoSyncRuntime = {
+        state: "failed",
+        conflictCount: 0,
+        errorCode: error?.status === 504 ? "peer_timeout" : "peer_unreachable",
+        message: "Automatic sync could not reach the previous peer. Your local data was not changed."
+      };
+      return autoSyncStatus(settings);
+    }
+  })().finally(() => { activeAutoSyncRun = null; });
+  return activeAutoSyncRun;
+};
+
 const getPromptContext = async ({ chatId, before, excludeMessageIds = [] }) => {
   const chat = getActiveChat(chatId);
   if (!chat) {
@@ -1788,12 +1975,12 @@ const getPromptContext = async ({ chatId, before, excludeMessageIds = [] }) => {
   }
 
   const character = chat.characterId ? store.getCharacter(chat.characterId) : null;
-  const recentMessages = store
-    .listMessages(chatId)
-    .filter((message) => !before || new Date(message.createdAt) < before)
-    .filter((message) => message.contextIncluded !== false)
-    .filter((message) => !excludeMessageIds.includes(message.id))
-    .slice(-(Math.max(1, Math.min(chat.memoryTurns ?? 12, 50)) * 2 + 1));
+  const recentMessages = store.listRecentContextMessages(
+    chatId,
+    Math.max(1, Math.min(chat.memoryTurns ?? 12, 50)) * 2 + 1,
+    before,
+    excludeMessageIds
+  );
 
   const messages = [];
   const characterPromptFields = character ? resolveCharacterPromptFields(character) : null;
@@ -1983,7 +2170,7 @@ const createAgentDraft = async ({ chatId, mode, focus }) => {
     actions: extractAgentActions(mode, content),
     matchedLoreEntries: context.matchedLoreEntries,
     matchedMemoryEntries: context.matchedMemoryEntries,
-    sourceMessageIds: store.listMessages(chatId).filter((message) => message.contextIncluded !== false).slice(-20).map((message) => message.id)
+    sourceMessageIds: store.listRecentContextMessages(chatId, 20).map((message) => message.id)
   };
 };
 
@@ -2330,6 +2517,7 @@ app.post("/api/privacy/lock", (request, response) => {
   const passcode = typeof request.body?.passcode === "string" ? request.body.passcode : "";
   if (passcode.length < 4 || passcode.length > 128) return response.status(400).json({ ok: false, error: "Unlock code must contain 4 to 128 characters." });
   privacyPasscodeDigest = privacyDigest(passcode);
+  mobileThumbnailCache.clear();
   closeMobileSocketsForPrivacy();
   storageHealth.cancelActive();
   response.json({ ok: true, data: { locked: true } });
@@ -2432,7 +2620,7 @@ app.get(
     response.json({
       ok: true,
       data: {
-        items: all.slice(start, start + query.pageSize).map(serializeCharacter),
+        items: all.slice(start, start + query.pageSize).map(serializeCharacterSummary),
         page,
         pageSize: query.pageSize,
         total,
@@ -2625,6 +2813,50 @@ app.post("/api/characters/batch-fetch", (request, response) => {
   });
 });
 
+app.get("/api/chats/page", (request, response) => {
+  const query = parseQuery(chatPageQuerySchema, request.query);
+  const normalizedQuery = query.q?.trim() ?? "";
+  const cursorScope = `${query.scope}:${query.folder ?? "*"}:${normalizedQuery.toLocaleLowerCase()}`;
+  const boundary = decodePageCursor(query.cursor, "chats", cursorScope);
+  if (boundary && (typeof boundary.updatedAt !== "string" || typeof boundary.pinned !== "boolean")) {
+    throw Object.assign(new Error("The chat cursor is incomplete."), { status: 400 });
+  }
+  const page = store.listChatPage({
+    scope: query.scope,
+    folder: query.folder,
+    q: normalizedQuery,
+    limit: query.limit,
+    boundary
+  });
+  const items = page.items.map((chat) => {
+    const lastMessage = chat._lastMessage;
+    const normalized = String(lastMessage?.content ?? "").replace(/\s+/g, " ").trim();
+    return {
+      ...serializeChat(chat, chat.messageCount, false),
+      lastMessagePreview: lastMessage && (lastMessage.role === "user" || lastMessage.role === "assistant")
+        ? {
+            role: lastMessage.role,
+            content: normalized.length > 180 ? `${normalized.slice(0, 179)}…` : normalized,
+            createdAt: lastMessage.createdAt
+          }
+        : null
+    };
+  });
+  const last = page.items.at(-1);
+  response.json({
+    ok: true,
+    data: {
+      scope: query.scope,
+      items,
+      total: query.includeTotal ? page.total : null,
+      hasMore: page.hasMore,
+      nextCursor: page.hasMore && last
+        ? encodePageCursor({ kind: "chats", scope: cursorScope, updatedAt: last.updatedAt, id: last.id, pinned: last.isPinned === true })
+        : null
+    }
+  });
+});
+
 app.get("/api/chats", (_request, response) => {
   response.json({
     ok: true,
@@ -2688,6 +2920,24 @@ app.get("/api/chats/:id/memories", (request, response) => {
   const chatId = requireParam(request, "id");
   if (!getActiveChat(chatId)) throw notFound("Chat not found");
   response.json({ ok: true, data: store.listMemories(chatId).map(serializeMemory) });
+});
+
+app.get("/api/chats/:id/memories/page", (request, response) => {
+  const chatId = requireParam(request, "id");
+  if (!getActiveChat(chatId)) throw notFound("Chat not found");
+  const query = parseQuery(memoryPageQuerySchema, request.query);
+  const boundary = decodePageCursor(query.cursor, "memories", chatId);
+  const page = store.listMemoryPage(chatId, query.limit, boundary, query.includeTotal);
+  const last = page.items.at(-1);
+  response.json({
+    ok: true,
+    data: {
+      items: page.items.map(serializeMemory),
+      nextCursor: page.hasMore && last ? encodePageCursor({ kind: "memories", scope: chatId, updatedAt: last.updatedAt, id: last.id }) : null,
+      hasMore: page.hasMore,
+      total: page.total ?? null
+    }
+  });
 });
 
 app.post(
@@ -2971,6 +3221,12 @@ app.get("/api/chats/:id/message-search", (request, response) => {
   });
 });
 
+app.get("/api/chats/:id/summary", (request, response) => {
+  const chat = getActiveChat(requireParam(request, "id"));
+  if (!chat) throw notFound("Chat not found");
+  response.json({ ok: true, data: serializeChat(chat, store.countMessages(chat.id)) });
+});
+
 app.get("/api/chats/:id", (request, response) => {
   const chat = getActiveChat(requireParam(request, "id"));
   if (!chat) throw notFound("Chat not found");
@@ -3099,6 +3355,53 @@ app.get("/api/messages", (request, response) => {
   });
 });
 
+app.get("/api/messages/page", (request, response) => {
+  const query = parseQuery(messagePageQuerySchema, request.query);
+  if (!getActiveChat(query.chatId)) throw notFound("Chat not found");
+  const boundary = decodePageCursor(query.cursor, "messages", query.chatId);
+  if (boundary && typeof boundary.createdAt !== "string") {
+    throw Object.assign(new Error("The message cursor is incomplete."), { status: 400 });
+  }
+  const page = store.listMessagePage(query.chatId, query.limit, boundary);
+  const oldest = page.items[0];
+  response.json({
+    ok: true,
+    data: {
+      chatId: query.chatId,
+      order: "ascending",
+      items: page.items.map(serializeMessage),
+      total: query.includeTotal ? store.countMessages(query.chatId) : null,
+      hasMore: page.hasMore,
+      nextCursor: page.hasMore && oldest
+        ? encodePageCursor({ kind: "messages", scope: query.chatId, createdAt: oldest.createdAt, id: oldest.id })
+        : null
+    }
+  });
+});
+
+app.get("/api/messages/locate", (request, response) => {
+  const query = parseQuery(messageLocateQuerySchema, request.query);
+  if (!getActiveChat(query.chatId)) throw notFound("Chat not found");
+  const location = store.locateMessageWindow(query.chatId, query.messageId, query.radius);
+  if (!location) throw notFound("The referenced message is unavailable.");
+  const oldest = location.items[0];
+  response.json({
+    ok: true,
+    data: {
+      chatId: query.chatId,
+      messageId: query.messageId,
+      index: location.index,
+      total: location.total,
+      items: location.items.map(serializeMessage),
+      hasOlder: location.hasOlder,
+      hasNewer: location.hasNewer,
+      olderCursor: location.hasOlder && oldest
+        ? encodePageCursor({ kind: "messages", scope: query.chatId, createdAt: oldest.createdAt, id: oldest.id })
+        : null
+    }
+  });
+});
+
 app.post(
   "/api/messages",
   asyncHandler(async (request, response) => {
@@ -3215,9 +3518,32 @@ app.delete("/api/media/chat-images/drafts/:draftId", asyncHandler(async (request
   response.status(204).send();
 }));
 
+app.get("/api/media/chat-images/:assetId/thumbnail", (request, response) => {
+  const assetId = requireParam(request, "assetId");
+  let thumbnail = mobileThumbnailCache.get(assetId);
+  if (!thumbnail) {
+    const asset = store.getMediaAsset(assetId);
+    if (!asset || !store.hasMediaAssetReference(asset.id)) throw notFound("Image not found");
+    const data = Buffer.from(asset.dataBase64, "base64");
+    try {
+      if (data.length !== asset.byteSize || createHash("sha256").update(data).digest("hex") !== asset.contentHash) throw new Error("mismatch");
+      thumbnail = { ...createImageThumbnail({ data, mimeType: asset.mimeType, width: asset.width, height: asset.height }), etag: `"thumb-${asset.contentHash}"` };
+      mobileThumbnailCache.delete(assetId);
+      mobileThumbnailCache.set(assetId, thumbnail);
+      while (mobileThumbnailCache.size > 32) mobileThumbnailCache.delete(mobileThumbnailCache.keys().next().value);
+    } catch { throw httpError(410, "Image unavailable."); }
+  }
+  response.setHeader("Content-Type", thumbnail.mimeType);
+  response.setHeader("Cache-Control", "private, max-age=300, must-revalidate");
+  response.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("ETag", thumbnail.etag);
+  response.send(thumbnail.data);
+});
+
 app.get("/api/media/chat-images/:assetId", (request, response) => {
   const asset = store.getMediaAsset(requireParam(request, "assetId"));
-  if (!asset || !store.readRecords("messageAttachment").some((item) => item.assetId === asset.id)) throw notFound("Image not found");
+  if (!asset || !store.hasMediaAssetReference(asset.id)) throw notFound("Image not found");
   const data = Buffer.from(asset.dataBase64, "base64");
   try {
     if (data.length !== asset.byteSize || createHash("sha256").update(data).digest("hex") !== asset.contentHash) throw new Error("mismatch");
@@ -3780,38 +4106,38 @@ app.get("/api/sync/info", (request, response) => {
   });
 });
 
+app.get("/api/sync/auto", (_request, response) => {
+  response.json({ ok: true, data: autoSyncStatus() });
+});
+
+app.put(
+  "/api/sync/auto",
+  asyncHandler(async (request, response) => {
+    const input = parseBody(lanAutoSyncSettingsSchema, request.body);
+    const current = readAutoSyncSettings();
+    const peerBaseUrl = input.peerBaseUrl?.trim()
+      ? normalizePeerBaseUrl(input.peerBaseUrl)
+      : current.lastPeerBaseUrl;
+    if (input.enabled && !peerBaseUrl) throw httpError(400, "Connect to a LAN peer before enabling automatic sync.");
+    autoSyncRuntime = { state: input.enabled ? "idle" : "disabled", conflictCount: 0, errorCode: null, message: null };
+    response.json({ ok: true, data: await writeAutoSyncSettings({ ...current, enabled: input.enabled, lastPeerBaseUrl: peerBaseUrl }) });
+  })
+);
+
+app.post(
+  "/api/sync/auto/run",
+  asyncHandler(async (_request, response) => {
+    response.json({ ok: true, data: await runMobileAutomaticSync() });
+  })
+);
+
 app.post(
   "/api/sync/pull",
   asyncHandler(async (request, response) => {
     const input = parseBody(lanSyncRequestSchema, request.body);
-    const peerBaseUrl = normalizePeerBaseUrl(input.peerBaseUrl);
-    const peerBackup = await requestPeer(peerBaseUrl, "/api/backups/export");
-    const backup = parseBody(backupPreviewRequestSchema, { ...peerBackup, mode: input.mode });
-    const preview = store.previewBackup(backup, serializeSettings(store.getSettings()));
-    const summary = input.phase === "execute"
-      ? await store.importBackup(
-          parseBody(backupExecuteSchema, {
-            ...backup,
-            previewId: input.previewId,
-            conflictResolutions: input.conflictResolutions
-          }),
-          serializeSettings(store.getSettings())
-        )
-      : null;
-
-    response.json({
-      ok: true,
-      data: {
-        direction: "pull",
-        phase: input.phase,
-        mode: input.mode,
-        peerBaseUrl,
-        peerExportedAt: peerBackup.exportedAt ?? null,
-        completedAt: summary?.completedAt ?? null,
-        preview,
-        summary
-      }
-    });
+    const result = await runMobilePullSync(input);
+    if (input.phase === "execute") await rememberSyncPeer(result.peerBaseUrl, result.completedAt);
+    response.json({ ok: true, data: result });
   })
 );
 
@@ -3819,37 +4145,9 @@ app.post(
   "/api/sync/push",
   asyncHandler(async (request, response) => {
     const input = parseBody(lanSyncRequestSchema, request.body);
-    const peerBaseUrl = normalizePeerBaseUrl(input.peerBaseUrl);
-    const localBackup = store.exportBackup(serializeSettings(store.getSettings()));
-    const preview = await requestPeer(peerBaseUrl, "/api/backups/preview", {
-      method: "POST",
-      body: JSON.stringify({ ...localBackup, mode: input.mode })
-    });
-    const summary = input.phase === "execute"
-      ? await requestPeer(peerBaseUrl, "/api/backups/import", {
-          method: "POST",
-          body: JSON.stringify({
-            ...localBackup,
-            mode: input.mode,
-            previewId: input.previewId,
-            conflictResolutions: input.conflictResolutions
-          })
-        })
-      : null;
-
-    response.json({
-      ok: true,
-      data: {
-        direction: "push",
-        phase: input.phase,
-        mode: input.mode,
-        peerBaseUrl,
-        peerExportedAt: null,
-        completedAt: summary?.completedAt ?? null,
-        preview,
-        summary
-      }
-    });
+    const result = await runMobilePushSync(input);
+    if (input.phase === "execute") await rememberSyncPeer(result.peerBaseUrl, result.completedAt);
+    response.json({ ok: true, data: result });
   })
 );
 
@@ -4461,6 +4759,8 @@ const startServer = async () => {
 
   httpServer.listen(port, host, () => {
     console.log(`${APP_NAME} listening on http://${host}:${port}`);
+    const autoSyncTimer = setTimeout(() => { void runMobileAutomaticSync(); }, 1_500);
+    autoSyncTimer.unref();
   });
 };
 

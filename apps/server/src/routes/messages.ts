@@ -8,12 +8,21 @@ import {
   parseQuery,
   requireParam
 } from "../lib/http.js";
-import { messageCreateSchema, messageListQuerySchema, messageUpdateSchema } from "../schemas.js";
+import { messageCreateSchema, messageListQuerySchema, messageLocateQuerySchema, messagePageQuerySchema, messageUpdateSchema } from "../schemas.js";
 import { serializeMessage } from "../serializers.js";
 import { deleteMessageTimeline } from "../services/messageTimeline.js";
 import { attachDraftToMessage, deleteUnreferencedAssets, messageIncludeAttachments } from "../services/messageAttachments.js";
+import { listMessagePage, locateMessagePage } from "../services/messagePaging.js";
 
 export const messagesRouter = Router();
+
+messagesRouter.get("/page", asyncHandler(async (request, response) => {
+  response.json({ ok: true, data: await listMessagePage(parseQuery(messagePageQuerySchema, request.query)) });
+}));
+
+messagesRouter.get("/locate", asyncHandler(async (request, response) => {
+  response.json({ ok: true, data: await locateMessagePage(parseQuery(messageLocateQuerySchema, request.query)) });
+}));
 
 const normalizeTokenUsage = (
   tokenUsage:

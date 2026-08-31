@@ -582,7 +582,10 @@ export const analyzeBackupCandidate = (
         profileSummaryRevisions: current.profileSummaryRevisions.filter((value) => fingerprintIds.profileSummaryRevisions.has(`${value.chatId}:${value.revision}`))
       };
   const previewId = createHash("sha256")
-    .update(JSON.stringify(canonicalize({ backup, current: fingerprintCurrent, mode: candidate.mode, issues })))
+    // exportedAt identifies an export operation, not its contents. LAN pull fetches the
+    // peer again for execute, so a fresh timestamp must not invalidate an otherwise
+    // identical preflight. Every persisted record timestamp remains in the fingerprint.
+    .update(JSON.stringify(canonicalize({ backup: { ...backup, exportedAt: undefined }, current: fingerprintCurrent, mode: candidate.mode, issues })))
     .digest("hex");
   const requiresRecoveryPoint = candidate.mode === "replace" || counts.updated > 0 || counts.deleted > 0;
 
