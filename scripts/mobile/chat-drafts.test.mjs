@@ -32,8 +32,61 @@ test("mobile drafts survive reopening SQLite with ordered images and preserve th
     assert.equal(store.readRecords("mediaAsset").length, 1);
     const backup = await store.exportBackup();
     assert.equal(backup.chatDrafts, undefined);
-    assert.equal(JSON.stringify(backup).includes(saved.content), false);
+    assert.equal(JSON.stringify(backup).includes(JSON.stringify(saved.content)), false);
     assert.equal(backup.media, undefined);
+  } finally { store.db?.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("mobile draft cleanup preserves shared message, composer and recovery-point media", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "star-companion-draft-test-"));
+  const filename = path.join(directory, "mobile.sqlite");
+  let store = new MobileStore(filename);
+  try {
+    await store.load();
+    const first = await store.createChat({ title: "Controlled media owners" });
+    const second = await store.createChat({ title: "Controlled other composer" });
+    const png = new PNG({ width: 2, height: 3 }); png.data.fill(153);
+    const bytes = PNG.sync.write(png);
+    const asset = { mimeType: "image/png", dataBase64: bytes.toString("base64"), byteSize: bytes.length,
+      contentHash: createHash("sha256").update(bytes).digest("hex"), width: 2, height: 3 };
+    const upload = (draftId) => store.createDraftAttachment({ draftId, asset });
+    const sentImage = await upload("draft_shared_sent");
+    const message = await store.createMessageWithDraft({ chatId: first.id, role: "user", content: "Controlled sent image" }, "draft_shared_sent");
+    const one = await upload("draft_shared_composer_one");
+    const two = await upload("draft_shared_composer_two");
+    const save = (chatId, version, content, attachmentIds) => store.saveChatDraft(chatId, { expectedVersion: version, mutationId: randomUUID(), content, attachmentIds });
+    const draft = await save(first.id, 0, "Controlled local-only composer", [one.attachment.id]);
+    await save(second.id, 0, "Controlled second composer", [two.attachment.id]);
+    assert.equal(store.readRecords("mediaAsset").length, 1);
+    const point = await store.atomicWrite(() => store.createRecoveryPoint("before_import"));
+    assert.equal(JSON.stringify(point.snapshot).includes(JSON.stringify(draft.content)), false);
+    assert.equal(point.snapshot.media.attachments.length, 1);
+    assert.equal(store.readRecords("recoveryPointMediaAsset").length, 1);
+    // Expiration removes only the first composer reference; its manifest survives.
+    await store.atomicWrite(async () => {
+      const reference = store.readRecord("messageAttachment", one.attachment.id);
+      await store.writeRecord("messageAttachment", { ...reference, createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() });
+    });
+    await store.cleanupExpiredDraftAttachments();
+    assert.equal(store.getChatDraft(first.id).attachments[0].status, "missing");
+    assert.equal(store.getChatDraft(first.id).content, draft.content);
+    assert.equal(store.getChatDraft(second.id).attachments[0].status, "ready");
+    assert.equal(store.listMessageAttachments(message.id).length, 1);
+    await save(first.id, 1, draft.content, []);
+    await save(second.id, 1, "", []);
+    assert.ok(store.getMediaAsset(sentImage.asset.id)); // Sent message still owns it.
+    await store.deleteMessage(message.id);
+    assert.equal(store.readRecords("messageAttachment").length, 0);
+    assert.ok(store.getMediaAsset(sentImage.asset.id)); // Recovery point is now the only owner.
+    store.db.close(); store = new MobileStore(filename); await store.load();
+    assert.ok(store.getMediaAsset(sentImage.asset.id));
+    assert.equal(store.readRecords("recoveryPointMediaAsset").length, 1);
+    await store.atomicWrite(async () => {
+      for (const ref of store.readRecords("recoveryPointMediaAsset")) await store.deleteRecord("recoveryPointMediaAsset", ref.id);
+      await store.deleteRecord("recoveryPoint", point.id);
+      await store.cleanupOrphanAssets();
+    });
+    assert.equal(store.readRecords("mediaAsset").length, 0);
   } finally { store.db?.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -58,6 +111,39 @@ test("mobile failed persistence rolls back memory and can retry without losing t
     assert.equal(retried.version, saved.version + 1);
     assert.equal(retried.content, edit.content);
     assert.deepEqual(await store.saveChatDraft(chat.id, edit), retried);
+  } finally { store.db?.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("mobile draft disk rollback cannot erase a concurrently acknowledged chat update", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "star-companion-draft-test-"));
+  const filename = path.join(directory, "mobile.sqlite");
+  const store = new MobileStore(filename);
+  try {
+    await store.load();
+    const chat = await store.createChat({ title: "Controlled before concurrent update" });
+    const saved = await store.saveChatDraft(chat.id, { expectedVersion: 0, mutationId: randomUUID(), content: "Controlled durable draft", attachmentIds: [] });
+    const originalPersist = store.persist.bind(store);
+    let reached;
+    let release;
+    const atDisk = new Promise((resolve) => { reached = resolve; });
+    const resume = new Promise((resolve) => { release = resolve; });
+    let failOnce = true;
+    store.persist = async (...args) => {
+      if (failOnce) { failOnce = false; reached(); await resume; throw new Error("Controlled isolated disk failure"); }
+      return originalPersist(...args);
+    };
+    const saving = assert.rejects(store.saveChatDraft(chat.id, { expectedVersion: 1, mutationId: randomUUID(), content: "Controlled rejected edit", attachmentIds: [] }));
+    await atDisk;
+    const reading = store.readCommitted(() => store.getChatDraft(chat.id));
+    const updating = store.updateChat(chat.id, { title: "Controlled acknowledged concurrent update" });
+    release();
+    await Promise.all([saving, updating]);
+    assert.deepEqual(await reading, saved);
+    assert.equal(store.getChat(chat.id).title, "Controlled acknowledged concurrent update");
+    assert.deepEqual(store.getChatDraft(chat.id), saved);
+    const reopened = new MobileStore(filename);
+    try { await reopened.load(); assert.equal(reopened.getChat(chat.id).title, "Controlled acknowledged concurrent update"); assert.deepEqual(reopened.getChatDraft(chat.id), saved); }
+    finally { reopened.db?.close(); }
   } finally { store.db?.close(); await rm(directory, { recursive: true, force: true }); }
 });
 

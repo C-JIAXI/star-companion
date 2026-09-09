@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { api, ApiRequestError } from "./api";
 import { generateId } from "./uuid";
+import { acknowledgeLegacyQueueItem, readLegacyChatQueue, type LegacyQueueItem } from "./legacyChatQueue";
 import { useAppStore } from "../store/useAppStore";
 import type { ChatDraftAttachmentDTO, ChatDraftDTO, ChatDraftSaveInput, DraftHandoffDTO } from "../types";
 
@@ -11,6 +12,10 @@ type Entry = {
   timer?: ReturnType<typeof setTimeout>; work?: Promise<void>; abort?: AbortController;
   pending?: { input: ChatDraftSaveInput; revision: number };
   handoffs: DraftHandoffDTO[]; transition: boolean;
+  handoffsError?: boolean; handoffsLoading?: boolean; handoffsAbort?: AbortController;
+  mediaOperations?: Set<AbortController>;
+  legacyQueue?: LegacyQueueItem[]; legacyQueueInvalid?: boolean; legacyQueueBusy?: boolean; legacyQueueUnavailable?: string; legacyQueueError?: boolean;
+  legacyQueueMigration?: { id: string; revision: number };
   handoffInput?: { id: string; expectedVersion: number; purpose: "send" | "queue" };
   restoreInput?: { id: string; expectedVersion: number; mutationId: string };
 };
@@ -27,7 +32,8 @@ const forgetLegacy = (entry: Entry) => {
 };
 const alive = (entry: Entry) => entries.get(entry.id) === entry && !useAppStore.getState().isPrivacyLocked;
 export const clearChatDraftMemory = () => {
-  for (const entry of entries.values()) { clearTimeout(entry.timer); entry.abort?.abort(); entry.content = ""; entry.attachments = []; entry.server = null; entry.legacy = null; entry.handoffs = []; entry.pending = undefined; entry.handoffInput = undefined; entry.restoreInput = undefined; }
+  for (const entry of entries.values()) entry.mediaOperations?.forEach((operation) => operation.abort());
+  for (const entry of entries.values()) { clearTimeout(entry.timer); entry.abort?.abort(); entry.handoffsAbort?.abort(); entry.content = ""; entry.attachments = []; entry.server = null; entry.legacy = null; entry.legacyQueue = []; entry.legacyQueueMigration = undefined; entry.handoffs = []; entry.pending = undefined; entry.handoffInput = undefined; entry.restoreInput = undefined; }
   entries.clear(); emit();
 };
 useAppStore.subscribe((state, previous) => { if (state.isPrivacyLocked && !previous.isPrivacyLocked) clearChatDraftMemory(); });
@@ -44,6 +50,7 @@ const markError = (entry: Entry, error: unknown) => {
   entry.error = error instanceof Error ? error.message : "Draft save failed."; emit();
 };
 const apply = (entry: Entry, value: ChatDraftDTO) => {
+  entry.legacyQueueMigration = undefined;
   entry.server = value; entry.content = value.content; entry.attachments = value.attachments;
   entry.revision += 1; entry.savedRevision = entry.revision; entry.pending = undefined; entry.state = "saved"; entry.error = null;
 };
@@ -52,10 +59,11 @@ const load = async (entry: Entry) => {
   entry.state = "loading"; const abort = new AbortController(); entry.abort = abort; emit();
   entry.work = (async () => {
     try {
-      const [value, handoffs] = await Promise.all([api.chats.getDraft(entry.id, abort.signal), api.chats.listDraftHandoffs(entry.id, abort.signal)]);
+      const value = await api.chats.getDraft(entry.id, abort.signal);
       if (!alive(entry)) return;
-      apply(entry, value); entry.handoffs = handoffs;
+      apply(entry, value);
       entry.legacy = readLegacy(entry.id);
+      const queue = readLegacyChatQueue(entry.id); entry.legacyQueue = queue.items; entry.legacyQueueInvalid = queue.invalid;
       if (entry.legacy !== null && entry.legacy !== "") {
         if (value.content && value.content !== entry.legacy || value.attachments.length > 0) entry.state = "legacy";
         else { entry.content = entry.legacy; entry.revision += 1; entry.state = "saving"; }
@@ -64,6 +72,7 @@ const load = async (entry: Entry) => {
     } catch (error) { markError(entry, error); }
   })().finally(() => { entry.work = undefined; });
   await entry.work;
+  if (alive(entry) && entry.server) void refreshHandoffs(entry);
   if (alive(entry) && entry.server && entry.revision !== entry.savedRevision && entry.legacy === entry.content) await flush(entry);
 };
 const flush = async (entry: Entry): Promise<void> => {
@@ -82,6 +91,10 @@ const flush = async (entry: Entry): Promise<void> => {
       const saved = await api.chats.saveDraft(entry.id, pending.input, abort.signal);
       if (!alive(entry)) return;
       entry.server = saved; entry.savedRevision = pending.revision; entry.pending = undefined;
+      if (entry.legacyQueueMigration?.revision === pending.revision) {
+        const remaining = acknowledgeLegacyQueueItem(entry.id, entry.legacyQueueMigration.id);
+        entry.legacyQueue = remaining.items; entry.legacyQueueInvalid = remaining.invalid; entry.legacyQueueMigration = undefined;
+      }
       const metadata = new Map(saved.attachments.map((item) => [item.id, item]));
       entry.attachments = entry.attachments.map((item, sortOrder) => ({ ...(metadata.get(item.id) ?? item), sortOrder }));
       if (pending.input.content === entry.legacy) forgetLegacy(entry);
@@ -91,7 +104,7 @@ const flush = async (entry: Entry): Promise<void> => {
   await entry.work;
 };
 const edit = (entry: Entry, change: Partial<Pick<Entry, "content" | "attachments">>) => {
-  if (!alive(entry) || !entry.server || entry.transition || entry.handoffInput || entry.restoreInput) return;
+  if (!alive(entry) || !entry.server || entry.transition || entry.handoffInput || entry.restoreInput || entry.legacyQueueBusy) return;
   Object.assign(entry, change); entry.revision += 1;
   clearTimeout(entry.timer);
   if (!["legacy", "conflict"].includes(entry.state)) {
@@ -101,7 +114,22 @@ const edit = (entry: Entry, change: Partial<Pick<Entry, "content" | "attachments
   emit();
 };
 const refreshHandoffs = async (entry: Entry) => {
-  try { const rows = await api.chats.listDraftHandoffs(entry.id); if (alive(entry)) { entry.handoffs = rows; emit(); } } catch (error) { markError(entry, error); }
+  if (!alive(entry)) return;
+  entry.handoffsAbort?.abort();
+  const abort = new AbortController(); entry.handoffsAbort = abort;
+  entry.handoffsLoading = true; emit();
+  const current = () => alive(entry) && entry.handoffsAbort === abort;
+  try {
+    const rows = await api.chats.listDraftHandoffs(entry.id, abort.signal);
+    if (current()) { entry.handoffs = rows; entry.handoffsError = false; }
+  } catch (error) {
+    if (current()) {
+      if (error instanceof ApiRequestError && error.status === 423) markError(entry, error);
+      else entry.handoffsError = true;
+    }
+  } finally {
+    if (current()) { entry.handoffsLoading = false; entry.handoffsAbort = undefined; emit(); }
+  }
 };
 
 const finishHandoff = async (entry: Entry) => {
@@ -163,7 +191,15 @@ export const useChatDraft = (chatId: string | null) => {
   return {
     content: entry?.content ?? "", attachments: entry?.attachments ?? [], state: entry?.state ?? "loading",
     error: entry?.error ?? null, savedAt: entry?.server?.updatedAt ?? null,
-    disabled: !entry?.server || !!entry?.transition || !!entry?.handoffInput || !!entry?.restoreInput, handoffs: entry?.handoffs ?? [], legacy: entry?.legacy ?? null,
+    handoffsError: !!entry?.handoffsError, handoffsLoading: !!entry?.handoffsLoading,
+    legacyQueue: entry?.legacyQueue ?? [], legacyQueueInvalid: !!entry?.legacyQueueInvalid, legacyQueueUnavailable: entry?.legacyQueueUnavailable, legacyQueueError: !!entry?.legacyQueueError,
+    beginImageUpload: () => {
+      if (!entry || !alive(entry) || !entry.server || entry.transition || entry.handoffInput || entry.restoreInput || entry.legacyQueueBusy) throw new Error("Draft unavailable.");
+      const controller = new AbortController();
+      (entry.mediaOperations ??= new Set()).add(controller);
+      return { signal: controller.signal, dispose: () => entry.mediaOperations?.delete(controller) };
+    },
+    disabled: !entry?.server || !!entry?.transition || !!entry?.handoffInput || !!entry?.restoreInput || !!entry?.legacyQueueBusy, handoffs: entry?.handoffs ?? [], legacy: entry?.legacy ?? null,
     setText: (value: string | ((previous: string) => string)) => { if (entry) edit(entry, { content: typeof value === "function" ? value(entry.content) : value }); },
     setImages: (images: ChatDraftAttachmentDTO[]) => { if (entry) edit(entry, { attachments: images }); },
     addImage: (image: ChatDraftAttachmentDTO) => { if (entry) edit(entry, { attachments: [...entry.attachments, image] }); },
@@ -184,8 +220,48 @@ export const useChatDraft = (chatId: string | null) => {
       entry.revision += 1; entry.state = "saving"; emit(); await flush(entry);
       if (choice === "keep") forgetLegacy(entry);
     },
-    clear: async () => { if (entry) { edit(entry, { content: "", attachments: [] }); await flush(entry); } },
+    clear: async () => { if (entry) { entry.mediaOperations?.forEach((operation) => operation.abort()); edit(entry, { content: "", attachments: [] }); await flush(entry); } },
     refreshHandoffs: () => entry ? refreshHandoffs(entry) : Promise.resolve(),
+    restoreLegacyQueue: async (id: string, textOnly = false) => {
+      const item = entry?.legacyQueue?.find((row) => row.id === id);
+      if (!entry || !item || !alive(entry) || entry.legacyQueueBusy || entry.mediaOperations?.size) return;
+      await flush(entry);
+      if (!alive(entry)) return;
+      entry.legacyQueueBusy = true; entry.legacyQueueError = false; emit();
+      const abort = new AbortController(); entry.abort = abort;
+      let changedComposer = false;
+      try {
+        const images: ChatDraftAttachmentDTO[] = [];
+        if (!textOnly && item.attachmentIds.length) {
+          const available = item.draftId ? await api.media.listDraftChatImages(item.draftId, abort.signal) : [];
+          if (!alive(entry)) return;
+          const byId = new Map(available.map((image) => [image.id, image]));
+          for (const imageId of item.attachmentIds) {
+            const image = byId.get(imageId);
+            if (!image || image.status !== "ready" || Date.parse(image.createdAt) + 86_400_000 <= Date.now()) {
+              entry.legacyQueueUnavailable = id;
+              return;
+            }
+            images.push({ ...image, sortOrder: images.length, expiresAt: new Date(Date.parse(image.createdAt) + 86_400_000).toISOString() });
+          }
+        }
+        changedComposer = true;
+        entry.content = item.content; entry.attachments = images; entry.revision += 1; entry.state = "saving";
+        entry.legacyQueueMigration = { id, revision: entry.revision }; entry.legacyQueueUnavailable = undefined;
+        emit(); await flush(entry);
+      } catch (error) {
+        if (alive(entry)) {
+          if (changedComposer || error instanceof ApiRequestError && error.status === 423) markError(entry, error);
+          else entry.legacyQueueError = true;
+        }
+      }
+      finally { if (alive(entry)) { entry.legacyQueueBusy = false; emit(); } }
+    },
+    discardLegacyQueue: (id: string) => {
+      if (!entry || !alive(entry)) return;
+      const remaining = acknowledgeLegacyQueueItem(entry.id, id);
+      entry.legacyQueue = remaining.items; entry.legacyQueueInvalid = remaining.invalid; emit();
+    },
     createHandoff: async (purpose: "send" | "queue") => {
       if (!entry) throw new Error("Select a chat.");
       if (!entry.handoffInput) {

@@ -159,7 +159,7 @@ export const createMobileStorageHealth = ({ store, dataDir, validateStoredImage 
         else if (item.action === "expired_recovery_points") await store.atomicWrite(async () => { for (const point of before.staleRecovery) { await store.deleteRecord("recoveryPoint", point.id); for (const ref of records("recoveryPointMediaAsset").filter((entry) => entry.recoveryPointId === point.id)) await store.deleteRecord("recoveryPointMediaAsset", ref.id); count += 1; } await store.cleanupOrphanAssets(); });
         else if (item.action === "usage_ledger") { const result = await store.clearUsageHistory(); count = result.attempts + result.requests; }
         else if (item.action === "app_temp_cache") count = await removeFiles([...before.temp.files, ...before.cache.files]);
-        else if (item.action === "rebuild_database_indexes") { store.db.run("REINDEX"); await store.persist(); count = 1; }
+        else if (item.action === "rebuild_database_indexes") { await store.atomicWrite(async () => store.db.run("REINDEX")); count = 1; }
         results.push({ action: item.action, status: "completed", count, reclaimedBytes: item.estimatedBytes, errorCode: null });
       } catch { results.push({ action: item.action, status: "failed", count: 0, reclaimedBytes: null, errorCode: "cleanup_action_failed" }); }
     }

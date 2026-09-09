@@ -108,7 +108,9 @@ test("the bundled Prisma SQL catalog initializes a fresh desktop database determ
     appVersion: "1.0.2"
   });
   assert.equal(report.appliedMigrations.length > 20, true);
-  assert.equal(report.schemaVersion, "20260813000300_add_appearance_preferences");
+  assert.equal(report.schemaVersion, "20260909010000_draft_handoffs");
+  assert.ok(report.appliedMigrations.includes("20260909000000_chat_drafts"));
+  assert.ok(report.appliedMigrations.includes("20260909010000_draft_handoffs"));
   const db = open(databasePath);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='RecoveryPoint'").get().count, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='ModelRequest'").get().count, 1);
@@ -117,6 +119,13 @@ test("the bundled Prisma SQL catalog initializes a fresh desktop database determ
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='MemoryOperation'").get().count, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='ProfileSummaryRevision'").get().count, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('UserSettings') WHERE name='appearancePreferences'").get().count, 1);
+  for (const table of ["ChatDraft", "DraftHandoff"]) {
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name=?").get(table).count, 1);
+  }
+  for (const column of ["composerChatId", "handoffId"]) {
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('MessageAttachment') WHERE name=?").get(column).count, 1);
+  }
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM pragma_foreign_key_check").get().count, 0);
   db.close();
   fs.rmSync(root, { recursive: true, force: true });
 });

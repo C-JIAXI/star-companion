@@ -300,6 +300,10 @@ replacement APKs. Supply that public listing URL at build time with
 
 Android Studio or a local Android SDK is required to assemble the APK.
 
+Draft persistence and all public record mutations now share a reentrant, async-context-scoped write queue. Nested writes persist only at the outer commit; a failed draft disk write cannot roll back a different acknowledged chat update. Draft and handoff HTTP reads wait for the durability barrier. Isolated tests exercise simultaneous updates, failed disk writes, restart, shared media and recovery-point-only references.
+
+Old session queues are read only after unlocking and recovered only by explicit choice. Their valid image order is preserved; unavailable images require explicit text-only recovery. Failed saving retains the old copy. Image preparation and upload are cancelled on lock and are not resumed on unlock.
+
 Current Windows machine note: the local command-line Android SDK is installed
 under the user's local Android SDK directory, `android/local.properties` points
 Gradle at that SDK, and `npm run mobile:build:android` successfully assembles

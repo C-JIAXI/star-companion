@@ -214,7 +214,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "草稿保存与恢复",
-              body: "每个聊天的原始文字、图片引用和顺序自动保存在受保护的本机后端。输入区显示正在保存、已保存、失败重试和版本冲突；切换聊天、刷新或重启后会恢复已保存内容，但不会自动发送。图片在原上传时间 24 小时后过期，读取不延长；失效时保留文字及可移除占位。旧浏览器文字仅在解锁后迁移，保存成功才移除旧值，新旧冲突需手动选择。清除草稿、恢复待发送快照和删除均需确认。草稿及发送快照不进入备份、恢复点、聊天归档或同步；替换导入会随被替换聊天移除本机草稿。队列调度仅在当前会话有效，重启后的未发送快照只供手动恢复编辑。"
+              body: "每个聊天的原始文字、图片引用和顺序自动保存在受保护的本机后端。输入区显示正在保存、已保存、失败重试和版本冲突；切换聊天、刷新或重启后会恢复已保存内容，但不会自动发送。图片在原上传时间 24 小时后过期，读取不延长；失效时保留文字及可移除占位。旧浏览器文字仅在解锁后迁移，保存成功才移除旧值，新旧冲突需手动选择。清除草稿、恢复待发送快照和删除均需确认。草稿及发送快照不进入备份、恢复点、聊天归档或同步；替换导入会随被替换聊天移除本机草稿。队列调度仅在当前会话有效，重启后的未发送快照只供手动恢复编辑。旧会话队列也只供手动恢复，图片失效需确认是否仅恢复文字。待恢复列表读取失败有独立重试，不影响输入框保存状态。锁定会取消尚在处理或上传的图片，解锁不会续跑旧任务。"
             },
             {
               title: "发送图片给视觉模型",
@@ -530,7 +530,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Saving and recovering drafts",
-            body: "Each chat saves raw text and ordered image references in the protected local backend. The composer shows saving, saved, retry and version-conflict states. Switching chats, reloading or restarting restores saved content without sending it. Images expire 24 hours after their original upload; reads do not renew them. Unavailable images leave removable placeholders and preserve text. Browser text migrates only after unlock and acknowledged saving; conflicting versions require your choice. Clearing drafts, restoring pending snapshots and discarding require confirmation. Drafts and pending sends are excluded from backups, recovery points, archives and sync; replace imports remove them with replaced chats. Queue scheduling is session-only; after restarting, pending snapshots are available solely for manual editing recovery."
+            body: "Each chat saves raw text and ordered image references in the protected local backend. The composer shows saving, saved, retry and version-conflict states. Switching chats, reloading or restarting restores saved content without sending it. Images expire 24 hours after their original upload; reads do not renew them. Unavailable images leave removable placeholders and preserve text. Browser text migrates only after unlock and acknowledged saving; conflicting versions require your choice. Clearing drafts, restoring pending snapshots and discarding require confirmation. Drafts and pending sends are excluded from backups, recovery points, archives and sync; replace imports remove them with replaced chats. Queue scheduling is session-only; after restarting, pending snapshots are available solely for manual editing recovery. Old session queues also require manual recovery; missing images require explicit text-only recovery. A pending-list read error has its own retry and does not change composer save status. Locking cancels pending image preparation and uploads; unlocking never resumes abandoned work."
           },
           {
             title: "Organize story folders",

@@ -1,6 +1,7 @@
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import initSqlJs from "sql.js";
 import { analyzeBackupCandidate } from "../server-dist/services/backupContract.js";
 import { backupImportSchema } from "../server-dist/schemas.js";
@@ -69,6 +70,7 @@ export class MobileStore {
     this.db = null;
     this.writeQueue = Promise.resolve();
     this.transactionQueue = Promise.resolve();
+    this.writeContext = new AsyncLocalStorage();
     this.migrationReport = null;
     this.mutationVersion = 0;
   }
@@ -95,6 +97,9 @@ export class MobileStore {
   }
 
   async persist(guard = () => {}) {
+    const context = this.writeContext.getStore();
+    if (context && !context.committing) { guard(); context.guards.add(guard); return; }
+    if (!context) return this.atomicWrite(async () => {}, guard);
     // A rejected disk write must not poison every later retry. Replace the file
     // only after all bytes were written and the caller's privacy guard still holds.
     this.writeQueue = this.writeQueue.catch(() => {}).then(async () => {
@@ -112,26 +117,47 @@ export class MobileStore {
   }
 
   async atomicWrite(operation, guard = () => {}) {
+    // Reentrant only for this async operation, never for a concurrent caller.
+    // Legacy public mutations join this queue before reading or changing records.
+    const parent = this.writeContext.getStore();
+    if (parent) {
+      guard(); parent.guards.add(guard);
+      return operation();
+    }
     const run = async () => {
       guard();
       const before = this.db.export();
       this.db.run("BEGIN");
-      try {
-        const result = await operation();
-        this.db.run("COMMIT");
-        await this.persist(guard);
-        return result;
-      } catch (error) {
+      return this.writeContext.run({ guards: new Set([guard]), committing: false }, async () => {
         try {
-          this.db.run("ROLLBACK");
-        } catch {
-          this.db.close();
-          this.db = new this.SQL.Database(before);
+          const result = await operation();
+          const context = this.writeContext.getStore();
+          const checkGuards = () => context.guards.forEach((check) => check());
+          checkGuards();
+          this.db.run("COMMIT");
+          context.committing = true;
+          await this.persist(checkGuards);
+          return result;
+        } catch (error) {
+          try {
+            this.db.run("ROLLBACK");
+          } catch {
+            this.db.close();
+            this.db = new this.SQL.Database(before);
+          }
+          throw error;
         }
-        throw error;
-      }
+      });
     };
     const result = this.transactionQueue.then(run, run);
+    this.transactionQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  async readCommitted(operation) {
+    if (this.writeContext.getStore()) return operation();
+    // Draft reads must not acknowledge a version still waiting for disk durability.
+    const result = this.transactionQueue.then(operation);
     this.transactionQueue = result.then(() => undefined, () => undefined);
     return result;
   }
@@ -164,6 +190,7 @@ export class MobileStore {
   }
 
   async writeRecord(type, record, persist = false) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.writeRecord(type, record, persist));
     this.db.run(
       `
         INSERT OR REPLACE INTO records (
@@ -230,6 +257,7 @@ export class MobileStore {
   }
 
   async deleteRecord(type, id, persist = false) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.deleteRecord(type, id, persist));
     const existing = this.readRecord(type, id);
     if (!existing) {
       return null;
@@ -246,6 +274,7 @@ export class MobileStore {
   }
 
   async updateSettings(updates) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.updateSettings(updates));
     const settings = {
       ...this.getSettings(),
       ...dropUndefined(updates),
@@ -274,6 +303,7 @@ export class MobileStore {
   }
 
   async createCharacter(input, persist = true) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.createCharacter(input, persist));
     const timestamp = now();
     const character = {
       id: input.id ?? randomUUID(),
@@ -299,6 +329,7 @@ export class MobileStore {
   }
 
   async updateCharacter(id, updates) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.updateCharacter(id, updates));
     const existing = this.readRecord("character", id);
     if (!existing) return null;
     const character = { ...existing, ...updates, updatedAt: updates.updatedAt ?? now() };
@@ -308,6 +339,7 @@ export class MobileStore {
   }
 
   async batchUpdateCharacterTags(ids, operation, tags, applyOperation) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.batchUpdateCharacterTags(ids, operation, tags, applyOperation));
     const characters = ids.map((id) => this.readRecord("character", id));
     if (characters.some((character) => !character)) {
       return null;
@@ -327,6 +359,7 @@ export class MobileStore {
   }
 
   async upsertCharacterByCardId(input) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.upsertCharacterByCardId(input));
     const existing = this.getCharacterByCardId(input.cardId);
     if (existing) {
       return this.updateCharacter(existing.id, input);
@@ -335,6 +368,7 @@ export class MobileStore {
   }
 
   async deleteCharacter(id) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.deleteCharacter(id));
     const existing = await this.deleteRecord("character", id);
     if (!existing) {
       return false;
@@ -369,6 +403,7 @@ export class MobileStore {
   }
 
   async createChat(input, persist = true) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.createChat(input, persist));
     const timestamp = now();
     const initialProfile = (input.userProfileSummary ?? "").trim();
     const shouldCreateProfileBaseline = initialProfile.length > 0 && input.profileRevision === undefined;
@@ -395,31 +430,25 @@ export class MobileStore {
       createdAt: input.createdAt ?? timestamp,
       updatedAt: input.updatedAt ?? timestamp
     };
-    if (persist) this.db.run("BEGIN");
-    try {
-      await this.writeRecord("chat", chat);
-      if (shouldCreateProfileBaseline) {
-        await this.writeRecord("profileSummaryRevision", {
-          id: randomUUID(),
-          chatId: chat.id,
-          revision: 1,
-          action: "baseline",
-          actor: input.profileBaselineActor ?? "user",
-          summary: initialProfile,
-          sourceMessageIds: [],
-          createdAt: timestamp
-        });
-      }
-      if (persist) this.db.run("COMMIT");
-    } catch (error) {
-      if (persist) this.db.run("ROLLBACK");
-      throw error;
+    await this.writeRecord("chat", chat);
+    if (shouldCreateProfileBaseline) {
+      await this.writeRecord("profileSummaryRevision", {
+        id: randomUUID(),
+        chatId: chat.id,
+        revision: 1,
+        action: "baseline",
+        actor: input.profileBaselineActor ?? "user",
+        summary: initialProfile,
+        sourceMessageIds: [],
+        createdAt: timestamp
+      });
     }
     if (persist) await this.persist();
     return clone(chat);
   }
 
   async updateChat(id, updates) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.updateChat(id, updates));
     const existing = this.readRecord("chat", id);
     if (!existing) return null;
     const chat = { ...existing, ...updates, updatedAt: updates.updatedAt ?? now() };
@@ -429,26 +458,21 @@ export class MobileStore {
   }
 
   async updateChats(ids, updates) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.updateChats(ids, updates));
     const timestamp = updates.updatedAt ?? now();
     let updated = 0;
-    this.db.run("BEGIN");
-    try {
-      for (const id of new Set(ids)) {
-        const existing = this.readRecord("chat", id);
-        if (!existing) continue;
-        await this.writeRecord("chat", { ...existing, ...updates, updatedAt: timestamp });
-        updated += 1;
-      }
-      this.db.run("COMMIT");
-    } catch (error) {
-      this.db.run("ROLLBACK");
-      throw error;
+    for (const id of new Set(ids)) {
+      const existing = this.readRecord("chat", id);
+      if (!existing) continue;
+      await this.writeRecord("chat", { ...existing, ...updates, updatedAt: timestamp });
+      updated += 1;
     }
     await this.persist();
     return updated;
   }
 
   async updateChatTrash(ids, action) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.updateChatTrash(ids, action));
     const uniqueIds = [...new Set(ids)];
     const chats = uniqueIds.map((id) => this.readRecord("chat", id));
     const expected = action === "trash"
@@ -457,65 +481,52 @@ export class MobileStore {
     if (!expected) return null;
 
     const timestamp = now();
-    this.db.run("BEGIN");
-    try {
-      for (const chat of chats) {
-        await this.writeRecord("chat", {
-          ...chat,
-          ...(action === "trash"
-            ? { deletedAt: timestamp, isArchived: false, isPinned: false }
-            : { deletedAt: null }),
-          updatedAt: timestamp
-        });
-      }
-      this.db.run("COMMIT");
-    } catch (error) {
-      this.db.run("ROLLBACK");
-      throw error;
+    for (const chat of chats) {
+      await this.writeRecord("chat", {
+        ...chat,
+        ...(action === "trash"
+          ? { deletedAt: timestamp, isArchived: false, isPinned: false }
+          : { deletedAt: null }),
+        updatedAt: timestamp
+      });
     }
     await this.persist();
     return uniqueIds.length;
   }
 
   async permanentlyDeleteChats(ids) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.permanentlyDeleteChats(ids));
     const uniqueIds = [...new Set(ids)];
     const chats = uniqueIds.map((id) => this.readRecord("chat", id));
     if (!chats.every((chat) => chat?.deletedAt)) return null;
 
     const deletedIds = new Set(uniqueIds);
     const timestamp = now();
-    this.db.run("BEGIN");
-    try {
-      for (const child of this.readRecords("chat")) {
-        if (child.parentChatId && deletedIds.has(child.parentChatId)) {
-          await this.writeRecord("chat", {
-            ...child,
-            parentChatId: null,
-            branchSourceMessageId: null,
-            updatedAt: timestamp
-          });
-        }
+    for (const child of this.readRecords("chat")) {
+      if (child.parentChatId && deletedIds.has(child.parentChatId)) {
+        await this.writeRecord("chat", {
+          ...child,
+          parentChatId: null,
+          branchSourceMessageId: null,
+          updatedAt: timestamp
+        });
       }
-      for (const id of uniqueIds) {
-        const draft = this.readRecord("chatDraft", id);
-        for (const handoff of this.readRecords("draftHandoff", "AND chatId = ?", [id])) {
-          for (const ref of this.listDraftAttachments(`draft_handoff_${handoff.id}`)) await this.deleteRecord("messageAttachment", ref.id);
-          await this.deleteRecord("draftHandoff", handoff.id);
-        }
-        if (draft) {
-          for (const attachment of this.listDraftAttachments(draft.draftId)) await this.deleteRecord("messageAttachment", attachment.id);
-          await this.deleteRecord("chatDraft", id);
-        }
-        for (const message of this.listMessages(id)) for (const attachment of this.listMessageAttachments(message.id)) await this.deleteRecord("messageAttachment", attachment.id);
-        await this.deleteRecord("chat", id);
-        this.db.run("DELETE FROM records WHERE type IN ('message', 'memory', 'memoryRevision', 'memoryOperation', 'profileSummaryRevision') AND chatId = ?", [id]);
-      }
-      await this.cleanupOrphanAssets();
-      this.db.run("COMMIT");
-    } catch (error) {
-      this.db.run("ROLLBACK");
-      throw error;
     }
+    for (const id of uniqueIds) {
+      const draft = this.readRecord("chatDraft", id);
+      for (const handoff of this.readRecords("draftHandoff", "AND chatId = ?", [id])) {
+        for (const ref of this.listDraftAttachments(`draft_handoff_${handoff.id}`)) await this.deleteRecord("messageAttachment", ref.id);
+        await this.deleteRecord("draftHandoff", handoff.id);
+      }
+      if (draft) {
+        for (const attachment of this.listDraftAttachments(draft.draftId)) await this.deleteRecord("messageAttachment", attachment.id);
+        await this.deleteRecord("chatDraft", id);
+      }
+      for (const message of this.listMessages(id)) for (const attachment of this.listMessageAttachments(message.id)) await this.deleteRecord("messageAttachment", attachment.id);
+      await this.deleteRecord("chat", id);
+      this.db.run("DELETE FROM records WHERE type IN ('message', 'memory', 'memoryRevision', 'memoryOperation', 'profileSummaryRevision') AND chatId = ?", [id]);
+    }
+    await this.cleanupOrphanAssets();
     await this.persist();
     return uniqueIds.length;
   }
@@ -768,6 +779,7 @@ export class MobileStore {
   }
 
   async attachDraftToMessage(draftId, messageId) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.attachDraftToMessage(draftId, messageId));
     if (!draftId) return [];
     assertUnmanagedDraftId(draftId);
     const attachments = this.listDraftAttachments(draftId);
@@ -778,6 +790,7 @@ export class MobileStore {
   }
 
   async cleanupOrphanAssets() {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.cleanupOrphanAssets());
     const referenced = new Set(this.readRecords("messageAttachment").map((item) => item.assetId));
     for (const item of this.readRecords("recoveryPointMediaAsset")) referenced.add(item.assetId);
     for (const asset of this.readRecords("mediaAsset")) if (!referenced.has(asset.id)) await this.deleteRecord("mediaAsset", asset.id);
@@ -833,6 +846,7 @@ export class MobileStore {
   }
 
   async createMessage(input, persist = true) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.createMessage(input, persist));
     const timestamp = now();
     const message = {
       id: input.id ?? randomUUID(),
@@ -868,6 +882,7 @@ export class MobileStore {
   }
 
   async copyMessageAttachments(sourceMessageId, targetMessageId) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.copyMessageAttachments(sourceMessageId, targetMessageId));
     for (const attachment of this.listMessageAttachments(sourceMessageId)) await this.writeRecord("messageAttachment", {
       ...attachment,
       id: randomUUID(),
@@ -909,6 +924,7 @@ export class MobileStore {
   }
 
   async updateMessage(id, updates) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.updateMessage(id, updates));
     const existing = this.readRecord("message", id);
     if (!existing) return null;
     const message = { ...existing, ...updates, updatedAt: updates.updatedAt ?? now() };
@@ -919,6 +935,7 @@ export class MobileStore {
   }
 
   async deleteMessage(id) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.deleteMessage(id));
     const existing = await this.deleteRecord("message", id);
     if (!existing) return null;
     for (const attachment of this.listMessageAttachments(id)) await this.deleteRecord("messageAttachment", attachment.id);
@@ -1356,6 +1373,7 @@ export class MobileStore {
   }
 
   async createMemory(input) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.createMemory(input));
     const timestamp = now();
     const embedding =
       Array.isArray(input.embedding) &&
@@ -1388,6 +1406,7 @@ export class MobileStore {
   }
 
   async updateMemory(chatId, memoryId, updates) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.updateMemory(chatId, memoryId, updates));
     const existing = this.getMemory(chatId, memoryId);
     if (!existing) return null;
     const memory = { ...existing, ...updates, updatedAt: updates.updatedAt ?? now() };
@@ -1412,6 +1431,7 @@ export class MobileStore {
   }
 
   async markMemoryEmbeddingsStale() {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.markMemoryEmbeddingsStale());
     const memories = this.readRecords("memory");
     for (const memory of memories) {
       await this.writeRecord("memory", {
@@ -1428,6 +1448,7 @@ export class MobileStore {
   }
 
   async deleteMemory(chatId, memoryId) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.deleteMemory(chatId, memoryId));
     const existing = this.getMemory(chatId, memoryId);
     if (!existing) return false;
     await this.deleteRecord("memory", memoryId);
@@ -1468,6 +1489,7 @@ export class MobileStore {
   }
 
   async updateModelRequest(id, updates) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.updateModelRequest(id, updates));
     const existing = this.readRecord("modelRequest", id);
     if (!existing) return null;
     const request = { ...existing, ...updates, updatedAt: now() };
@@ -1553,6 +1575,7 @@ export class MobileStore {
   }
 
   async createUsageAttempt(input) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.createUsageAttempt(input));
     const attempt = { id: input.id ?? `att_${randomUUID()}`, createdAt: now(), ...input };
     await this.writeRecord("usageAttempt", attempt);
     await this.persist();
@@ -1620,6 +1643,7 @@ export class MobileStore {
   }
 
   async clearUsageHistory() {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.clearUsageHistory());
     const attempts = this.readRecords("usageAttempt").length;
     const requests = this.readRecords("modelRequest").filter((request) => ["succeeded", "failed", "cancelled", "interrupted", "blocked"].includes(request.status)).length;
     this.db.run("DELETE FROM records WHERE type = 'usageAttempt'");
@@ -1647,6 +1671,7 @@ export class MobileStore {
   }
 
   async createRecoveryPoint(reason, settings) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.createRecoveryPoint(reason, settings));
     const snapshot = { ...this.exportBackup(settings), mode: "replace" };
     const storedSnapshot = snapshot.media ? { ...snapshot, media: { ...snapshot.media, assets: snapshot.media.assets.map(({ dataBase64: _data, ...asset }) => asset) } } : snapshot;
     const point = {
@@ -1979,6 +2004,7 @@ export class MobileStore {
   }
 
   async touchChat(chatId, persist = true) {
+    if (!this.writeContext.getStore()) return this.atomicWrite(() => this.touchChat(chatId, persist));
     const chat = this.readRecord("chat", chatId);
     if (chat) {
       await this.writeRecord("chat", { ...chat, updatedAt: now() });

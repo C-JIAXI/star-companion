@@ -91,6 +91,17 @@ export const verifyChatDraftContract = async (baseUrl, restart) => {
     image.data[0] = 30;
     const second = await send("/api/media/chat-images/drafts", "POST", { draftId: `draft_${randomUUID()}`, dataBase64: PNG.sync.write(image).toString("base64"), mimeType: "image/png" }, 201);
     const input = { expectedVersion: 0, mutationId: randomUUID(), content: "  Controlled draft\n\n  ", attachmentIds: [second.id, first.id] };
+    const verifyLocalOnly = async () => {
+      for (const path of ["/api/backups/export", `/api/chats/${chat.id}/archive`]) {
+        const payload = await send(path);
+        const encoded = JSON.stringify(payload);
+        assert.equal(encoded.includes(JSON.stringify(input.content)), false);
+        assert.equal(encoded.includes(JSON.stringify(first.id)), false);
+        assert.equal(encoded.includes(JSON.stringify(second.id)), false);
+        assert.equal(Object.hasOwn(payload, "chatDrafts"), false);
+        assert.equal(Object.hasOwn(payload, "draftHandoffs"), false);
+      }
+    };
     const saved = await send(route, "PUT", input);
     assert.equal(saved.content, input.content);
     assert.equal(saved.version, 1);
@@ -98,6 +109,7 @@ export const verifyChatDraftContract = async (baseUrl, restart) => {
     assert.equal(saved.attachments[1].createdAt, first.createdAt);
     assert.ok(saved.attachments.every((item) => item.status === "ready" && item.expiresAt && !Object.hasOwn(item, "dataBase64")));
     assert.deepEqual(await send(route), saved);
+    await verifyLocalOnly();
     if (restart) { await restart(); assert.deepEqual(await send(route), saved); }
     const health = await send("/api/storage-health/summary");
     const draftCategory = health.categories.find((item) => item.id === "chat_drafts");
@@ -124,6 +136,7 @@ export const verifyChatDraftContract = async (baseUrl, restart) => {
     assert.equal(transfer.handoff.attachments[0].id, first.id);
     assert.deepEqual(await send(`${route}/handoffs`, "POST", transferInput), transfer);
     assert.equal((await send(`${route}/handoffs`)).length, 1);
+    await verifyLocalOnly();
     await send(`/api/media/chat-images/drafts/${transfer.handoff.draftId}`, "DELETE", undefined, 409);
     await send(`${route}/handoffs/${transfer.handoff.id}/restore`, "POST", { expectedVersion: single.version, mutationId: randomUUID() }, 409);
     const restoreInput = { expectedVersion: transfer.draft.version, mutationId: randomUUID() };

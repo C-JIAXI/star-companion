@@ -81,6 +81,163 @@ test("failed autosave retains edits and retry persists the exact draft", async (
   } finally { await fixture.dispose(); }
 });
 
+test("pending-list failure stays separate from saved edits and retries the failed read", async ({ page, request }, testInfo) => {
+  const fixture = await createFixture(request, `list-retry-${testInfo.project.name}-${Date.now()}`);
+  const [first, second] = fixture.chats;
+  let failList = false;
+  let listReads = 0;
+  await page.route(`**/api/chats/${first.id}/draft/handoffs`, async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    listReads += 1;
+    if (failList) await route.fulfill({ status: 503, json: { ok: false, error: "Controlled list failure" } });
+    else await route.continue();
+  });
+  try {
+    await page.goto("/"); await selectChat(page, first.title);
+    await page.locator("#chat-message-input").fill("  Saved despite list failure\n ");
+    await expect(page.getByTestId("chat-draft-status")).toContainText("Saved");
+    await selectChat(page, second.title);
+    failList = true;
+    await selectChat(page, first.title);
+    await expect(page.getByTestId("draft-handoff-list-error")).toBeVisible();
+    await expect(page.getByTestId("chat-draft-status")).toContainText("Saved");
+    await expect(page.locator("#chat-message-input")).toHaveValue("  Saved despite list failure\n ");
+    const beforeRetry = listReads;
+    failList = false;
+    await page.getByRole("button", { name: "Retry pending drafts", exact: true }).click();
+    await expect(page.getByTestId("draft-handoff-list-error")).toHaveCount(0);
+    expect(listReads).toBeGreaterThan(beforeRetry);
+    // A failing list on a fresh page must not prevent loading the authoritative composer.
+    failList = true;
+    await page.reload();
+    await expect(page.getByTestId("draft-handoff-list-error")).toBeVisible();
+    await expect(page.locator("#chat-message-input")).toHaveValue("  Saved despite list failure\n ");
+    await expect(page.locator("#chat-message-input")).toBeEnabled();
+    await expect(page.getByTestId("chat-draft-status")).toContainText("Saved");
+  } finally { await fixture.dispose(); }
+});
+
+test("clear draft requires confirmation and clears only the composer across reload", async ({ page, request }, testInfo) => {
+  const fixture = await createFixture(request, `clear-${testInfo.project.name}-${Date.now()}`);
+  const chat = fixture.chats[0];
+  try {
+    await request.put(`/api/chats/${chat.id}/draft`, { data: { expectedVersion: 0, mutationId: "controlled-clear-pending", content: "Controlled pending snapshot", attachmentIds: [] } });
+    const handoffId = crypto.randomUUID();
+    expect((await request.post(`/api/chats/${chat.id}/draft/handoffs`, { data: { id: handoffId, expectedVersion: 1, purpose: "queue" } })).ok()).toBeTruthy();
+    await page.goto("/"); await selectChat(page, chat.title);
+    await page.locator("#chat-message-input").fill("  Controlled composer to clear\n ");
+    await page.getByLabel("Choose chat images").setInputFiles(controlledImage(71));
+    await expect.poll(async () => (await (await request.get(`/api/chats/${chat.id}/draft`)).json()).data.attachments.length).toBe(1);
+    await expect(page.getByTestId("chat-draft-status")).toContainText("Saved");
+    await page.getByRole("button", { name: "Clear draft", exact: true }).click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.locator("#chat-message-input")).toHaveValue("  Controlled composer to clear\n ");
+    await page.reload();
+    await expect(page.getByTestId("chat-image-draft").getByRole("img")).toHaveCount(1);
+    await page.getByRole("button", { name: "Clear draft", exact: true }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(page.getByTestId("chat-draft-status")).toContainText("Saved");
+    await page.reload();
+    await expect(page.locator("#chat-message-input")).toHaveValue("");
+    await expect(page.getByTestId("chat-image-draft")).toHaveCount(0);
+    await expect(page.getByTestId("recoverable-draft")).toHaveCount(1);
+    const handoff = (await (await request.get(`/api/chats/${chat.id}/draft/handoffs/${handoffId}`)).json()).data;
+    expect(handoff.content).toBe("Controlled pending snapshot");
+    expect(handoff.committedAt).toBeNull();
+  } finally { await fixture.dispose(); }
+});
+
+test("image preparation crossing lock and unlock cannot resume an abandoned upload", async ({ page, request }, testInfo) => {
+  const fixture = await createFixture(request, `upload-lock-${testInfo.project.name}-${Date.now()}`);
+  let uploads = 0;
+  await page.route("**/api/media/chat-images/drafts", async (route) => {
+    uploads += 1;
+    await route.continue();
+  });
+  await page.route("**/api/privacy/unlock", (route) => route.fulfill({ json: { ok: true, data: { locked: false } } }));
+  await page.addInitScript(() => {
+    const original = FileReader.prototype.readAsDataURL;
+    const pending: Array<() => void> = [];
+    Object.assign(window, { releaseControlledImage: () => pending.splice(0).forEach((resume) => resume()), controlledImageStarted: false });
+    FileReader.prototype.readAsDataURL = function (blob) {
+      Object.assign(window, { controlledImageStarted: true });
+      pending.push(() => original.call(this, blob));
+    };
+  });
+  try {
+    await page.goto("/"); await selectChat(page, fixture.chats[0].title);
+    await page.getByLabel("Choose chat images").setInputFiles(controlledImage(81));
+    await expect.poll(() => page.evaluate(() => (window as unknown as { controlledImageStarted: boolean }).controlledImageStarted)).toBe(true);
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("star-companion:privacy-locked")));
+    await expect(page.getByTestId("privacy-lock-screen")).toBeVisible();
+    await page.getByTestId("privacy-unlock-input").fill("controlled-code");
+    await page.getByTestId("privacy-unlock-submit").click();
+    await expect(page.locator("#chat-message-input")).toBeVisible();
+    await page.evaluate(() => (window as unknown as { releaseControlledImage: () => void }).releaseControlledImage());
+    // Let the controlled reader finish, plus a debounce window, without any upload.
+    await page.waitForTimeout(700);
+    expect(uploads).toBe(0);
+    await expect(page.getByTestId("chat-image-draft")).toHaveCount(0);
+  } finally { await fixture.dispose(); }
+});
+
+test("old session queues recover ordered images only by choice and retain their copy until saved", async ({ page, request }, testInfo) => {
+  const fixture = await createFixture(request, `old-queue-${testInfo.project.name}-${Date.now()}`);
+  const chat = fixture.chats[0], draftId = `draft_old_queue_${crypto.randomUUID().replaceAll("-", "")}`;
+  const ids: string[] = [];
+  for (const color of [45, 95]) {
+    const response = await request.post("/api/media/chat-images/drafts", { data: { draftId, mimeType: "image/png", dataBase64: controlledImage(color).buffer.toString("base64") } });
+    expect(response.ok()).toBeTruthy(); ids.push((await response.json()).data.id);
+  }
+  const queueKey = `star-companion:chat-queue:${chat.id}`;
+  await page.addInitScript(({ key, draftId, ids }) => {
+    if (!sessionStorage.getItem("controlled-old-queue-seeded")) {
+      sessionStorage.setItem(key, JSON.stringify([
+        { id: "controlled-old-queue-images", content: "  Controlled old queued images\n ", draftId, attachments: [...ids].reverse().map((id) => ({ id })) },
+        { id: "controlled-old-queue-missing", content: "Controlled old text with missing image", draftId: "draft_controlled_missing", attachments: [{ id: "controlled-missing-image" }] }
+      ]));
+      sessionStorage.setItem("controlled-old-queue-seeded", "true");
+    }
+  }, { key: queueKey, draftId, ids });
+  let failSave = false, generations = 0;
+  page.on("websocket", (socket) => socket.on("framesent", ({ payload }) => { try { if (["generate", "regenerate", "continue"].includes(JSON.parse(String(payload)).type)) generations += 1; } catch {} }));
+  await page.route(`**/api/chats/${chat.id}/draft`, async (route) => {
+    if (failSave && route.request().method() === "PUT") await route.fulfill({ status: 503, json: { ok: false, error: "Controlled old queue save failure" } });
+    else await route.continue();
+  });
+  try {
+    await page.goto("/"); await selectChat(page, chat.title);
+    await expect(page.getByTestId("legacy-queue-draft")).toHaveCount(2);
+    await expect(page.locator("#chat-message-input")).toHaveValue("");
+    failSave = true;
+    await page.getByRole("button", { name: "Restore old queue without sending", exact: true }).first().click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(page.getByTestId("chat-draft-status")).toContainText("Save failed");
+    expect(await page.evaluate((key) => sessionStorage.getItem(key) !== null, queueKey)).toBe(true);
+    await expect(page.locator("#chat-message-input")).toHaveValue("  Controlled old queued images\n ");
+    failSave = false;
+    await page.getByRole("button", { name: "Retry save", exact: true }).click();
+    await expect(page.getByTestId("chat-draft-status")).toContainText("Saved");
+    await expect(page.getByTestId("legacy-queue-draft")).toHaveCount(1);
+    await page.reload();
+    await expect(page.getByTestId("chat-image-draft").getByRole("img")).toHaveCount(2);
+    const saved = (await (await request.get(`/api/chats/${chat.id}/draft`)).json()).data;
+    expect(saved.attachments.map((image: { id: string }) => image.id)).toEqual([...ids].reverse());
+    await page.getByRole("button", { name: "Restore old queue without sending", exact: true }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(page.getByTestId("legacy-queue-draft")).toContainText("Old images expired or are unavailable");
+    await expect(page.locator("#chat-message-input")).toHaveValue("  Controlled old queued images\n ");
+    await page.getByRole("button", { name: "Restore old text only", exact: true }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(page.getByTestId("chat-draft-status")).toContainText("Saved");
+    await expect(page.getByTestId("legacy-queue-draft")).toHaveCount(0);
+    expect(await page.evaluate((key) => sessionStorage.getItem(key), queueKey)).toBeNull();
+    await page.reload();
+    await expect(page.locator("#chat-message-input")).toHaveValue("Controlled old text with missing image");
+    expect(generations).toBe(0);
+  } finally { await fixture.dispose(); }
+});
+
 test("stale tab preserves edits and requires explicit conflict resolution", async ({ page, context, request }, testInfo) => {
   const fixture = await createFixture(request, `tabs-${testInfo.project.name}-${Date.now()}`);
   const second = await context.newPage();

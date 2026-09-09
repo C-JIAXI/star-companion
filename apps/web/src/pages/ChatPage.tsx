@@ -3123,7 +3123,7 @@ export function ChatPage({
   };
 
   const addChatImages = async (files: File[]) => {
-    if (!files.length) return;
+    if (!files.length || attachmentBusy || composer.disabled) return;
     if (!activeChatSupportsVision) {
       setAttachmentError(language === "zh-CN" ? "当前聊天模型不支持图片输入。请先切换模型。" : "The current chat model does not support image input. Switch models first.");
       return;
@@ -3134,17 +3134,22 @@ export function ChatPage({
     }
     setAttachmentBusy(true);
     setAttachmentError(null);
+    let operation: ReturnType<typeof composer.beginImageUpload> | undefined;
     try {
+      operation = composer.beginImageUpload();
       const stagingId = `draft_${generateId().replace(/-/g, "")}`;
       for (const file of files) {
-        const normalized = await normalizeChatImageFile(file);
-        const uploaded = await api.media.uploadChatImage({ draftId: stagingId, ...normalized });
+        const normalized = await normalizeChatImageFile(file, operation.signal);
+        operation.signal.throwIfAborted();
+        const uploaded = await api.media.uploadChatImage({ draftId: stagingId, ...normalized }, operation.signal);
+        operation.signal.throwIfAborted();
         composer.addImage({ ...uploaded, expiresAt: new Date(Date.parse(uploaded.createdAt) + 24 * 60 * 60 * 1000).toISOString() });
         await composer.flush();
       }
     } catch (caught) {
-      setAttachmentError(caught instanceof Error ? caught.message : (language === "zh-CN" ? "图片处理失败。" : "Image processing failed."));
+      if (!operation?.signal.aborted) setAttachmentError(caught instanceof Error ? caught.message : (language === "zh-CN" ? "图片处理失败。" : "Image processing failed."));
     } finally {
+      operation?.dispose();
       setAttachmentBusy(false);
       if (attachmentInputRef.current) attachmentInputRef.current.value = "";
     }
@@ -4868,6 +4873,21 @@ export function ChatPage({
                           <button type="button" className="ml-auto underline disabled:opacity-40" disabled={composer.disabled || (!draft && !draftAttachments.length)} onClick={() => setDraftConfirm({ title: language === "zh-CN" ? "清除草稿？" : "Clear draft?", body: language === "zh-CN" ? "清除当前聊天输入框中的文字和图片引用，不删除已发送消息或待发送快照。" : "Clear this chat's composer text and image references, without deleting messages or pending snapshots.", run: composer.clear })}>{language === "zh-CN" ? "清除草稿" : "Clear draft"}</button>
                           {draftAttachments.some((item) => item.status !== "ready") ? <span className="w-full text-amber-300">{language === "zh-CN" ? "存在过期或不可用附件。文字仍保留；请移除后重新选择图片。图片上传后 24 小时过期。" : "Some images expired or are unavailable. Your text is preserved. Remove and reselect images; uploads expire after 24 hours."}</span> : null}
                         </div>
+                        {composer.legacyQueueInvalid ? <p role="alert" className="mb-2 text-xs text-slate-300">{language === "zh-CN" ? "旧队列部分数据无法读取，原浏览器副本仍保留。" : "Some old queue data could not be read. The browser copy has been preserved."}</p> : null}
+                        {composer.legacyQueueError ? <p role="alert" className="mb-2 text-xs text-slate-300">{language === "zh-CN" ? "旧队列图片读取失败，请再次选择恢复。当前草稿未修改。" : "Old queue images could not be read. Try restoring again; the composer was not changed."}</p> : null}
+                        {composer.legacyQueue.map((item) => <div key={item.id} data-testid="legacy-queue-draft" className="mb-2 space-y-2 rounded border border-white/10 p-2 text-xs text-slate-300">
+                          <details><summary className="cursor-pointer">{language === "zh-CN" ? "旧会话队列（仅手动恢复）" : "Old session queue (manual recovery only)"} · {item.attachmentIds.length} {language === "zh-CN" ? "张图片" : "images"}</summary><pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words">{item.content}</pre></details>
+                          {composer.legacyQueueUnavailable === item.id ? <p role="alert">{language === "zh-CN" ? "旧图片已过期或不可用，原文字仍保留。可以仅恢复文字，再重新选择图片。" : "Old images expired or are unavailable. The original text is preserved. Restore text only, then reselect images."}</p> : null}
+                          <div className="flex flex-wrap gap-3">
+                            <button type="button" className="min-h-8 underline" disabled={composer.disabled || attachmentBusy} onClick={() => setDraftConfirm({ title: language === "zh-CN" ? "恢复旧队列草稿？" : "Restore old queue draft?", body: language === "zh-CN" ? "用这条旧队列的文字和原顺序图片替换输入框；不发送。保存成功后才移除旧副本。" : "Replace the composer with this old queue item's text and original image order, without sending. Remove its old copy only after saving succeeds.", run: () => composer.restoreLegacyQueue(item.id) })}>{language === "zh-CN" ? "恢复旧队列（不发送）" : "Restore old queue without sending"}</button>
+                            {composer.legacyQueueUnavailable === item.id ? <button type="button" className="min-h-8 underline" disabled={composer.disabled || attachmentBusy} onClick={() => setDraftConfirm({ title: language === "zh-CN" ? "仅恢复文字并放弃旧图片？" : "Restore text and discard old images?", body: language === "zh-CN" ? "使用旧文字替换输入框，放弃此条旧队列的所有图片引用；你需要重新选择图片。不发送。" : "Replace the composer with the old text, discarding all image references in this queue item. Images must be selected again. Nothing is sent.", run: () => composer.restoreLegacyQueue(item.id, true) })}>{language === "zh-CN" ? "仅恢复旧文字" : "Restore old text only"}</button> : null}
+                            <button type="button" className="min-h-8 underline" disabled={composer.disabled} onClick={() => setDraftConfirm({ title: language === "zh-CN" ? "放弃旧队列条目？" : "Discard old queue item?", body: language === "zh-CN" ? "不恢复这条旧文字及图片。当前输入框不变，旧暂存图片仍按 24 小时规则清理。" : "Discard this old text and its image references. The composer is unchanged; staged images still expire after 24 hours.", run: async () => composer.discardLegacyQueue(item.id) })}>{language === "zh-CN" ? "放弃旧队列条目" : "Discard old queue item"}</button>
+                          </div>
+                        </div>)}
+                        {composer.handoffsError ? <div role="alert" data-testid="draft-handoff-list-error" className="mb-2 flex flex-wrap items-center gap-2 rounded border border-amber-500/30 p-2 text-xs text-slate-300">
+                          <span>{language === "zh-CN" ? "待恢复草稿列表读取失败；输入框保存状态不受影响。" : "Pending drafts could not be loaded; composer save status is unaffected."}</span>
+                          <button type="button" className="min-h-8 underline" disabled={composer.handoffsLoading} onClick={() => void composer.refreshHandoffs()}>{language === "zh-CN" ? "重试读取待恢复草稿" : "Retry pending drafts"}</button>
+                        </div> : null}
                         {composer.handoffs.filter((item) => !item.committedAt && !item.disposedAt && item.id !== activeRequestId && !queuedMessages.some((queued) => queued.id === item.id)).map((item) => <div className="mb-2 flex flex-wrap items-center gap-2 rounded border border-white/10 p-2 text-xs text-slate-300" key={item.id} data-testid="recoverable-draft">
                           <span>{language === "zh-CN" ? "可恢复的待发送草稿" : "Recoverable pending draft"} · {new Date(item.createdAt).toLocaleTimeString()} · {item.attachments.length} {language === "zh-CN" ? "张图片" : "images"}</span>
                           <button type="button" className="underline" onClick={() => editQueuedMessage(item)}>{language === "zh-CN" ? "恢复编辑（不发送）" : "Restore without sending"}</button>

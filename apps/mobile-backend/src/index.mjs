@@ -3387,27 +3387,27 @@ app.get("/api/chats/:id/summary", (request, response) => {
   response.json({ ok: true, data: serializeChat(chat, store.countMessages(chat.id)) });
 });
 
-app.get("/api/chats/:id/draft", (request, response) => {
+app.get("/api/chats/:id/draft", asyncHandler(async (request, response) => {
   response.setHeader("Cache-Control", "no-store");
-  response.json({ ok: true, data: store.getChatDraft(requireParam(request, "id")) });
-});
+  response.json({ ok: true, data: await store.readCommitted(() => store.getChatDraft(requireParam(request, "id"))) });
+}));
 app.put("/api/chats/:id/draft", asyncHandler(async (request, response) => {
   response.setHeader("Cache-Control", "no-store");
   response.json({ ok: true, data: await store.saveChatDraft(requireParam(request, "id"), request.body) });
 }));
 
-app.get("/api/chats/:id/draft/handoffs", (request, response) => {
+app.get("/api/chats/:id/draft/handoffs", asyncHandler(async (request, response) => {
   response.setHeader("Cache-Control", "no-store");
-  response.json({ ok: true, data: store.listDraftHandoffs(requireParam(request, "id")) });
-});
+  response.json({ ok: true, data: await store.readCommitted(() => store.listDraftHandoffs(requireParam(request, "id"))) });
+}));
 app.post("/api/chats/:id/draft/handoffs", asyncHandler(async (request, response) => {
   response.setHeader("Cache-Control", "no-store");
   response.json({ ok: true, data: await store.createDraftHandoff(requireParam(request, "id"), request.body) });
 }));
-app.get("/api/chats/:id/draft/handoffs/:handoffId", (request, response) => {
+app.get("/api/chats/:id/draft/handoffs/:handoffId", asyncHandler(async (request, response) => {
   response.setHeader("Cache-Control", "no-store");
-  response.json({ ok: true, data: store.getDraftHandoff(requireParam(request, "id"), requireParam(request, "handoffId")) });
-});
+  response.json({ ok: true, data: await store.readCommitted(() => store.getDraftHandoff(requireParam(request, "id"), requireParam(request, "handoffId"))) });
+}));
 app.post("/api/chats/:id/draft/handoffs/:handoffId/restore", asyncHandler(async (request, response) => {
   response.setHeader("Cache-Control", "no-store");
   response.json({ ok: true, data: await store.restoreDraftHandoff(requireParam(request, "id"), requireParam(request, "handoffId"), request.body) });
@@ -4700,7 +4700,7 @@ const handleGenerate = async (socket, raw) => {
   let resumeBlockedHandoff = false;
   if (request.handoffId) {
     try {
-      const receipt = store.getDraftHandoff(request.chatId, request.handoffId);
+      const receipt = await store.readCommitted(() => store.getDraftHandoff(request.chatId, request.handoffId));
       if (receipt.committedAt) {
         const message = receipt.messageId ? store.getMessage(receipt.messageId) : null;
         const original = request.overrideHardBudget ? store.getModelRequest(request.handoffId) : null;
