@@ -174,7 +174,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           items: [
             {
               title: "发送与停止",
-              body: "输入消息后发送。生成期间可继续输入并加入待发送队列；队列可编辑、删除或立即发送，当前回复结束后会合并为下一条消息自动发送。队列只在当前应用会话中保留。停止后仍保留已经流式返回的内容。连接中断时输入区会显示重连状态；未被服务端确认的草稿会自动恢复，重连后刷新当前会话。"
+              body: "输入消息后发送。生成期间可继续输入并加入待发送队列；队列可编辑、删除或立即发送，成功回复结束后按顺序发送下一份快照。调度只在当前应用会话有效。停止或首个 token 后失败仍保留已发送用户消息及收到的回复，不恢复成待发送草稿。连接中断时显示重连状态并核对请求回执，刷新会话；未发送快照可手动恢复编辑，不会因恢复而自动调用模型。"
             },
             {
               title: "消息操作",
@@ -213,8 +213,8 @@ const getDocsCopy = (language: string): DocsCopy => {
               body: "输入框工具可录音转写、朗读最近回复和生成图片；每条助手回复也可单独朗读或停止。尚未配置兼容模型时，这些入口会直接定位到设置页对应的模块模型下拉框。设置页可指定文字朗读的声音 ID、0.5–2 倍播放速度，并选择是否自动朗读当前聊天中新收到的助手回复。图片会先在预览中展示，确认后才插入输入框。"
             },
             {
-              title: "草稿保存范围（开发中）",
-              body: "完整草稿恢复正在接入：后端已支持每个聊天独立保存文字与有序图片引用，但当前输入框还未接入，切换聊天仍可能丢失未发送图片。图片暂存期限为上传后 24 小时，读取不延长；草稿不属于备份或局域网同步内容。待发送队列仍仅在当前应用会话中使用。"
+              title: "草稿保存与恢复",
+              body: "每个聊天的原始文字、图片引用和顺序自动保存在受保护的本机后端。输入区显示正在保存、已保存、失败重试和版本冲突；切换聊天、刷新或重启后会恢复已保存内容，但不会自动发送。图片在原上传时间 24 小时后过期，读取不延长；失效时保留文字及可移除占位。旧浏览器文字仅在解锁后迁移，保存成功才移除旧值，新旧冲突需手动选择。清除草稿、恢复待发送快照和删除均需确认。草稿及发送快照不进入备份、恢复点、聊天归档或同步；替换导入会随被替换聊天移除本机草稿。队列调度仅在当前会话有效，重启后的未发送快照只供手动恢复编辑。"
             },
             {
               title: "发送图片给视觉模型",
@@ -486,7 +486,7 @@ const getDocsCopy = (language: string): DocsCopy => {
         items: [
           {
             title: "Send and stop",
-            body: "Send from the composer. While generation streams, new messages can be queued, edited, deleted, or sent immediately. The queue is combined into the next message after the current reply and lasts only for the current app session. Stopping keeps content already received. If the connection drops, the composer reports reconnection progress, restores drafts that the server did not acknowledge, and refreshes the conversation after recovery."
+            body: "Send from the composer. While generation streams, messages can be queued, edited, deleted, or sent immediately. The next snapshot sends in order after a successful reply; scheduling lasts only for the current app session. Stopping or failing after the first token retains the sent user message and received reply, without restoring sent content as a draft. Reconnection checks request receipts and refreshes the conversation. Unsent snapshots can be manually restored to edit, never automatically sent by recovery."
           },
           {
             title: "Message actions",
@@ -529,8 +529,8 @@ const getDocsCopy = (language: string): DocsCopy => {
             body: "Archive hides a completed chat from active History without deleting its messages or memories. History management mode can archive or restore several chats together; global message search still includes archived chats."
           },
           {
-            title: "Draft persistence scope (in development)",
-            body: "Complete draft recovery is being integrated. The backend can now save per-chat text and ordered image references, but the current composer is not connected yet and switching chats can still lose unsent images. Temporary images expire 24 hours after upload; reading does not renew them. Drafts are excluded from backups and LAN sync. The send queue remains limited to the current app session."
+            title: "Saving and recovering drafts",
+            body: "Each chat saves raw text and ordered image references in the protected local backend. The composer shows saving, saved, retry and version-conflict states. Switching chats, reloading or restarting restores saved content without sending it. Images expire 24 hours after their original upload; reads do not renew them. Unavailable images leave removable placeholders and preserve text. Browser text migrates only after unlock and acknowledged saving; conflicting versions require your choice. Clearing drafts, restoring pending snapshots and discarding require confirmation. Drafts and pending sends are excluded from backups, recovery points, archives and sync; replace imports remove them with replaced chats. Queue scheduling is session-only; after restarting, pending snapshots are available solely for manual editing recovery."
           },
           {
             title: "Organize story folders",

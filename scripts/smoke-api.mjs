@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { verifyChatDraftContract } from "./testing/chat-draft-contract.mjs";
+import { verifyChatDraftContract, verifyDraftBudgetResume } from "./testing/chat-draft-contract.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -215,6 +215,7 @@ const readRawBody = (request) =>
   });
 
 const createFakeModelServer = (port) => {
+  let failNextStream = false;
   let chatCompletionRequests = 0;
   let lastChatCompletionBody = null;
 
@@ -287,6 +288,7 @@ const createFakeModelServer = (port) => {
         Connection: "keep-alive"
       });
       response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: streamContent } }] })}\n\n`);
+      if (failNextStream) { failNextStream = false; response.end('data: {"error":{"type":"server_error","message":"Controlled partial failure"}}\n\n'); return; }
       response.write('data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}\n\n');
       response.end("data: [DONE]\n\n");
       return;
@@ -303,6 +305,7 @@ const createFakeModelServer = (port) => {
       resolve({
         close: () => server.close(),
         getChatCompletionRequests: () => chatCompletionRequests,
+        failNextStream: () => { failNextStream = true; },
         getLastChatCompletionBody: () => lastChatCompletionBody
       });
     });
@@ -655,7 +658,13 @@ const main = async () => {
 
     log("Verifying character CRUD, paging, export, import, and unlock flows");
     const localAvatar = "data:image/png;base64,QUJDRA==";
-    await verifyChatDraftContract(baseUrl);
+    await verifyChatDraftContract(baseUrl, async () => {
+      log("Restarting the isolated backend to verify exact draft and image recovery");
+      await stopProcess(server.child);
+      server = startServer(env);
+      await waitForHealth(baseUrl, server);
+    });
+    await verifyDraftBudgetResume(baseUrl, () => fakeModelServer.getChatCompletionRequests(), () => fakeModelServer.failNextStream());
     log("Chat draft persistence, conflicts, lock and lifecycle contract passed");
     const characterPayload = {
       name: `Smoke Character ${runId}`,

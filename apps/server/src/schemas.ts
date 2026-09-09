@@ -509,7 +509,7 @@ export const chatBranchSchema = z.object({
   kind: z.enum(["branch", "checkpoint"]).default("branch")
 });
 
-export const messageCreateSchema = z.object({
+const messageFieldsSchema = z.object({
   chatId: idSchema,
   role: z.enum(["user", "assistant", "system"]),
   characterId: idSchema.nullable().optional(),
@@ -526,7 +526,8 @@ export const messageCreateSchema = z.object({
   promptBreakdown: promptBreakdownSchema.nullable().optional(),
   loreMatches: z.array(loreMatchSchema).nullable().optional(),
   memoryMatches: z.array(matchedMemorySchema).nullable().optional()
-}).refine((value) => !value.handoffId || (value.role === "user" && !value.draftId), "A pending draft can only create its original user message.");
+});
+export const messageCreateSchema = messageFieldsSchema.refine((value) => !value.handoffId || (value.role === "user" && !value.draftId), "A pending draft can only create its original user message.");
 
 export const messageUpdateSchema = z
   .object({
@@ -849,11 +850,11 @@ export const backupChatSchema = chatCreateSchema.extend({
   updatedAt: backupDateSchema
 });
 
-export const backupMessageSchema = messageCreateSchema.extend({
+export const backupMessageSchema = messageFieldsSchema.extend({
   id: idSchema.optional(),
   createdAt: backupDateSchema,
   updatedAt: backupDateSchema
-}).omit({ draftId: true });
+}).omit({ draftId: true, handoffId: true });
 
 const memoryActorSchema = z.enum(["user", "automatic_memory", "agent_confirmed", "timeline_cleanup", "restore"]);
 const memoryActionSchema = z.enum(["baseline", "automatic_create", "automatic_update", "automatic_disable", "manual_create", "manual_edit", "manual_enable", "manual_disable", "manual_delete", "agent_confirmed_create", "timeline_disable", "restore", "undo_create", "undo_update", "undo_disable"]);

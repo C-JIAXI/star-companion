@@ -4697,16 +4697,23 @@ const handleGenerate = async (socket, raw) => {
   }
   const request = parsed.data;
   const abortController = new AbortController();
+  let resumeBlockedHandoff = false;
   if (request.handoffId) {
     try {
       const receipt = store.getDraftHandoff(request.chatId, request.handoffId);
       if (receipt.committedAt) {
         const message = receipt.messageId ? store.getMessage(receipt.messageId) : null;
+        const original = request.overrideHardBudget ? store.getModelRequest(request.handoffId) : null;
+        const latest = original?.status === "blocked" && !original.outputStarted
+          ? store.readRecords("message", "AND chatId = ?", [request.chatId], "ORDER BY createdAt DESC, id DESC LIMIT 1")[0] : null;
+        resumeBlockedHandoff = !!message && original?.chatId === request.chatId && original.errorCode === "budget_blocked" && latest?.id === message.id;
+        if (!resumeBlockedHandoff) {
         if (message) sendJson(socket, { type: "user_message", requestId: request.requestId, message: serializeMessage(message) });
         const status = store.getModelRequest(request.requestId);
         if (status) sendJson(socket, { type: "generation_status", request: { ...status, requestId: status.id } });
         else sendJson(socket, { type: "generation_done", requestId: request.requestId });
         return;
+        }
       }
     } catch {
       sendJson(socket, { type: "error", requestId: request.requestId, error: "Pending draft unavailable. Reload the chat before sending." });
@@ -4733,7 +4740,7 @@ const handleGenerate = async (socket, raw) => {
       requestId: request.requestId,
       message: serializeMessage(userMessage)
     });
-    if (consumed?.replayed) {
+    if (consumed?.replayed && !resumeBlockedHandoff) {
       await store.updateModelRequest(request.requestId, { status: "succeeded", completedAt: new Date().toISOString() });
       sendJson(socket, { type: "generation_done", requestId: request.requestId });
       return;

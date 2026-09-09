@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { verifyChatDraftContract } from "../testing/chat-draft-contract.mjs";
+import { verifyChatDraftContract, verifyDraftBudgetResume } from "../testing/chat-draft-contract.mjs";
 import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -42,6 +42,7 @@ const readRawBody = (request) =>
   });
 
 const createFakeModelServer = () => {
+  let failNextStream = false;
   let chatCompletionRequests = 0;
   let lastChatCompletionBody = null;
   const chatCompletionBodies = [];
@@ -111,6 +112,7 @@ const createFakeModelServer = () => {
         Connection: "keep-alive"
       });
       response.write('data: {"choices":[{"delta":{"content":"Mobile assistant reply."}}]}\n\n');
+      if (failNextStream) { failNextStream = false; response.end('data: {"error":{"type":"server_error","message":"Controlled partial failure"}}\n\n'); return; }
       response.write('data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}\n\n');
       response.end("data: [DONE]\n\n");
       return;
@@ -167,6 +169,7 @@ const createFakeModelServer = () => {
       resolve({
         close: () => server.close(),
         getChatCompletionRequests: () => chatCompletionRequests,
+        failNextStream: () => { failNextStream = true; },
         getLastChatCompletionBody: () => lastChatCompletionBody,
         getChatCompletionBodies: () => [...chatCompletionBodies]
       });
@@ -496,6 +499,7 @@ try {
   assert.equal(fakeModelServer.getLastChatCompletionBody().stream, false);
 
   await verifyChatDraftContract(`http://127.0.0.1:${port}`);
+  await verifyDraftBudgetResume(`http://127.0.0.1:${port}`, () => fakeModelServer.getChatCompletionRequests(), () => fakeModelServer.failNextStream());
   console.log("Mobile chat draft persistence, conflicts, lock and lifecycle contract passed");
   const character = await request("/api/characters", {
     method: "POST",

@@ -4,7 +4,7 @@ LLM front end
 
 Local-first AI character chat workspace with web, desktop, and Android builds.
 
-Development checkpoint: protected chat-draft persistence is being implemented. Desktop and mobile now expose versioned draft read/save APIs with metadata-only ordered image references, original 24-hour expiry, and lock protection. Composer UI, browser-text migration, and reliable send/queue handoff are not connected yet; do not rely on complete image-draft recovery in the current UI. See [implementation progress](docs/chat-drafts-implementation.md).
+Chat drafts now save raw text and ordered image references per chat in the protected local backend. The composer displays saving, saved, failed/retry, conflicts, and unavailable images. Switching chats or reloading does not discard saved drafts; recovery never sends automatically. Images expire 24 hours after upload (reads do not renew them), while text and unavailable placeholders remain until explicitly cleared. Browser text is migrated only after unlock and a successful save; conflicting versions require your choice. Drafts and pending-send snapshots are device-local: they are excluded from backups, recovery points, archives, and LAN sync, and replace imports remove them with replaced chats. Queue scheduling remains session-only; pending snapshots can be manually restored after restarting. Final lifecycle verification remains in progress; see [implementation checkpoints](docs/chat-drafts-implementation.md).
 
 Current scope:
 
@@ -29,7 +29,7 @@ Current scope:
 - Archive completed chats to remove them from active history without deleting messages or memories, then restore them individually or in batches from History management mode.
 - Organize long-running story lines with lightweight chat folders. Filter any History scope by folder, create or clear a folder from a chat action menu, rename or clear an entire folder from its filter control, and keep folder metadata in backups, LAN sync, branches, and JSON chat archives.
 - Move unwanted chats to Trash without losing messages or long-term memories, restore them later, or permanently delete them through a separate confirmation. Trash state is retained in backups and LAN sync.
-- Queue messages while a reply is generating, then edit, delete, or send them immediately; queued items are combined and sent automatically after the current response and remain session-only.
+- Queue messages while a reply is generating, then edit, delete, or send them immediately; each queued snapshot is sent in order after successful replies. Scheduling remains session-only, with manual recovery of unsent snapshots after reload/restart.
 - Persistent message bookmarks with a chat-local list that jumps to saved turns across paginated conversations; bookmarks never affect model context.
 - Export or import an individual structured chat archive with its bound character, messages, current long-term memories, immutable memory/operation history, and chat-profile history; imports always create a separate chat.
 - Preview, copy, or download readable chat transcripts as Markdown or plain text, with optional per-message timestamps; structured JSON archives remain available for complete restoration.

@@ -48,6 +48,7 @@ export const createMobileStorageHealth = ({ store, dataDir, validateStoredImage 
   const issue = (code, severity, category, message, extra = {}) => ({ code, severity, category, message, ...extra });
 
   const summary = async () => {
+    const localDrafts = store.select("SELECT COUNT(*) AS count, COALESCE(SUM(length(CAST(json_extract(data, '$.content') AS BLOB)) + length(CAST(json_extract(data, '$.attachments') AS BLOB))), 0) AS bytes FROM records WHERE type IN ('chatDraft', 'draftHandoff')")[0];
     const characters = records("character"); const chats = records("chat"); const messages = records("message"); const memories = records("memory");
     const revisions = records("memoryRevision"); const operations = records("memoryOperation"); const profiles = records("profileSummaryRevision");
     const assets = records("mediaAsset"); const attachments = records("messageAttachment"); const recovery = records("recoveryPoint"); const recoveryRefs = records("recoveryPointMediaAsset");
@@ -71,6 +72,7 @@ export const createMobileStorageHealth = ({ store, dataDir, validateStoredImage 
       { id: "media", label: "Chat image media", count: assets.length, bytes: sum(assets.map((entry) => entry.byteSize ?? 0)), measurement: "exact", reclaimableBytes: sum(orphans.map((entry) => entry.byteSize ?? 0)) },
       { id: "media_sent", label: "Sent image references", count: attachments.filter((entry) => entry.messageId).length, bytes: null, measurement: "unavailable", reclaimableBytes: null },
       { id: "media_drafts", label: "Draft image references", count: attachments.filter((entry) => entry.draftId && !entry.messageId).length, bytes: null, measurement: "unavailable", reclaimableBytes: null },
+      { id: "chat_drafts", label: "Local drafts and send receipts", count: Number(localDrafts.count), bytes: Number(localDrafts.bytes), measurement: "estimated", reclaimableBytes: null },
       { id: "media_recovery_refs", label: "Recovery-point media references", count: recoveryRefs.length, bytes: null, measurement: "unavailable", reclaimableBytes: null },
       { id: "media_orphans", label: "Unreferenced media assets", count: orphans.length, bytes: sum(orphans.map((entry) => entry.byteSize ?? 0)), measurement: "exact", reclaimableBytes: sum(orphans.map((entry) => entry.byteSize ?? 0)) },
       { id: "character_images", label: "Local character images", count: null, bytes: characterImageBytes, measurement: "estimated", reclaimableBytes: null },

@@ -1692,15 +1692,14 @@ test("messages queued during generation can be managed and send after the reply"
       .click();
     await page.getByRole("dialog", { name: /恢复到输入框|Restore to composer/ }).getByRole("button", { name: /^(确认|Confirm)$/ }).click();
     await expect(composer).toHaveValue(queuedMessage);
+    // The current reply finishes while the queue snapshot is still being saved.
+    await page.route(`**/api/chats/${chatId}/draft/handoffs`, async (route) => {
+      if (route.request().method() === "POST") {
+        await page.evaluate(() => (window as unknown as { __finishQueueTestGeneration: () => void }).__finishQueueTestGeneration());
+      }
+      await route.continue();
+    });
     await page.locator('#chat-primary-action[data-chat-action="queue"]').click();
-
-    await page.evaluate(() =>
-      (
-        window as unknown as {
-          __finishQueueTestGeneration: () => void;
-        }
-      ).__finishQueueTestGeneration()
-    );
     await expect
       .poll(() =>
         page.evaluate(

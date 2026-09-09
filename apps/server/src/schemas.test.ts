@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import { parseBody } from "./lib/http.js";
 import {
   backupImportSchema,
+  backupMessageSchema,
+  messageCreateSchema,
   chatAgentDraftSchema,
   chatBatchArchiveSchema,
   chatBatchFolderSchema,
@@ -28,6 +30,19 @@ import {
   storageCleanupPlanRequestSchema,
   voiceTranscriptionSchema
 } from "./schemas.js";
+
+describe("message handoff schema boundaries", () => {
+  it("validates live handoffs but excludes device-local identities from backups", () => {
+    const handoffId = "00000000-0000-4000-8000-000000000001";
+    const input = { chatId: "controlled-chat", role: "user", content: "Controlled fixture", handoffId };
+    assert.equal(messageCreateSchema.parse(input).handoffId, handoffId);
+    assert.equal(messageCreateSchema.safeParse({ ...input, role: "assistant" }).success, false);
+    assert.equal(messageCreateSchema.safeParse({ ...input, draftId: "draft_controlled" }).success, false);
+    const backup = backupMessageSchema.parse({ ...input, draftId: "draft_controlled", createdAt: "2026-09-09T00:00:00.000Z", updatedAt: "2026-09-09T00:00:00.000Z" });
+    assert.equal(Object.hasOwn(backup, "handoffId"), false);
+    assert.equal(Object.hasOwn(backup, "draftId"), false);
+  });
+});
 
 describe("chatAgentDraftSchema", () => {
   it("accepts known agent modes and trims optional focus", () => {

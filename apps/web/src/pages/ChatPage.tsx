@@ -479,6 +479,7 @@ export function ChatPage({
   const queuedChatIdRef = useRef<string | null>(null);
   const queuedMessagesRef = useRef<QueuedChatMessage[]>([]);
   const interruptForQueueRef = useRef(false);
+  const completedQueueRequestRef = useRef<string | null>(null);
   const resendRequestRef = useRef<{ requestId: string; messageId: string } | null>(null);
   const pendingGenerationDraftRef = useRef<{
     requestId: string;
@@ -710,7 +711,7 @@ export function ChatPage({
         }
         saveStoredActiveRequest(null);
         activeRequestRef.current = null;
-        lastGenerationPayloadRef.current = null;
+        if (request.status !== "blocked" || request.error?.code !== "budget_blocked") lastGenerationPayloadRef.current = null;
         setActiveRequestId(null);
         setGenerationChatId(null);
         setLoading(false);
@@ -787,6 +788,7 @@ export function ChatPage({
         }
         const shouldDispatchQueue =
           msg.type === "generation_done" || interruptForQueueRef.current;
+        completedQueueRequestRef.current = shouldDispatchQueue ? msg.requestId : null;
         interruptForQueueRef.current = false;
         setActiveRequestId(null);
         setGenerationChatId(null);
@@ -3019,9 +3021,18 @@ export function ChatPage({
       return;
     }
 
+    const queuedDuringRequest = activeRequestRef.current?.requestId;
     try {
       const message = await composer.createHandoff("queue");
-      if (queuedChatIdRef.current === message.chatId) replaceQueuedMessages([...queuedMessagesRef.current, message]);
+      if (queuedChatIdRef.current === message.chatId) {
+        replaceQueuedMessages([...queuedMessagesRef.current, message]);
+        // A reply may finish while the durable queue handoff is being saved.
+        // Only continue the explicit session queue after that successful reply,
+        // never after an error, a plain stop, or restoring a pending snapshot.
+        if (queuedDuringRequest && !activeRequestRef.current && completedQueueRequestRef.current === queuedDuringRequest) {
+          onMessageHandlersRef.current.dispatchQueuedMessages();
+        }
+      }
       setStatus(t("chat.messageQueued"));
     } catch (caught) { setError(caught instanceof Error ? caught.message : t("chat.failedSend")); }
     requestAnimationFrame(() => {
@@ -4848,6 +4859,7 @@ export function ChatPage({
                             : composer.state === "conflict" ? (language === "zh-CN" ? "草稿发生冲突，当前编辑仍保留。" : "Draft conflict. Your edits are still here.")
                             : (language === "zh-CN" ? "保存失败，当前编辑仍保留。" : "Save failed. Your edits are still here.")}</span>
                           {composer.state === "error" ? <button type="button" className="underline" onClick={() => void composer.retry().catch(() => {})}>{language === "zh-CN" ? "重试保存" : "Retry save"}</button> : null}
+                          {composer.state === "legacy" ? <details className="w-full" data-testid="legacy-draft-preview"><summary className="cursor-pointer underline">{language === "zh-CN" ? "查看旧浏览器文字（当前版本在输入框中）" : "View legacy text (current version is in the composer)"}</summary><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded border border-white/10 p-2">{composer.legacy}</pre></details> : null}
                           {composer.state === "conflict" || composer.state === "legacy" ? <>
                             <button type="button" className="underline" onClick={() => setDraftConfirm({ title: language === "zh-CN" ? "重新加载草稿？" : "Reload draft?", body: language === "zh-CN" ? "使用后端草稿，放弃当前未保存修改及已选择放弃的旧浏览器草稿。" : "Use the backend draft and discard the current unsaved or legacy edit.", run: () => composer.resolve("reload") })}>{language === "zh-CN" ? "重新加载" : "Reload draft"}</button>
                             <button type="button" className="underline" onClick={() => setDraftConfirm({ title: language === "zh-CN" ? "保留当前版本？" : "Keep this version?", body: language === "zh-CN" ? "再次读取最新版本后，使用当前输入框内容替换后端草稿。" : "Read the latest version, then replace the backend draft with your current edits.", run: () => composer.resolve("keep") })}>{language === "zh-CN" ? "保留当前版本" : "Keep my version"}</button>
@@ -4865,7 +4877,7 @@ export function ChatPage({
                           {!visionNoticeAcknowledged ? <div className="mb-2 flex items-start justify-between gap-2 rounded bg-amber-500/10 p-2 text-xs text-amber-100"><span>{language === "zh-CN" ? "发送时，这些图片会传给你配置的第三方模型供应商。" : "When sent, these images will be shared with your configured third-party model provider."}</span><button className="shrink-0 font-semibold underline" type="button" onClick={() => { setVisionNoticeAcknowledged(true); try { localStorage.setItem("star-companion:vision-privacy-notice", "acknowledged"); } catch {} }}>{language === "zh-CN" ? "知道了" : "Got it"}</button></div> : null}
                           <div className="flex max-w-full gap-2 overflow-x-auto pb-1">
                             {draftAttachments.map((attachment, index) => <div key={attachment.id} className="relative w-24 shrink-0 rounded border border-white/10 bg-ink-950 p-1" data-image-status={attachment.status}>
-                              {attachment.status === "ready" ? <img className="h-16 w-full rounded object-cover" alt={`${language === "zh-CN" ? "待发送图片" : "Pending image"} ${index + 1}`} src={resolveApiUrl(attachment.url)} /> : <div className="grid h-16 place-items-center rounded text-xs text-amber-300">{attachment.status === "expired" ? (language === "zh-CN" ? "图片已过期" : "Image expired") : (language === "zh-CN" ? "图片不可用" : "Image unavailable")}</div>}
+                              {attachment.status === "ready" ? <img className="h-16 w-full rounded object-cover" alt={`${language === "zh-CN" ? "待发送图片" : "Pending image"} ${index + 1}`} src={resolveApiUrl(attachment.url)} onError={() => composer.markImageUnavailable(attachment.id)} /> : <div className="grid h-16 place-items-center rounded text-xs text-amber-300">{attachment.status === "expired" ? (language === "zh-CN" ? "图片已过期" : "Image expired") : (language === "zh-CN" ? "图片不可用" : "Image unavailable")}</div>}
                               <span className="mt-1 block truncate text-[10px] text-slate-400" title={new Date(attachment.expiresAt).toLocaleString()}>{language === "zh-CN" ? "上传后 24 小时过期" : "Expires after 24 hours"}</span>
                               <div className="flex justify-between"><button className="min-h-7 min-w-7" type="button" disabled={composer.disabled || index === 0} aria-label={language === "zh-CN" ? "图片前移" : "Move image earlier"} onClick={() => void moveChatImage(index, -1)}><ChevronLeft size={13} /></button><button className="min-h-7 min-w-7 text-rose-300" type="button" disabled={composer.disabled} aria-label={language === "zh-CN" ? "移除图片" : "Remove image"} onClick={() => void removeChatImage(attachment)}><X size={13} /></button><button className="min-h-7 min-w-7" type="button" disabled={composer.disabled || index === draftAttachments.length - 1} aria-label={language === "zh-CN" ? "图片后移" : "Move image later"} onClick={() => void moveChatImage(index, 1)}><ChevronRight size={13} /></button></div>
                             </div>)}

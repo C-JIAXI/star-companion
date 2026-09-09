@@ -50,6 +50,7 @@ export function StorageHealthPanel({ language }: { language: AppLanguage }) {
     vacuum_database: zh ? "压缩数据库（独立操作）" : "Compact database (separate operation)"
   };
   const categoryZh: Record<string, string> = {
+    chat_drafts: "本机草稿与发送回执",
     database: "SQLite 数据库", core: "角色、聊天与消息", memory_current: "当前长期记忆", memory_revisions: "记忆版本", memory_operations: "记忆操作", profile_revisions: "画像摘要版本",
     media: "聊天图片媒体", media_sent: "已发送图片引用", media_drafts: "草稿图片引用", media_recovery_refs: "恢复点媒体引用", media_orphans: "无引用媒体", character_images: "本地角色图片", persona_images: "本地用户头像", background_images: "本地聊天背景",
     embeddings: "记忆向量与索引", recovery_points: "本地恢复点", upgrade_recovery: "升级恢复副本", trash: "聊天回收站与记忆墓碑", usage: "模型请求与用量账本", temp_cache: "应用临时文件与缓存", other_private_files: "其他应用私有文件"

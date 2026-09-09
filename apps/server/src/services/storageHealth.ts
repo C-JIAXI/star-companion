@@ -215,6 +215,8 @@ const fastIssues = async (): Promise<StorageHealthIssueDTO[]> => {
 };
 
 export const getStorageHealthSnapshot = async (): Promise<StorageHealthSnapshotDTO> => {
+  // Aggregate in SQLite; diagnostics must never materialize or expose draft text.
+  const localDrafts = await prisma.$queryRaw<Array<{ count: bigint | number; bytes: bigint | number }>>`SELECT COUNT(*) AS count, COALESCE(SUM(length(CAST(content AS BLOB)) + length(CAST(attachments AS BLOB))), 0) AS bytes FROM (SELECT content, attachments FROM ChatDraft UNION ALL SELECT content, attachments FROM DraftHandoff)`;
   const [characters, chats, messages, memories, revisions, operations, profiles, assets, sentAttachments, draftAttachments, recoveryRefs, recoveryPoints, requests, attempts, db, disk, upgrade, temp, cache, otherFiles] = await Promise.all([
     prisma.character.findMany(),
     prisma.chat.findMany(),
@@ -252,6 +254,7 @@ export const getStorageHealthSnapshot = async (): Promise<StorageHealthSnapshotD
     category("media", "Chat image media", assets.length, mediaBytes, "exact", sum(orphanAssets.map((item) => item.byteSize))),
     category("media_sent", "Sent image references", sentAttachments, null, "unavailable"),
     category("media_drafts", "Draft image references", draftAttachments, null, "unavailable"),
+    category("chat_drafts", "Local drafts and send receipts", Number(localDrafts[0]?.count ?? 0), Number(localDrafts[0]?.bytes ?? 0), "estimated"),
     category("media_recovery_refs", "Recovery-point media references", recoveryRefs, null, "unavailable"),
     category("media_orphans", "Unreferenced media assets", orphanAssets.length, sum(orphanAssets.map((item) => item.byteSize)), "exact", sum(orphanAssets.map((item) => item.byteSize))),
     category("character_images", "Local character images", null, characterImageBytes, "estimated"),

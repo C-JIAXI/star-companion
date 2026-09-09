@@ -543,16 +543,23 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
 
   const request = parsed.data;
   const abortController = new AbortController();
+  let resumeBlockedHandoff = false;
   if (request.handoffId) {
     try {
       const receipt = await getDraftHandoff(request.chatId, request.handoffId);
       if (receipt.committedAt) {
         const message = receipt.messageId ? await prisma.message.findUnique({ where: { id: receipt.messageId }, include: messageIncludeAttachments }) : null;
+        const original = request.overrideHardBudget ? await getModelRequest(request.handoffId) : null;
+        const latest = original?.status === "blocked" && !original.outputStarted
+          ? await prisma.message.findFirst({ where: { chatId: request.chatId }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { id: true } }) : null;
+        resumeBlockedHandoff = !!message && original?.chatId === request.chatId && original.errorCode === "budget_blocked" && latest?.id === message.id;
+        if (!resumeBlockedHandoff) {
         if (message) sendJson(socket, { type: "user_message", requestId: request.requestId, message: serializeMessage(message) });
         const status = await getModelRequest(request.requestId);
         if (status) sendJson(socket, { type: "generation_status", request: serializeModelRequest(status) });
         else sendJson(socket, { type: "generation_done", requestId: request.requestId });
         return;
+        }
       }
     } catch {
       sendJson(socket, { type: "error", requestId: request.requestId, error: "Pending draft unavailable. Reload the chat before sending." });
@@ -584,7 +591,7 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
       message: serializeMessage(userMessage)
     });
 
-    if (consumed?.replayed) {
+    if (consumed?.replayed && !resumeBlockedHandoff) {
       await completeModelRequest(request.requestId);
       sendJson(socket, { type: "generation_done", requestId: request.requestId });
       return;
