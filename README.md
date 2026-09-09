@@ -138,7 +138,7 @@ After a credentialed build, verify the APK with Android SDK `apksigner verify --
 
 Before either desktop SQLite or mobile WASM SQLite applies a new schema, it checks database integrity and migration checksums, rejects data created by a newer unsupported app/schema, records prior app/schema versions, and creates a bounded full-database safety copy when an existing database needs migration. Migrations run in a transaction and schema state is published only after success. A failure preserves the original database and the `upgrade-recovery` copy instead of starting on a half-migrated schema.
 
-Release automation is split from ordinary CI. Pull requests never receive signing secrets. The release workflow only builds signed artifacts from an explicit tag/manual dispatch and does not create or publish a GitHub Release. Useful local gates are:
+Release automation is split from ordinary CI. Pull requests never receive signing secrets. The release workflow builds signed artifacts on manual dispatch, or on tags when the repository variable `STAR_COMPANION_SIGNED_RELEASES=true` explicitly enables it; it does not create or publish a GitHub Release. Signing preflight remains mandatory for those jobs. Without credentials, Windows unsigned installers and Android debug-key APKs may only be published as clearly labeled test prereleases, without stable updater metadata. Android debug keys may differ from previous installs: export a backup first, and never uninstall an existing installation without a verified backup. SQL migrations are checked out with LF line endings so their committed checksums remain identical on Windows and Linux. Useful local gates are:
 
 ```bash
 npm run test:release-tools

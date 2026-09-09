@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { readMigrationCatalog } from "../release/version-core.mjs";
 
 if (process.platform !== "win32") {
   console.log("Packaged desktop smoke is only applicable to Windows.");
@@ -11,6 +12,7 @@ if (process.platform !== "win32") {
 }
 
 const root = process.cwd();
+const migrations = await readMigrationCatalog(path.join(root, "apps/server/prisma/migrations"));
 const executable = path.join(root, "dist", "desktop", "win-unpacked", "Star Companion.exe");
 await stat(executable);
 const temporary = await mkdtemp(path.join(os.tmpdir(), "star-companion-packaged-smoke-"));
@@ -46,7 +48,10 @@ try {
   const db = new DatabaseSync(databasePath, { readOnly: true });
   try {
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='RecoveryPoint'").get().count, 1);
-    assert.equal(db.prepare("SELECT schema_version FROM _star_companion_meta WHERE id=1").get().schema_version, "20260810000300_add_recovery_points");
+    assert.equal(db.prepare("SELECT schema_version FROM _star_companion_meta WHERE id=1").get().schema_version, migrations.at(-1).name);
+    for (const table of ["ChatDraft", "DraftHandoff"]) {
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name=?").get(table).count, 1);
+    }
   } finally {
     db.close();
   }

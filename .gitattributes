@@ -1,0 +1,3 @@
+# Migration checksums must be identical on Windows, Linux and packaged builds.
+# Keep the committed SQL bytes (LF); never regenerate checksums for CRLF copies.
+*.sql text eol=lf

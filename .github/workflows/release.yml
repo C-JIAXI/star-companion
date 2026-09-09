@@ -9,6 +9,7 @@ on:
 jobs:
   windows-desktop:
     name: Build signed Windows desktop artifacts
+    if: github.event_name == 'workflow_dispatch' || vars.STAR_COMPANION_SIGNED_RELEASES == 'true'
     runs-on: windows-latest
     environment: release
     permissions:
@@ -54,6 +55,7 @@ jobs:
 
   android:
     name: Build signed Android release artifacts
+    if: github.event_name == 'workflow_dispatch' || vars.STAR_COMPANION_SIGNED_RELEASES == 'true'
     runs-on: ubuntu-latest
     environment: release
     permissions:

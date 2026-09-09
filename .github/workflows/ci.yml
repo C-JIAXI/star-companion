@@ -25,6 +25,9 @@ jobs:
       - run: npm run test:server
       - run: npm run test:api
       - run: npm run mobile-backend:smoke
+      - name: Install Playwright Chromium
+        working-directory: apps/web
+        run: npx playwright install chromium
       - run: npm run test:e2e
       - run: npm run test:release-tools
 
