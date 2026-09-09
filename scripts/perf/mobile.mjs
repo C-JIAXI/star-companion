@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { PNG } from "pngjs";
 import { Agent } from "undici";
 import { PERF_DATASET_PROFILES, perfMarkerName } from "./dataset.mjs";
+import { MOBILE_MIGRATIONS } from "../../apps/mobile-backend/src/migration-safety.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const npmCli = process.env.npm_execpath;
@@ -254,7 +255,7 @@ try {
   const report = {
     kind: "mobile", profileName, seed: 20260831,
     appVersion: JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version,
-    schemaVersion: "005_message_search",
+    schemaVersion: MOBILE_MIGRATIONS.at(-1).name,
     environment: { platform: process.platform, arch: process.arch, node: process.version, cpu: os.cpus()[0]?.model ?? "unknown", logicalCpus: os.cpus().length },
     run: { temperature: "warm", samples, includeBulk, generatedAt: new Date().toISOString(), seedDurationMs },
     dataset: { characters: profile.characters, chats: profile.chats, messages: profile.messages, longChatMessages: profile.longChatMessages, memories: profile.memories, mediaAssets: profile.mediaAssets, attachments: profile.attachments },

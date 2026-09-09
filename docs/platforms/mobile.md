@@ -6,6 +6,8 @@ or LAN backend is only a development fallback, not the product direction.
 
 ## Current state
 
+Chat-draft persistence is an in-progress backend checkpoint. Mobile migration `006_chat_drafts` uses the existing SQLite record store; GET/PUT `/api/chats/:id/draft` matches desktop CAS/version and lock semantics. Saves contain raw text and metadata-only ordered image references, never image bytes in browser storage. Disk writes use a temporary sibling plus rename and recover after failed writes. Draft images retain the original 24-hour lifetime, and drafts are excluded from backups/sync. The current composer and reliable send/queue handoff are not yet integrated; see [the implementation checklist](../chat-drafts-implementation.md).
+
 This repository now has a Capacitor Android project and scripts that can package
 the Vite web app into an Android shell.
 

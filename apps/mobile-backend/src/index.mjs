@@ -2607,6 +2607,8 @@ const importChatArchive = async ({ archive, title }) => {
 
 const app = express();
 let privacyPasscodeDigest = null;
+let draftPrivacyEpoch = 0;
+store.draftPrivacyState = () => ({ locked: privacyPasscodeDigest !== null, epoch: draftPrivacyEpoch });
 let closeMobileSocketsForPrivacy = () => undefined;
 const privacyDigest = (passcode) => createHash("sha256").update(passcode, "utf8").digest();
 app.use(cors({ origin: true, credentials: true }));
@@ -2636,6 +2638,7 @@ app.post("/api/privacy/lock", (request, response) => {
   const passcode = typeof request.body?.passcode === "string" ? request.body.passcode : "";
   if (passcode.length < 4 || passcode.length > 128) return response.status(400).json({ ok: false, error: "Unlock code must contain 4 to 128 characters." });
   privacyPasscodeDigest = privacyDigest(passcode);
+  draftPrivacyEpoch += 1;
   mobileThumbnailCache.clear();
   closeMobileSocketsForPrivacy();
   storageHealth.cancelActive();
@@ -3384,6 +3387,36 @@ app.get("/api/chats/:id/summary", (request, response) => {
   response.json({ ok: true, data: serializeChat(chat, store.countMessages(chat.id)) });
 });
 
+app.get("/api/chats/:id/draft", (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: store.getChatDraft(requireParam(request, "id")) });
+});
+app.put("/api/chats/:id/draft", asyncHandler(async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: await store.saveChatDraft(requireParam(request, "id"), request.body) });
+}));
+
+app.get("/api/chats/:id/draft/handoffs", (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: store.listDraftHandoffs(requireParam(request, "id")) });
+});
+app.post("/api/chats/:id/draft/handoffs", asyncHandler(async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: await store.createDraftHandoff(requireParam(request, "id"), request.body) });
+}));
+app.get("/api/chats/:id/draft/handoffs/:handoffId", (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: store.getDraftHandoff(requireParam(request, "id"), requireParam(request, "handoffId")) });
+});
+app.post("/api/chats/:id/draft/handoffs/:handoffId/restore", asyncHandler(async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: await store.restoreDraftHandoff(requireParam(request, "id"), requireParam(request, "handoffId"), request.body) });
+}));
+app.delete("/api/chats/:id/draft/handoffs/:handoffId", asyncHandler(async (request, response) => {
+  await store.discardDraftHandoff(requireParam(request, "id"), requireParam(request, "handoffId"));
+  response.status(204).send();
+}));
+
 app.get("/api/chats/:id", (request, response) => {
   const chat = getActiveChat(requireParam(request, "id"));
   if (!chat) throw notFound("Chat not found");
@@ -3565,7 +3598,12 @@ app.post(
   asyncHandler(async (request, response) => {
     const body = parseBody(messageCreateSchema, request.body);
     if (!getActiveChat(body.chatId)) throw notFound("Chat not found");
-    const { draftId, ...messageBody } = body;
+    const { draftId, handoffId, ...messageBody } = body;
+    if (handoffId) {
+      const result = await store.consumeDraftHandoff(body.chatId, handoffId);
+      response.status(201).json({ ok: true, data: serializeMessage(result.message) });
+      return;
+    }
     const message = draftId ? await store.createMessageWithDraft(messageBody, draftId) : await store.createMessage(messageBody);
     response.status(201).json({ ok: true, data: serializeMessage(message) });
   })
@@ -3678,6 +3716,7 @@ app.delete("/api/media/chat-images/drafts/:draftId", asyncHandler(async (request
 
 app.get("/api/media/chat-images/:assetId/thumbnail", (request, response) => {
   const assetId = requireParam(request, "assetId");
+  if (!store.hasMediaAssetReference(assetId)) throw notFound("Image not found");
   let thumbnail = mobileThumbnailCache.get(assetId);
   if (!thumbnail) {
     const asset = store.getMediaAsset(assetId);
@@ -4322,7 +4361,8 @@ app.use((error, _request, response, _next) => {
   const status = Number.isInteger(error?.status) ? error.status : 500;
   response.status(status).json({
     ok: false,
-    error: status < 500 && error instanceof Error ? error.message : "Internal server error"
+    error: status < 500 && error instanceof Error ? error.message : "Internal server error",
+    ...(["draft_conflict", "draft_managed", "draft_attachment_unavailable", "draft_already_sent", "chat_in_trash"].includes(error?.details?.code) ? { details: { code: error.details.code } } : {})
   });
 });
 
@@ -4657,6 +4697,22 @@ const handleGenerate = async (socket, raw) => {
   }
   const request = parsed.data;
   const abortController = new AbortController();
+  if (request.handoffId) {
+    try {
+      const receipt = store.getDraftHandoff(request.chatId, request.handoffId);
+      if (receipt.committedAt) {
+        const message = receipt.messageId ? store.getMessage(receipt.messageId) : null;
+        if (message) sendJson(socket, { type: "user_message", requestId: request.requestId, message: serializeMessage(message) });
+        const status = store.getModelRequest(request.requestId);
+        if (status) sendJson(socket, { type: "generation_status", request: { ...status, requestId: status.id } });
+        else sendJson(socket, { type: "generation_done", requestId: request.requestId });
+        return;
+      }
+    } catch {
+      sendJson(socket, { type: "error", requestId: request.requestId, error: "Pending draft unavailable. Reload the chat before sending." });
+      return;
+    }
+  }
   if (!await claimMobileRequest(socket, { requestId: request.requestId, operation: "generate", chatId: request.chatId, overrideHardBudget: request.overrideHardBudget })) return;
   controllers.set(request.requestId, abortController);
 
@@ -4664,7 +4720,8 @@ const handleGenerate = async (socket, raw) => {
     const chat = getActiveChat(request.chatId);
     if (!chat) throw notFound("Chat not found");
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
-    const userMessage = await store.createMessageWithDraft({
+    const consumed = request.handoffId ? await store.consumeDraftHandoff(request.chatId, request.handoffId) : null;
+    const userMessage = consumed?.message ?? await store.createMessageWithDraft({
       chatId: request.chatId,
       role: "user",
       content: request.content,
@@ -4676,6 +4733,11 @@ const handleGenerate = async (socket, raw) => {
       requestId: request.requestId,
       message: serializeMessage(userMessage)
     });
+    if (consumed?.replayed) {
+      await store.updateModelRequest(request.requestId, { status: "succeeded", completedAt: new Date().toISOString() });
+      sendJson(socket, { type: "generation_done", requestId: request.requestId });
+      return;
+    }
     const result = await createAssistantReply({
       socket,
       requestId: request.requestId,

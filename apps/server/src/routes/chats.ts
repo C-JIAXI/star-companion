@@ -26,6 +26,8 @@ import {
 } from "../schemas.js";
 import { serializeChat, serializeChatMemory, serializeMessage } from "../serializers.js";
 import { createChatAgentDraft } from "../services/chatAgent.js";
+import { getChatDraft, saveChatDraft } from "../services/chatDrafts.js";
+import { createDraftHandoff, discardDraftHandoff, getDraftHandoff, listDraftHandoffs, restoreDraftHandoff } from "../services/draftHandoffs.js";
 import { listChatPage } from "../services/chatPaging.js";
 import { createChatOpeningMessage } from "../services/chatOpening.js";
 import { deleteUnreferencedAssets, messageIncludeAttachments } from "../services/messageAttachments.js";
@@ -62,6 +64,37 @@ import {
 } from "../services/memoryEmbeddingJobs.js";
 
 export const chatsRouter = Router();
+
+chatsRouter.get("/:id/draft/handoffs", asyncHandler(async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: await listDraftHandoffs(requireParam(request, "id")) });
+}));
+chatsRouter.post("/:id/draft/handoffs", asyncHandler(async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: await createDraftHandoff(requireParam(request, "id"), request.body) });
+}));
+chatsRouter.get("/:id/draft/handoffs/:handoffId", asyncHandler(async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: await getDraftHandoff(requireParam(request, "id"), requireParam(request, "handoffId")) });
+}));
+chatsRouter.post("/:id/draft/handoffs/:handoffId/restore", asyncHandler(async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: await restoreDraftHandoff(requireParam(request, "id"), requireParam(request, "handoffId"), request.body) });
+}));
+chatsRouter.delete("/:id/draft/handoffs/:handoffId", asyncHandler(async (request, response) => {
+  await discardDraftHandoff(requireParam(request, "id"), requireParam(request, "handoffId"));
+  response.status(204).send();
+}));
+
+chatsRouter.get("/:id/draft", asyncHandler(async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: await getChatDraft(requireParam(request, "id")) });
+}));
+
+chatsRouter.put("/:id/draft", asyncHandler(async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: await saveChatDraft(requireParam(request, "id"), request.body) });
+}));
 
 chatsRouter.get("/page", asyncHandler(async (request, response) => {
   response.json({ ok: true, data: await listChatPage(parseQuery(chatPageQuerySchema, request.query)) });

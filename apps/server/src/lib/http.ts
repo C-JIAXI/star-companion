@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { Prisma } from "@prisma/client";
 import { ZodError, type ZodType } from "zod";
 import { ModelCallError } from "../services/modelErrors.js";
+import { DraftOwnershipError } from "../services/draftOwnership.js";
 
 export class HttpError extends Error {
   constructor(
@@ -61,7 +62,7 @@ export const errorMiddleware = (
   response: Response,
   _next: NextFunction
 ) => {
-  if (error instanceof HttpError) {
+  if (error instanceof HttpError || error instanceof DraftOwnershipError) {
     response.status(error.status).json({
       ok: false,
       error: error.message,

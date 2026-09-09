@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { verifyChatDraftContract } from "../testing/chat-draft-contract.mjs";
 import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -305,6 +306,12 @@ await new Promise((resolve, reject) => {
   );
 });
 
+await new Promise((resolve, reject) => {
+  const draftTests = spawn(process.execPath, ["--test", "scripts/mobile/chat-drafts.test.mjs"], { cwd: rootDir, stdio: "inherit" });
+  draftTests.on("error", reject);
+  draftTests.on("exit", (code) => code === 0 ? resolve() : reject(new Error(`mobile draft persistence tests failed: ${code}`)));
+});
+
 const fakeModelServer = await createFakeModelServer();
 
 const child = spawn("node", ["apps/mobile-backend/src/index.mjs"], {
@@ -329,7 +336,7 @@ try {
   const appInfo = await request("/api/app/info");
   assert.match(appInfo.appVersion, /^\d+\.\d+\.\d+/);
   assert.equal(appInfo.platform, "android");
-  assert.equal(appInfo.schemaVersion, "005_message_search");
+  assert.equal(appInfo.schemaVersion, "006_chat_drafts");
   assert.equal(appInfo.migration.status, "ready");
   assert.equal("apiKey" in appInfo, false);
 
@@ -488,6 +495,8 @@ try {
   assert.equal(fakeModelServer.getLastChatCompletionBody().model, "fake-mobile-model-2");
   assert.equal(fakeModelServer.getLastChatCompletionBody().stream, false);
 
+  await verifyChatDraftContract(`http://127.0.0.1:${port}`);
+  console.log("Mobile chat draft persistence, conflicts, lock and lifecycle contract passed");
   const character = await request("/api/characters", {
     method: "POST",
     body: {

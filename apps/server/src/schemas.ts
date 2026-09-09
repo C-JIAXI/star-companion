@@ -16,6 +16,21 @@ export const imageAttachmentReorderSchema = z.object({
 });
 export const imageAttachmentEditDraftSchema = z.object({ draftId: attachmentDraftIdSchema });
 
+export const chatDraftSaveSchema = z.object({
+  expectedVersion: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER - 1),
+  mutationId: z.string().regex(/^[a-zA-Z0-9_-]{12,100}$/),
+  content: z.string().max(200_000),
+  attachmentIds: z.array(z.string().min(1).max(128)).max(4)
+    .refine((ids) => new Set(ids).size === ids.length, "Image references must be unique.")
+}).strict();
+
+export const draftHandoffCreateSchema = z.object({
+  id: z.string().uuid(), expectedVersion: z.number().int().min(1), purpose: z.enum(["send", "queue"])
+}).strict();
+export const draftHandoffRestoreSchema = z.object({
+  expectedVersion: z.number().int().min(0), mutationId: z.string().uuid()
+}).strict();
+
 const stringArraySchema = z.array(z.string().trim().min(1)).default([]);
 const characterTagsSchema = z
   .array(z.string().trim().min(1).max(40))
@@ -500,6 +515,7 @@ export const messageCreateSchema = z.object({
   characterId: idSchema.nullable().optional(),
   content: z.string(),
   draftId: attachmentDraftIdSchema.optional(),
+  handoffId: z.string().uuid().optional(),
   contextIncluded: z.boolean().default(true),
   isBookmarked: z.boolean().default(false),
   variants: z.array(z.string()).default([]),
@@ -510,7 +526,7 @@ export const messageCreateSchema = z.object({
   promptBreakdown: promptBreakdownSchema.nullable().optional(),
   loreMatches: z.array(loreMatchSchema).nullable().optional(),
   memoryMatches: z.array(matchedMemorySchema).nullable().optional()
-});
+}).refine((value) => !value.handoffId || (value.role === "user" && !value.draftId), "A pending draft can only create its original user message.");
 
 export const messageUpdateSchema = z
   .object({
@@ -738,8 +754,9 @@ export const generationRequestSchema = z.object({
   chatId: idSchema,
   content: z.string().max(100000),
   draftId: attachmentDraftIdSchema.optional(),
+  handoffId: z.string().uuid().optional(),
   overrideHardBudget: z.boolean().optional()
-}).refine((value) => value.content.trim().length > 0 || Boolean(value.draftId), "Text or an image attachment is required.");
+}).refine((value) => value.content.trim().length > 0 || Boolean(value.draftId) || Boolean(value.handoffId), "Text or an image attachment is required.");
 
 export const regenerateRequestSchema = z.object({
   type: z.literal("regenerate"),

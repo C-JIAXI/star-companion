@@ -34,6 +34,7 @@ import {
 import { updateUserProfileFromChat } from "../services/userProfileMemory.js";
 import { isPrivacyLocked } from "../services/privacyLock.js";
 import { attachDraftToMessage, messageIncludeAttachments } from "../services/messageAttachments.js";
+import { consumeDraftHandoff, getDraftHandoff } from "../services/draftHandoffs.js";
 
 export const GENERATION_ERROR_PREFIX = "[GENERATION_FAILED] ";
 
@@ -542,6 +543,22 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
 
   const request = parsed.data;
   const abortController = new AbortController();
+  if (request.handoffId) {
+    try {
+      const receipt = await getDraftHandoff(request.chatId, request.handoffId);
+      if (receipt.committedAt) {
+        const message = receipt.messageId ? await prisma.message.findUnique({ where: { id: receipt.messageId }, include: messageIncludeAttachments }) : null;
+        if (message) sendJson(socket, { type: "user_message", requestId: request.requestId, message: serializeMessage(message) });
+        const status = await getModelRequest(request.requestId);
+        if (status) sendJson(socket, { type: "generation_status", request: serializeModelRequest(status) });
+        else sendJson(socket, { type: "generation_done", requestId: request.requestId });
+        return;
+      }
+    } catch {
+      sendJson(socket, { type: "error", requestId: request.requestId, error: "Pending draft unavailable. Reload the chat before sending." });
+      return;
+    }
+  }
   if (!await claimGenerationRequest(socket, { requestId: request.requestId, operation: "generate", chatId: request.chatId, overrideHardBudget: request.overrideHardBudget })) return;
   if (!controllers.register(request.requestId, socket, abortController)) return;
 
@@ -553,7 +570,8 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
       throw new Error("Chat not found");
     }
 
-    const userMessage = await prisma.$transaction(async (tx) => {
+    const consumed = request.handoffId ? await consumeDraftHandoff(request.chatId, request.handoffId) : null;
+    const userMessage = consumed?.message ?? await prisma.$transaction(async (tx) => {
       const created = await tx.message.create({ data: { chatId: request.chatId, role: "user", content: request.content.trim(), variants: [], activeVariantIndex: 0 } });
       await attachDraftToMessage(tx, request.draftId, created.id);
       await tx.chat.update({ where: { id: request.chatId }, data: { updatedAt: new Date() } });
@@ -565,6 +583,12 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
       requestId: request.requestId,
       message: serializeMessage(userMessage)
     });
+
+    if (consumed?.replayed) {
+      await completeModelRequest(request.requestId);
+      sendJson(socket, { type: "generation_done", requestId: request.requestId });
+      return;
+    }
 
     const characterId = chat.characterId;
 

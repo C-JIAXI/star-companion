@@ -43,11 +43,11 @@ async function createFixture(request: APIRequestContext, suffix: string) {
   };
 }
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, context }) => {
   await page.addInitScript(() => {
     localStorage.setItem("star-companion:onboarding:v1", JSON.stringify({ dismissed: true, completed: false, lastStep: 0 }));
   });
-  await page.route("**/api/settings", async (route) => {
+  await context.route("**/api/settings", async (route) => {
     if (route.request().method() !== "GET") return route.continue();
     const now = new Date().toISOString();
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: {
@@ -59,6 +59,68 @@ test.beforeEach(async ({ page }) => {
       userProfileUpdatedAt: null, createdAt: now, updatedAt: now, hasApiKey: true
     } }) });
   });
+});
+
+test("failed autosave retains edits and retry persists the exact draft", async ({ page, request }, testInfo) => {
+  const fixture = await createFixture(request, `save-failure-${testInfo.project.name}-${Date.now()}`);
+  const chat = fixture.chats[0];
+  let failSave = true;
+  await page.route(`**/api/chats/${chat.id}/draft`, async (route) => {
+    if (failSave && route.request().method() === "PUT") await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ ok: false, error: "Controlled storage failure" }) });
+    else await route.continue();
+  });
+  try {
+    await page.goto("/"); await selectChat(page, chat.title);
+    await page.locator("#chat-message-input").fill("  Controlled retry\n ");
+    await expect(page.getByTestId("chat-draft-status")).toContainText("Save failed");
+    await expect(page.locator("#chat-message-input")).toHaveValue("  Controlled retry\n ");
+    failSave = false;
+    await page.getByRole("button", { name: "Retry save", exact: true }).click();
+    await expect(page.getByTestId("chat-draft-status")).toContainText("Saved");
+    await page.reload(); await expect(page.locator("#chat-message-input")).toHaveValue("  Controlled retry\n ");
+  } finally { await fixture.dispose(); }
+});
+
+test("stale tab preserves edits and requires explicit conflict resolution", async ({ page, context, request }, testInfo) => {
+  const fixture = await createFixture(request, `tabs-${testInfo.project.name}-${Date.now()}`);
+  const second = await context.newPage();
+  try {
+    await page.goto("/"); await selectChat(page, fixture.chats[0].title);
+    await second.goto("/"); await selectChat(second, fixture.chats[0].title);
+    await page.locator("#chat-message-input").fill("Controlled first tab");
+    await expect(page.getByTestId("chat-draft-status")).toContainText("Saved");
+    await second.locator("#chat-message-input").fill("Controlled second tab");
+    await expect(second.getByTestId("chat-draft-status")).toContainText("Draft conflict");
+    await expect(second.locator("#chat-message-input")).toHaveValue("Controlled second tab");
+    const remote = await request.get(`/api/chats/${fixture.chats[0].id}/draft`);
+    expect((await remote.json()).data.content).toBe("Controlled first tab");
+    await second.getByRole("button", { name: "Keep my version", exact: true }).click();
+    await second.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(second.getByTestId("chat-draft-status")).toContainText("Saved");
+    await second.reload(); await expect(second.locator("#chat-message-input")).toHaveValue("Controlled second tab");
+  } finally { await second.close(); await fixture.dispose(); }
+});
+
+test("legacy text migrates only after backend acknowledgement", async ({ page, request }, testInfo) => {
+  const fixture = await createFixture(request, `legacy-${testInfo.project.name}-${Date.now()}`);
+  const chat = fixture.chats[0];
+  const legacyKey = `star-companion:chat-draft:${chat.id}`;
+  await page.addInitScript(({ key }) => { if (!sessionStorage.getItem("controlled-legacy-seeded")) { localStorage.setItem(key, "  Controlled legacy\n "); sessionStorage.setItem("controlled-legacy-seeded", "yes"); } }, { key: legacyKey });
+  let failSave = true;
+  await page.route(`**/api/chats/${chat.id}/draft`, async (route) => {
+    if (route.request().method() === "PUT" && failSave) await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ ok: false, error: "Controlled migration failure" }) });
+    else await route.continue();
+  });
+  try {
+    await page.goto("/"); await selectChat(page, chat.title);
+    await expect(page.getByTestId("chat-draft-status")).toContainText("Save failed");
+    expect(await page.evaluate((key) => localStorage.getItem(key), legacyKey)).toBe("  Controlled legacy\n ");
+    failSave = false;
+    await page.getByRole("button", { name: "Retry save", exact: true }).click();
+    await expect(page.getByTestId("chat-draft-status")).toContainText("Saved");
+    expect(await page.evaluate((key) => localStorage.getItem(key), legacyKey)).toBeNull();
+    await page.reload(); await expect(page.locator("#chat-message-input")).toHaveValue("  Controlled legacy\n ");
+  } finally { await fixture.dispose(); }
 });
 
 test("complete chat drafts preserve exact text and image order across switching and reload", async ({ page, request }, testInfo) => {

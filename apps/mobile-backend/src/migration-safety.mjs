@@ -92,6 +92,13 @@ export const MOBILE_MIGRATIONS = [
       UPDATE records SET content = json_extract(data, '$.content');
       CREATE INDEX IF NOT EXISTS idx_records_message_search_order ON records(type, createdAt, id);
     `
+  },
+  {
+    name: "006_chat_drafts",
+    sql: `
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_records_composer_identity
+        ON records(draftId) WHERE type = 'chatDraft';
+    `
   }
 ];
 

@@ -1,4 +1,8 @@
 import type {
+  ChatDraftDTO,
+  ChatDraftSaveInput,
+  ChatDraftAttachmentDTO,
+  DraftHandoffDTO,
   CharacterCardDTO,
   CharacterBatchTagsRequestDTO,
   CharacterBatchTagsResultDTO,
@@ -115,6 +119,8 @@ import type {
 
 export type AppSection = "chat" | "docs" | "characters" | "settings";
 
+export type { ChatDraftDTO, ChatDraftSaveInput, ChatDraftAttachmentDTO, DraftHandoffDTO };
+
 export type ApiEnvelope<T> = {
   ok: boolean;
   data: T;
@@ -163,6 +169,7 @@ export type MessageInput = {
   characterId?: string | null;
   content: string;
   draftId?: string;
+  handoffId?: string;
   contextIncluded?: boolean;
   isBookmarked?: boolean;
   variants?: string[];

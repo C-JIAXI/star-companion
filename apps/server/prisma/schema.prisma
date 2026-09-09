@@ -118,6 +118,9 @@ model Chat {
   modelRequests ModelRequest[]
   usageAttempts ModelUsageAttempt[]
 
+  draft ChatDraft?
+  draftHandoffs DraftHandoff[]
+
   @@index([characterId])
   @@index([parentChatId])
   @@index([deletedAt, isArchived, folder, isPinned, updatedAt])
@@ -293,15 +296,57 @@ model MessageAttachment {
   sortOrder        Int
   originalFilename String?
   createdAt        DateTime @default(now())
+  /// Managed composer ownership; cascading chat deletion releases these references.
+  composerChatId   String?
+  handoffId        String?
 
   message Message?   @relation(fields: [messageId], references: [id], onDelete: Cascade)
   asset   MediaAsset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  composer ChatDraft? @relation(fields: [composerChatId], references: [chatId], onDelete: Cascade)
+  handoff DraftHandoff? @relation(fields: [handoffId], references: [id], onDelete: Cascade)
 
   @@index([messageId, sortOrder])
   @@index([draftId, sortOrder])
   @@index([assetId])
+  @@index([composerChatId])
+  @@index([handoffId])
   @@unique([messageId, sortOrder])
   @@unique([draftId, sortOrder])
+}
+
+/// Device-local unsent content. Explicitly excluded from backup, recovery and sync envelopes.
+model ChatDraft {
+  chatId         String   @id
+  draftId        String   @unique
+  version        Int      @default(0)
+  content        String   @default("")
+  /// Metadata-only manifest retains placeholders after temporary media expires.
+  attachments    Json     @default("[]")
+  lastMutationId String
+  lastMutationHash String
+  updatedAt      DateTime @updatedAt
+
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  media MessageAttachment[]
+}
+
+/// Durable unsent snapshot or content-free delivery receipt. Never exported or synced.
+model DraftHandoff {
+  id             String   @id
+  chatId         String
+  originVersion  Int
+  purpose        String
+  content        String
+  attachments    Json     @default("[]")
+  messageId      String?
+  createdAt      DateTime @default(now())
+  committedAt    DateTime?
+  disposedAt     DateTime?
+  disposition    String?
+  restoreMutationId String?
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  media MessageAttachment[]
+  @@index([chatId, createdAt])
 }
 
 /// Content-free lifecycle record used for reconnect recovery and application-level deduplication.

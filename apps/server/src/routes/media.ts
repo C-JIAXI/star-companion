@@ -93,6 +93,12 @@ mediaRouter.get(
   "/chat-images/:assetId/thumbnail",
   asyncHandler(async (request, response) => {
     const assetId = requireParam(request, "assetId");
+    // Recheck references even on a cache hit: expiry/removal must revoke access.
+    const liveReference = await prisma.messageAttachment.findFirst({ where: { assetId, OR: [
+      { messageId: { not: null } },
+      { draftId: { not: null }, createdAt: { gt: new Date(Date.now() - 24 * 60 * 60 * 1000) } }
+    ] }, select: { id: true } });
+    if (!liveReference) throw new HttpError(404, "Image not found.");
     let thumbnail = thumbnailCache.get(assetId);
     if (!thumbnail) {
       const asset = await prisma.mediaAsset.findFirst({
@@ -121,7 +127,10 @@ mediaRouter.get(
   "/chat-images/:assetId",
   asyncHandler(async (request, response) => {
     const asset = await prisma.mediaAsset.findFirst({
-      where: { id: requireParam(request, "assetId"), attachments: { some: {} } },
+      where: { id: requireParam(request, "assetId"), attachments: { some: { OR: [
+        { messageId: { not: null } },
+        { draftId: { not: null }, createdAt: { gt: new Date(Date.now() - 24 * 60 * 60 * 1000) } }
+      ] } } },
       select: { mimeType: true, data: true, contentHash: true, byteSize: true, width: true, height: true }
     });
     if (!asset) throw new HttpError(404, "Image not found.");

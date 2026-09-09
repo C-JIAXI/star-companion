@@ -4,6 +4,8 @@ import { prisma } from "../db.js";
 import { HttpError } from "../lib/http.js";
 import { ImageValidationError, MAX_MESSAGE_IMAGE_BYTES, normalizeUploadedImage as normalizeImage, type SupportedImageMime } from "./imageNormalization.js";
 import { assertStorageCapacity } from "./storageHealth.js";
+import { assertUnmanagedDraftId } from "./draftOwnership.js";
+import { getPrivacyEpoch, isPrivacyLocked } from "./privacyLock.js";
 
 export { MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, MAX_MESSAGE_IMAGE_BYTES } from "./imageNormalization.js";
 export const normalizeUploadedImage = (input: Parameters<typeof normalizeImage>[0]) => {
@@ -58,10 +60,17 @@ export const uploadDraftImage = async (input: {
   mimeType: SupportedMime;
   originalFilename?: string;
 }) => {
+  assertUnmanagedDraftId(input.draftId);
+  const epoch = getPrivacyEpoch();
+  const checkLock = () => {
+    if (isPrivacyLocked() || epoch !== getPrivacyEpoch()) throw new HttpError(423, "App is locked.");
+  };
+  checkLock();
   await assertStorageCapacity(Math.ceil(input.dataBase64.length * 0.75));
   const normalized = normalizeUploadedImage(input);
   const contentHash = createHash("sha256").update(normalized.data).digest("hex");
   return prisma.$transaction(async (tx) => {
+    checkLock();
     await cleanupExpiredDraftAttachments(tx);
     const existing = await tx.messageAttachment.findMany({ where: { draftId: input.draftId, messageId: null }, include: { asset: true }, orderBy: { sortOrder: "asc" } });
     if (existing.length >= MAX_MESSAGE_IMAGES) throw new HttpError(413, "A message can contain at most 4 images.");
@@ -77,6 +86,7 @@ export const uploadDraftImage = async (input: {
       data: { draftId: input.draftId, assetId: asset.id, sortOrder: existing.length, originalFilename: cleanFilename(input.originalFilename) },
       include: { asset: true }
     });
+    checkLock();
     return { ...serializeAttachment(attachment), draftId: input.draftId, status: "ready" as const };
   });
 };
@@ -84,6 +94,7 @@ export const uploadDraftImage = async (input: {
 export const listDraftAttachments = (draftId: string) => prisma.messageAttachment.findMany({ where: { draftId, messageId: null }, include: { asset: true }, orderBy: { sortOrder: "asc" } });
 
 export const removeDraftAttachment = async (draftId: string, attachmentId: string) => prisma.$transaction(async (tx) => {
+  assertUnmanagedDraftId(draftId);
   const attachment = await tx.messageAttachment.findFirst({ where: { id: attachmentId, draftId, messageId: null } });
   if (!attachment) throw new HttpError(404, "Draft image not found.");
   await tx.messageAttachment.delete({ where: { id: attachment.id } });
@@ -94,6 +105,7 @@ export const removeDraftAttachment = async (draftId: string, attachmentId: strin
 });
 
 export const reorderDraftAttachments = async (draftId: string, attachmentIds: string[]) => prisma.$transaction(async (tx) => {
+  assertUnmanagedDraftId(draftId);
   const current = await tx.messageAttachment.findMany({ where: { draftId, messageId: null }, include: { asset: true } });
   if (current.length !== attachmentIds.length || new Set(attachmentIds).size !== current.length || current.some((item) => !attachmentIds.includes(item.id))) {
     throw new HttpError(409, "The draft images changed. Reload them before reordering.");
@@ -105,24 +117,28 @@ export const reorderDraftAttachments = async (draftId: string, attachmentIds: st
 });
 
 export const discardDraftAttachments = async (draftId: string) => prisma.$transaction(async (tx) => {
+  assertUnmanagedDraftId(draftId);
   const removed = await tx.messageAttachment.deleteMany({ where: { draftId, messageId: null } });
   await deleteUnreferencedAssets(tx);
   return removed.count;
 });
 
 export const stageMessageAttachmentsForEdit = async (messageId: string, draftId: string) => prisma.$transaction(async (tx) => {
+  assertUnmanagedDraftId(draftId);
   const message = await tx.message.findFirst({ where: { id: messageId, chat: { deletedAt: null } }, include: messageIncludeAttachments });
   if (!message) throw new HttpError(404, "Message not found.");
   if (message.role !== "user") throw new HttpError(400, "Image attachments can only be edited on user messages.");
   await tx.messageAttachment.deleteMany({ where: { draftId, messageId: null } });
-  if (message.attachments.length) await tx.messageAttachment.createMany({ data: message.attachments.map((attachment) => ({ draftId, assetId: attachment.assetId, sortOrder: attachment.sortOrder, originalFilename: attachment.originalFilename, createdAt: attachment.createdAt })) });
+  if (message.attachments.length) await tx.messageAttachment.createMany({ data: message.attachments.map((attachment) => ({ draftId, assetId: attachment.assetId, sortOrder: attachment.sortOrder, originalFilename: attachment.originalFilename })) });
   return tx.messageAttachment.findMany({ where: { draftId, messageId: null }, include: { asset: true }, orderBy: { sortOrder: "asc" } });
 });
 
 export const attachDraftToMessage = async (tx: Prisma.TransactionClient, draftId: string | undefined, messageId: string) => {
   if (!draftId) return [];
+  assertUnmanagedDraftId(draftId);
   const attachments = await tx.messageAttachment.findMany({ where: { draftId, messageId: null }, include: { asset: true }, orderBy: { sortOrder: "asc" } });
   if (!attachments.length) throw new HttpError(409, "The selected draft images are unavailable. Add them again before sending.");
+  if (attachments.some((item) => item.createdAt.getTime() + DRAFT_MAX_AGE_MS <= Date.now())) throw new HttpError(409, "The selected draft images expired. Add them again before sending.");
   if (attachments.length > MAX_MESSAGE_IMAGES || attachments.reduce((total, item) => total + item.asset.byteSize, 0) > MAX_MESSAGE_IMAGE_BYTES) throw new HttpError(413, "The draft images exceed the message limits.");
   await tx.messageAttachment.updateMany({ where: { draftId, messageId: null }, data: { messageId, draftId: null } });
   return attachments.map((item) => ({ ...item, messageId, draftId: null }));

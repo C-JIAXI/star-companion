@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import initSqlJs from "sql.js";
@@ -6,6 +6,9 @@ import { analyzeBackupCandidate } from "../server-dist/services/backupContract.j
 import { backupImportSchema } from "../server-dist/schemas.js";
 import { generatedBuildInfo } from "../server-dist/generated/buildInfo.js";
 import { runProtectedMobileMigrations } from "./migration-safety.mjs";
+import { assertUnmanagedDraftId } from "../server-dist/services/draftOwnership.js";
+import { captureDraftPrivacyGuard, getChatDraft, saveChatDraft } from "./chat-drafts.mjs";
+import { consumeDraftHandoff, createDraftHandoff, discardDraftHandoff, getDraftHandoff, listDraftHandoffs, restoreDraftHandoff } from "./draft-handoffs.mjs";
 
 const now = () => new Date().toISOString();
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -91,23 +94,32 @@ export class MobileStore {
     await this.cleanupExpiredDraftAttachments();
   }
 
-  async persist() {
-    this.writeQueue = this.writeQueue.then(async () => {
+  async persist(guard = () => {}) {
+    // A rejected disk write must not poison every later retry. Replace the file
+    // only after all bytes were written and the caller's privacy guard still holds.
+    this.writeQueue = this.writeQueue.catch(() => {}).then(async () => {
+      guard();
       await mkdir(path.dirname(this.filePath), { recursive: true });
-      await writeFile(this.filePath, Buffer.from(this.db.export()));
+      const temporary = `${this.filePath}.pending-${randomUUID()}`;
+      try {
+        await writeFile(temporary, Buffer.from(this.db.export()), { flag: "wx" });
+        guard();
+        await rename(temporary, this.filePath);
+      } finally { await rm(temporary, { force: true }); }
     });
     await this.writeQueue;
     this.mutationVersion += 1;
   }
 
-  async atomicWrite(operation) {
+  async atomicWrite(operation, guard = () => {}) {
     const run = async () => {
+      guard();
       const before = this.db.export();
       this.db.run("BEGIN");
       try {
         const result = await operation();
         this.db.run("COMMIT");
-        await this.persist();
+        await this.persist(guard);
         return result;
       } catch (error) {
         try {
@@ -485,6 +497,15 @@ export class MobileStore {
         }
       }
       for (const id of uniqueIds) {
+        const draft = this.readRecord("chatDraft", id);
+        for (const handoff of this.readRecords("draftHandoff", "AND chatId = ?", [id])) {
+          for (const ref of this.listDraftAttachments(`draft_handoff_${handoff.id}`)) await this.deleteRecord("messageAttachment", ref.id);
+          await this.deleteRecord("draftHandoff", handoff.id);
+        }
+        if (draft) {
+          for (const attachment of this.listDraftAttachments(draft.draftId)) await this.deleteRecord("messageAttachment", attachment.id);
+          await this.deleteRecord("chatDraft", id);
+        }
         for (const message of this.listMessages(id)) for (const attachment of this.listMessageAttachments(message.id)) await this.deleteRecord("messageAttachment", attachment.id);
         await this.deleteRecord("chat", id);
         this.db.run("DELETE FROM records WHERE type IN ('message', 'memory', 'memoryRevision', 'memoryOperation', 'profileSummaryRevision') AND chatId = ?", [id]);
@@ -711,15 +732,27 @@ export class MobileStore {
     return clone(this.readRecords("messageAttachment", "AND draftId = ? AND messageId IS NULL", [draftId]).sort((a, b) => a.sortOrder - b.sortOrder));
   }
 
+  getChatDraft(chatId) { return getChatDraft(this, chatId); }
+
+  saveChatDraft(chatId, input) { return saveChatDraft(this, chatId, input); }
+  getDraftHandoff(chatId, id) { return getDraftHandoff(this, chatId, id); }
+  listDraftHandoffs(chatId) { return listDraftHandoffs(this, chatId); }
+  createDraftHandoff(chatId, input) { return createDraftHandoff(this, chatId, input); }
+  restoreDraftHandoff(chatId, id, input) { return restoreDraftHandoff(this, chatId, id, input); }
+  discardDraftHandoff(chatId, id) { return discardDraftHandoff(this, chatId, id); }
+  consumeDraftHandoff(chatId, id) { return consumeDraftHandoff(this, chatId, id); }
+
   getMediaAsset(id) {
     return clone(this.readRecord("mediaAsset", id));
   }
 
   hasMediaAssetReference(assetId) {
-    return Boolean(this.select("SELECT 1 AS found FROM records WHERE type = 'messageAttachment' AND assetId = ? LIMIT 1", [assetId])[0]);
+    return Boolean(this.select("SELECT 1 AS found FROM records WHERE type = 'messageAttachment' AND assetId = ? AND (messageId IS NOT NULL OR (draftId IS NOT NULL AND createdAt > ?)) LIMIT 1", [assetId, new Date(Date.now() - DRAFT_ATTACHMENT_MAX_AGE_MS).toISOString()])[0]);
   }
 
   async createDraftAttachment({ draftId, asset, originalFilename }) {
+    assertUnmanagedDraftId(draftId);
+    const guard = captureDraftPrivacyGuard(this);
     return this.atomicWrite(async () => {
       const current = this.listDraftAttachments(draftId);
       if (current.length >= 4) { const error = new Error("A message can contain at most 4 images."); error.status = 413; throw error; }
@@ -731,13 +764,15 @@ export class MobileStore {
       const attachment = { id: randomUUID(), messageId: null, draftId, assetId: storedAsset.id, sortOrder: current.length, originalFilename: originalFilename ?? null, createdAt: now() };
       await this.writeRecord("messageAttachment", attachment);
       return { attachment, asset: storedAsset };
-    });
+    }, guard);
   }
 
   async attachDraftToMessage(draftId, messageId) {
     if (!draftId) return [];
+    assertUnmanagedDraftId(draftId);
     const attachments = this.listDraftAttachments(draftId);
     if (!attachments.length) { const error = new Error("The selected draft images are unavailable. Add them again before sending."); error.status = 409; throw error; }
+    if (attachments.some((item) => Date.parse(item.createdAt) + DRAFT_ATTACHMENT_MAX_AGE_MS <= Date.now())) { const error = new Error("The selected draft images expired. Add them again before sending."); error.status = 409; throw error; }
     for (const attachment of attachments) await this.writeRecord("messageAttachment", { ...attachment, draftId: null, messageId });
     return attachments.map((item) => ({ ...item, draftId: null, messageId }));
   }
@@ -759,6 +794,7 @@ export class MobileStore {
   }
 
   async removeDraftAttachment(draftId, attachmentId) {
+    assertUnmanagedDraftId(draftId);
     return this.atomicWrite(async () => {
       const attachment = this.readRecord("messageAttachment", attachmentId);
       if (!attachment || attachment.draftId !== draftId || attachment.messageId) return null;
@@ -770,6 +806,7 @@ export class MobileStore {
   }
 
   async reorderDraftAttachments(draftId, attachmentIds) {
+    assertUnmanagedDraftId(draftId);
     return this.atomicWrite(async () => {
       const current = this.listDraftAttachments(draftId);
       if (current.length !== attachmentIds.length || new Set(attachmentIds).size !== current.length || current.some((item) => !attachmentIds.includes(item.id))) {
@@ -782,6 +819,7 @@ export class MobileStore {
   }
 
   async discardDraftAttachments(draftId) {
+    assertUnmanagedDraftId(draftId);
     return this.atomicWrite(async () => {
       const attachments = this.listDraftAttachments(draftId);
       for (const item of attachments) await this.deleteRecord("messageAttachment", item.id);
@@ -840,12 +878,13 @@ export class MobileStore {
   }
 
   async stageMessageAttachmentsForEdit(messageId, draftId) {
+    assertUnmanagedDraftId(draftId);
     return this.atomicWrite(async () => {
       const message = this.getMessage(messageId);
       if (!message) return null;
       if (message.role !== "user") { const error = new Error("Image attachments can only be edited on user messages."); error.status = 400; throw error; }
       for (const attachment of this.listDraftAttachments(draftId)) await this.deleteRecord("messageAttachment", attachment.id);
-      for (const attachment of this.listMessageAttachments(messageId)) await this.writeRecord("messageAttachment", { ...attachment, id: randomUUID(), messageId: null, draftId });
+      for (const attachment of this.listMessageAttachments(messageId)) await this.writeRecord("messageAttachment", { ...attachment, id: randomUUID(), messageId: null, draftId, composerChatId: null, createdAt: now() });
       return this.listDraftAttachments(draftId);
     });
   }
@@ -1668,7 +1707,7 @@ export class MobileStore {
   async applyBackupAnalysis(analysis, resolutions) {
     const { backup, records } = analysis;
     if (backup.mode === "replace") {
-      this.db.run("DELETE FROM records WHERE type IN ('character', 'chat', 'message', 'messageAttachment', 'memory', 'memoryRevision', 'memoryOperation', 'profileSummaryRevision')");
+      this.db.run("DELETE FROM records WHERE type IN ('character', 'chat', 'chatDraft', 'draftHandoff', 'message', 'messageAttachment', 'memory', 'memoryRevision', 'memoryOperation', 'profileSummaryRevision')");
     }
 
     const existingSettings = this.getSettings();

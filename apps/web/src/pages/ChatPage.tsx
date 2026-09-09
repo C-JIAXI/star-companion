@@ -48,6 +48,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useI18n } from "../i18n";
 import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
 import { api } from "../lib/api";
+import { useChatDraft } from "../lib/useChatDraft";
 import { timelineApi } from "../lib/timelineApi";
 import {
   buildChatTranscript,
@@ -63,6 +64,8 @@ import { usePlaceholderSrc } from "../placeholderImages";
 import { useAppStore } from "../store/useAppStore";
 import type {
   CharacterDTO,
+  ChatDraftAttachmentDTO,
+  DraftHandoffDTO,
   ChatAgentDraftDTO,
   ChatAgentActionDTO,
   ChatAgentMode,
@@ -121,8 +124,6 @@ const MESSAGE_PAGE_SIZE = 50;
 const MAX_RENDERED_MESSAGES = 250;
 const preferredScrollBehavior = (): ScrollBehavior =>
   document.documentElement.dataset.motion === "reduced" ? "auto" : "smooth";
-const CHAT_DRAFT_STORAGE_PREFIX = "star-companion:chat-draft:";
-const CHAT_QUEUE_STORAGE_PREFIX = "star-companion:chat-queue:";
 const ACTIVE_REQUEST_STORAGE_KEY = "star-companion:active-model-request";
 const MAX_QUEUED_MESSAGES = 10;
 const GENERATION_ERROR_PREFIX = "[GENERATION_FAILED] ";
@@ -227,72 +228,12 @@ const isSupportedChatBackgroundUrl = (value: string) => {
   }
 };
 
-const chatDraftStorageKey = (chatId: string) => `${CHAT_DRAFT_STORAGE_PREFIX}${chatId}`;
-
-const readStoredChatDraft = (chatId: string) => {
-  try {
-    return window.localStorage.getItem(chatDraftStorageKey(chatId)) ?? "";
-  } catch {
-    return "";
-  }
-};
-
-const saveStoredChatDraft = (chatId: string, value: string) => {
-  try {
-    if (value) {
-      window.localStorage.setItem(chatDraftStorageKey(chatId), value);
-    } else {
-      window.localStorage.removeItem(chatDraftStorageKey(chatId));
-    }
-  } catch {
-    // Draft persistence is best-effort when browser storage is unavailable.
-  }
-};
-
-type QueuedChatMessage = {
-  id: string;
-  content: string;
-  draftId?: string;
-  attachments?: DraftImageAttachmentDTO[];
-};
-
-const chatQueueStorageKey = (chatId: string) => `${CHAT_QUEUE_STORAGE_PREFIX}${chatId}`;
-
-const readStoredChatQueue = (chatId: string): QueuedChatMessage[] => {
-  try {
-    const parsed = JSON.parse(window.sessionStorage.getItem(chatQueueStorageKey(chatId)) ?? "[]");
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed
-      .filter(
-        (entry): entry is QueuedChatMessage =>
-          Boolean(
-            entry &&
-              typeof entry === "object" &&
-              typeof entry.id === "string" &&
-              typeof entry.content === "string" &&
-              (entry.content.trim() || (typeof entry.draftId === "string" && Array.isArray(entry.attachments)))
-          )
-      )
-      .slice(0, MAX_QUEUED_MESSAGES)
-      .map((entry) => ({ id: entry.id, content: entry.content.trim(), draftId: entry.draftId, attachments: entry.attachments }));
-  } catch {
-    return [];
-  }
-};
-
-const saveStoredChatQueue = (chatId: string, messages: QueuedChatMessage[]) => {
-  try {
-    if (messages.length > 0) {
-      window.sessionStorage.setItem(chatQueueStorageKey(chatId), JSON.stringify(messages));
-    } else {
-      window.sessionStorage.removeItem(chatQueueStorageKey(chatId));
-    }
-  } catch {
-    // Queue persistence is best-effort and intentionally limited to this browser session.
-  }
-};
+type QueuedChatMessage = DraftHandoffDTO;
+// Scheduling is session-memory only. Durable handoffs are recovered manually after reload.
+const sessionQueues = new Map<string, QueuedChatMessage[]>();
+const readStoredChatQueue = (chatId: string) => sessionQueues.get(chatId) ?? [];
+const saveStoredChatQueue = (chatId: string, messages: QueuedChatMessage[]) => { sessionQueues.set(chatId, messages); };
+useAppStore.subscribe((state) => { if (state.isPrivacyLocked) sessionQueues.clear(); });
 
 type StoredActiveRequest = { requestId: string; chatId: string };
 const readStoredActiveRequest = (): StoredActiveRequest | null => {
@@ -350,9 +291,11 @@ export function ChatPage({
   const refreshReadiness = useAppStore((state) => state.refreshReadiness);
   const [characters, setCharacters] = useState<CharacterDTO[]>([]);
   const [activeChat, setActiveChat] = useState<ChatWithMessagesDTO | null>(null);
-  const [draft, setDraft] = useState("");
-  const [attachmentDraftId, setAttachmentDraftId] = useState(() => `draft_${generateId().replace(/-/g, "")}`);
-  const [draftAttachments, setDraftAttachments] = useState<DraftImageAttachmentDTO[]>([]);
+  const composer = useChatDraft(selectedChatId);
+  const draft = composer.content;
+  const setDraft = composer.setText;
+  const draftAttachments = composer.attachments;
+  const [draftConfirm, setDraftConfirm] = useState<null | { title: string; body: string; run: () => Promise<void> }>(null);
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
@@ -666,8 +609,7 @@ export function ChatPage({
       if (msg.type === "user_message") {
         if (pendingGenerationDraftRef.current?.requestId === msg.requestId) {
           pendingGenerationDraftRef.current = null;
-          setDraftAttachments([]);
-          setAttachmentDraftId(`draft_${generateId().replace(/-/g, "")}`);
+          void composer.refreshHandoffs();
         }
         handlers.upsertMessage(msg.message);
         return;
@@ -756,6 +698,7 @@ export function ChatPage({
       }
 
       if (msg.type === "generation_status") {
+        void composer.refreshHandoffs();
         const request = msg.request as ModelRequestDTO;
         const terminal = ["succeeded", "failed", "cancelled", "interrupted", "blocked"].includes(request.status);
         if (!terminal) {
@@ -827,6 +770,7 @@ export function ChatPage({
       }
 
       if (msg.type === "generation_done" || msg.type === "generation_stopped") {
+        void composer.refreshHandoffs();
         if (msg.type === "generation_done") {
           try {
             window.localStorage.setItem("star-companion:onboarding:v1", JSON.stringify({ completed: true, dismissed: true, lastStep: 4 }));
@@ -869,6 +813,7 @@ export function ChatPage({
       }
 
       if (msg.type === "error") {
+        void composer.refreshHandoffs();
         if (msg.requestId && pendingGenerationDraftRef.current?.requestId === msg.requestId) {
           pendingGenerationDraftRef.current = null;
         }
@@ -1575,16 +1520,6 @@ export function ChatPage({
     loadChatAbortRef.current?.abort();
     const loadController = new AbortController();
     loadChatAbortRef.current = loadController;
-    const previousChatId = draftChatIdRef.current;
-    if (previousChatId && previousChatId !== id) {
-      saveStoredChatDraft(previousChatId, draft);
-      if (draftAttachments.length) {
-        void api.media.discardDraftChatImages(attachmentDraftId).catch(() => {});
-        setDraftAttachments([]);
-        setAttachmentDraftId(`draft_${generateId().replace(/-/g, "")}`);
-        setAttachmentError(null);
-      }
-    }
     const previousQueueChatId = queuedChatIdRef.current;
     if (previousQueueChatId && previousQueueChatId !== id) {
       saveStoredChatQueue(previousQueueChatId, queuedMessagesRef.current);
@@ -1595,7 +1530,6 @@ export function ChatPage({
       draftChatIdRef.current = null;
       queuedChatIdRef.current = null;
       queuedMessagesRef.current = [];
-      setDraft("");
       setQueuedMessages([]);
       setActiveChat(null);
       hasMessagesRef.current = false;
@@ -1613,7 +1547,6 @@ export function ChatPage({
     const storedQueue = readStoredChatQueue(id);
     queuedMessagesRef.current = storedQueue;
     setQueuedMessages(storedQueue);
-    setDraft(readStoredChatDraft(id));
     const pendingMessageJump = takeChatMessageJump(id);
     const [chat, memories] = await Promise.all([
       timelineApi.summary(id, loadController.signal),
@@ -1773,14 +1706,6 @@ export function ChatPage({
       viewport.style.scrollBehavior = previousScrollBehavior;
     };
   }, [activeChat?.id, activeChat?.messages]);
-
-  useEffect(() => {
-    if (!selectedChatId || draftChatIdRef.current !== selectedChatId) {
-      return;
-    }
-
-    saveStoredChatDraft(selectedChatId, draft);
-  }, [draft, selectedChatId]);
 
   useEffect(() => {
     const viewport = messageViewportRef.current;
@@ -2888,17 +2813,16 @@ export function ChatPage({
     }
   };
 
-  const startMessageGeneration = async (messageContent: string, imageDraftId?: string) => {
-    if (!activeChat || (!messageContent.trim() && !imageDraftId)) {
+  const startMessageGeneration = async (handoff: DraftHandoffDTO) => {
+    if (!activeChat || activeChat.id !== handoff.chatId) {
       return;
     }
-    if (imageDraftId && !activeChatSupportsVision) {
+    if (handoff.attachments.length && !activeChatSupportsVision) {
       setError(language === "zh-CN" ? "当前聊天模型未声明视觉输入能力。请切换到支持图片输入的模型后再发送。" : "The current chat model does not declare vision input support. Switch to a vision-capable model before sending.");
       return;
     }
 
     const chatId = activeChat.id;
-    const normalizedContent = messageContent.trim();
     setLoading(true);
     setError(null);
     setStatus(null);
@@ -2906,14 +2830,8 @@ export function ChatPage({
       if (!isConnected) {
         throw new Error(t("chat.websocketFailed"));
       }
-      const requestId = generateId();
-      const payload: GenerationClientMessage = {
-        type: "generate",
-        requestId,
-        chatId,
-        content: normalizedContent,
-        ...(imageDraftId ? { draftId: imageDraftId } : {})
-      };
+      const requestId = handoff.id;
+      const payload: GenerationClientMessage = { type: "generate", requestId, chatId, content: "", handoffId: handoff.id };
       lastGenerationPayloadRef.current = payload;
       activeRequestRef.current = { requestId, chatId };
       saveStoredActiveRequest(activeRequestRef.current);
@@ -2926,10 +2844,8 @@ export function ChatPage({
       pendingGenerationDraftRef.current = {
         requestId,
         chatId,
-        content: normalizedContent
+        content: handoff.content
       };
-      saveStoredChatDraft(chatId, "");
-      setDraft("");
       requestAnimationFrame(() => {
         if (draftTextAreaRef.current) {
           draftTextAreaRef.current.style.height = "auto";
@@ -2943,11 +2859,7 @@ export function ChatPage({
       lastGenerationPayloadRef.current = null;
       activeRequestRef.current = null;
       saveStoredActiveRequest(null);
-      if (draftChatIdRef.current === chatId) {
-        setDraft((current) => current || normalizedContent);
-      } else {
-        saveStoredChatDraft(chatId, normalizedContent);
-      }
+      await composer.refreshHandoffs();
       setError(caught instanceof Error ? caught.message : t("chat.failedSend"));
       setLoading(false);
       setActiveRequestId(null);
@@ -3098,7 +3010,7 @@ export function ChatPage({
     }
   };
 
-  const queueDraftMessage = () => {
+  const queueDraftMessage = async () => {
     if (!activeChat || (!draft.trim() && draftAttachments.length === 0)) {
       return;
     }
@@ -3107,13 +3019,11 @@ export function ChatPage({
       return;
     }
 
-    const message: QueuedChatMessage = { id: generateId(), content: draft.trim(), ...(draftAttachments.length ? { draftId: attachmentDraftId, attachments: draftAttachments } : {}) };
-    replaceQueuedMessages([...queuedMessagesRef.current, message]);
-    saveStoredChatDraft(activeChat.id, "");
-    setDraft("");
-    setDraftAttachments([]);
-    setAttachmentDraftId(`draft_${generateId().replace(/-/g, "")}`);
-    setStatus(t("chat.messageQueued"));
+    try {
+      const message = await composer.createHandoff("queue");
+      if (queuedChatIdRef.current === message.chatId) replaceQueuedMessages([...queuedMessagesRef.current, message]);
+      setStatus(t("chat.messageQueued"));
+    } catch (caught) { setError(caught instanceof Error ? caught.message : t("chat.failedSend")); }
     requestAnimationFrame(() => {
       if (draftTextAreaRef.current) {
         draftTextAreaRef.current.style.height = "auto";
@@ -3133,7 +3043,15 @@ export function ChatPage({
       return;
     }
 
-    await startMessageGeneration(draft, draftAttachments.length ? attachmentDraftId : undefined);
+    if (composer.disabled || draftAttachments.some((item) => item.status !== "ready")) return;
+    setLoading(true);
+    try {
+      const handoff = await composer.createHandoff("send");
+      await startMessageGeneration(handoff);
+    } catch (caught) {
+      setLoading(false);
+      setError(caught instanceof Error ? caught.message : t("chat.failedSend"));
+    }
   };
 
   const stopGeneration = () => {
@@ -3161,12 +3079,12 @@ export function ChatPage({
 
     const [message, ...rest] = queuedMessagesRef.current;
     if (!message) return;
-    if (message.draftId && !activeChatSupportsVision) {
+    if (message.attachments.length && !activeChatSupportsVision) {
       setError(language === "zh-CN" ? "队列中的图片消息尚未发送：当前聊天模型不支持图片输入。请切换模型或编辑该队列项。" : "The queued image message was not sent because the current chat model does not support image input. Switch models or edit the queued item.");
       return;
     }
     replaceQueuedMessages(rest);
-    void startMessageGeneration(message.content, message.draftId);
+    void startMessageGeneration(message);
   };
 
   const sendQueuedMessagesNow = () => {
@@ -3182,23 +3100,15 @@ export function ChatPage({
   };
 
   const editQueuedMessage = (message: QueuedChatMessage) => {
-    if (draftAttachments.length && message.attachments?.length) {
-      setError(language === "zh-CN" ? "请先发送或移除输入框中的图片，再编辑队列中的图片消息。" : "Send or remove the current composer images before editing a queued image message.");
-      return;
-    }
-    replaceQueuedMessages(queuedMessagesRef.current.filter((entry) => entry.id !== message.id));
-    setDraft((current) => (current.trim() ? `${message.content}\n\n${current}` : message.content));
-    if (message.attachments?.length && message.draftId) {
-      setAttachmentDraftId(message.draftId);
-      setDraftAttachments(message.attachments);
-    }
-    requestAnimationFrame(() => draftTextAreaRef.current?.focus());
+    setDraftConfirm({ title: language === "zh-CN" ? "恢复到输入框？" : "Restore to composer?",
+      body: language === "zh-CN" ? "用这份待发送内容替换当前输入框的文字和图片；不会自动发送。" : "Replace the current composer text and images with this pending draft. Nothing will be sent.",
+      run: async () => { await composer.restore(message.id); replaceQueuedMessages(queuedMessagesRef.current.filter((entry) => entry.id !== message.id)); } });
   };
 
   const deleteQueuedMessage = (messageId: string) => {
-    const message = queuedMessagesRef.current.find((entry) => entry.id === messageId);
-    replaceQueuedMessages(queuedMessagesRef.current.filter((entry) => entry.id !== messageId));
-    if (message?.draftId) void api.media.discardDraftChatImages(message.draftId).catch(() => {});
+    setDraftConfirm({ title: language === "zh-CN" ? "删除待发送草稿？" : "Discard pending draft?",
+      body: language === "zh-CN" ? "删除这份待发送文字和图片引用，不会删除已发送消息。" : "Discard this pending text and image references without deleting sent messages.",
+      run: async () => { await composer.discard(messageId); replaceQueuedMessages(queuedMessagesRef.current.filter((entry) => entry.id !== messageId)); } });
   };
 
   const addChatImages = async (files: File[]) => {
@@ -3214,12 +3124,12 @@ export function ChatPage({
     setAttachmentBusy(true);
     setAttachmentError(null);
     try {
-      let next = [...draftAttachments];
+      const stagingId = `draft_${generateId().replace(/-/g, "")}`;
       for (const file of files) {
         const normalized = await normalizeChatImageFile(file);
-        const uploaded = await api.media.uploadChatImage({ draftId: attachmentDraftId, ...normalized });
-        next = [...next, uploaded];
-        setDraftAttachments(next);
+        const uploaded = await api.media.uploadChatImage({ draftId: stagingId, ...normalized });
+        composer.addImage({ ...uploaded, expiresAt: new Date(Date.parse(uploaded.createdAt) + 24 * 60 * 60 * 1000).toISOString() });
+        await composer.flush();
       }
     } catch (caught) {
       setAttachmentError(caught instanceof Error ? caught.message : (language === "zh-CN" ? "图片处理失败。" : "Image processing failed."));
@@ -3229,10 +3139,10 @@ export function ChatPage({
     }
   };
 
-  const removeChatImage = async (attachment: DraftImageAttachmentDTO) => {
+  const removeChatImage = async (attachment: ChatDraftAttachmentDTO) => {
     try {
-      await api.media.removeDraftChatImage(attachmentDraftId, attachment.id);
-      setDraftAttachments((current) => current.filter((item) => item.id !== attachment.id));
+      composer.setImages(draftAttachments.filter((item) => item.id !== attachment.id));
+      await composer.flush();
     } catch (caught) {
       setAttachmentError(caught instanceof Error ? caught.message : "Image removal failed.");
     }
@@ -3244,8 +3154,8 @@ export function ChatPage({
     const reordered = [...draftAttachments];
     [reordered[index], reordered[target]] = [reordered[target]!, reordered[index]!];
     try {
-      const updated = await api.media.reorderDraftChatImages(attachmentDraftId, reordered.map((item) => item.id));
-      setDraftAttachments(updated.map((item) => ({ ...item, draftId: attachmentDraftId, status: "ready" })));
+      composer.setImages(reordered);
+      await composer.flush();
     } catch (caught) {
       setAttachmentError(caught instanceof Error ? caught.message : "Image reordering failed.");
     }
@@ -4930,10 +4840,35 @@ export function ChatPage({
                             <span className="ml-1 text-xs text-slate-500">{t("chat.mediaWorking")}</span>
                           ) : null}
                         </div>
+                        <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-300" data-testid="chat-draft-status" aria-live="polite">
+                          <span>{composer.state === "loading" ? (language === "zh-CN" ? "正在读取草稿…" : "Loading draft…")
+                            : composer.state === "saving" ? (language === "zh-CN" ? "正在保存…" : "Saving…")
+                            : composer.state === "saved" ? `${language === "zh-CN" ? "已保存" : "Saved"}${composer.savedAt ? ` · ${new Date(composer.savedAt).toLocaleTimeString()}` : ""}`
+                            : composer.state === "legacy" ? (language === "zh-CN" ? "发现旧浏览器草稿，请选择保留内容。" : "A legacy browser draft needs your choice.")
+                            : composer.state === "conflict" ? (language === "zh-CN" ? "草稿发生冲突，当前编辑仍保留。" : "Draft conflict. Your edits are still here.")
+                            : (language === "zh-CN" ? "保存失败，当前编辑仍保留。" : "Save failed. Your edits are still here.")}</span>
+                          {composer.state === "error" ? <button type="button" className="underline" onClick={() => void composer.retry().catch(() => {})}>{language === "zh-CN" ? "重试保存" : "Retry save"}</button> : null}
+                          {composer.state === "conflict" || composer.state === "legacy" ? <>
+                            <button type="button" className="underline" onClick={() => setDraftConfirm({ title: language === "zh-CN" ? "重新加载草稿？" : "Reload draft?", body: language === "zh-CN" ? "使用后端草稿，放弃当前未保存修改及已选择放弃的旧浏览器草稿。" : "Use the backend draft and discard the current unsaved or legacy edit.", run: () => composer.resolve("reload") })}>{language === "zh-CN" ? "重新加载" : "Reload draft"}</button>
+                            <button type="button" className="underline" onClick={() => setDraftConfirm({ title: language === "zh-CN" ? "保留当前版本？" : "Keep this version?", body: language === "zh-CN" ? "再次读取最新版本后，使用当前输入框内容替换后端草稿。" : "Read the latest version, then replace the backend draft with your current edits.", run: () => composer.resolve("keep") })}>{language === "zh-CN" ? "保留当前版本" : "Keep my version"}</button>
+                            {composer.state === "legacy" ? <button type="button" className="underline" onClick={() => setDraftConfirm({ title: language === "zh-CN" ? "使用旧文字草稿？" : "Use legacy text?", body: language === "zh-CN" ? "旧文字将替换输入框文字；只有后端确认保存后才移除旧浏览器值。现有图片保持不变。" : "Replace composer text with the legacy text, keeping images. Remove the browser copy only after the backend confirms saving.", run: () => composer.resolve("legacy") })}>{language === "zh-CN" ? "使用旧文字" : "Use legacy text"}</button> : null}
+                          </> : null}
+                          <button type="button" className="ml-auto underline disabled:opacity-40" disabled={composer.disabled || (!draft && !draftAttachments.length)} onClick={() => setDraftConfirm({ title: language === "zh-CN" ? "清除草稿？" : "Clear draft?", body: language === "zh-CN" ? "清除当前聊天输入框中的文字和图片引用，不删除已发送消息或待发送快照。" : "Clear this chat's composer text and image references, without deleting messages or pending snapshots.", run: composer.clear })}>{language === "zh-CN" ? "清除草稿" : "Clear draft"}</button>
+                          {draftAttachments.some((item) => item.status !== "ready") ? <span className="w-full text-amber-300">{language === "zh-CN" ? "存在过期或不可用附件。文字仍保留；请移除后重新选择图片。图片上传后 24 小时过期。" : "Some images expired or are unavailable. Your text is preserved. Remove and reselect images; uploads expire after 24 hours."}</span> : null}
+                        </div>
+                        {composer.handoffs.filter((item) => !item.committedAt && !item.disposedAt && item.id !== activeRequestId && !queuedMessages.some((queued) => queued.id === item.id)).map((item) => <div className="mb-2 flex flex-wrap items-center gap-2 rounded border border-white/10 p-2 text-xs text-slate-300" key={item.id} data-testid="recoverable-draft">
+                          <span>{language === "zh-CN" ? "可恢复的待发送草稿" : "Recoverable pending draft"} · {new Date(item.createdAt).toLocaleTimeString()} · {item.attachments.length} {language === "zh-CN" ? "张图片" : "images"}</span>
+                          <button type="button" className="underline" onClick={() => editQueuedMessage(item)}>{language === "zh-CN" ? "恢复编辑（不发送）" : "Restore without sending"}</button>
+                          <button type="button" className="underline" onClick={() => deleteQueuedMessage(item.id)}>{language === "zh-CN" ? "删除" : "Discard"}</button>
+                        </div>)}
                         {draftAttachments.length > 0 || attachmentBusy || attachmentError ? <div className="mb-2 rounded-md border border-white/10 bg-black/10 p-2" data-testid="chat-image-draft" aria-live="polite">
                           {!visionNoticeAcknowledged ? <div className="mb-2 flex items-start justify-between gap-2 rounded bg-amber-500/10 p-2 text-xs text-amber-100"><span>{language === "zh-CN" ? "发送时，这些图片会传给你配置的第三方模型供应商。" : "When sent, these images will be shared with your configured third-party model provider."}</span><button className="shrink-0 font-semibold underline" type="button" onClick={() => { setVisionNoticeAcknowledged(true); try { localStorage.setItem("star-companion:vision-privacy-notice", "acknowledged"); } catch {} }}>{language === "zh-CN" ? "知道了" : "Got it"}</button></div> : null}
                           <div className="flex max-w-full gap-2 overflow-x-auto pb-1">
-                            {draftAttachments.map((attachment, index) => <div key={attachment.id} className="relative w-24 shrink-0 rounded border border-white/10 bg-ink-950 p-1" data-image-status="ready"><img className="h-16 w-full rounded object-cover" alt={`${language === "zh-CN" ? "待发送图片" : "Pending image"} ${index + 1}`} src={resolveApiUrl(attachment.url)} /><span className="mt-1 block truncate text-[10px] text-slate-400">{language === "zh-CN" ? "已就绪" : "Ready"}</span><div className="flex justify-between"><button className="min-h-7 min-w-7" type="button" disabled={index === 0} aria-label={language === "zh-CN" ? "图片前移" : "Move image earlier"} onClick={() => void moveChatImage(index, -1)}><ChevronLeft size={13} /></button><button className="min-h-7 min-w-7 text-rose-300" type="button" aria-label={language === "zh-CN" ? "移除图片" : "Remove image"} onClick={() => void removeChatImage(attachment)}><X size={13} /></button><button className="min-h-7 min-w-7" type="button" disabled={index === draftAttachments.length - 1} aria-label={language === "zh-CN" ? "图片后移" : "Move image later"} onClick={() => void moveChatImage(index, 1)}><ChevronRight size={13} /></button></div></div>)}
+                            {draftAttachments.map((attachment, index) => <div key={attachment.id} className="relative w-24 shrink-0 rounded border border-white/10 bg-ink-950 p-1" data-image-status={attachment.status}>
+                              {attachment.status === "ready" ? <img className="h-16 w-full rounded object-cover" alt={`${language === "zh-CN" ? "待发送图片" : "Pending image"} ${index + 1}`} src={resolveApiUrl(attachment.url)} /> : <div className="grid h-16 place-items-center rounded text-xs text-amber-300">{attachment.status === "expired" ? (language === "zh-CN" ? "图片已过期" : "Image expired") : (language === "zh-CN" ? "图片不可用" : "Image unavailable")}</div>}
+                              <span className="mt-1 block truncate text-[10px] text-slate-400" title={new Date(attachment.expiresAt).toLocaleString()}>{language === "zh-CN" ? "上传后 24 小时过期" : "Expires after 24 hours"}</span>
+                              <div className="flex justify-between"><button className="min-h-7 min-w-7" type="button" disabled={composer.disabled || index === 0} aria-label={language === "zh-CN" ? "图片前移" : "Move image earlier"} onClick={() => void moveChatImage(index, -1)}><ChevronLeft size={13} /></button><button className="min-h-7 min-w-7 text-rose-300" type="button" disabled={composer.disabled} aria-label={language === "zh-CN" ? "移除图片" : "Remove image"} onClick={() => void removeChatImage(attachment)}><X size={13} /></button><button className="min-h-7 min-w-7" type="button" disabled={composer.disabled || index === draftAttachments.length - 1} aria-label={language === "zh-CN" ? "图片后移" : "Move image later"} onClick={() => void moveChatImage(index, 1)}><ChevronRight size={13} /></button></div>
+                            </div>)}
                             {attachmentBusy ? <div className="grid h-24 w-24 shrink-0 place-items-center rounded border border-white/10 text-xs text-slate-300" role="status"><RefreshCw className="animate-spin" size={16} />{language === "zh-CN" ? "处理中" : "Processing"}</div> : null}
                           </div>
                           {attachmentError ? <p className="mt-2 text-xs text-rose-300" role="alert">{attachmentError} {!activeChatSupportsVision ? <button className="font-semibold underline" type="button" onClick={() => navigateToSection("settings", "model")}>{language === "zh-CN" ? "切换模型" : "Switch model"}</button> : null}</p> : null}
@@ -4947,6 +4882,7 @@ export function ChatPage({
                             placeholder={t("chat.writeMessage")}
                             rows={1}
                             value={draft}
+                            disabled={composer.disabled || selectedChatId !== activeChat.id}
                             onInput={autoResizeDraftTextArea}
                             onChange={(event) => setDraft(event.target.value)}
                             onDragOver={(event) => { if (Array.from(event.dataTransfer.items).some((item) => item.kind === "file")) event.preventDefault(); }}
@@ -4977,7 +4913,7 @@ export function ChatPage({
                                 className="!min-h-[40px] sm:!min-h-[44px]"
                                 data-chat-action="queue"
                                 disabled={
-                                  (!draft.trim() && draftAttachments.length === 0) || attachmentBusy || queuedMessages.length >= MAX_QUEUED_MESSAGES
+                                  composer.disabled || draftAttachments.some((item) => item.status !== "ready") || (!draft.trim() && draftAttachments.length === 0) || attachmentBusy || queuedMessages.length >= MAX_QUEUED_MESSAGES
                                 }
                                 id="chat-primary-action"
                                 onClick={queueDraftMessage}
@@ -4991,7 +4927,7 @@ export function ChatPage({
                               className="!min-h-[40px] sm:!min-h-[44px]"
                               data-chat-action="send"
                               id="chat-primary-action"
-                              disabled={loading || attachmentBusy || (!draft.trim() && draftAttachments.length === 0)}
+                              disabled={loading || composer.disabled || draftAttachments.some((item) => item.status !== "ready") || attachmentBusy || (!draft.trim() && draftAttachments.length === 0)}
                               onClick={() => void sendMessage()}
                             >
                               <Send size={16} />
@@ -5283,6 +5219,8 @@ export function ChatPage({
           </section>
         </div>
       ) : null}
+      {draftConfirm ? <ConfirmDialog title={draftConfirm.title} message={draftConfirm.body} cancelLabel={t("common.cancel")} confirmLabel={language === "zh-CN" ? "确认" : "Confirm"}
+        onCancel={() => setDraftConfirm(null)} onConfirm={() => { const action = draftConfirm; setDraftConfirm(null); void action.run().catch((caught) => setError(caught instanceof Error ? caught.message : "Draft operation failed.")); }} /> : null}
       {pendingBudgetOverride ? (
         <ConfirmDialog
           cancelLabel={t("common.cancel")}

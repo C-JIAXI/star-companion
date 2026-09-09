@@ -1170,6 +1170,42 @@ export interface DraftImageAttachmentDTO extends MessageAttachmentDTO {
   status: "ready";
 }
 
+/** Metadata only; an unavailable image keeps its place without retaining bytes. */
+export interface ChatDraftAttachmentDTO extends MessageAttachmentDTO {
+  draftId: string;
+  status: "ready" | "expired" | "missing";
+  expiresAt: string;
+}
+
+export interface ChatDraftDTO {
+  chatId: string;
+  draftId: string;
+  version: number;
+  content: string;
+  attachments: ChatDraftAttachmentDTO[];
+  updatedAt: string | null;
+}
+
+export interface ChatDraftSaveInput {
+  expectedVersion: number;
+  mutationId: string;
+  content: string;
+  attachmentIds: string[];
+}
+
+export interface DraftHandoffDTO {
+  id: string;
+  chatId: string;
+  draftId: string;
+  content: string;
+  attachments: ChatDraftAttachmentDTO[];
+  purpose: "send" | "queue";
+  messageId: string | null;
+  createdAt: string;
+  committedAt: string | null;
+  disposedAt: string | null;
+}
+
 export type MemoryActor = "user" | "automatic_memory" | "agent_confirmed" | "timeline_cleanup" | "restore";
 
 export type MemoryAction =
@@ -1749,6 +1785,7 @@ export type GenerationClientMessage =
       chatId: string;
       content: string;
       draftId?: string;
+      handoffId?: string;
       overrideHardBudget?: boolean;
     }
   | {

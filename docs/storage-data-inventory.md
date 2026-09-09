@@ -13,6 +13,7 @@ This inventory is the implementation boundary for Settings → Storage & health.
 | Chat media bytes | `MediaAsset.data` BLOB | `mediaAsset.dataBase64` in app-private SQLite | Attachments and recovery references | Delete only with zero references | No | Hash/length/MIME/dimension/decode mismatch |
 | Sent media references | `MessageAttachment.messageId` | Same logical record | Message and asset | Message timeline lifecycle | No | Broken/double-owned reference |
 | Draft media references | `MessageAttachment.draftId` | Same logical record | Controlled draft ID and asset | Expire after 24 hours | No | Abandoned large draft |
+| Protected composer drafts (backend checkpoint) | `ChatDraft`; `MessageAttachment.composerChatId` ownership | `chatDraft` record and composer-owned attachments | Chat and ordered metadata-only manifest | Text until explicit clearing/chat permanent deletion; images expire 24 hours after upload, reads do not renew; unavailable placeholders remain | No | Concurrent writes, missing/expired images, unacknowledged saves |
 | Recovery media references | `RecoveryPointMediaAsset` | Same logical record | Recovery point and asset | Recovery retention | No | Deleting recoverable media |
 | Character images | `Character.avatar` data URLs; HTTPS is remote | Same | Character | Character lifecycle | No | Encoded size miscount |
 | Persona images | Chat avatar and persona-preset data URLs | Same | Chat/preset | Owning record lifecycle | No | Sensitive association |
@@ -27,6 +28,8 @@ This inventory is the implementation boundary for Settings → Storage & health.
 | Exports | User-selected download; not enumerated | Private staging before Android share | User export action | User-managed, excluded from cleanup | No | Treating exports as cache |
 
 ## Measurement and safety rules
+
+- Composer drafts are device-local and excluded from full backups, recovery points, chat archives, and LAN sync. The current replace implementation removes local drafts together with replaced chats; ordinary chat trash retains them. Live `MessageAttachment` rows protect assets from orphan cleanup, and removing an expired reference never deletes an asset shared with a sent message, another live draft, or recovery point. Draft manifest entries contain no image bytes. The current UI has not yet been connected to this persistence layer; see `chat-drafts-implementation.md`.
 
 - `exact` means filesystem allocation, stored media byte length, or a direct reference count.
 - `estimated` means UTF-8/JSON logical size or decoded data-URL size, not physical SQLite allocation.

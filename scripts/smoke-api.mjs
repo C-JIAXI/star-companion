@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { verifyChatDraftContract } from "./testing/chat-draft-contract.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -654,6 +655,8 @@ const main = async () => {
 
     log("Verifying character CRUD, paging, export, import, and unlock flows");
     const localAvatar = "data:image/png;base64,QUJDRA==";
+    await verifyChatDraftContract(baseUrl);
+    log("Chat draft persistence, conflicts, lock and lifecycle contract passed");
     const characterPayload = {
       name: `Smoke Character ${runId}`,
       avatar: localAvatar,

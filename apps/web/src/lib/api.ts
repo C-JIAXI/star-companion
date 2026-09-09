@@ -1,4 +1,7 @@
 import type {
+  ChatDraftDTO,
+  ChatDraftSaveInput,
+  DraftHandoffDTO,
   ApiEnvelope,
   AvailableModelsDTO,
   BackupDTO,
@@ -120,6 +123,10 @@ const getFallbackErrorMessage = (response: Response) =>
     ? `Request failed: ${response.status} ${response.statusText}`
     : `Request failed: ${response.status}`;
 
+export class ApiRequestError extends Error {
+  constructor(message: string, public readonly status: number) { super(message); }
+}
+
 export const request = async <T>(path: string, options: RequestOptions = {}): Promise<T> => {
   const response = await fetchWithStartupRetry(resolveApiUrl(path), {
     method: options.method ?? "GET",
@@ -161,7 +168,7 @@ export const request = async <T>(path: string, options: RequestOptions = {}): Pr
 
   if (!response.ok || !payload.ok) {
     const message = "error" in payload ? payload.error : getFallbackErrorMessage(response);
-    throw new Error(message);
+    throw new ApiRequestError(message, response.status);
   }
 
   return payload.data;
@@ -263,6 +270,16 @@ export const api = {
       })
   },
   chats: {
+    listDraftHandoffs: (id: string, signal?: AbortSignal) => request<DraftHandoffDTO[]>(`/api/chats/${encodeURIComponent(id)}/draft/handoffs`, { signal }),
+    getDraftHandoff: (id: string, handoffId: string) => request<DraftHandoffDTO>(`/api/chats/${encodeURIComponent(id)}/draft/handoffs/${handoffId}`),
+    createDraftHandoff: (id: string, body: { id: string; expectedVersion: number; purpose: "send" | "queue" }, signal?: AbortSignal) =>
+      request<{ draft: ChatDraftDTO; handoff: DraftHandoffDTO }>(`/api/chats/${encodeURIComponent(id)}/draft/handoffs`, { method: "POST", body, signal }),
+    restoreDraftHandoff: (id: string, handoffId: string, body: { expectedVersion: number; mutationId: string }, signal?: AbortSignal) =>
+      request<ChatDraftDTO>(`/api/chats/${encodeURIComponent(id)}/draft/handoffs/${handoffId}/restore`, { method: "POST", body, signal }),
+    discardDraftHandoff: (id: string, handoffId: string) => request<void>(`/api/chats/${encodeURIComponent(id)}/draft/handoffs/${handoffId}`, { method: "DELETE" }),
+    getDraft: (id: string, signal?: AbortSignal) => request<ChatDraftDTO>(`/api/chats/${encodeURIComponent(id)}/draft`, { signal }),
+    saveDraft: (id: string, body: ChatDraftSaveInput, signal?: AbortSignal) =>
+      request<ChatDraftDTO>(`/api/chats/${encodeURIComponent(id)}/draft`, { method: "PUT", body, signal }),
     list: () => request<ChatDTO[]>("/api/chats"),
     page: (input: { scope?: "active" | "archived" | "trash" | "all"; folder?: string; q?: string; limit?: number; cursor?: string; includeTotal?: boolean } = {}, signal?: AbortSignal) => {
       return request<ChatPageDTO>(withQuery("/api/chats/page", {

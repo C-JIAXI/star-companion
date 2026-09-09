@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { consumeDraftHandoff } from "../services/draftHandoffs.js";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import {
@@ -70,7 +71,12 @@ messagesRouter.post(
     if (!chat) {
       throw new HttpError(404, "Chat not found");
     }
-    const { draftId, ...messageBody } = body;
+    const { draftId, handoffId, ...messageBody } = body;
+    if (handoffId) {
+      const result = await consumeDraftHandoff(body.chatId, handoffId);
+      response.status(201).json({ ok: true, data: serializeMessage(result.message) });
+      return;
+    }
     const data: Prisma.MessageUncheckedCreateInput = {
       ...messageBody,
       tokenUsage: normalizeTokenUsage(body.tokenUsage),

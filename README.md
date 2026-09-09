@@ -4,6 +4,8 @@ LLM front end
 
 Local-first AI character chat workspace with web, desktop, and Android builds.
 
+Development checkpoint: protected chat-draft persistence is being implemented. Desktop and mobile now expose versioned draft read/save APIs with metadata-only ordered image references, original 24-hour expiry, and lock protection. Composer UI, browser-text migration, and reliable send/queue handoff are not connected yet; do not rely on complete image-draft recovery in the current UI. See [implementation progress](docs/chat-drafts-implementation.md).
+
 Current scope:
 
 - Single-user, single-character chat with backend-proxied model requests.

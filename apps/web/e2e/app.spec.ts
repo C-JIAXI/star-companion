@@ -1217,11 +1217,11 @@ test("chat image attachments preview, send, reload, view, and unmount when locke
         readyState = 0; onopen: ((event: Event) => void) | null = null; onclose: ((event: CloseEvent) => void) | null = null; onerror: ((event: Event) => void) | null = null; onmessage: ((event: MessageEvent) => void) | null = null;
         constructor() { socket = this; window.setTimeout(() => { this.readyState = 1; this.onopen?.(new Event("open")); }, 0); }
         send(data: string) {
-          const value = JSON.parse(data) as { type: string; requestId: string; chatId?: string; content?: string; draftId?: string };
+          const value = JSON.parse(data) as { type: string; requestId: string; chatId?: string; content?: string; draftId?: string; handoffId?: string };
           if (value.type !== "generate") return;
           (window as unknown as { __visionRequest: unknown }).__visionRequest = value;
           window.setTimeout(async () => {
-            const response = await fetch("http://127.0.0.1:4010/api/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chatId: value.chatId, role: "user", content: value.content ?? "", draftId: value.draftId }) });
+            const response = await fetch("http://127.0.0.1:4010/api/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chatId: value.chatId, role: "user", content: value.content ?? "", draftId: value.draftId, handoffId: value.handoffId }) });
             const payload = await response.json();
             emit({ type: "user_message", requestId: value.requestId, message: payload.data });
             emit({ type: "generation_started", requestId: value.requestId });
@@ -1258,9 +1258,9 @@ test("chat image attachments preview, send, reload, view, and unmount when locke
     await expect(page.locator('[data-chat-message="user"]')).toHaveCount(1);
     await expect(page.getByTestId("chat-message-viewport").getByText(visionReply)).toBeVisible();
     await expect.poll(() => page.evaluate(() => JSON.parse(window.localStorage.getItem("star-companion:onboarding:v1") || "{}"))).toMatchObject({ completed: true });
-    const requestPayload = await page.evaluate(() => (window as unknown as { __visionRequest: { content: string; draftId: string } }).__visionRequest);
+    const requestPayload = await page.evaluate(() => (window as unknown as { __visionRequest: { content: string; handoffId: string } }).__visionRequest);
     expect(requestPayload.content).toBe("");
-    expect(requestPayload.draftId).toMatch(/^draft_/);
+    expect(requestPayload.handoffId).toMatch(/^[a-f0-9-]{36}$/);
     await expect(page.getByTestId("message-image-gallery")).toBeVisible();
     await page.reload();
     await expect(page.getByTestId("message-image-gallery")).toBeVisible();
@@ -1591,7 +1591,7 @@ test("messages queued during generation can be managed and send after the reply"
     await page.addInitScript((selectedChatId) => {
       window.localStorage.setItem("star-companion:selected-chat", selectedChatId);
 
-      type QueueRequest = { type: string; requestId: string; content?: string };
+      type QueueRequest = { type: string; requestId: string; chatId?: string; content?: string; handoffId?: string };
       const requests: QueueRequest[] = [];
       let socket: { onmessage: ((event: MessageEvent) => void) | null } | null = null;
       const emit = (message: Record<string, unknown>) => {
@@ -1621,10 +1621,14 @@ test("messages queued during generation can be managed and send after the reply"
           }, 0);
         }
 
-        send(data: string) {
+        async send(data: string) {
           const request = JSON.parse(data) as QueueRequest;
           if (request.type !== "generate") return;
+          const response = await fetch("http://127.0.0.1:4010/api/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chatId: request.chatId, role: "user", content: request.content ?? "", handoffId: request.handoffId }) });
+          const message = (await response.json()).data;
+          request.content = message.content;
           requests.push(request);
+          emit({ type: "user_message", requestId: request.requestId, message });
           emit({ type: "generation_started", requestId: request.requestId });
           if (requests.length > 1) {
             window.setTimeout(
@@ -1678,6 +1682,7 @@ test("messages queued during generation can be managed and send after the reply"
       .filter({ hasText: "Discard this queued note." })
       .locator('[data-chat-action="queue-delete"]')
       .click();
+    await page.getByRole("dialog", { name: /删除待发送草稿|Discard pending draft/ }).getByRole("button", { name: /^(确认|Confirm)$/ }).click();
     await expect(queue).not.toContainText("Discard this queued note.");
 
     await queue
@@ -1685,6 +1690,7 @@ test("messages queued during generation can be managed and send after the reply"
       .filter({ hasText: queuedMessage })
       .locator('[data-chat-action="queue-edit"]')
       .click();
+    await page.getByRole("dialog", { name: /恢复到输入框|Restore to composer/ }).getByRole("button", { name: /^(确认|Confirm)$/ }).click();
     await expect(composer).toHaveValue(queuedMessage);
     await page.locator('#chat-primary-action[data-chat-action="queue"]').click();
 

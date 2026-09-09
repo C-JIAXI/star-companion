@@ -213,6 +213,10 @@ const getDocsCopy = (language: string): DocsCopy => {
               body: "输入框工具可录音转写、朗读最近回复和生成图片；每条助手回复也可单独朗读或停止。尚未配置兼容模型时，这些入口会直接定位到设置页对应的模块模型下拉框。设置页可指定文字朗读的声音 ID、0.5–2 倍播放速度，并选择是否自动朗读当前聊天中新收到的助手回复。图片会先在预览中展示，确认后才插入输入框。"
             },
             {
+              title: "草稿保存范围（开发中）",
+              body: "完整草稿恢复正在接入：后端已支持每个聊天独立保存文字与有序图片引用，但当前输入框还未接入，切换聊天仍可能丢失未发送图片。图片暂存期限为上传后 24 小时，读取不延长；草稿不属于备份或局域网同步内容。待发送队列仍仅在当前应用会话中使用。"
+            },
+            {
               title: "发送图片给视觉模型",
               body: "可通过文件选择、拖放或粘贴为一条用户消息添加最多 4 张图片，移动端使用系统相册/文件选择器。单张源文件最多 10 MB、每条消息规范化后合计最多 20 MB、解码后最多 2500 万像素。JPEG/PNG 会重新解码、应用方向并移除元数据；浏览器可安全读取的 WebP/GIF/AVIF 会转成静态 PNG/JPEG。SVG、图片网址和普通文件不支持。只有明确标记支持图片输入的聊天模型可发送；图片会经本地后端传给所选第三方模型服务，请同时遵守该服务的隐私与保留政策。"
             },
@@ -523,6 +527,10 @@ const getDocsCopy = (language: string): DocsCopy => {
           {
             title: "Archive completed chats",
             body: "Archive hides a completed chat from active History without deleting its messages or memories. History management mode can archive or restore several chats together; global message search still includes archived chats."
+          },
+          {
+            title: "Draft persistence scope (in development)",
+            body: "Complete draft recovery is being integrated. The backend can now save per-chat text and ordered image references, but the current composer is not connected yet and switching chats can still lose unsent images. Temporary images expire 24 hours after upload; reading does not renew them. Drafts are excluded from backups and LAN sync. The send queue remains limited to the current app session."
           },
           {
             title: "Organize story folders",
