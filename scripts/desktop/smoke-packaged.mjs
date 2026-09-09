@@ -28,6 +28,7 @@ const child = spawn(executable, [], {
   stdio: "ignore",
   windowsHide: true
 });
+const childClosed = new Promise((resolve) => child.once("close", resolve));
 
 try {
   const startedAt = Date.now();
@@ -43,9 +44,12 @@ try {
   assert.ok(!log.includes(root));
   assert.ok(!/api.?key|persona|chat content/i.test(log));
   child.kill();
-  await new Promise((resolve) => setTimeout(resolve, 750));
+  await childClosed;
   const databasePath = path.join(dataDirectory, "star-companion.db");
-  const db = new DatabaseSync(databasePath, { readOnly: true });
+  // This is an isolated disposable database. An interrupted SQLite writer may
+  // leave a hot journal, which must be recovered before read-only queries work.
+  const db = new DatabaseSync(databasePath);
+  db.exec("PRAGMA busy_timeout=5000");
   try {
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='RecoveryPoint'").get().count, 1);
     assert.equal(db.prepare("SELECT schema_version FROM _star_companion_meta WHERE id=1").get().schema_version, migrations.at(-1).name);

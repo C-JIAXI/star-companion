@@ -96,12 +96,14 @@ describe("storage health", () => {
     assert.equal(result.items[0]?.status, "completed");
   });
 
-  it("does not follow linked or traversal-like entries during temp cleanup", async (context) => {
+  for (const aliasedRoot of [false, true]) it(`does not follow linked or traversal-like entries during temp cleanup${aliasedRoot ? " through a root alias" : ""}`, async (context) => {
     const originalRoot = process.env.STAR_COMPANION_DATA_DIR;
     const root = await mkdtemp(path.join(os.tmpdir(), "star-companion-storage-test-"));
     const outside = await mkdtemp(path.join(os.tmpdir(), "star-companion-storage-outside-"));
+    const rootAlias = `${root}-alias`;
     try {
-      process.env.STAR_COMPANION_DATA_DIR = root;
+      if (aliasedRoot) await symlink(root, rootAlias, process.platform === "win32" ? "junction" : "dir");
+      process.env.STAR_COMPANION_DATA_DIR = aliasedRoot ? rootAlias : root;
       await mkdir(path.join(root, "temp"), { recursive: true });
       await writeFile(path.join(root, "temp", "owned.tmp"), "owned");
       const outsideFile = path.join(outside, "keep.txt");
@@ -115,6 +117,7 @@ describe("storage health", () => {
       await assert.rejects(() => readFile(path.join(root, "temp", "owned.tmp"), "utf8"));
     } finally {
       if (originalRoot === undefined) delete process.env.STAR_COMPANION_DATA_DIR; else process.env.STAR_COMPANION_DATA_DIR = originalRoot;
+      if (aliasedRoot) await rm(rootAlias, { recursive: true, force: true });
       await rm(root, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true });
     }
   });

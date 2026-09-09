@@ -102,9 +102,11 @@ const directoryInventory = async (name: "upgrade-recovery" | "temp" | "cache") =
     let anomalies = 0;
     for (const entry of entries) {
       const candidate = path.resolve(directory, entry.name);
-      if (!within(directoryReal, candidate) || entry.isSymbolicLink() || !entry.isFile()) { anomalies += 1; continue; }
+      if (!within(directory, candidate) || entry.isSymbolicLink() || !entry.isFile()) { anomalies += 1; continue; }
       const metadata = await lstat(candidate);
       if (!metadata.isFile() || metadata.isSymbolicLink()) { anomalies += 1; continue; }
+      // Compare canonical paths with canonical paths (Windows short paths and root aliases differ).
+      if (!within(directoryReal, await realpath(candidate))) { anomalies += 1; continue; }
       files.push({ path: candidate, size: metadata.size, mtimeMs: metadata.mtimeMs });
     }
     return { count: files.length, bytes: sum(files.map((entry) => entry.size)), anomalies, files };
@@ -141,10 +143,11 @@ const otherPrivateFiles = async () => {
     const knownDatabase = databasePath();
     for (const entry of await readdir(root, { withFileTypes: true })) {
       const candidate = path.resolve(root, entry.name);
-      if (!within(rootReal, candidate) || entry.isSymbolicLink()) { anomalies += 1; continue; }
+      if (!within(root, candidate) || entry.isSymbolicLink()) { anomalies += 1; continue; }
       if (!entry.isFile() || candidate === knownDatabase || candidate === `${knownDatabase}-wal` || candidate === `${knownDatabase}-shm`) continue;
       const metadata = await lstat(candidate);
       if (!metadata.isFile() || metadata.isSymbolicLink()) { anomalies += 1; continue; }
+      if (!within(rootReal, await realpath(candidate))) { anomalies += 1; continue; }
       count += 1; bytes += metadata.size;
     }
     return { count, bytes, anomalies };
