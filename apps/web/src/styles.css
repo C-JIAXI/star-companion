@@ -450,3 +450,44 @@
   height: 100dvh;
   height: -webkit-fill-available;
 }
+/* The chat workspace owns its scroll area instead of nesting in a page card. */
+.chat-workspace-central {
+  display: flex;
+  flex: 1 1 0%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-subtle);
+}
+.chat-workspace-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: .5rem;
+  padding: .375rem .75rem;
+  border-bottom: 1px solid var(--border-muted);
+  background: var(--surface);
+}
+#chat-composer, #chat-quick-replies {
+  width: 100%;
+  max-width: min(100%, var(--chat-reading-width));
+}
+.chat-actions-menu > button { min-height: 44px; text-align: left; padding: .5rem; border-radius: .375rem; }
+.chat-actions-menu > button:hover, .chat-actions-menu > button:focus-visible { background: var(--surface-subtle); }
+.chat-app-shell {
+  height: var(--chat-workspace-height, 100dvh);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  overflow: hidden;
+}
+[data-testid="chat-composer-toolbar"] button {
+  min-width: 44px;
+  min-height: 44px;
+}
+[data-testid="chat-image-draft"] { max-height: min(180px, 24dvh); overflow-y: auto; }
+[data-testid="chat-image-draft"] [data-image-status] { width: 140px; }
+[data-testid="chat-image-draft"] button { min-height: 44px; min-width: 44px; }
+[data-testid="chat-message-queue"] button { min-height: 44px; min-width: 44px; }
+#chat-message-input { min-height: 44px; line-height: var(--reading-line-height); }
+#chat-message-viewport { overflow-anchor: none; }

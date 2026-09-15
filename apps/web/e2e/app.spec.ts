@@ -1674,6 +1674,7 @@ test("messages queued during generation can be managed and send after the reply"
     await page.locator('#chat-primary-action[data-chat-action="queue"]').click();
     const queue = page.getByTestId("chat-message-queue");
     await expect(queue).toContainText(queuedMessage);
+    await page.getByTestId("chat-queue-toggle").click();
 
     await composer.fill("Discard this queued note.");
     await page.locator('#chat-primary-action[data-chat-action="queue"]').click();
@@ -2195,6 +2196,7 @@ test("chat agent panel inserts reply drafts and confirms memory candidates befor
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/");
     await openChatHistoryAndSelect(page, chatTitle);
+    await page.getByTestId("chat-more-trigger").click();
     await page.getByTestId("chat-agent-trigger").click();
     await expect(page.getByTestId("chat-agent-panel")).toBeVisible();
     await page.getByRole("button", { name: /回复草案|Reply Drafts/ }).click();
@@ -2222,10 +2224,13 @@ test("chat agent panel inserts reply drafts and confirms memory candidates befor
 
     await page.getByRole("button", { name: /关闭 Agent|Close Agent/ }).click();
     await page.setViewportSize({ width: 390, height: 780 });
+    await page.getByTestId("chat-more-trigger").click();
     await page.getByTestId("chat-agent-trigger").click();
     await expect(page.getByTestId("chat-agent-panel")).toBeVisible();
     const mobilePanelBox = await page.getByTestId("chat-agent-panel").boundingBox();
-    expect(mobilePanelBox?.y ?? 0).toBeGreaterThan(120);
+    expect(mobilePanelBox?.y ?? 0).toBeGreaterThanOrEqual(0);
+    await expect(page.getByTestId("chat-tools-panel")).toHaveAttribute("data-chat-tool-layout", "drawer");
+    expect((mobilePanelBox?.x ?? 0) + (mobilePanelBox?.width ?? 0)).toBeLessThanOrEqual(390);
   } finally {
     if (chatId) {
       await permanentlyDeleteChatViaApi(request, chatId);
@@ -2579,6 +2584,7 @@ test("AI title suggestion stays editable until the user confirms it", async ({ p
 
     await page.goto("/");
     await openChatHistoryAndSelect(page, chatTitle);
+    await page.getByTestId("chat-more-trigger").click();
     await page.getByTestId("chat-title-suggestion-trigger").click();
     await expect(page.locator("#chat-title input")).toHaveValue(suggestedTitle);
 
@@ -2694,7 +2700,7 @@ test("active chats export readable Markdown and plain-text transcripts", async (
     await page.goto("/");
     await expect(page.locator("#chat-title")).toContainText(chatTitle);
     await page.locator("#chat-settings-trigger").click();
-    await page.getByRole("button", { name: /导出聊天|Export Chat/ }).click();
+    await page.getByRole("menuitem", { name: /导出聊天|Export Chat/ }).click();
 
     const dialog = page.getByTestId("chat-export-dialog");
     await expect(dialog).toBeVisible();
@@ -2826,7 +2832,8 @@ test("history searches message content across chats and jumps to the matching tu
     await page.goto("/");
     const viewport = page.viewportSize();
     if (viewport && viewport.width < 1024) {
-      await page.getByTestId("global-search-trigger-mobile").click();
+      await page.getByRole("button", { name: "Toggle navigation", exact: true }).click();
+      await page.getByTestId("global-search-trigger-drawer").click();
     } else {
       await page.keyboard.press("Control+K");
     }
@@ -4438,6 +4445,7 @@ test("chat context budget uses the active model window and latest token usage", 
     await page.goto("/");
     await openChatHistoryAndSelect(page, chatTitle);
     await page.locator("#chat-settings-trigger").click();
+    await page.getByRole("menuitem", { name: /聊天设定|Chat settings/ }).click();
     await page.getByTestId("chat-context-budget-trigger").click();
 
     const dialog = page.getByTestId("chat-context-budget-dialog");
@@ -5134,6 +5142,7 @@ test("chat branches return to their highlighted source through Story paths", asy
     await expect(messageViewport.getByText(firstUserText)).toBeVisible();
     await expect(messageViewport.getByText(assistantText)).toBeVisible();
     await expect(messageViewport.getByText(secondUserText)).toHaveCount(0);
+    await page.getByTestId("chat-more-trigger").click();
     await page.getByTestId("chat-story-trigger").click();
     const storyNavigator = page.getByTestId("chat-story-navigator");
     await expect(storyNavigator.getByTestId("chat-story-path-node")).toHaveCount(2);
@@ -5192,6 +5201,7 @@ test("a checkpoint stays in the background and opens from Story paths", async ({
     await expect(
       page.getByText(/检查点已保存，可在历史记录中打开。|Checkpoint saved. Open it from History/)
     ).toBeVisible();
+    await page.getByTestId("chat-more-trigger").click();
     await page.getByTestId("chat-story-trigger").click();
     const checkpointPath = page
       .getByTestId("chat-story-navigator")
@@ -5421,6 +5431,7 @@ test("bookmarked messages persist and jump to saved chat history", async ({ page
     expect(persistedFirstResponse.ok()).toBeTruthy();
     expect((await persistedFirstResponse.json()).data.isBookmarked).toBe(true);
 
+    await page.getByTestId("chat-more-trigger").click();
     await page.getByTestId("chat-bookmarks-trigger").click();
     const bookmarks = page.getByTestId("chat-bookmarks-dialog");
     await expect(bookmarks).toBeVisible();
@@ -5683,7 +5694,7 @@ test("chat model switch preserves stored key and runtime settings when provider 
     await page.reload();
     await expect(page.locator("#chat-title")).toContainText(chatTitle);
     await page.locator("#chat-settings-trigger").click();
-    await page.getByRole("button", { name: /模型切换|Switch Model/ }).click();
+    await page.getByRole("menuitem", { name: /模型切换|Switch Model/ }).click();
     await page.getByRole("button", { name: /Target Model/ }).click();
 
     await expect.poll(() => latestSettingsPut.value).not.toBeNull();
@@ -5794,10 +5805,11 @@ test("chat persona presets save a visible identity and prompt config", async ({
 
     await page.goto("/");
     await openChatHistoryAndSelect(page, chatTitle);
-    await page.locator("button[aria-expanded]").click();
+    await page.getByTestId("chat-more-trigger").click();
+    await page.getByRole("menuitem", { name: /聊天设定|Chat settings/ }).click();
     await page.getByRole("button", { name: /^(自定义配置|Custom Config)$/ }).click();
 
-    const customConfigDialog = page.getByRole("dialog");
+    const customConfigDialog = page.getByRole("dialog").filter({ has: page.locator("#persona-display-name") });
     const configInputs = customConfigDialog.locator("textarea");
     const displayNameInput = customConfigDialog.locator("#persona-display-name");
     await displayNameInput.fill(personaDisplayName);
@@ -5866,7 +5878,8 @@ test("chat persona presets save a visible identity and prompt config", async ({
 
     await page.reload();
     await openChatHistoryAndSelect(page, chatTitle);
-    await page.locator("button[aria-expanded]").click();
+    await page.getByTestId("chat-more-trigger").click();
+    await page.getByRole("menuitem", { name: /聊天设定|Chat settings/ }).click();
     await page.getByRole("button", { name: /^(自定义配置|Custom Config)$/ }).click();
     await expect(customConfigDialog.locator("textarea").nth(0)).toHaveValue(customConfig.prefix);
     await expect(customConfigDialog.locator("textarea").nth(1)).toHaveValue(customConfig.prompt);
@@ -6023,9 +6036,9 @@ test("long-term memory delete confirm stays centered above the memory dialog", a
     await page.goto("/");
     await openChatHistoryAndSelect(page, chatTitle);
     await page.locator("#chat-settings-trigger").click();
-    await page.getByRole("button", { name: /^(记忆|Memory)$/ }).nth(1).click();
+    await page.getByRole("menuitem", { name: /^(记忆|Memory)$/ }).click();
 
-    const memoryDialog = page.getByRole("dialog").filter({ hasText: memoryTitle });
+    const memoryDialog = page.getByTestId("chat-tools-panel");
     await expect(memoryDialog).toBeVisible();
     await expect(memoryDialog.getByRole("paragraph").filter({ hasText: memoryTitle })).toBeVisible();
     await expect(memoryDialog.getByTestId("memory-index-summary")).toHaveAttribute(
@@ -6084,7 +6097,7 @@ test("memory history previews diffs, jumps across pages, restores tombstones, an
     await page.goto("/");
     await openChatHistoryAndSelect(page, `Audit Chat ${suffix}`);
     await page.locator("#chat-settings-trigger").click();
-    await page.getByRole("button", { name: /^(记忆|Memory)$/ }).nth(1).click();
+    await page.getByRole("menuitem", { name: /^(记忆|Memory)$/ }).click();
     const auditPanel = page.getByTestId("memory-audit-panel");
     await auditPanel.getByRole("button", { name: "Audited memory" }).click();
     await expect(page.getByTestId("memory-revision-2")).toBeVisible();
@@ -6106,7 +6119,7 @@ test("memory history previews diffs, jumps across pages, restores tombstones, an
     await page.reload();
     await openChatHistoryAndSelect(page, `Audit Chat ${suffix}`);
     await page.locator("#chat-settings-trigger").click();
-    await page.getByRole("button", { name: /^(记忆|Memory)$/ }).nth(1).click();
+    await page.getByRole("menuitem", { name: /^(记忆|Memory)$/ }).click();
     await expect(page.getByText(/已删除|Deleted/, { exact: true }).first()).toBeVisible();
     await page.getByRole("button", { name: /永久清除历史|Permanently purge history/ }).click();
     await expect(page.getByRole("dialog").filter({ hasText: /永久清除记忆历史|Permanently purge memory history/ })).toBeVisible();
@@ -6132,6 +6145,7 @@ test("chat profile summary history shows diffs and requires restore confirmation
     await page.goto("/");
     await openChatHistoryAndSelect(page, `Profile Chat ${suffix}`);
     await page.locator("#chat-settings-trigger").click();
+    await page.getByRole("menuitem", { name: /聊天设定|Chat settings/ }).click();
     await page.getByRole("button", { name: /用户信息摘要|Profile Summary/ }).click();
     const panel = page.getByTestId("profile-history-panel");
     await expect(panel).toContainText("Second profile version");

@@ -128,7 +128,7 @@ const scopeCssRules = (
   css: string,
   scope: string,
   shouldKeepSelector: (selector: string) => boolean = () => true,
-  transformBody: (body: string) => string = (body) => body,
+  transformBody: (body: string, selector: string) => string = (body) => body,
   restrictedAtRules = false
 ): string => {
   let output = "";
@@ -168,7 +168,7 @@ const scopeCssRules = (
         .map((selector) => scopeSelector(selector, scope))
         .join(", ");
       if (scopedSelectors) {
-        const transformedBody = transformBody(body);
+        const transformedBody = transformBody(body, trimmedPrelude);
         if (transformedBody.trim()) output += `${leading}${scopedSelectors} {${transformedBody}}`;
       }
     }
@@ -212,13 +212,29 @@ export const scopeCharacterHtmlCss = (css: string, scope = ":where(.rp-wrap)") =
   return scopeCssRules(sanitized, scope);
 };
 
+// Structural selectors remain available for paint, but cannot remove the controls
+// or change the workspace geometry. Message-fragment styles keep their own scope.
+const CORE_CHAT_SELECTOR = /#chat-(?:page-root|panel|title|settings-trigger|message-viewport|message-list|pagination|scroll-bottom|quick-replies(?:-toggle)?|composer|message-input|primary-action|empty-state)(?![\w-])/i;
+const protectChatStructure = (body: string, selector: string) => {
+  if (!CORE_CHAT_SELECTOR.test(selector)) return body;
+  return body.split(";").filter((declaration) => {
+    const separator = declaration.indexOf(":");
+    if (separator < 1) return false;
+    const property = declaration.slice(0, separator).trim().toLowerCase();
+    const value = declaration.slice(separator + 1).trim();
+    if (!/^(?:background(?:-color|-image|-position|-size|-repeat)?|color|border(?:-color|-width|-style|-radius|-top|-right|-bottom|-left)?|box-shadow|font-family|font-weight)$/.test(property)) return false;
+    if (/\b(?:transparent|inherit|unset|revert)\b/i.test(value) && property === "color") return false;
+    return true;
+  }).join(";");
+};
+
 export const scopeCharacterChatUiCss = (css: string, scope = "#chat-page-root") => {
   const sanitized = sanitizeCharacterHtmlCss(css).trim();
   if (!sanitized) {
     return "";
   }
 
-  return scopeCssRules(sanitized, scope, targetsChatUiSelector);
+  return scopeCssRules(sanitized, scope, targetsChatUiSelector, protectChatStructure);
 };
 
 export const scopeRestrictedCharacterHtmlCss = (css: string, scope = ":where(.rp-wrap)") => {
@@ -228,5 +244,6 @@ export const scopeRestrictedCharacterHtmlCss = (css: string, scope = ":where(.rp
 
 export const scopeRestrictedCharacterChatUiCss = (css: string, scope = "#chat-page-root") => {
   const sanitized = sanitizeCharacterHtmlCss(css).trim();
-  return sanitized ? scopeCssRules(sanitized, scope, targetsChatUiSelector, restrictDeclarations, true) : "";
+  return sanitized ? scopeCssRules(sanitized, scope, targetsChatUiSelector,
+    (body, selector) => protectChatStructure(restrictDeclarations(body), selector), true) : "";
 };

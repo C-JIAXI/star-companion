@@ -36,7 +36,7 @@ const getFocusableElements = (container: HTMLElement) =>
     (element) => !element.hasAttribute("disabled") && element.getClientRects().length > 0
   );
 
-function useDialogFocus<T extends HTMLElement>({
+export function useDialogFocus<T extends HTMLElement>({
   active,
   onDismiss,
   initialFocusSelector

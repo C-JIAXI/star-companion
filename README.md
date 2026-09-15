@@ -8,6 +8,30 @@ Chat drafts now save raw text and ordered image references per chat in the prote
 
 Old session queues are offered for manual recovery after unlock, never automatic sending. Image order is retained, and failed saves keep the old browser copy. Missing images require an explicit text-only recovery choice. Pending-list read errors have a separate retry and do not change the composer's save status. Locking cancels pending image preparation and uploads; unlocking does not resume abandoned work.
 
+## Chat workspace
+
+Chat uses a collapsible 240px navigation/history sidebar, a central reading area,
+and one optional tool surface. Tools dock at 340px when the chat workspace has
+at least 980px available; narrower windows use a keyboard-accessible drawer.
+Only the chat page removes the application-level heading and outer card padding.
+Official Chat UI selectors remain available. Core workspace containers and
+controls accept paint styling, but ignore character CSS that changes their
+display, positioning, sizing or transforms. Restricted/off modes remain available.
+
+- Desktop: model switch, search, Tools and More share the chat header.
+- Mobile: menu, chat title, search and More remain in one header. Model and
+  Memory / AI Agent / Story paths / Chat settings are within two actions.
+- More contains rename, title suggestions, bookmarks, export, background, archive
+  and move-to-trash; destructive actions still require confirmation.
+- Images precede the growing text input; media/send controls and draft status
+  follow it. Quick replies use one expandable row; queue and cost details can be
+  expanded. Budget warnings and draft errors remain visible.
+- Closing or switching tools does not apply Agent candidates or send drafts.
+  Sidebar/tool presentation state is session-only, not user-content storage.
+
+See [layout implementation and verification](docs/chat-workspace-layout.md) for
+synthetic before/after captures, actual test results and remaining platform checks.
+
 Current scope:
 
 - Single-user, single-character chat with backend-proxied model requests.

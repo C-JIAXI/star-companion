@@ -4,7 +4,7 @@ import {
   Menu,
   MessageSquarePlus,
   MessageSquareText,
-  Plus,
+  PanelLeftClose,
   Search,
   Settings,
   Users
@@ -128,6 +128,13 @@ export function App() {
   const appName = t("app.name");
   const active = sectionMeta[activeSection];
   const [showMobileNav, setShowMobileNav] = useState(false);
+  const [chatSidebarCollapsed, setChatSidebarCollapsed] = useState(false);
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const closeMobileNavigation = () => { if (desktop.matches) setShowMobileNav(false); };
+    desktop.addEventListener("change", closeMobileNavigation);
+    return () => desktop.removeEventListener("change", closeMobileNavigation);
+  }, []);
   const [showNewChatDialog, setShowNewChatDialog] = useState(false);
   const [chatCreationError, setChatCreationError] = useState<string | null>(null);
   const [settingsDirty, setSettingsDirty] = useState(false);
@@ -378,7 +385,7 @@ export function App() {
   }
 
   return (
-    <div className="h-dvh bg-ink-950 text-ink-50 selection:bg-ember-400/25 safe-area-top safe-area-bottom transition-[height] duration-200">
+    <div className={`h-dvh bg-ink-950 text-ink-50 selection:bg-ember-400/25 safe-area-top safe-area-bottom ${activeSection === "chat" ? "chat-app-shell" : "transition-[height] duration-200"}`}>
       <a className="skip-link" href="#main-content">
         {language === "zh-CN" ? "跳到主要内容" : "Skip to main content"}
       </a>
@@ -406,6 +413,9 @@ export function App() {
         }
       >
         <div className="flex h-full flex-col gap-4" data-testid="mobile-nav-content">
+          <button type="button" className="flex min-h-11 items-center gap-2 rounded-md px-3 text-sm text-ink-300" data-testid="global-search-trigger-drawer" onClick={openGlobalSearch}>
+            <Search size={18} />{t("chat.globalSearch")}
+          </button>
           <div>
             <p className="text-xs font-medium text-slate-400">{t("app.tagline")}</p>
             <nav className="mt-4 flex flex-col gap-1">
@@ -462,9 +472,17 @@ export function App() {
 
       <div className="flex h-full min-w-0 flex-col lg:flex-row">
         <aside
-          className="hidden lg:sticky lg:top-0 lg:flex lg:h-full lg:w-60 lg:flex-col lg:border-r lg:border-white/[0.08] lg:bg-ink-900"
+          className={`hidden lg:sticky lg:top-0 ${activeSection === "chat" && chatSidebarCollapsed ? "" : "lg:flex"} lg:h-full lg:w-60 lg:shrink-0 lg:flex-col lg:border-r lg:border-white/[0.08] lg:bg-ink-900`}
           data-testid="desktop-sidebar"
         >
+          {activeSection === "chat" ? <button
+            type="button"
+            aria-label={language === "zh-CN" ? "折叠侧栏" : "Collapse sidebar"}
+            data-testid="chat-sidebar-collapse"
+            className="ml-auto grid h-11 w-11 place-items-center text-ink-300"
+            onPointerDown={(event) => { if (document.activeElement?.id === "chat-message-input") event.preventDefault(); }}
+            onClick={() => setChatSidebarCollapsed(true)}
+          ><PanelLeftClose size={20} /></button> : null}
           <div className="flex shrink-0 items-center justify-between gap-3 px-4 py-5">
             <div className="flex items-center gap-3 min-w-0">
               <img
@@ -547,7 +565,7 @@ export function App() {
         </aside>
 
         <main id="main-content" tabIndex={-1} className="flex min-w-0 flex-1 flex-col min-h-0 overflow-hidden">
-          <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-white/[0.08] bg-ink-950/95 px-3 py-2.5 backdrop-blur-md safe-area-top sm:px-4 lg:hidden">
+          {activeSection !== "chat" ? <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-white/[0.08] bg-ink-950/95 px-3 py-2.5 backdrop-blur-md safe-area-top sm:px-4 lg:hidden">
             <button
               className="grid h-11 w-11 shrink-0 place-items-center rounded-md text-ink-300 transition-colors hover:bg-white/[0.06] hover:text-ink-50"
               type="button"
@@ -582,29 +600,17 @@ export function App() {
               >
                 <Search size={19} />
               </button>
-              {activeSection === "chat" ? (
-                <button
-                  aria-label={t("chat.newChat")}
-                  className="grid h-11 w-11 shrink-0 place-items-center rounded-md text-ink-300 transition-colors hover:bg-white/[0.06] hover:text-ink-50"
-                  data-testid="new-chat-trigger-mobile"
-                  title={t("chat.newChat")}
-                  type="button"
-                  onClick={() => setShowNewChatDialog(true)}
-                >
-                  <Plus size={20} />
-                </button>
-              ) : null}
             </div>
-          </header>
-          <header className="sticky top-0 z-20 hidden shrink-0 border-b border-white/[0.08] bg-ink-950/90 px-6 py-4 backdrop-blur-md lg:block lg:px-8">
+          </header> : null}
+          {activeSection !== "chat" ? <header className="sticky top-0 z-20 hidden shrink-0 border-b border-white/[0.08] bg-ink-950/90 px-6 py-4 backdrop-blur-md lg:block lg:px-8">
             <div>
               <h2 className="text-lg font-semibold text-ink-50">
                 {t(active.titleKey)}
               </h2>
               <p className="mt-0.5 text-sm leading-5 text-ink-400">{t(active.subtitleKey)}</p>
             </div>
-          </header>
-          <div className="animate-fade-in min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-5 lg:p-6 xl:p-8">
+          </header> : null}
+          <div className={activeSection === "chat" ? "min-h-0 flex-1 overflow-hidden" : "animate-fade-in min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-5 lg:p-6 xl:p-8"}>
             <Suspense
               fallback={
                 <div
@@ -621,6 +627,17 @@ export function App() {
             >
               {activeSection === "chat" ? (
                 <ChatPage
+                  navigationOpen={showMobileNav}
+                  navigationControl={<button
+                    type="button"
+                    aria-label="Toggle navigation"
+                    className={`grid h-11 w-11 shrink-0 place-items-center rounded-md text-ink-300 ${chatSidebarCollapsed ? "" : "lg:hidden"}`}
+                    onPointerDown={(event) => { if (window.matchMedia("(min-width: 1024px)").matches && document.activeElement?.id === "chat-message-input") event.preventDefault(); }}
+                    onClick={() => {
+                      if (window.matchMedia("(min-width: 1024px)").matches) setChatSidebarCollapsed(false);
+                      else setShowMobileNav(true);
+                    }}
+                  ><Menu size={20} /></button>}
                   selectedChatId={selectedChatId}
                   onChatsChanged={triggerChatRefresh}
                   onNewChat={() => setShowNewChatDialog(true)}

@@ -4,12 +4,15 @@ export function useMobileViewport() {
   const updateViewportHeight = useCallback(() => {
     const vh = window.innerHeight * 0.01;
     document.documentElement.style.setProperty('--vh', `${vh}px`);
+    const viewport = window.visualViewport;
+    const unzoomed = !viewport || Math.abs(viewport.scale - 1) < 0.01;
+    document.documentElement.style.setProperty('--chat-workspace-height', `${unzoomed && viewport ? viewport.height : window.innerHeight}px`);
 
     if (window.visualViewport) {
       const vvHeight = window.visualViewport.height;
       document.documentElement.style.setProperty('--vvh', `${vvHeight}px`);
       
-      const isKeyboardOpen = vvHeight < window.innerHeight * 0.75;
+      const isKeyboardOpen = unzoomed && vvHeight < window.innerHeight * 0.75;
       document.documentElement.classList.toggle('keyboard-open', isKeyboardOpen);
     }
   }, []);
@@ -27,6 +30,7 @@ export function useMobileViewport() {
 
     const handleFocusIn = (event: FocusEvent) => {
       const target = event.target as HTMLElement;
+      if (target.closest('#chat-page-root')) return;
       if (
         target.tagName === 'INPUT' ||
         target.tagName === 'TEXTAREA' ||

@@ -11,10 +11,10 @@ import {
   Download,
   FileText,
   Gauge,
-  GitBranch,
   Image,
   ListChecks,
   Mic,
+  MoreHorizontal,
   Pencil,
   Plus,
   Paperclip,
@@ -26,7 +26,6 @@ import {
   Sparkles,
   StopCircle,
   Trash2,
-  User,
   Volume2,
   VolumeX,
   WifiOff,
@@ -49,6 +48,7 @@ import { useI18n } from "../i18n";
 import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
 import { api } from "../lib/api";
 import { useChatDraft } from "../lib/useChatDraft";
+import { useChatLayoutAnchor } from "../lib/useChatLayoutAnchor";
 import { timelineApi } from "../lib/timelineApi";
 import {
   buildChatTranscript,
@@ -100,7 +100,6 @@ import {
   EmptyState,
   ErrorNotice,
   Modal,
-  Panel,
   SuccessNotice,
   TextArea,
   TextInput
@@ -116,6 +115,11 @@ import { MarkdownEditor } from "../components/MarkdownEditor";
 import { DebugPromptDrawer } from "../components/DebugPromptDrawer";
 import { ChatStoryNavigator } from "../components/ChatStoryNavigator";
 import { MemoryAuditPanel } from "../components/MemoryAuditPanel";
+import { ChatWorkspacePanel as Panel } from "../components/ChatWorkspacePanel";
+import { ChatToolSurface } from "../components/ChatToolSurface";
+import { ChatToolContent } from "../components/ChatToolContent";
+import { ChatActionsMenu } from "../components/ChatActionsMenu";
+import type { ReactNode } from "react";
 import { ProfileHistoryPanel } from "../components/ProfileHistoryPanel";
 import { normalizeChatImageFile } from "../lib/chatImages";
 import { resolveApiUrl } from "../lib/appBackend";
@@ -273,11 +277,15 @@ const hasCompatibleModuleModel = (
 };
 
 export function ChatPage({
+  navigationOpen = false,
+  navigationControl,
   selectedChatId,
   onChatsChanged,
   onNewChat,
   onSelectChat
 }: {
+  navigationOpen?: boolean;
+  navigationControl?: ReactNode;
   selectedChatId: string | null;
   onChatsChanged: () => void;
   onNewChat: () => void;
@@ -304,6 +312,7 @@ export function ChatPage({
   });
   const [costPreview, setCostPreview] = useState<CostPreviewDTO | null>(null);
   const [costPreviewExpanded, setCostPreviewExpanded] = useState(false);
+  const [queueExpanded, setQueueExpanded] = useState(false);
   const [queuedMessages, setQueuedMessages] = useState<QueuedChatMessage[]>([]);
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingCharacterId, setStreamingCharacterId] = useState<string | null>(null);
@@ -410,6 +419,24 @@ export function ChatPage({
   const [guidedRegenerateMessage, setGuidedRegenerateMessage] = useState<MessageDTO | null>(null);
   const [regenerationGuidance, setRegenerationGuidance] = useState("");
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
+  const [chatSettingsToolOpen, setChatSettingsToolOpen] = useState(false);
+  const [pendingChatManagement, setPendingChatManagement] = useState<{ id: string; action: "trash" | "archive"; archived: boolean } | null>(null);
+  const [toolHost, setToolHost] = useState<HTMLDivElement | null>(null);
+  const memoryEditorChatRef = useRef<string | null>(null);
+  const closeTools = () => {
+    setAgentPanelOpen(false);
+    setShowMemoryDialog(false);
+    setShowStoryNavigator(false);
+    setChatSettingsToolOpen(false);
+  };
+  useEffect(() => {
+    if (navigationOpen) {
+      setAgentPanelOpen(false);
+      setShowMemoryDialog(false);
+      setShowStoryNavigator(false);
+      setChatSettingsToolOpen(false);
+    }
+  }, [navigationOpen]);
   const [agentMode, setAgentMode] = useState<ChatAgentMode>("next_steps");
   const [agentFocus, setAgentFocus] = useState("");
   const [agentDraft, setAgentDraft] = useState<ChatAgentDraftDTO | null>(null);
@@ -492,6 +519,7 @@ export function ChatPage({
   const draftTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
   const pendingTimelineAnchorRef = useRef<{ id: string; offset: number } | null>(null);
+  useChatLayoutAnchor(messageViewportRef, activeChat?.id, pendingTimelineAnchorRef);
   const loadChatAbortRef = useRef<AbortController | null>(null);
   const backgroundFileInputRef = useRef<HTMLInputElement | null>(null);
   const hasMessagesRef = useRef(false);
@@ -500,13 +528,14 @@ export function ChatPage({
   const activeRequestRef = useRef<StoredActiveRequest | null>(readStoredActiveRequest());
   tRef.current = t;
 
-  const autoResizeDraftTextArea = () => {
+  const autoResizeDraftTextArea = useCallback(() => {
     const el = draftTextAreaRef.current;
     if (!el) return;
     el.style.height = "auto";
     const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 19.6;
     const maxLines = 6;
-    const maxHeight = lineHeight * maxLines;
+    const viewportHeight = window.visualViewport?.scale === 1 ? window.visualViewport.height : window.innerHeight;
+    const maxHeight = Math.max(44, Math.min(lineHeight * maxLines + 24, viewportHeight * 0.2));
     if (el.scrollHeight <= maxHeight) {
       el.style.height = `${el.scrollHeight}px`;
       el.style.overflowY = "hidden";
@@ -514,11 +543,30 @@ export function ChatPage({
       el.style.height = `${maxHeight}px`;
       el.style.overflowY = "auto";
     }
-  };
+  }, []);
 
   useEffect(() => {
     autoResizeDraftTextArea();
-  }, [draft]);
+  }, [draft, autoResizeDraftTextArea]);
+
+  useEffect(() => {
+    const element = draftTextAreaRef.current;
+    if (!element) return;
+    let width = element.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (width !== element.clientWidth) { width = element.clientWidth; autoResizeDraftTextArea(); }
+    });
+    observer.observe(element);
+    const appearance = new MutationObserver(autoResizeDraftTextArea);
+    appearance.observe(document.documentElement, { attributes: true });
+    window.addEventListener("resize", autoResizeDraftTextArea);
+    window.visualViewport?.addEventListener("resize", autoResizeDraftTextArea);
+    return () => {
+      observer.disconnect(); appearance.disconnect();
+      window.removeEventListener("resize", autoResizeDraftTextArea);
+      window.visualViewport?.removeEventListener("resize", autoResizeDraftTextArea);
+    };
+  }, [activeChat?.id, autoResizeDraftTextArea]);
 
   const upsertMessage = (message: MessageDTO) => {
     setActiveChat((current) => {
@@ -1774,7 +1822,6 @@ export function ChatPage({
       return;
     }
 
-    setMemoryDraft(String(activeChat.memoryTurns));
     setMemorySettingsOpen((current) => {
       if (!current) {
         void api.settings.get().then((settings) => {
@@ -1790,10 +1837,6 @@ export function ChatPage({
       }
       return !current;
     });
-  };
-
-  const handleMemorySettingsPointerDownCapture = (_event: React.PointerEvent<HTMLDivElement>) => {
-    // no-op: editing now uses modal dialogs
   };
 
   const saveUserConfig = async () => {
@@ -2171,10 +2214,14 @@ export function ChatPage({
   };
 
   const openMemoryDialog = () => {
+    closeTools();
+    if (memoryEditorChatRef.current !== activeChat?.id) {
     setMemoryDraft(String(activeChat?.memoryTurns ?? 12));
     setAutoMemoryEnabled(activeChat?.autoMemoryEnabled ?? true);
     setEditingMemory(null);
     setMemoryForm(emptyMemoryForm);
+    memoryEditorChatRef.current = activeChat?.id ?? null;
+    }
     setShowMemoryDialog(true);
     setMemoryCursor(null);
     setMemoryHasMore(false);
@@ -2182,12 +2229,6 @@ export function ChatPage({
     setMemoryIndexStats(null);
     setMemorySettingsOpen(false);
     void loadChatMemories();
-  };
-
-  const closeMemoryDialog = () => {
-    setShowMemoryDialog(false);
-    setEditingMemory(null);
-    setMemoryForm(emptyMemoryForm);
   };
 
   const openBackgroundDialog = () => {
@@ -2283,6 +2324,7 @@ export function ChatPage({
   };
 
   const openAgentPanel = () => {
+    closeTools();
     setAgentPanelOpen(true);
     setMemorySettingsOpen(false);
   };
@@ -3385,6 +3427,7 @@ export function ChatPage({
   };
 
   const openStoryNavigator = () => {
+    closeTools();
     setShowStoryNavigator(true);
     void loadStoryNavigator();
   };
@@ -4010,11 +4053,14 @@ export function ChatPage({
   return (
     <>
       <div className="flex flex-col h-full min-h-0 min-w-0" id="chat-page-root">
-        <div className="flex flex-col h-full min-h-0 min-w-0" id="chat-panel">
+        <div className="flex h-full min-h-0 min-w-0" id="chat-panel">
           <Panel
             className="flex flex-col h-full min-h-0 min-w-0"
             title={
-              <div className="min-w-0" id="chat-title">
+              <div className="flex min-w-0 items-center gap-1">
+                {navigationControl}
+<h2 className="min-w-0 flex-1 truncate" id="chat-title">
+                {activeChat?.characterId ? <div className="truncate px-1 text-[11px] font-normal text-ink-400" title={characterMap.get(activeChat.characterId)?.name}>{characterMap.get(activeChat.characterId)?.name}</div> : null}
                 {titleEditing && activeChat ? (
                   <input
                     ref={titleInputRef}
@@ -4034,10 +4080,12 @@ export function ChatPage({
                     }}
                   />
                 ) : (
-                  <span
-                    className="cursor-pointer rounded px-1 py-0.5 hover:bg-white/5 outline-none focus:outline-none focus:ring-0"
+                  <button
+                    type="button"
+                    className="block min-h-11 max-w-full truncate rounded px-1 text-left hover:bg-white/5"
                     style={{ WebkitUserSelect: "none", userSelect: "none" }}
-                    title={t("chat.renameHint")}
+                    title={`${activeChat?.title ?? t("chat.messageStream")} · ${t("chat.renameHint")}`}
+                    aria-label={`${activeChat?.title ?? t("chat.messageStream")} · ${t("chat.renameHint")}`}
                     onClick={() => {
                       if (!activeChat) {
                         return;
@@ -4048,201 +4096,63 @@ export function ChatPage({
                     }}
                   >
                     {activeChat?.title ?? t("chat.messageStream")}
-                  </span>
+                  </button>
                 )}
+              </h2>
               </div>
             }
             action={
               <div className="flex items-center gap-1">
-                <Button
-                  aria-label={t("chat.readinessTitle")}
-                  className={`!h-8 !min-h-8 !w-8 !p-0 ${
-                    readinessIssueCount > 0 ? "text-amber-300" : "text-emerald-300"
-                  }`}
-                  data-testid="chat-readiness-trigger"
-                  title={t("chat.readinessTitle")}
-                  variant="ghost"
-                  onClick={() => setShowReadinessDialog(true)}
-                >
-                  {readinessIssueCount > 0 ? <CircleAlert size={15} /> : <ListChecks size={15} />}
+                <Button aria-label={t("chat.readinessTitle")} data-testid="chat-readiness-trigger"
+                  className={`${activeChat ? "!hidden sm:!inline-flex" : ""} !h-11 !min-h-11 !w-11 !p-0`}
+                  variant="ghost" onClick={() => setShowReadinessDialog(true)}>
+                  {readinessIssueCount > 0 ? <CircleAlert size={18} /> : <ListChecks size={18} />}
                 </Button>
-                {activeChat ? (
-                  <>
-                    <Button
-                      aria-label={t("chat.storyPaths")}
-                      className="!h-8 !min-h-8 !w-8 !p-0"
-                      data-testid="chat-story-trigger"
-                      title={t("chat.storyPaths")}
-                      variant="ghost"
-                      onClick={openStoryNavigator}
-                    >
-                      <GitBranch size={15} />
-                    </Button>
-                  <Button
-                    aria-label={t("chat.searchMessages")}
-                    className="!h-8 !min-h-8 !w-8 !p-0"
-                    data-testid="chat-search-trigger"
-                    title={t("chat.searchMessages")}
-                    variant="ghost"
-                    onClick={() => {
-                      setMessageSearchOpen(true);
-                      setMessageSearchResult(null);
-                    }}
-                  >
-                    <Search size={15} />
+                {!activeChat ? <Button className="!h-11 !min-h-11 !w-11 !p-0 lg:!hidden" aria-label={t("chat.newChat")} data-testid="new-chat-trigger-mobile" onClick={onNewChat}><Plus size={18} /></Button> : null}
+                {activeChat ? <>
+                  <Button className="!hidden !min-h-11 max-w-40 sm:!inline-flex" variant="ghost"
+                    data-testid="chat-model-trigger" title={t("chat.modelSwitchTitle")} onClick={openModelDialog}>
+                    <span className="truncate">{activeChatModel?.model.model || runtimeSettings?.model || t("chat.modelSwitchTitle")}</span>
+                    <ChevronDown size={14} />
                   </Button>
-                  <Button
-                    aria-label={t("chat.bookmarks")}
-                    className="!h-8 !min-h-8 !w-8 !p-0"
-                    data-testid="chat-bookmarks-trigger"
-                    title={t("chat.bookmarks")}
-                    variant="ghost"
-                    onClick={openBookmarks}
-                  >
-                    <Bookmark size={15} />
+                  <Button aria-label={t("chat.searchMessages")} className="!h-11 !min-h-11 !w-11 !p-0"
+                    data-testid="chat-search-trigger" variant="ghost"
+                    onClick={() => { setMessageSearchOpen(true); setMessageSearchResult(null); }}>
+                    <Search size={18} />
                   </Button>
-                  <Button
-                    aria-label={t("chat.titleSuggestion")}
-                    className="!h-8 !min-h-8 !w-8 !p-0"
-                    data-testid="chat-title-suggestion-trigger"
-                    disabled={titleSuggestionLoading || activeChat.messages.length === 0}
-                    title={t("chat.titleSuggestion")}
-                    variant="ghost"
-                    onClick={() => void generateTitleSuggestion()}
-                  >
-                    <Sparkles size={15} />
-                  </Button>
-                  <Button
-                    aria-label={t("chat.agentTitle")}
-                    aria-pressed={agentPanelOpen}
-                    className="!h-8 !min-h-8 !w-8 !p-0"
-                    data-testid="chat-agent-trigger"
-                    id="chat-agent-trigger"
-                    title={t("chat.agentTitle")}
-                    variant={agentPanelOpen ? "secondary" : "ghost"}
-                    onClick={openAgentPanel}
-                  >
-                    <BrainCircuit size={15} />
+                  <Button className="!hidden !min-h-11 sm:!inline-flex" variant="ghost"
+                    data-testid="chat-tools-trigger" aria-expanded={agentPanelOpen || showMemoryDialog || showStoryNavigator || chatSettingsToolOpen}
+                    onPointerDown={(event) => { if (document.activeElement?.id === "chat-message-input") event.preventDefault(); }}
+                    onClick={() => { closeTools(); setChatSettingsToolOpen(true); }}>
+                    <Settings size={18} />{language === "zh-CN" ? "工具" : "Tools"}
                   </Button>
                   <div className="relative" ref={memorySettingsRef}>
-                  <Button
-                    aria-expanded={memorySettingsOpen}
-                    aria-label={t("chat.memorySettings")}
-                    className="!h-8 !min-h-8 !w-8 !p-0"
-                    id="chat-settings-trigger"
-                    variant="ghost"
-                    onClick={openMemorySettings}
-                  >
-                    <Settings size={15} />
-                  </Button>
-                  {memorySettingsOpen ? (
-                    <div
-                      className="custom-scrollbar absolute right-0 top-10 z-20 max-h-80 w-60 overflow-y-auto rounded-lg border border-white/[0.1] bg-ink-800 p-2 shadow-xl shadow-black/45 sm:max-h-[calc(100dvh-22rem)]"
-                      onPointerDownCapture={handleMemorySettingsPointerDownCapture}
-                    >
-                      {settingsProviders.length > 0 ? (
-                        <div className="mb-2 border-b border-white/10 pb-2">
-                          <button
-                            className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
-                            type="button"
-                            onClick={openModelDialog}
-                          >
-                            <span>{t("chat.modelSwitchTitle")}</span>
-                            <Sparkles size={14} className="text-slate-400" />
-                          </button>
-                        </div>
-                      ) : null}
-
-                      <div className="border-b border-white/10 pb-2">
-                        <button
-                          className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
-                          data-testid="chat-context-budget-trigger"
-                          type="button"
-                          onClick={() => {
-                            setMemorySettingsOpen(false);
-                            setShowContextBudgetDialog(true);
-                          }}
-                        >
-                          <span>{t("chat.contextBudgetTitle")}</span>
-                          <Gauge size={14} className="text-slate-400" />
-                        </button>
-                      </div>
-
-                      <div className="border-b border-white/10 pb-2 pt-2">
-                        <button
-                          className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
-                          type="button"
-                          onClick={openMemoryDialog}
-                        >
-                          <span>{t("chat.memorySettings")}</span>
-                          <BrainCircuit size={14} className="text-slate-400" />
-                        </button>
-                      </div>
-
-                      <div className="border-b border-white/10 pb-2 pt-2">
-                        <button
-                          className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
-                          type="button"
-                          onClick={openBackgroundDialog}
-                        >
-                          <span>{backgroundCopy.title}</span>
-                          <Image size={14} className="text-slate-400" />
-                        </button>
-                      </div>
-
-                      <div className="border-b border-white/10 pb-2 pt-2">
-                        <button
-                          className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
-                          type="button"
-                          onClick={openTranscriptExport}
-                        >
-                          <span>{t("chat.exportChat")}</span>
-                          <Download size={14} className="text-slate-400" />
-                        </button>
-                      </div>
-
-                      <div className="border-b border-white/10 pb-2 pt-2">
-                        <button
-                          className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
-                          type="button"
-                          onClick={startEditingUserConfig}
-                        >
-                          <span>{t("chat.userConfigTitle")}</span>
-                          <FileText size={14} className="text-slate-400" />
-                        </button>
-                      </div>
-
-                      <div className="pt-2">
-                        <button
-                          className="flex min-h-[36px] w-full items-center justify-between text-sm font-semibold text-slate-100 transition-colors hover:text-ember-200 active:text-ember-300"
-                          type="button"
-                          onClick={startEditingProfile}
-                        >
-                          <span>{t("chat.userProfileTitle")}</span>
-                          <User size={14} className="text-slate-400" />
-                        </button>
-                        <div className="mt-1.5 flex items-center justify-between gap-2">
-                          <p className="text-xs font-semibold text-slate-100">
-                            {t("chat.autoSummarizeUser")}
-                          </p>
-                          <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-slate-400">
-                            <input
-                              checked={autoSummarizeUser}
-                              type="checkbox"
-                              className="rounded border-white/20 bg-ink-950 text-ember-500 focus:ring-ember-500/50"
-                              onChange={(event) =>
-                                void updateAutoSummarizeUser(event.target.checked)
-                              }
-                            />
-                            {t("chat.autoSummarizeUser")}
-                          </label>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
+                    <Button aria-expanded={memorySettingsOpen} aria-haspopup="menu"
+                      aria-label={language === "zh-CN" ? "更多聊天操作" : "More chat actions"}
+                      className="!h-11 !min-h-11 !w-11 !p-0" id="chat-settings-trigger"
+                      data-testid="chat-more-trigger" variant="ghost" onClick={openMemorySettings}>
+                      <MoreHorizontal size={20} />
+                    </Button>
+                    {memorySettingsOpen ? <ChatActionsMenu label={language === "zh-CN" ? "更多聊天操作" : "More chat actions"} onClose={() => setMemorySettingsOpen(false)}>
+                      <p className="px-2 pt-1 text-xs text-ink-400">{language === "zh-CN" ? "模型与工具" : "Model and tools"}</p>
+                      <button role="menuitem" type="button" onClick={openModelDialog}>{t("chat.modelSwitchTitle")}: {activeChatModel?.model.model || runtimeSettings?.model}</button>
+                      <button role="menuitem" type="button" onClick={openMemoryDialog}>{t("chat.memorySettings")}</button>
+                      <button role="menuitem" type="button" id="chat-agent-trigger" data-testid="chat-agent-trigger" onClick={openAgentPanel}>{t("chat.agentTitle")}</button>
+                      <button role="menuitem" type="button" data-testid="chat-story-trigger" onClick={() => { setMemorySettingsOpen(false); openStoryNavigator(); }}>{t("chat.storyPaths")}</button>
+                      <button role="menuitem" type="button" onClick={() => { setMemorySettingsOpen(false); closeTools(); setChatSettingsToolOpen(true); }}>{language === "zh-CN" ? "聊天设定" : "Chat settings"}</button>
+                      <button role="menuitem" type="button" data-testid="chat-readiness-menu-trigger" onClick={() => { setMemorySettingsOpen(false); setShowReadinessDialog(true); }}>{t("chat.readinessTitle")}</button>
+                      <p className="border-t border-white/10 px-2 pt-2 text-xs text-ink-400">{language === "zh-CN" ? "聊天管理" : "Manage chat"}</p>
+                      <button role="menuitem" type="button" onClick={() => { setMemorySettingsOpen(false); setTitleDraft(activeChat.title); setTitleEditing(true); setTimeout(() => titleInputRef.current?.focus(), 0); }}>{t("chat.renameHint")}</button>
+                      <button role="menuitem" type="button" data-testid="chat-title-suggestion-trigger" disabled={titleSuggestionLoading || activeChat.messages.length === 0} onClick={() => { setMemorySettingsOpen(false); void generateTitleSuggestion(); }}>{t("chat.titleSuggestion")}</button>
+                      <button role="menuitem" type="button" data-testid="chat-bookmarks-trigger" onClick={() => { setMemorySettingsOpen(false); openBookmarks(); }}>{t("chat.bookmarks")}</button>
+                      <button role="menuitem" type="button" onClick={openTranscriptExport}>{t("chat.exportChat")}</button>
+                      <button role="menuitem" type="button" onClick={openBackgroundDialog}>{backgroundCopy.title}</button>
+                      <button role="menuitem" type="button" data-testid="new-chat-trigger-mobile" onClick={() => { setMemorySettingsOpen(false); onNewChat(); }}>{t("chat.newChat")}</button>
+                      <button role="menuitem" type="button" onClick={() => { setMemorySettingsOpen(false); setPendingChatManagement({ id: activeChat.id, action: "archive", archived: activeChat.isArchived }); }}>{language === "zh-CN" ? (activeChat.isArchived ? "取消归档" : "归档聊天") : (activeChat.isArchived ? "Unarchive chat" : "Archive chat")}</button>
+                      <button role="menuitem" type="button" className="text-rose-400" onClick={() => { setMemorySettingsOpen(false); setPendingChatManagement({ id: activeChat.id, action: "trash", archived: activeChat.isArchived }); }}>{language === "zh-CN" ? "移入回收站" : "Move to trash"}</button>
+                    </ChatActionsMenu> : null}
                   </div>
-                  </>
-                ) : null}
+                </> : null}
               </div>
             }
           >
@@ -4627,11 +4537,12 @@ export function ChatPage({
 
                     <div className="shrink-0">
                       {activeQuickReplies.length > 0 ? (
-                        <div className="mx-auto mb-1 max-w-2xl px-1" id="chat-quick-replies">
+                        <div className="mx-auto mb-1 flex max-w-2xl items-start gap-1 px-1" id="chat-quick-replies">
                           <button
                             id="chat-quick-replies-toggle"
                             type="button"
-                            className="inline-flex h-6 items-center gap-1 text-xs font-medium text-slate-500 transition-colors hover:text-slate-300 active:text-slate-200"
+                            className="inline-flex min-h-11 shrink-0 items-center gap-1 px-2 text-xs font-medium text-slate-500 transition-colors hover:text-slate-300 active:text-slate-200"
+                            aria-expanded={quickRepliesOpen}
                             onClick={toggleQuickReplies}
                           >
                             <ChevronDown
@@ -4641,20 +4552,15 @@ export function ChatPage({
                             {t("chat.quickReplies")}
                           </button>
                           <div
-                            className="overflow-hidden"
-                            style={{
-                              maxHeight: quickRepliesOpen ? "200px" : "0px",
-                              opacity: quickRepliesOpen ? 1 : 0,
-                              transition: "max-height 300ms ease-out, opacity 300ms ease-out"
-                            }}
+                            className="min-w-0 flex-1 overflow-x-auto"
                           >
-                            <div className="mt-0.5 flex flex-wrap gap-1">
+                            <div className={`flex gap-1 ${quickRepliesOpen ? "max-h-32 flex-wrap overflow-y-auto" : "flex-nowrap"}`}>
                               {activeQuickReplies.map((qr) => (
                                 <button
                                   data-chat-quick-reply=""
                                   key={qr.id}
                                   type="button"
-                                  className="inline-flex h-7 items-center gap-1 rounded-md border border-white/10 bg-ink-950/80 px-2 text-xs font-medium text-slate-300 transition-colors hover:border-ember-500/40 hover:bg-ink-900 hover:text-slate-100 active:bg-ink-800"
+                                  className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-md border border-white/10 bg-ink-950/80 px-2 text-xs font-medium text-slate-300 transition-colors hover:border-ember-500/40 hover:bg-ink-900 hover:text-slate-100 active:bg-ink-800"
                                   onClick={() =>
                                     setDraft((current) =>
                                       current ? `${current}\n${qr.content}` : qr.content
@@ -4669,7 +4575,7 @@ export function ChatPage({
                         </div>
                       ) : null}
                       <div
-                        className="mx-auto max-w-3xl rounded-lg border border-white/[0.1] bg-ink-950/95 p-1.5 shadow-xl shadow-black/30 sm:p-2 xl:bg-ink-950/70"
+                        className="mx-auto max-w-3xl rounded-t-lg border-t border-white/[0.1] bg-ink-950/95 p-1.5 sm:p-2"
                         id="chat-composer"
                       >
                         {connectionState !== "connected" ? (
@@ -4712,9 +4618,10 @@ export function ChatPage({
                             data-testid="chat-message-queue"
                           >
                             <div className="mb-1 flex items-center justify-between gap-2">
-                              <span className="text-xs font-medium text-slate-400">
+                              <button type="button" className="min-h-11 text-xs font-medium text-slate-400" aria-expanded={queueExpanded} data-testid="chat-queue-toggle" onClick={() => setQueueExpanded((value) => !value)}>
                                 {t("chat.queueCount", { count: queuedMessages.length })}
-                              </span>
+                                <ChevronDown className={`ml-1 inline ${queueExpanded ? "rotate-180" : ""}`} size={14} />
+                              </button>
                               <button
                                 className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-ember-300 transition-colors hover:bg-ember-500/10 hover:text-ember-200"
                                 data-chat-action="queue-send-now"
@@ -4727,7 +4634,7 @@ export function ChatPage({
                                 <Send size={15} />
                               </button>
                             </div>
-                            <div className="max-h-28 space-y-1 overflow-y-auto">
+                            <div hidden={!queueExpanded} className="max-h-36 space-y-1 overflow-y-auto">
                               {queuedMessages.map((message) => (
                                 <div
                                   className="flex min-w-0 items-center gap-1 rounded-md bg-white/[0.035] px-2 py-1"
@@ -4762,7 +4669,45 @@ export function ChatPage({
                             </div>
                           </div>
                         ) : null}
-                        <div className="mb-1 flex items-center gap-1 px-1">
+                        {draftAttachments.length > 0 || attachmentBusy || attachmentError ? <div className="mb-2 rounded-md border border-white/10 bg-black/10 p-2" data-testid="chat-image-draft" aria-live="polite">
+                          {!visionNoticeAcknowledged ? <div className="mb-2 flex items-start justify-between gap-2 rounded bg-amber-500/10 p-2 text-xs text-amber-100"><span>{language === "zh-CN" ? "发送时，这些图片会传给你配置的第三方模型供应商。" : "When sent, these images will be shared with your configured third-party model provider."}</span><button className="shrink-0 font-semibold underline" type="button" onClick={() => { setVisionNoticeAcknowledged(true); try { localStorage.setItem("star-companion:vision-privacy-notice", "acknowledged"); } catch {} }}>{language === "zh-CN" ? "知道了" : "Got it"}</button></div> : null}
+                          <div className="flex max-w-full gap-2 overflow-x-auto pb-1">
+                            {draftAttachments.map((attachment, index) => <div key={attachment.id} className="relative w-24 shrink-0 rounded border border-white/10 bg-ink-950 p-1" data-image-status={attachment.status}>
+                              {attachment.status === "ready" ? <img className="h-16 w-full rounded object-cover" alt={`${language === "zh-CN" ? "待发送图片" : "Pending image"} ${index + 1}`} src={resolveApiUrl(attachment.url)} onError={() => composer.markImageUnavailable(attachment.id)} /> : <div className="grid h-16 place-items-center rounded text-xs text-amber-300">{attachment.status === "expired" ? (language === "zh-CN" ? "图片已过期" : "Image expired") : (language === "zh-CN" ? "图片不可用" : "Image unavailable")}</div>}
+                              <span className="mt-1 block truncate text-[10px] text-slate-400" title={new Date(attachment.expiresAt).toLocaleString()}>{language === "zh-CN" ? "上传后 24 小时过期" : "Expires after 24 hours"}</span>
+                              <div className="flex justify-between"><button className="min-h-7 min-w-7" type="button" disabled={composer.disabled || index === 0} aria-label={language === "zh-CN" ? "图片前移" : "Move image earlier"} onClick={() => void moveChatImage(index, -1)}><ChevronLeft size={13} /></button><button className="min-h-7 min-w-7 text-rose-300" type="button" disabled={composer.disabled} aria-label={language === "zh-CN" ? "移除图片" : "Remove image"} onClick={() => void removeChatImage(attachment)}><X size={13} /></button><button className="min-h-7 min-w-7" type="button" disabled={composer.disabled || index === draftAttachments.length - 1} aria-label={language === "zh-CN" ? "图片后移" : "Move image later"} onClick={() => void moveChatImage(index, 1)}><ChevronRight size={13} /></button></div>
+                            </div>)}
+                            {attachmentBusy ? <div className="grid h-24 w-24 shrink-0 place-items-center rounded border border-white/10 text-xs text-slate-300" role="status"><RefreshCw className="animate-spin" size={16} />{language === "zh-CN" ? "处理中" : "Processing"}</div> : null}
+                          </div>
+                          {attachmentError ? <p className="mt-2 text-xs text-rose-300" role="alert">{attachmentError} {!activeChatSupportsVision ? <button className="font-semibold underline" type="button" onClick={() => navigateToSection("settings", "model")}>{language === "zh-CN" ? "切换模型" : "Switch model"}</button> : null}</p> : null}
+                        </div> : null}
+                        <div className="min-w-0">
+                          <TextArea
+                            ref={draftTextAreaRef}
+                            className="chat-input !resize-none border-0 bg-transparent !px-2 !py-[11px] !text-sm leading-[1.4] focus:bg-transparent focus:ring-0 sm:!py-3"
+                            id="chat-message-input"
+                            style={{ height: "auto" }}
+                            placeholder={t("chat.writeMessage")}
+                            rows={1}
+                            value={draft}
+                            disabled={composer.disabled || selectedChatId !== activeChat.id}
+                            onInput={autoResizeDraftTextArea}
+                            onChange={(event) => setDraft(event.target.value)}
+                            onDragOver={(event) => { if (Array.from(event.dataTransfer.items).some((item) => item.kind === "file")) event.preventDefault(); }}
+                            onDrop={(event) => { const files = Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith("image/")); if (files.length) { event.preventDefault(); void addChatImages(files); } }}
+                            onPaste={(event) => { const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (files.length) { event.preventDefault(); void addChatImages(files); } }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" && !event.shiftKey) {
+                                const hasTouch =
+                                  navigator.maxTouchPoints > 0 || "ontouchstart" in window;
+                                if (hasTouch && window.innerWidth < 768) return;
+                                event.preventDefault();
+                                void sendMessage();
+                              }
+                            }}
+                          />
+                        </div>
+                        <div className="mb-1 flex flex-wrap items-center gap-1 px-1" data-testid="chat-composer-toolbar">
                           <input ref={attachmentInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" multiple aria-label={language === "zh-CN" ? "选择聊天图片" : "Choose chat images"} onChange={(event) => void addChatImages(Array.from(event.target.files ?? []))} />
                           <button className={`grid h-9 w-9 place-items-center rounded-md transition-colors disabled:opacity-40 ${activeChatSupportsVision ? "text-slate-500 hover:bg-white/10 hover:text-slate-200" : "text-amber-300/80 hover:bg-amber-500/10"}`} data-chat-action="attach-image" disabled={attachmentBusy || draftAttachments.length >= 4} aria-label={language === "zh-CN" ? "添加图片" : "Add images"} title={activeChatSupportsVision ? (language === "zh-CN" ? "添加图片（也可拖放或粘贴）" : "Add images (you can also drop or paste)") : (language === "zh-CN" ? "当前模型不支持图片输入" : "Current model does not support image input")} type="button" onClick={() => attachmentInputRef.current?.click()}><Paperclip size={16} /></button>
                           <button
@@ -4855,7 +4800,45 @@ export function ChatPage({
                           {mediaLoading ? (
                             <span className="ml-1 text-xs text-slate-500">{t("chat.mediaWorking")}</span>
                           ) : null}
-                        </div>
+                        <div className="ml-auto flex shrink-0 items-center gap-1">
+                          {activeRequestId ? (
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-rose-600 text-white transition-colors hover:bg-rose-500 sm:h-11 sm:w-11"
+                                data-chat-action="stop"
+                                title={t("chat.stop")}
+                                type="button"
+                                onClick={stopGeneration}
+                              >
+                                <StopCircle size={17} />
+                              </button>
+                              <Button
+                                className="!min-h-[40px] sm:!min-h-[44px]"
+                                data-chat-action="queue"
+                                disabled={
+                                  composer.disabled || draftAttachments.some((item) => item.status !== "ready") || (!draft.trim() && draftAttachments.length === 0) || attachmentBusy || queuedMessages.length >= MAX_QUEUED_MESSAGES
+                                }
+                                id="chat-primary-action"
+                                onClick={queueDraftMessage}
+                              >
+                                <Send size={16} />
+                                {t("chat.queue")}
+                              </Button>
+                            </div>
+                          ) : (
+                            <Button
+                              className="!min-h-[40px] sm:!min-h-[44px]"
+                              data-chat-action="send"
+                              id="chat-primary-action"
+                              disabled={loading || composer.disabled || draftAttachments.some((item) => item.status !== "ready") || attachmentBusy || (!draft.trim() && draftAttachments.length === 0)}
+                              onClick={() => void sendMessage()}
+                            >
+                              <Send size={16} />
+                              {t("chat.send")}
+                            </Button>
+                          )}
+
+</div></div>
                         <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-300" data-testid="chat-draft-status" aria-live="polite">
                           <span>{composer.state === "loading" ? (language === "zh-CN" ? "正在读取草稿…" : "Loading draft…")
                             : composer.state === "saving" ? (language === "zh-CN" ? "正在保存…" : "Saving…")
@@ -4893,87 +4876,16 @@ export function ChatPage({
                           <button type="button" className="underline" onClick={() => editQueuedMessage(item)}>{language === "zh-CN" ? "恢复编辑（不发送）" : "Restore without sending"}</button>
                           <button type="button" className="underline" onClick={() => deleteQueuedMessage(item.id)}>{language === "zh-CN" ? "删除" : "Discard"}</button>
                         </div>)}
-                        {draftAttachments.length > 0 || attachmentBusy || attachmentError ? <div className="mb-2 rounded-md border border-white/10 bg-black/10 p-2" data-testid="chat-image-draft" aria-live="polite">
-                          {!visionNoticeAcknowledged ? <div className="mb-2 flex items-start justify-between gap-2 rounded bg-amber-500/10 p-2 text-xs text-amber-100"><span>{language === "zh-CN" ? "发送时，这些图片会传给你配置的第三方模型供应商。" : "When sent, these images will be shared with your configured third-party model provider."}</span><button className="shrink-0 font-semibold underline" type="button" onClick={() => { setVisionNoticeAcknowledged(true); try { localStorage.setItem("star-companion:vision-privacy-notice", "acknowledged"); } catch {} }}>{language === "zh-CN" ? "知道了" : "Got it"}</button></div> : null}
-                          <div className="flex max-w-full gap-2 overflow-x-auto pb-1">
-                            {draftAttachments.map((attachment, index) => <div key={attachment.id} className="relative w-24 shrink-0 rounded border border-white/10 bg-ink-950 p-1" data-image-status={attachment.status}>
-                              {attachment.status === "ready" ? <img className="h-16 w-full rounded object-cover" alt={`${language === "zh-CN" ? "待发送图片" : "Pending image"} ${index + 1}`} src={resolveApiUrl(attachment.url)} onError={() => composer.markImageUnavailable(attachment.id)} /> : <div className="grid h-16 place-items-center rounded text-xs text-amber-300">{attachment.status === "expired" ? (language === "zh-CN" ? "图片已过期" : "Image expired") : (language === "zh-CN" ? "图片不可用" : "Image unavailable")}</div>}
-                              <span className="mt-1 block truncate text-[10px] text-slate-400" title={new Date(attachment.expiresAt).toLocaleString()}>{language === "zh-CN" ? "上传后 24 小时过期" : "Expires after 24 hours"}</span>
-                              <div className="flex justify-between"><button className="min-h-7 min-w-7" type="button" disabled={composer.disabled || index === 0} aria-label={language === "zh-CN" ? "图片前移" : "Move image earlier"} onClick={() => void moveChatImage(index, -1)}><ChevronLeft size={13} /></button><button className="min-h-7 min-w-7 text-rose-300" type="button" disabled={composer.disabled} aria-label={language === "zh-CN" ? "移除图片" : "Remove image"} onClick={() => void removeChatImage(attachment)}><X size={13} /></button><button className="min-h-7 min-w-7" type="button" disabled={composer.disabled || index === draftAttachments.length - 1} aria-label={language === "zh-CN" ? "图片后移" : "Move image later"} onClick={() => void moveChatImage(index, 1)}><ChevronRight size={13} /></button></div>
-                            </div>)}
-                            {attachmentBusy ? <div className="grid h-24 w-24 shrink-0 place-items-center rounded border border-white/10 text-xs text-slate-300" role="status"><RefreshCw className="animate-spin" size={16} />{language === "zh-CN" ? "处理中" : "Processing"}</div> : null}
-                          </div>
-                          {attachmentError ? <p className="mt-2 text-xs text-rose-300" role="alert">{attachmentError} {!activeChatSupportsVision ? <button className="font-semibold underline" type="button" onClick={() => navigateToSection("settings", "model")}>{language === "zh-CN" ? "切换模型" : "Switch model"}</button> : null}</p> : null}
-                        </div> : null}
-                        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-1.5 sm:gap-2">
-                          <TextArea
-                            ref={draftTextAreaRef}
-                            className="chat-input !resize-none border-0 bg-transparent !px-2 !py-[11px] !text-sm leading-[1.4] focus:bg-transparent focus:ring-0 sm:!py-3"
-                            id="chat-message-input"
-                            style={{ height: "auto" }}
-                            placeholder={t("chat.writeMessage")}
-                            rows={1}
-                            value={draft}
-                            disabled={composer.disabled || selectedChatId !== activeChat.id}
-                            onInput={autoResizeDraftTextArea}
-                            onChange={(event) => setDraft(event.target.value)}
-                            onDragOver={(event) => { if (Array.from(event.dataTransfer.items).some((item) => item.kind === "file")) event.preventDefault(); }}
-                            onDrop={(event) => { const files = Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith("image/")); if (files.length) { event.preventDefault(); void addChatImages(files); } }}
-                            onPaste={(event) => { const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (files.length) { event.preventDefault(); void addChatImages(files); } }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter" && !event.shiftKey) {
-                                const hasTouch =
-                                  navigator.maxTouchPoints > 0 || "ontouchstart" in window;
-                                if (hasTouch && window.innerWidth < 768) return;
-                                event.preventDefault();
-                                void sendMessage();
-                              }
-                            }}
-                          />
-                          {activeRequestId ? (
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-rose-600 text-white transition-colors hover:bg-rose-500 sm:h-11 sm:w-11"
-                                data-chat-action="stop"
-                                title={t("chat.stop")}
-                                type="button"
-                                onClick={stopGeneration}
-                              >
-                                <StopCircle size={17} />
-                              </button>
-                              <Button
-                                className="!min-h-[40px] sm:!min-h-[44px]"
-                                data-chat-action="queue"
-                                disabled={
-                                  composer.disabled || draftAttachments.some((item) => item.status !== "ready") || (!draft.trim() && draftAttachments.length === 0) || attachmentBusy || queuedMessages.length >= MAX_QUEUED_MESSAGES
-                                }
-                                id="chat-primary-action"
-                                onClick={queueDraftMessage}
-                              >
-                                <Send size={16} />
-                                {t("chat.queue")}
-                              </Button>
-                            </div>
-                          ) : (
-                            <Button
-                              className="!min-h-[40px] sm:!min-h-[44px]"
-                              data-chat-action="send"
-                              id="chat-primary-action"
-                              disabled={loading || composer.disabled || draftAttachments.some((item) => item.status !== "ready") || attachmentBusy || (!draft.trim() && draftAttachments.length === 0)}
-                              onClick={() => void sendMessage()}
-                            >
-                              <Send size={16} />
-                              {t("chat.send")}
-                            </Button>
-                          )}
-                        </div>
                         {costPreview ? (
                           <div className={`mt-1 rounded-md px-2 py-1 text-[11px] ${costPreview.hardBlocked ? "bg-rose-500/10 text-rose-200" : costPreview.softWarning || costPreview.unknownPricing ? "bg-amber-500/10 text-amber-200" : "bg-white/[0.03] text-slate-400"}`} data-testid="chat-cost-preview">
-                            <button className="flex w-full items-center justify-between gap-2 text-left" type="button" onClick={() => setCostPreviewExpanded((value) => !value)}>
+                            <button className="flex min-h-8 w-full items-center justify-between gap-2 text-left" type="button" aria-expanded={costPreviewExpanded} onClick={() => setCostPreviewExpanded((value) => !value)}>
                               <span className="truncate">{costPreview.modelId} · {costPreview.unknownPricing ? (language === "zh-CN" ? "费用未知" : "Cost unknown") : `${language === "zh-CN" ? "估算" : "Estimated"} $${(costPreview.minimumCostMicros! / 1_000_000).toFixed(4)}–$${(costPreview.maximumCostMicros! / 1_000_000).toFixed(4)}`}</span>
                               <ChevronDown className={costPreviewExpanded ? "rotate-180" : ""} size={13} />
                             </button>
-                            {costPreviewExpanded ? <div className="mt-2 grid gap-1 border-t border-white/10 pt-2 sm:grid-cols-2">
+                            {costPreview.hardBlocked || costPreview.softWarning ? <p role="status" className="py-1 text-xs" data-testid="chat-budget-warning">{costPreview.hardBlocked
+                              ? (language === "zh-CN" ? "预计超出硬预算，后端将阻止请求。请调整模型、输出长度或预算。" : "Estimated hard-budget overrun: the backend will block this request. Adjust the model, output limit or budget.")
+                              : (language === "zh-CN" ? "预计超出软预算，请检查费用后发送。" : "Estimated soft-budget overrun. Review costs before sending.")}</p> : null}
+                            {costPreviewExpanded ? <div className="mt-2 grid max-h-32 gap-1 overflow-y-auto border-t border-white/10 pt-2 sm:grid-cols-2">
                               <span>{language === "zh-CN" ? "预计输入" : "Estimated input"}: {costPreview.inputTokens.toLocaleString()} tokens</span>
                               <span>{language === "zh-CN" ? "最大输出" : "Maximum output"}: {costPreview.maxOutputTokens.toLocaleString()} tokens</span>
                               <span>{language === "zh-CN" ? "今日已记录" : "Recorded today"}: ${(costPreview.todayCostMicros / 1_000_000).toFixed(4)}</span>
@@ -4992,19 +4904,39 @@ export function ChatPage({
               </div>
             </div>
           </Panel>
-          {activeChat && agentPanelOpen ? (
-            <>
-              <button
-                aria-label={t("chat.agentClose")}
-                className="fixed inset-0 z-40 bg-black/45 sm:hidden"
-                type="button"
-                onClick={closeAgentPanel}
-              />
-              <aside
-                aria-label={t("chat.agentTitle")}
-                className="fixed inset-x-0 bottom-0 z-50 flex max-h-[82dvh] min-h-[420px] flex-col rounded-t-lg border border-white/[0.1] bg-ink-900 p-3 shadow-2xl shadow-black/60 sm:inset-x-auto sm:bottom-4 sm:right-4 sm:top-24 sm:w-[420px] sm:max-h-none sm:min-h-0 sm:rounded-lg sm:p-4"
-                data-testid="chat-agent-panel"
+          {activeChat && (agentPanelOpen || showMemoryDialog || showStoryNavigator || chatSettingsToolOpen) ? (
+              <ChatToolSurface
+                label={language === "zh-CN" ? "聊天工具" : "Chat tools"}
+                onClose={closeTools}
+                testId="chat-tools-panel"
               >
+                <div className="flex shrink-0 items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold">{language === "zh-CN" ? "聊天工具" : "Chat tools"}</h3>
+                  <button type="button" className="grid h-11 w-11 place-items-center" aria-label={language === "zh-CN" ? "关闭工具" : "Close tools"} onClick={closeTools}><X size={18} /></button>
+                </div>
+                <nav className="grid shrink-0 grid-cols-2 gap-1 border-b border-white/10 pb-2" aria-label={language === "zh-CN" ? "聊天工具" : "Chat tools"}>
+                  {[
+                    { id: "memory", label: t("chat.memorySettings"), selected: showMemoryDialog, open: openMemoryDialog },
+                    { id: "agent", label: t("chat.agentTitle"), selected: agentPanelOpen, open: openAgentPanel },
+                    { id: "story", label: t("chat.storyPaths"), selected: showStoryNavigator, open: openStoryNavigator },
+                    { id: "settings", label: language === "zh-CN" ? "聊天设定" : "Chat settings", selected: chatSettingsToolOpen, open: () => { closeTools(); setChatSettingsToolOpen(true); } }
+                  ].map((tool) => <button key={tool.id} type="button" data-testid={`chat-tool-${tool.id}`} aria-pressed={tool.selected}
+                    className={`min-h-11 rounded-md px-2 text-sm ${tool.selected ? "bg-ember-500/15 text-ember-100" : "text-ink-300 hover:bg-white/5"}`} onClick={tool.open}>{tool.label}</button>)}
+                </nav>
+                <div ref={setToolHost} className={`${agentPanelOpen ? "hidden" : ""} min-h-0 flex-1 overflow-y-auto py-3`} />
+                {chatSettingsToolOpen ? <ChatToolContent host={toolHost}>
+                  <div className="flex flex-col gap-2">
+                    <Button variant="secondary" onClick={startEditingUserConfig}>{t("chat.userConfigTitle")}</Button>
+                    <Button variant="secondary" onClick={startEditingProfile}>{t("chat.userProfileTitle")}</Button>
+                    <Button variant="secondary" data-testid="chat-context-budget-trigger" onClick={() => setShowContextBudgetDialog(true)}>{t("chat.contextBudgetTitle")}</Button>
+                    <Button variant="secondary" onClick={openModelDialog}>{t("chat.modelSwitchTitle")}</Button>
+                    <label className="flex min-h-11 items-center justify-between gap-2 text-sm">
+                      {t("chat.autoSummarizeUser")}
+                      <input type="checkbox" checked={autoSummarizeUser} onChange={(event) => void updateAutoSummarizeUser(event.target.checked)} />
+                    </label>
+                  </div>
+                </ChatToolContent> : null}
+                <div className={`${agentPanelOpen ? "flex" : "hidden"} min-h-0 flex-1 flex-col`} data-testid="chat-agent-panel">
                 <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-3">
                   <div className="min-w-0">
                     <h4 className="text-sm font-semibold text-slate-100">
@@ -5043,7 +4975,7 @@ export function ChatPage({
                           <span className="block text-xs font-semibold">
                             {getAgentModeLabel(mode)}
                           </span>
-                          <span className="mt-1 block text-[11px] leading-4 text-slate-500">
+                          <span className="mt-1 block text-xs leading-5 text-ink-300">
                             {getAgentModeDescription(mode)}
                           </span>
                         </button>
@@ -5132,23 +5064,19 @@ export function ChatPage({
                         ) : null}
                       </div>
                     ) : (
-                      <div className="flex h-full min-h-[150px] items-center justify-center text-center text-sm leading-6 text-slate-500">
+                      <div className="flex h-full min-h-[150px] items-center justify-center text-center text-sm leading-6 text-ink-300">
                         {t("chat.agentEmpty")}
                       </div>
                     )}
                   </div>
                 </div>
-              </aside>
-            </>
+                </div>
+              </ChatToolSurface>
           ) : null}
         </div>
       </div>
       {showStoryNavigator && activeChat ? (
-        <Modal
-          panelClassName="max-w-2xl"
-          title={t("chat.storyPaths")}
-          onClose={() => setShowStoryNavigator(false)}
-        >
+        <ChatToolContent host={toolHost}>
           <ChatStoryNavigator
             activeChat={activeChat}
             chats={storyChats}
@@ -5158,8 +5086,33 @@ export function ChatPage({
             onRetry={() => void loadStoryNavigator()}
             onReturnToParent={() => void returnToParentChat()}
           />
-        </Modal>
+        </ChatToolContent>
       ) : null}
+      {pendingChatManagement ? <ConfirmDialog
+        title={language === "zh-CN" ? "确认聊天管理操作" : "Confirm chat action"}
+        message={pendingChatManagement.action === "trash"
+          ? (language === "zh-CN" ? "此聊天将移入回收站，可从聊天列表恢复。不会永久删除消息。" : "Move this chat to trash. It can be restored from the chat list; messages will not be permanently deleted.")
+          : (language === "zh-CN" ? "更改此聊天的归档状态，保留消息和草稿。" : "Change this chat's archive status. Messages and drafts are preserved.")}
+        confirmLabel={t("common.confirm")} cancelLabel={t("common.cancel")} loading={loading}
+        variant={pendingChatManagement.action === "trash" ? "danger" : "primary"}
+        onCancel={() => setPendingChatManagement(null)}
+        onConfirm={() => void (async () => {
+          const target = pendingChatManagement;
+          setLoading(true);
+          try {
+            if (target.action === "trash") {
+              await api.chats.remove(target.id);
+              if (selectedChatId === target.id) onSelectChat(null);
+            } else {
+              await api.chats.update(target.id, { isArchived: !target.archived });
+              setActiveChat((current) => current?.id === target.id ? { ...current, isArchived: !target.archived } : current);
+            }
+            onChatsChanged(); setPendingChatManagement(null);
+          } catch {
+            setError(language === "zh-CN" ? "聊天操作失败，请重试。" : "Chat action failed. Please retry.");
+          } finally { setLoading(false); }
+        })()}
+      /> : null}
       {editingMessage ? (
         <div className="animate-fade-in fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm p-4">
           <section
@@ -6314,7 +6267,7 @@ export function ChatPage({
         />
       ) : null}
       {showMemoryDialog ? (
-        <Modal title={t("chat.memorySettings")} onClose={closeMemoryDialog}>
+        <ChatToolContent host={toolHost}>
           <div className="space-y-6">
             <div className="rounded-lg border border-white/10 bg-ink-950/30 p-4">
               <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
@@ -6719,7 +6672,7 @@ export function ChatPage({
               />
             </div>
           </div>
-        </Modal>
+        </ChatToolContent>
       ) : null}
       {memoryRestorePreview ? (
         <ConfirmDialog

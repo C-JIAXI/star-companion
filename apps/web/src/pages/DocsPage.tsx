@@ -173,6 +173,14 @@ const getDocsCopy = (language: string): DocsCopy => {
           kind: "guide",
           items: [
             {
+              title: "工作区与工具",
+              body: "左栏可折叠，聊天区只有一条标题栏。桌面从“工具”切换长期记忆、AI Agent、故事路径和聊天设定；窄屏从“更多”进入，模型切换也在其中。空间足够时工具停靠右侧，否则使用抽屉。关闭或切换工具不会应用草案或发送消息。更多还提供重命名、书签、导出、背景、归档和回收站操作；危险操作须再次确认。"
+            },
+            {
+              title: "阅读与输入",
+              body: "快捷回复默认单行，可展开。图片在输入框上方；输入框自动增高至当前视口上限，之后内部滚动。附件、语音与发送在其下方，随后显示草稿状态和可展开的费用。队列默认显示数量，展开后可编辑、删除或立即发送；草稿错误和预算警告不会随费用详情隐藏。"
+            },
+            {
               title: "发送与停止",
               body: "输入消息后发送。生成期间可继续输入并加入待发送队列；队列可编辑、删除或立即发送，成功回复结束后按顺序发送下一份快照。调度只在当前应用会话有效。停止或首个 token 后失败仍保留已发送用户消息及收到的回复，不恢复成待发送草稿。连接中断时显示重连状态并核对请求回执，刷新会话；未发送快照可手动恢复编辑，不会因恢复而自动调用模型。"
             },
@@ -360,7 +368,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           id: "appearance",
           title: "样式参考",
           description:
-            "如果你会写 CSS，可以用这里列出的位置来调整聊天界面外观。",
+            "官方选择器保持兼容。工作区容器和核心控件只接受外观声明，不能通过角色 CSS 的隐藏、定位、尺寸或变换破坏操作；消息 HTML 仍独立限定作用域。可随时使用受限或关闭模式。",
           kind: "selectors",
           groups: [
             {
@@ -369,7 +377,7 @@ const getDocsCopy = (language: string): DocsCopy => {
                 { selector: "#chat-page-root", detail: "聊天页根容器" },
                 { selector: "#chat-panel", detail: "主聊天面板容器" },
                 { selector: "#chat-title", detail: "聊天标题区域" },
-                { selector: "#chat-settings-trigger", detail: "右上角聊天设置按钮" },
+                { selector: "#chat-settings-trigger", detail: "右上角更多菜单按钮（兼容旧选择器）" },
                 { selector: "#chat-message-viewport", detail: "消息滚动视口" },
                 { selector: "#chat-message-list", detail: "消息列表容器" },
                 { selector: "#chat-pagination", detail: "消息分页条" },
@@ -541,6 +549,14 @@ const getDocsCopy = (language: string): DocsCopy => {
             body: "Save a checkpoint from any user or assistant message to preserve a story snapshot without switching away from the current chat. Checkpoints stay linked to their source and can be opened later from History."
           },
           {
+            title: "Workspace and tools",
+            body: "Collapse the left sidebar to make more room. Desktop Tools switches between Memory, AI Agent, Story paths and Chat settings; narrow screens expose them through More, alongside model switching. Tools dock when space permits and otherwise use a drawer. Closing or switching tools never applies drafts or sends messages. More also offers rename, bookmarks, export, background, archive and trash, with separate confirmation for dangerous actions."
+          },
+          {
+            title: "Reading and composing",
+            body: "Quick replies use one expandable row. Images sit above the growing input; media and send controls follow it, then draft status and expandable cost details. The input scrolls internally at its viewport limit. Expand the queue count to edit, discard or send pending snapshots. Draft errors and budget warnings remain visible when cost details are collapsed."
+          },
+          {
             title: "Story paths",
             body: "Open Story paths from the chat toolbar to see the current ancestry and every direct branch or checkpoint. Returning to the source chat jumps to and highlights the message where the path split."
           },
@@ -698,7 +714,7 @@ const getDocsCopy = (language: string): DocsCopy => {
         id: "appearance",
         title: "Appearance Reference",
         description:
-          "If you write CSS, use these available places to adjust the chat interface.",
+          "Official selectors remain compatible. Workspace containers and core controls accept paint styling, not character CSS that hides, positions, resizes or transforms them. Message HTML retains its own scope. Restricted and off modes remain available.",
         kind: "selectors",
         groups: [
           {
@@ -707,7 +723,7 @@ const getDocsCopy = (language: string): DocsCopy => {
               { selector: "#chat-page-root", detail: "Chat page root container" },
               { selector: "#chat-panel", detail: "Primary chat panel shell" },
               { selector: "#chat-title", detail: "Chat title region" },
-              { selector: "#chat-settings-trigger", detail: "Top-right chat settings button" },
+              { selector: "#chat-settings-trigger", detail: "Top-right More button (legacy selector retained)" },
               { selector: "#chat-message-viewport", detail: "Scrollable message viewport" },
               { selector: "#chat-message-list", detail: "Message list container" },
               { selector: "#chat-pagination", detail: "Message pagination bar" },
