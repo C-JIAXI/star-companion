@@ -187,6 +187,7 @@ const moduleModelRows = [
 
 const modelCapabilityRows: Array<{ id: AiModelCapability; zh: string; en: string }> = [
   { id: "text_generation", zh: "文本生成", en: "Text" },
+  { id: "tool_calling", zh: "工具调用", en: "Tool calling" },
   { id: "text_embedding", zh: "文本向量", en: "Embedding" },
   { id: "audio_transcription", zh: "语音转写", en: "Transcription" },
   { id: "text_to_speech", zh: "文字朗读", en: "Speech" },

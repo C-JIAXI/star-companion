@@ -20,6 +20,7 @@ export type ModelErrorCode =
   | "stream_interrupted"
   | "cancelled"
   | "budget_blocked"
+  | "mcp_outcome_unknown"
   | "unknown";
 
 export type SafeModelError = {
@@ -61,6 +62,7 @@ const summaries: Record<ModelErrorCode, string> = {
   stream_interrupted: "The reply stream ended before the response was complete.",
   cancelled: "Generation was stopped.",
   budget_blocked: "The local hard budget prevented this model call.",
+  mcp_outcome_unknown: "The external tool may have run, but its result is unknown. Review the external service before trying again.",
   unknown: "The model request failed for an unknown reason."
 };
 
@@ -197,6 +199,9 @@ export const normalizeModelError = (error: unknown, input: {
   }
   const name = error instanceof Error ? error.name.toLowerCase() : "";
   const code = error && typeof error === "object" && "code" in error ? String(error.code).toUpperCase() : "";
+  if (code === "MCP_OUTCOME_UNKNOWN") {
+    return createModelError({ code: "mcp_outcome_unknown", provider: input.provider, modelId: input.modelId, attempt: input.attempt });
+  }
   if (name.includes("timeout") || code === "ETIMEDOUT") {
     return createModelError({ code: "timeout", provider: input.provider, modelId: input.modelId, attempt: input.attempt });
   }

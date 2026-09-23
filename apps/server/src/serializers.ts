@@ -39,6 +39,7 @@ const normalizeAppearancePreferences = (value: unknown) => {
 type AiModelCapability =
   | "text_generation"
   | "vision_input"
+  | "tool_calling"
   | "text_embedding"
   | "audio_transcription"
   | "text_to_speech"
@@ -146,6 +147,7 @@ const toProviderModels = (value: unknown): ProviderModel[] => {
             (capability): capability is AiModelCapability =>
               capability === "text_generation" ||
               capability === "vision_input" ||
+              capability === "tool_calling" ||
               capability === "text_embedding" ||
               capability === "audio_transcription" ||
               capability === "text_to_speech" ||

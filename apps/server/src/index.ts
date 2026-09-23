@@ -16,9 +16,14 @@ import { syncRouter } from "./routes/sync.js";
 import { usageRouter } from "./routes/usage.js";
 import { readinessRouter } from "./routes/readiness.js";
 import { storageHealthRouter } from "./routes/storageHealth.js";
+import { skillsRouter } from "./routes/skills.js";
+import { mcpRouter } from "./routes/mcp.js";
+import { clearMcpApprovals } from "./services/mcpApprovals.js";
 import { attachChatSocket } from "./realtime/chatSocket.js";
+import { clearAgentRunEvents } from "./services/agentRunEvents.js";
 import { getAppInfo } from "./services/appInfo.js";
 import { recoverInterruptedModelCalls } from "./services/modelUsage.js";
+import { cancelAllAgentTasks, recoverInterruptedAgentTasks } from "./services/agentSessions.js";
 import { cleanupExpiredDraftAttachments } from "./services/messageAttachments.js";
 import { isPrivacyLocked, lockPrivacy, unlockPrivacy } from "./services/privacyLock.js";
 import { cancelActiveStorageScan, registerStorageMutation } from "./services/storageHealth.js";
@@ -90,6 +95,9 @@ app.post("/api/privacy/lock", (request, response) => {
   closeWebSocketsForPrivacy();
   cancelActiveStorageScan();
   cancelAllMemoryEmbeddingJobs();
+  cancelAllAgentTasks();
+  clearMcpApprovals();
+  clearAgentRunEvents();
   clearMediaThumbnailCache();
   response.json({ ok: true, data: { locked: true } });
 });
@@ -116,6 +124,8 @@ app.use("/api", (request, _response, next) => {
   if (request.method !== "GET" && !request.path.startsWith("/storage-health/") && !readOnlyPost) registerStorageMutation();
   next();
 });
+app.use("/api/skills", skillsRouter);
+app.use("/api/mcp", mcpRouter);
 
 if (process.env.STAR_COMPANION_PERF_METRICS === "1") {
   app.get("/api/perf/prompt/:chatId", async (request, response, next) => {
@@ -163,6 +173,7 @@ attachChatSocket(wsServer, APP_NAME);
 const start = async () => {
   await connectDatabase();
   await recoverInterruptedModelCalls();
+  await recoverInterruptedAgentTasks();
   await cleanupExpiredDraftAttachments();
   draftCleanupTimer = setInterval(() => {
     void cleanupExpiredDraftAttachments().catch(() => undefined);

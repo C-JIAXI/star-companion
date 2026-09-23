@@ -374,6 +374,7 @@ export const buildPromptContext = async ({
   settings
 }: PromptInput): Promise<{
   messages: ChatCompletionMessage[];
+  recentMessageIds: string[];
   matchedLoreEntries: MatchedLoreEntry[];
   matchedMemoryEntries: MatchedMemoryEntry[];
   promptBreakdown: PromptBreakdown;
@@ -459,6 +460,7 @@ export const buildPromptContext = async ({
 
   return {
     messages,
+    recentMessageIds: recentMessages.map((message) => message.id),
     matchedLoreEntries,
     matchedMemoryEntries,
     promptBreakdown: buildPromptBreakdown({

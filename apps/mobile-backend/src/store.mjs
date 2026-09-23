@@ -10,6 +10,8 @@ import { runProtectedMobileMigrations } from "./migration-safety.mjs";
 import { assertUnmanagedDraftId } from "../server-dist/services/draftOwnership.js";
 import { captureDraftPrivacyGuard, getChatDraft, saveChatDraft } from "./chat-drafts.mjs";
 import { consumeDraftHandoff, createDraftHandoff, discardDraftHandoff, getDraftHandoff, listDraftHandoffs, restoreDraftHandoff } from "./draft-handoffs.mjs";
+import { buildCharacterUpdateData, resolveCharacterPromptFields, resolveCharacterRecord } from "./privateCharacters.mjs";
+import { BUILTIN_SKILLS } from "../server-dist/services/skillPackages.js";
 
 const now = () => new Date().toISOString();
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -92,6 +94,7 @@ export class MobileStore {
       await this.persist();
     }
     await this.recoverInterruptedModelCalls();
+    await this.recoverInterruptedAgentTasks();
     await this.ensureMemoryHistoryBaselines();
     await this.cleanupExpiredDraftAttachments();
   }
@@ -525,7 +528,8 @@ export class MobileStore {
       }
       for (const message of this.listMessages(id)) for (const attachment of this.listMessageAttachments(message.id)) await this.deleteRecord("messageAttachment", attachment.id);
       await this.deleteRecord("chat", id);
-      this.db.run("DELETE FROM records WHERE type IN ('message', 'memory', 'memoryRevision', 'memoryOperation', 'profileSummaryRevision') AND chatId = ?", [id]);
+      await this.deleteRecord("agentSession", id);
+      this.db.run("DELETE FROM records WHERE type IN ('message', 'memory', 'memoryRevision', 'memoryOperation', 'profileSummaryRevision', 'agentEntry') AND chatId = ?", [id]);
     }
     await this.cleanupOrphanAssets();
     await this.persist();
@@ -563,10 +567,12 @@ export class MobileStore {
     return { items: clone(rows.slice(0, limit).reverse()), hasMore: rows.length > limit };
   }
 
-  searchMessagePage(query, { chatId = null, limit = 20, before = null } = {}) {
+  searchMessagePage(query, { chatId = null, limit = 20, before = null, contextOnly = false } = {}) {
+    if (contextOnly && !chatId) throw new Error("Context search requires a chat.");
     const where = ["m.type = 'message'", "c.type = 'chat'", "c.deletedAt IS NULL", "instr(lower(m.content), lower(?)) > 0"];
     const params = [query];
     if (chatId) { where.push("m.chatId = ?"); params.push(chatId); }
+    if (contextOnly) where.push("COALESCE(m.contextIncluded, 1) = 1");
     if (before) {
       where.push("(m.createdAt < ? OR (m.createdAt = ? AND m.id < ?))");
       params.push(before.createdAt, before.createdAt, before.id);
@@ -590,6 +596,500 @@ export class MobileStore {
       hasMore: rows.length > limit,
       total
     };
+  }
+
+  skillSummary(skill) {
+    const { skillMd: _skillMd, references: _references, id: _id, createdAt: _createdAt, ...summary } = skill;
+    return clone(summary);
+  }
+
+  async ensureBuiltinSkills() {
+    if (BUILTIN_SKILLS.every((builtin) => {
+      const existing = this.readRecord("skill", builtin.name);
+      return existing?.source === "imported" || existing?.digest === builtin.digest;
+    })) return;
+    return this.atomicWrite(async () => {
+      for (const builtin of BUILTIN_SKILLS) {
+        const existing = this.readRecord("skill", builtin.name);
+        if (existing?.source === "imported" || existing?.digest === builtin.digest) continue;
+        const timestamp = now();
+        await this.writeRecord("skill", {
+          ...existing, ...builtin, id: builtin.name, source: "builtin",
+          version: (existing?.version ?? 0) + 1,
+          agentEnabled: existing?.agentEnabled ?? true,
+          enabledChatIds: existing?.enabledChatIds ?? [],
+          createdAt: existing?.createdAt ?? timestamp, updatedAt: timestamp
+        });
+      }
+    });
+  }
+
+  async listSkills() {
+    await this.ensureBuiltinSkills();
+    return this.readRecords("skill").sort((a, b) => a.name.localeCompare(b.name)).map((skill) => this.skillSummary(skill));
+  }
+
+  async getSkill(name) {
+    await this.ensureBuiltinSkills();
+    const skill = this.readRecord("skill", name);
+    if (!skill) return null;
+    return { ...this.skillSummary(skill), skillMd: skill.skillMd, referencePaths: Object.keys(skill.references ?? {}).sort() };
+  }
+
+  getSkillReference(name, referencePath) {
+    const skill = this.readRecord("skill", name);
+    const content = skill?.references?.[referencePath];
+    return typeof content === "string" ? { name, path: referencePath, content } : null;
+  }
+
+  async importSkill(parsed, replaceVersion) {
+    return this.atomicWrite(async () => {
+      const existing = this.readRecord("skill", parsed.name);
+      if (BUILTIN_SKILLS.some((builtin) => builtin.name === parsed.name) || existing?.source === "builtin") { const error = new Error("Built-in Skills cannot be replaced"); error.status = 409; throw error; }
+      if (existing && existing.version !== replaceVersion) { const error = new Error("Skill name already exists; confirm the current version before replacing"); error.status = 409; throw error; }
+      if (!existing && replaceVersion !== undefined) { const error = new Error("Skill changed after preview"); error.status = 409; throw error; }
+      const timestamp = now();
+      const skill = { ...parsed, id: parsed.name, source: "imported", version: (existing?.version ?? 0) + 1,
+        agentEnabled: false, enabledChatIds: [], createdAt: existing?.createdAt ?? timestamp, updatedAt: timestamp };
+      await this.writeRecord("skill", skill);
+      return this.skillSummary(skill);
+    });
+  }
+
+  previewSkillImport(parsed) {
+    const existing = this.readRecord("skill", parsed.name);
+    const builtIn = BUILTIN_SKILLS.some((skill) => skill.name === parsed.name);
+    return { name: parsed.name, description: parsed.description, digest: parsed.digest,
+      compatibility: parsed.compatibility, unsupportedFiles: parsed.unsupportedFiles,
+      referencePaths: Object.keys(parsed.references).sort(), existingVersion: existing?.version ?? null,
+      canReplace: !builtIn && existing?.source !== "builtin" };
+  }
+
+  async setSkillEnabled(name, input) {
+    return this.atomicWrite(async () => {
+      const skill = this.readRecord("skill", name);
+      if (!skill) { const error = new Error("Skill not found"); error.status = 404; throw error; }
+      if (skill.version !== input.expectedVersion) { const error = new Error("Skill changed; review its current version"); error.status = 409; throw error; }
+      const ids = new Set(skill.enabledChatIds ?? []);
+      if (input.chatId) {
+        const chat = this.getChat(input.chatId);
+        if (!chat || chat.deletedAt) { const error = new Error("Chat not found"); error.status = 404; throw error; }
+        if (input.chatEnabled) ids.add(input.chatId); else ids.delete(input.chatId);
+        if (ids.size > 200) { const error = new Error("Too many chats enabled for one Skill"); error.status = 400; throw error; }
+      }
+      const updated = { ...skill, agentEnabled: input.agentEnabled ?? skill.agentEnabled,
+        enabledChatIds: [...ids], version: skill.version + 1, updatedAt: now() };
+      await this.writeRecord("skill", updated);
+      return this.skillSummary(updated);
+    });
+  }
+
+  async deleteSkill(name, expectedVersion) {
+    return this.atomicWrite(async () => {
+      const skill = this.readRecord("skill", name);
+      if (!skill || skill.source !== "imported" || skill.version !== expectedVersion) {
+        const error = new Error("Skill changed or cannot be removed"); error.status = 409; throw error;
+      }
+      await this.deleteRecord("skill", name);
+      return { deleted: true };
+    });
+  }
+
+  async listEnabledAgentSkillCatalog() {
+    await this.ensureBuiltinSkills();
+    return this.readRecords("skill").filter((skill) => skill.agentEnabled)
+      .sort((a, b) => a.name.localeCompare(b.name)).map(({ name, description }) => ({ name, description }));
+  }
+
+  async listEnabledChatSkillCatalog(chatId) {
+    await this.ensureBuiltinSkills();
+    return this.readRecords("skill").filter((skill) => Array.isArray(skill.enabledChatIds) && skill.enabledChatIds.includes(chatId))
+      .sort((a, b) => a.name.localeCompare(b.name)).map(({ name, description }) => ({ name, description }));
+  }
+
+  loadEnabledAgentSkill(name, referencePath) {
+    const skill = this.readRecord("skill", name);
+    if (!skill?.agentEnabled) return null;
+    if (referencePath) {
+      const content = skill.references?.[referencePath];
+      return typeof content === "string" ? { name, path: referencePath, content } : null;
+    }
+    return { name, content: skill.skillMd, referencePaths: Object.keys(skill.references ?? {}).sort(), unsupportedFiles: skill.unsupportedFiles ?? [] };
+  }
+
+  loadEnabledChatSkill(chatId, name, referencePath) {
+    const skill = this.readRecord("skill", name);
+    if (!skill || !Array.isArray(skill.enabledChatIds) || !skill.enabledChatIds.includes(chatId)) return null;
+    if (referencePath) {
+      const content = skill.references?.[referencePath];
+      return typeof content === "string" ? { name, path: referencePath, content } : null;
+    }
+    return { name, content: skill.skillMd, referencePaths: Object.keys(skill.references ?? {}).sort(), unsupportedFiles: skill.unsupportedFiles ?? [] };
+  }
+
+  mcpSummary(connection) {
+    const { bearerEncrypted: _secret, createdAt: _created, toolDefinitions: _definitions, enabledToolNames: _names, ...safe } = connection;
+    const enabledNames = new Set(connection.enabledToolNames ?? []);
+    return clone({ ...safe, hasBearerToken: Boolean(connection.bearerEncrypted),
+      tools: (connection.toolDefinitions ?? []).map((tool) => ({ ...tool, enabled: enabledNames.has(tool.name) })) });
+  }
+
+  listMcpConnections() {
+    return this.readRecords("mcpConnection").sort((a, b) => a.name.localeCompare(b.name)).map((row) => this.mcpSummary(row));
+  }
+
+  getMcpConnection(id) { return this.readRecord("mcpConnection", id); }
+
+  async createMcpConnection(input) {
+    return this.atomicWrite(async () => {
+      if (this.readRecords("mcpConnection").some((row) => row.name === input.name)) {
+        throw Object.assign(new Error("MCP name already exists"), { status: 409 });
+      }
+      const timestamp = now();
+      const row = { id: randomUUID(), name: input.name, endpointUrl: input.endpointUrl,
+        allowPrivateNetwork: input.allowPrivateNetwork, bearerEncrypted: input.bearerEncrypted ?? null,
+        enabled: false, toolDefinitions: [], enabledToolNames: [], version: 1, lastCheckedAt: null,
+        createdAt: timestamp, updatedAt: timestamp };
+      await this.writeRecord("mcpConnection", row);
+      return this.mcpSummary(row);
+    });
+  }
+
+  async updateMcpConnection(id, input) {
+    return this.atomicWrite(async () => {
+      const current = this.getMcpConnection(id);
+      if (!current) throw Object.assign(new Error("MCP connection not found"), { status: 404 });
+      if (current.version !== input.expectedVersion) throw Object.assign(new Error("MCP connection changed"), { status: 409 });
+      if (input.name && input.name !== current.name && this.readRecords("mcpConnection").some((row) => row.name === input.name)) {
+        throw Object.assign(new Error("MCP name already exists"), { status: 409 });
+      }
+      const connectionChanged = (input.endpointUrl !== undefined && input.endpointUrl !== current.endpointUrl)
+        || (input.allowPrivateNetwork !== undefined && input.allowPrivateNetwork !== current.allowPrivateNetwork)
+        || input.bearerEncrypted !== undefined;
+      const updated = { ...current, ...input, id, version: current.version + 1, updatedAt: now(),
+        enabled: connectionChanged ? false : input.enabled ?? current.enabled,
+        toolDefinitions: connectionChanged ? [] : current.toolDefinitions,
+        enabledToolNames: connectionChanged ? [] : current.enabledToolNames,
+        lastCheckedAt: connectionChanged ? null : current.lastCheckedAt };
+      delete updated.expectedVersion;
+      await this.writeRecord("mcpConnection", updated);
+      return this.mcpSummary(updated);
+    });
+  }
+
+  async applyMcpDiscovery(id, expectedVersion, tools) {
+    return this.atomicWrite(async () => {
+      const current = this.getMcpConnection(id);
+      if (!current || current.version !== expectedVersion) throw Object.assign(new Error("MCP connection changed"), { status: 409 });
+      const previous = new Map((current.toolDefinitions ?? []).map((tool) => [tool.name, tool.definitionDigest]));
+      const enabled = (current.enabledToolNames ?? []).filter((name) => tools.some((tool) => tool.name === name && previous.get(name) === tool.definitionDigest));
+      const updated = { ...current, toolDefinitions: tools, enabledToolNames: enabled,
+        lastCheckedAt: now(), version: current.version + 1, updatedAt: now() };
+      await this.writeRecord("mcpConnection", updated);
+      return this.mcpSummary(updated);
+    });
+  }
+
+  async setMcpToolEnabled(id, input) {
+    return this.atomicWrite(async () => {
+      const current = this.getMcpConnection(id);
+      if (!current || current.version !== input.expectedVersion) throw Object.assign(new Error("MCP connection changed"), { status: 409 });
+      const tool = (current.toolDefinitions ?? []).find((item) => item.name === input.toolName);
+      if (!tool || tool.definitionDigest !== input.definitionDigest) throw Object.assign(new Error("MCP tool definition changed"), { status: 409 });
+      const names = new Set(current.enabledToolNames ?? []);
+      if (input.enabled) names.add(input.toolName); else names.delete(input.toolName);
+      const updated = { ...current, enabledToolNames: [...names], version: current.version + 1, updatedAt: now() };
+      await this.writeRecord("mcpConnection", updated);
+      return this.mcpSummary(updated);
+    });
+  }
+
+  async deleteMcpConnection(id, expectedVersion) {
+    return this.atomicWrite(async () => {
+      const current = this.getMcpConnection(id);
+      if (!current || current.version !== expectedVersion) throw Object.assign(new Error("MCP connection changed or missing"), { status: 409 });
+      await this.deleteRecord("mcpConnection", id);
+      return { deleted: true };
+    });
+  }
+
+  getAgentSession(chatId) {
+    const session = this.readRecord("agentSession", chatId);
+    const entries = this.readRecords("agentEntry", "AND chatId = ?", [chatId])
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+      .map((entry) => ({ ...entry, sourceMemoryIds: Array.isArray(entry.sourceMemoryIds) ? entry.sourceMemoryIds : [] }));
+    return { chatId, activeRunId: session?.activeRunId ?? null, entries: clone(entries) };
+  }
+
+  previewAgentCandidate(chatId, actionId, candidate, accessPassword) {
+    const chat = this.readRecord("chat", chatId);
+    if (!chat || chat.deletedAt) { const error = new Error("Chat not found"); error.status = 404; throw error; }
+    const entries = this.readRecords("agentEntry", "AND chatId = ?", [chatId])
+      .filter((entry) => entry.role === "assistant" && entry.status === "succeeded");
+    const action = entries.flatMap((entry) => entry.actions ?? []).find((item) => item.id === actionId);
+    if (!action || action.kind === "reply_draft") { const error = new Error("Agent candidate not found"); error.status = 404; throw error; }
+    const sourceMessageIds = action.sourceMessageIds ?? [];
+    if (sourceMessageIds.some((id) => {
+      const message = this.getMessage(id);
+      return !message || message.chatId !== chatId || message.contextIncluded === false;
+    })) { const error = new Error("Candidate sources changed; review the proposal again"); error.status = 409; throw error; }
+    const sourceMemoryIds = action.sourceMemoryIds ?? [];
+    if (sourceMemoryIds.some((id) => {
+      const memory = this.getMemory(chatId, id);
+      return !memory || memory.enabled === false || memory.deletedAt;
+    })) { const error = new Error("Candidate memory sources changed; review the proposal again"); error.status = 409; throw error; }
+    let targetName = chat.title;
+    let targetVersion = null;
+    let affectedChatCount = 1;
+    let privateCharacter = false;
+    let targets;
+    let loreTarget;
+    if (action.kind === "memory_candidate" && action.memoryAction && action.memoryAction !== "create") {
+      targets = (action.targetMemoryIds ?? []).map((id, index) => {
+        const memory = this.getMemory(chatId, id);
+        if (!memory || !memory.enabled || memory.deletedAt || (!action.appliedTargetId && memory.currentRevision !== action.targetMemoryRevisions?.[index])) {
+          const error = new Error("Target memory changed; review the proposal again"); error.status = 409; throw error;
+        }
+        return { id, title: memory.title, content: memory.content, currentRevision: memory.currentRevision, enabled: memory.enabled };
+      });
+      targetName = targets[0]?.title ?? chat.title;
+      targetVersion = String(targets[0]?.currentRevision ?? "");
+    }
+    if (action.kind === "lore_candidate") {
+      const character = chat.characterId && this.getCharacter(chat.characterId);
+      if (!character || chat.characterId !== action.targetCharacterId || !action.targetVersion) {
+        const error = new Error("Character binding changed; review the proposal again"); error.status = 409; throw error;
+      }
+      if (!action.appliedTargetId && character.updatedAt !== action.targetVersion) {
+        const error = new Error("Character changed; review the Lore diff again"); error.status = 409; throw error;
+      }
+      targetName = character.name;
+      targetVersion = character.updatedAt;
+      affectedChatCount = this.readRecords("chat").filter((item) => item.characterId === character.id && !item.deletedAt).length;
+      privateCharacter = resolveCharacterRecord(character).visibility === "private";
+      if (action.loreAction === "update") {
+        const target = privateCharacter && !accessPassword ? null : resolveCharacterPromptFields(character, accessPassword).loreEntries.find((item) => item.id === action.targetLoreEntryId);
+        if ((!privateCharacter || accessPassword) && !target) { const error = new Error("Target Lore changed; review the proposal again"); error.status = 409; throw error; }
+        loreTarget = target ? { id: target.id, content: target.content, keywords: target.keys } : null;
+      }
+    }
+    return {
+      kind: action.kind, original: { title: action.title, content: action.content, keywords: action.keywords ?? [] },
+      proposed: candidate, targetName, targetVersion, affectedChatCount,
+      sourceMessageCount: sourceMessageIds.length, sourceMemoryCount: sourceMemoryIds.length,
+      privateCharacter, alreadyApplied: Boolean(action.appliedTargetId), loreAction: action.loreAction ?? "create", loreTarget,
+      memoryAction: action.kind === "memory_candidate" ? action.memoryAction ?? "create" : undefined, targets
+    };
+  }
+
+  async confirmAgentMemoryCandidate(chatId, actionId, candidate) {
+    return this.atomicWrite(async () => {
+      const entries = this.readRecords("agentEntry", "AND chatId = ?", [chatId])
+        .filter((entry) => entry.role === "assistant" && entry.status === "succeeded");
+      const entry = entries.find((item) => Array.isArray(item.actions) && item.actions.some((action) => action.id === actionId));
+      const action = entry?.actions.find((item) => item.id === actionId);
+      if (!action || action.kind !== "memory_candidate") {
+        const error = new Error("Agent candidate not found"); error.status = 404; throw error;
+      }
+      if (action.appliedTargetId) {
+        const appliedInput = action.appliedInput ?? { title: action.title, content: action.content, keywords: action.keywords ?? [] };
+        if (JSON.stringify(appliedInput) !== JSON.stringify(candidate)) { const error = new Error("Candidate was already applied with different content"); error.status = 409; throw error; }
+        const memory = this.getMemory(chatId, action.appliedTargetId);
+        if (!memory) { const error = new Error("Applied memory is no longer available"); error.status = 409; throw error; }
+        return { memory, session: this.getAgentSession(chatId), alreadyApplied: true };
+      }
+      const sourceMessageIds = action.sourceMessageIds ?? [];
+      if (sourceMessageIds.some((id) => {
+        const message = this.getMessage(id);
+        return !message || message.chatId !== chatId || message.contextIncluded === false;
+      })) {
+        const error = new Error("Candidate sources changed; review the proposal again"); error.status = 409; throw error;
+      }
+      if ((action.sourceMemoryIds ?? []).some((id) => {
+        const memory = this.getMemory(chatId, id);
+        return !memory || memory.enabled === false || memory.deletedAt;
+      })) { const error = new Error("Candidate memory sources changed; review the proposal again"); error.status = 409; throw error; }
+      const memoryAction = action.memoryAction ?? "create";
+      let result;
+      let operationId;
+      if (memoryAction === "create") {
+        result = await this.createAuditedMemoryInTransaction({
+          id: action.id, chatId, title: candidate.title, content: candidate.content,
+          keywords: candidate.keywords, importance: 3, enabled: true, sourceMessageIds
+        }, { actor: "agent_confirmed", action: "agent_confirmed_create", reasonCode: "agent_candidate_confirmed" });
+      } else {
+        const ids = action.targetMemoryIds ?? [];
+        const versions = action.targetMemoryRevisions ?? [];
+        if (!ids.length || ids.length !== versions.length || (memoryAction === "merge" ? ids.length < 2 : ids.length !== 1)) {
+          const error = new Error("Candidate targets are incomplete"); error.status = 409; throw error;
+        }
+        const targets = ids.map((id, index) => {
+          const memory = this.getMemory(chatId, id);
+          if (!memory || !memory.enabled || memory.deletedAt || memory.currentRevision !== versions[index]) {
+            const error = new Error("Target memory changed; review the proposal again"); error.status = 409; throw error;
+          }
+          return memory;
+        });
+        const operation = await this.createMemoryOperation({ chatId, type: "agent_maintenance", actor: "agent_confirmed", status: "running", sourceMessageIds });
+        operationId = operation.id;
+        const mergedSources = [...new Set([...sourceMessageIds, ...targets.flatMap((memory) => memory.sourceMessageIds ?? [])])].slice(0, 20);
+        result = await this.updateAuditedMemoryInTransaction(targets[0], memoryAction === "disable"
+          ? { enabled: false }
+          : { title: candidate.title, content: candidate.content, keywords: candidate.keywords, sourceMessageIds: mergedSources }, {
+          actor: "agent_confirmed", action: memoryAction === "disable" ? "agent_confirmed_disable" : "agent_confirmed_update",
+          reasonCode: "agent_candidate_confirmed", operationId, allowMissingSources: true
+        });
+        if (!result.changed && targets.length === 1) { const error = new Error("The proposed memory change has no differences"); error.status = 409; throw error; }
+        let disabled = memoryAction === "disable" && result.changed ? 1 : 0;
+        for (const duplicate of targets.slice(1)) {
+          const changed = await this.updateAuditedMemoryInTransaction(duplicate, { enabled: false }, {
+            actor: "agent_confirmed", action: "agent_confirmed_disable", reasonCode: "agent_candidate_confirmed", operationId
+          });
+          if (changed.changed) disabled += 1;
+        }
+        await this.writeRecord("memoryOperation", {
+          ...operation, status: "succeeded", completedAt: now(), updated: memoryAction === "disable" ? 0 : result.changed ? 1 : 0,
+          disabled, updatedAt: now()
+        });
+        await this.pruneMemoryOperations(chatId);
+      }
+      const timestamp = now();
+      await this.writeRecord("agentEntry", {
+        ...entry, actions: entry.actions.map((item) => item.id === actionId
+          ? { ...item, appliedAt: timestamp, appliedTargetId: result.memory.id, appliedOperationId: operationId, appliedInput: candidate }
+          : item)
+      });
+      return { memory: result.memory, operationId, session: this.getAgentSession(chatId), alreadyApplied: false };
+    });
+  }
+
+  async confirmAgentLoreCandidate(chatId, actionId, candidate, accessPassword) {
+    return this.atomicWrite(async () => {
+      const entries = this.readRecords("agentEntry", "AND chatId = ?", [chatId])
+        .filter((entry) => entry.role === "assistant" && entry.status === "succeeded");
+      const entry = entries.find((item) => Array.isArray(item.actions) && item.actions.some((action) => action.id === actionId));
+      const action = entry?.actions.find((item) => item.id === actionId);
+      if (!action || action.kind !== "lore_candidate") { const error = new Error("Agent candidate not found"); error.status = 404; throw error; }
+      const chat = this.readRecord("chat", chatId);
+      if (!chat || chat.deletedAt || !chat.characterId || chat.characterId !== action.targetCharacterId || !action.targetVersion) {
+        const error = new Error("Character binding changed; review the proposal again"); error.status = 409; throw error;
+      }
+      const character = this.getCharacter(chat.characterId);
+      if (!character) { const error = new Error("Character not found"); error.status = 404; throw error; }
+      const affectedChatCount = this.readRecords("chat").filter((item) => item.characterId === character.id && !item.deletedAt).length;
+      if (action.appliedTargetId) {
+        const appliedInput = action.appliedInput ?? { title: action.title, content: action.content, keywords: action.keywords ?? [] };
+        if (JSON.stringify(appliedInput) !== JSON.stringify(candidate)) { const error = new Error("Candidate was already applied with different content"); error.status = 409; throw error; }
+        return { characterId: character.id, characterName: character.name, affectedChatCount, session: this.getAgentSession(chatId), alreadyApplied: true };
+      }
+      if (character.updatedAt !== action.targetVersion) { const error = new Error("Character changed; review the Lore diff again"); error.status = 409; throw error; }
+      const sourceMessageIds = action.sourceMessageIds ?? [];
+      if (sourceMessageIds.some((id) => { const message = this.getMessage(id); return !message || message.chatId !== chatId || message.contextIncluded === false; })) {
+        const error = new Error("Candidate sources changed; review the proposal again"); error.status = 409; throw error;
+      }
+      if ((action.sourceMemoryIds ?? []).some((id) => {
+        const memory = this.getMemory(chatId, id);
+        return !memory || memory.enabled === false || memory.deletedAt;
+      })) { const error = new Error("Candidate memory sources changed; review the proposal again"); error.status = 409; throw error; }
+      const fields = resolveCharacterPromptFields(character, accessPassword);
+      if (action.loreAction === "update" && !fields.loreEntries.some((item) => item.id === action.targetLoreEntryId)) {
+        const error = new Error("Target Lore changed; review the proposal again"); error.status = 409; throw error;
+      }
+      const loreEntries = action.loreAction === "update" ? fields.loreEntries.map((item) => item.id === action.targetLoreEntryId
+        ? { ...item, keys: candidate.keywords, content: candidate.content } : item)
+        : [...fields.loreEntries, {
+            id: action.id, keys: candidate.keywords, content: candidate.content,
+            priority: 0, scope: "prompt", triggerMode: "both", alwaysActive: false, enabled: true
+          }];
+      const updates = buildCharacterUpdateData(character, { loreEntries }, accessPassword);
+      await this.updateCharacter(character.id, dropUndefined(updates));
+      const timestamp = now();
+      await this.writeRecord("agentEntry", { ...entry, actions: entry.actions.map((item) => item.id === actionId
+        ? { ...item, appliedAt: timestamp, appliedTargetId: character.id, appliedInput: candidate }
+        : item) });
+      return { characterId: character.id, characterName: character.name, affectedChatCount, session: this.getAgentSession(chatId), alreadyApplied: false };
+    });
+  }
+
+  async beginAgentTask(chatId, input) {
+    return this.atomicWrite(async () => {
+      const existingEntry = this.readRecord("agentEntry", input.mutationId);
+      if (existingEntry) {
+        if (existingEntry.chatId !== chatId || existingEntry.content !== input.content || existingEntry.mode !== input.mode ||
+          JSON.stringify(existingEntry.generation ?? {}) !== JSON.stringify(input.generation ?? {})) {
+          const error = new Error("Task id was already used with different content"); error.status = 409; throw error;
+        }
+        return { duplicate: true, history: [] };
+      }
+      const session = this.readRecord("agentSession", chatId);
+      if (session?.activeRunId) {
+        const error = new Error("An Agent task is already running"); error.status = 409; throw error;
+      }
+      const history = this.getAgentSession(chatId).entries.filter((entry) => entry.status === "succeeded")
+        .slice(-12).map((entry) => ({ role: entry.role, content: entry.content }));
+      const timestamp = now();
+      await this.writeRecord("agentSession", { id: chatId, chatId, activeRunId: input.mutationId, createdAt: session?.createdAt ?? timestamp, updatedAt: timestamp });
+      await this.writeRecord("agentEntry", {
+        id: input.mutationId, chatId, role: "user", mode: input.mode, content: input.content,
+        status: "running", generation: input.generation ?? {}, sourceMessageIds: [], sourceMemoryIds: [], actions: [], createdAt: timestamp, completedAt: null
+      });
+      return { duplicate: false, history };
+    });
+  }
+
+  async completeAgentTask(chatId, mutationId, mode, draft) {
+    return this.atomicWrite(async () => {
+      const session = this.readRecord("agentSession", chatId);
+      const userEntry = this.readRecord("agentEntry", mutationId);
+      if (!session || session.activeRunId !== mutationId || userEntry?.status !== "running") {
+        const error = new Error("Agent task is no longer active"); error.status = 409; throw error;
+      }
+      const timestamp = now();
+      await this.writeRecord("agentEntry", { ...userEntry, status: "succeeded", completedAt: timestamp });
+      await this.writeRecord("agentEntry", {
+        id: randomUUID(), chatId, role: "assistant", mode, content: draft.content,
+        status: "succeeded", sourceMessageIds: draft.sourceMessageIds, sourceMemoryIds: draft.sourceMemoryIds, actions: draft.actions,
+        createdAt: timestamp, completedAt: timestamp
+      });
+      await this.writeRecord("agentSession", { ...session, activeRunId: null, updatedAt: timestamp });
+      return this.getAgentSession(chatId);
+    });
+  }
+
+  async failAgentTask(chatId, mutationId, status) {
+    return this.atomicWrite(async () => {
+      const session = this.readRecord("agentSession", chatId);
+      const entry = this.readRecord("agentEntry", mutationId);
+      if (!session || session.activeRunId !== mutationId || !entry) return;
+      const timestamp = now();
+      await this.writeRecord("agentEntry", { ...entry, status, completedAt: timestamp });
+      await this.writeRecord("agentSession", { ...session, activeRunId: null, updatedAt: timestamp });
+    });
+  }
+
+  async clearAgentSession(chatId) {
+    return this.atomicWrite(async () => {
+      const session = this.readRecord("agentSession", chatId);
+      if (session?.activeRunId) { const error = new Error("Stop the running Agent task before clearing history"); error.status = 409; throw error; }
+      await this.deleteRecord("agentSession", chatId);
+      this.db.run("DELETE FROM records WHERE type = 'agentEntry' AND chatId = ?", [chatId]);
+      return { cleared: true };
+    });
+  }
+
+  async recoverInterruptedAgentTasks() {
+    return this.atomicWrite(async () => {
+      let recovered = 0;
+      for (const session of this.readRecords("agentSession")) {
+        if (!session.activeRunId) continue;
+        const entry = this.readRecord("agentEntry", session.activeRunId);
+        const timestamp = now();
+        if (entry?.status === "running") await this.writeRecord("agentEntry", { ...entry, status: "interrupted", completedAt: timestamp });
+        await this.writeRecord("agentSession", { ...session, activeRunId: null, updatedAt: timestamp });
+        recovered += 1;
+      }
+      return recovered;
+    });
   }
 
   listMemoryPage(chatId, limit, boundary = null, includeTotal = false) {
@@ -1250,14 +1750,15 @@ export class MobileStore {
   }
 
   createMemoryOperation(input) {
+    const timestamp = input.startedAt ?? now();
     const operation = {
       id: input.id ?? randomUUID(), chatId: input.chatId, type: input.type ?? "automatic_maintenance",
       actor: input.actor ?? "automatic_memory", status: input.status ?? "running",
-      startedAt: input.startedAt ?? now(), completedAt: input.completedAt ?? null,
+      startedAt: timestamp, completedAt: input.completedAt ?? null,
       created: input.created ?? 0, updated: input.updated ?? 0, disabled: input.disabled ?? 0, unchanged: input.unchanged ?? 0,
       sourceMessageIds: input.sourceMessageIds ?? [], errorCode: input.errorCode ?? null,
       undoneAt: input.undoneAt ?? null, undoOperationId: input.undoOperationId ?? null,
-      createdAt: input.startedAt ?? now(), updatedAt: now()
+      createdAt: timestamp, updatedAt: now()
     };
     return this.writeRecord("memoryOperation", operation).then(() => clone(operation));
   }
@@ -1265,7 +1766,7 @@ export class MobileStore {
   previewMemoryOperationUndo(chatId, operationId) {
     const operation = this.readRecord("memoryOperation", operationId);
     if (!operation || operation.chatId !== chatId) return null;
-    if (operation.type !== "automatic_maintenance" || ["running", "failed"].includes(operation.status)) { const error = new Error("This operation cannot be undone."); error.status = 409; throw error; }
+    if (!["automatic_maintenance", "agent_maintenance"].includes(operation.type) || ["running", "failed"].includes(operation.status)) { const error = new Error("This operation cannot be undone."); error.status = 409; throw error; }
     if (operation.undoneAt || operation.undoOperationId) { const error = new Error("This operation was already undone."); error.status = 409; throw error; }
     const revisions = this.readRecords("memoryRevision").filter((item) => item.chatId === chatId && item.operationId === operationId).sort((a, b) => a.revision - b.revision);
     const items = revisions.map((revision) => {
@@ -1273,7 +1774,7 @@ export class MobileStore {
       if (!memory) { const error = new Error("An affected memory is no longer available."); error.status = 409; throw error; }
       return {
         memoryId: memory.id, operationRevision: revision.revision, currentRevision: memory.currentRevision,
-        effect: revision.beforeSnapshot === null ? "retire_created" : revision.action === "automatic_disable" ? "restore_disabled" : "restore_updated",
+        effect: revision.beforeSnapshot === null ? "retire_created" : ["automatic_disable", "agent_confirmed_disable"].includes(revision.action) ? "restore_disabled" : "restore_updated",
         conflict: memory.currentRevision !== revision.revision,
         current: memory.deletedAt ? null : this.memorySnapshot(memory), restored: revision.beforeSnapshot
       };
@@ -1733,7 +2234,7 @@ export class MobileStore {
   async applyBackupAnalysis(analysis, resolutions) {
     const { backup, records } = analysis;
     if (backup.mode === "replace") {
-      this.db.run("DELETE FROM records WHERE type IN ('character', 'chat', 'chatDraft', 'draftHandoff', 'message', 'messageAttachment', 'memory', 'memoryRevision', 'memoryOperation', 'profileSummaryRevision')");
+      this.db.run("DELETE FROM records WHERE type IN ('character', 'chat', 'chatDraft', 'draftHandoff', 'message', 'messageAttachment', 'memory', 'memoryRevision', 'memoryOperation', 'profileSummaryRevision', 'agentSession', 'agentEntry')");
     }
 
     const existingSettings = this.getSettings();

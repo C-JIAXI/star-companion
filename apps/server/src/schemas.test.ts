@@ -6,6 +6,7 @@ import {
   backupMessageSchema,
   messageCreateSchema,
   chatAgentDraftSchema,
+  agentTaskSchema,
   chatBatchArchiveSchema,
   chatBatchFolderSchema,
   chatRenameFolderSchema,
@@ -70,6 +71,13 @@ describe("chatAgentDraftSchema", () => {
       })
     );
   });
+});
+
+it("bounds per-task Agent generation parameters", () => {
+  const task = { mutationId: "00000000-0000-4000-8000-000000000001", mode: "reply_drafts", content: "Draft a reply" };
+  assert.deepEqual(agentTaskSchema.parse({ ...task, generation: { temperature: 0.8, maxTokens: 1800 } }).generation, { temperature: 0.8, maxTokens: 1800 });
+  assert.equal(agentTaskSchema.safeParse({ ...task, generation: { temperature: 2.1, maxTokens: 1800 } }).success, false);
+  assert.equal(agentTaskSchema.safeParse({ ...task, generation: { temperature: 0.8, maxTokens: 8192 } }).success, false);
 });
 
 describe("storage cleanup schemas", () => {

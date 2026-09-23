@@ -1,5 +1,6 @@
 import type { UserSettings } from "@prisma/client";
 import { decryptApiKey } from "./apiKeyVault.js";
+import { parseModelToolDecision, providerToolDefinitions, providerToolHistory, type ModelToolDefinition, type ModelToolExchange } from "./toolProtocol.js";
 import {
   createModelError,
   malformedModelResponse,
@@ -854,6 +855,49 @@ export const completeChatCompletionDetailed = async (input: {
 
 export const completeChatCompletion = async (input: Parameters<typeof completeChatCompletionDetailed>[0]) =>
   (await completeChatCompletionDetailed(input)).content;
+
+export const completeToolDecision = async (input: {
+  settings: UserSettings;
+  messages: ChatCompletionMessage[];
+  tools: ModelToolDefinition[];
+  exchanges: ModelToolExchange[];
+  signal?: AbortSignal;
+  maxTokens?: number;
+  temperature?: number;
+}) => {
+  const provider = normalizeProvider(input.settings.activeProvider);
+  const maxTokens = input.maxTokens ?? input.settings.maxTokens;
+  const temperature = input.temperature ?? input.settings.temperature;
+  let url: string;
+  let body: Record<string, unknown>;
+  if (provider === "anthropic") {
+    url = joinApiPath(input.settings.apiBaseUrl, "messages");
+    const base = toAnthropicPayload({ settings: input.settings, messages: input.messages, stream: false, maxTokens, temperature });
+    body = { ...base, messages: [...base.messages, ...providerToolHistory(provider, input.exchanges)], tools: providerToolDefinitions(provider, input.tools) };
+  } else if (provider === "google-gemini") {
+    url = joinApiPath(input.settings.apiBaseUrl, `models/${encodeURIComponent(normalizeGeminiModel(input.settings.model))}:generateContent`);
+    const base = toGeminiPayload({ settings: input.settings, messages: input.messages, maxTokens, temperature });
+    body = { ...base, contents: [...base.contents, ...providerToolHistory(provider, input.exchanges)], tools: providerToolDefinitions(provider, input.tools) };
+  } else {
+    url = joinApiPath(input.settings.apiBaseUrl, "chat/completions");
+    const base = openAiRequestBody({ settings: input.settings, messages: input.messages, stream: false, maxTokens, temperature });
+    body = { ...base, messages: [...base.messages, ...providerToolHistory(provider, input.exchanges)], tools: providerToolDefinitions(provider, input.tools) };
+  }
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST", headers: authHeaders(input.settings, provider), signal: callSignal(input.signal), body: JSON.stringify(body)
+    });
+  } catch (error) {
+    throw normalizeModelError(error, { provider, modelId: input.settings.model, cancelled: input.signal?.aborted });
+  }
+  if (!response.ok) throw await responseError(response, input.settings);
+  try {
+    return parseModelToolDecision(provider, await response.json());
+  } catch {
+    throw malformedModelResponse(provider, input.settings.model);
+  }
+};
 
 const estimateTokens = (text: string) => {
   const compact = text.trim();

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { verifyChatDraftContract, verifyDraftBudgetResume } from "../testing/chat-draft-contract.mjs";
 import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
@@ -104,6 +106,83 @@ const createFakeModelServer = () => {
     lastChatCompletionBody = body;
     chatCompletionBodies.push(body);
     const joinedMessages = (body.messages ?? []).map((message) => message.content ?? "").join("\n\n");
+    if (body.tools && joinedMessages.includes("mobile-role-tool-smoke")) {
+      const toolMessages = (body.messages ?? []).filter((message) => message.role === "tool");
+      const message = toolMessages.length === 0
+        ? { role: "assistant", content: null, tool_calls: [{ id: "mobile_role_search", type: "function", function: { name: "search_history", arguments: JSON.stringify({ query: "mobile-role-tool-smoke", limit: 5 }) } }] }
+        : { role: "assistant", content: "Mobile role tool found the current scene." };
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message }], usage: { prompt_tokens: 25, completion_tokens: 8, total_tokens: 33 } }));
+      return;
+    }
+    if (body.tools && joinedMessages.includes("mobile-lore-update-smoke")) {
+      const toolMessages = (body.messages ?? []).filter((message) => message.role === "tool");
+      const lore = toolMessages.length ? JSON.parse(toolMessages.at(-1).content).character?.loreEntries?.find((entry) => entry.id === "mobile-update-entry") : null;
+      const message = toolMessages.length === 0
+        ? { role: "assistant", content: null, tool_calls: [{ id: "mobile_update_lore_read", type: "function", function: { name: "read_character", arguments: "{}" } }] }
+        : { role: "assistant", content: JSON.stringify({ answer: "Update the bell.", candidates: [{ kind: "lore_candidate", loreAction: "update",
+          targetLoreEntryId: lore?.id, title: "Bell", content: "The bell rings twice.", keywords: ["bell"], sourceMessageIds: [], sourceMemoryIds: [] }] }) };
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message }], usage: { prompt_tokens: 25, completion_tokens: 8, total_tokens: 33 } }));
+      return;
+    }
+    if (body.tools && joinedMessages.includes("User focus:\nmobile-agent-merge-smoke")) {
+      const toolMessages = (body.messages ?? []).filter((message) => message.role === "tool");
+      const searched = toolMessages.flatMap((item) => JSON.parse(item.content).memories ?? []);
+      const ids = ["Festival promise revised", "Festival promise duplicate"].map((title) => searched.find((memory) => memory.title === title)?.id);
+      const message = toolMessages.length === 0
+        ? { role: "assistant", content: null, tool_calls: [{ id: "mobile_merge_search_one", type: "function", function: { name: "search_memories", arguments: JSON.stringify({ query: "Festival promise revised", limit: 5 }) } }] }
+        : toolMessages.length === 1
+          ? { role: "assistant", content: null, tool_calls: [{ id: "mobile_merge_search_two", type: "function", function: { name: "search_memories", arguments: JSON.stringify({ query: "Festival promise duplicate", limit: 5 }) } }] }
+        : { role: "assistant", content: JSON.stringify({ answer: "Merge duplicate festival promises.", candidates: [{
+          kind: "memory_candidate", memoryAction: "merge", targetMemoryIds: ids.filter(Boolean),
+          title: "Festival promise merged", content: "They promised to meet after the festival.", keywords: ["festival"], sourceMessageIds: [], sourceMemoryIds: []
+        }] }) };
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message }], usage: { prompt_tokens: 24, completion_tokens: 20, total_tokens: 44 } }));
+      return;
+    }
+    if (body.tools && joinedMessages.includes("mobile-agent-candidate-smoke")) {
+      const message = { role: "assistant", content: JSON.stringify({ answer: "Reviewable mobile candidates.", candidates: [
+        { kind: "memory_candidate", title: "Festival promise", content: "They promised to meet after the festival.", keywords: ["festival"], sourceMessageIds: [], sourceMemoryIds: [] },
+        { kind: "lore_candidate", title: "Festival lantern", content: "The festival lantern glows blue.", keywords: ["festival", "lantern"], sourceMessageIds: [], sourceMemoryIds: [] }
+      ] }) };
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message }], usage: { prompt_tokens: 24, completion_tokens: 20, total_tokens: 44 } }));
+      return;
+    }
+    if (body.tools && joinedMessages.includes("User focus:\nmobile-character-tool-smoke")) {
+      const toolMessages = (body.messages ?? []).filter((message) => message.role === "tool");
+      const character = toolMessages.length ? JSON.parse(toolMessages.at(-1).content).character : null;
+      const message = toolMessages.length === 0
+        ? { role: "assistant", content: null, tool_calls: [{ id: "mobile_character_read", type: "function", function: { name: "read_character", arguments: "{}" } }] }
+        : { role: "assistant", content: `Character prompt: ${character?.prompt ?? "locked"}.` };
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message }], usage: { prompt_tokens: 24, completion_tokens: 8, total_tokens: 32 } }));
+      return;
+    }
+    if (body.tools && joinedMessages.includes("Find the mobile-tool-smoke agreement") && !joinedMessages.includes("mobile-memory-tool-smoke agreement")) {
+      const toolMessages = (body.messages ?? []).filter((message) => message.role === "tool");
+      const readId = toolMessages.length ? JSON.parse(toolMessages.at(-1).content).messages?.[0]?.id : null;
+      const message = toolMessages.length === 0
+        ? { role: "assistant", content: null, tool_calls: [{ id: "mobile_search", type: "function", function: { name: "search_history", arguments: JSON.stringify({ query: "What did I say about blue doors?", limit: 5 }) } }] }
+        : toolMessages.length === 1
+          ? { role: "assistant", content: null, tool_calls: [{ id: "mobile_read", type: "function", function: { name: "read_messages", arguments: JSON.stringify({ ids: [readId] }) } }] }
+          : { role: "assistant", content: `The old question concerned blue doors. [source:${readId}]` };
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message }], usage: { prompt_tokens: 20 + toolMessages.length * 5, completion_tokens: 8, total_tokens: 28 + toolMessages.length * 5 } }));
+      return;
+    }
+    if (body.tools && joinedMessages.includes("mobile-memory-tool-smoke agreement")) {
+      const toolMessages = (body.messages ?? []).filter((message) => message.role === "tool");
+      const memoryId = toolMessages.length ? JSON.parse(toolMessages.at(-1).content).memories?.[0]?.id : null;
+      const message = toolMessages.length === 0
+        ? { role: "assistant", content: null, tool_calls: [{ id: "mobile_memory_search", type: "function", function: { name: "search_memories", arguments: JSON.stringify({ query: "harbor festival", limit: 5 }) } }] }
+        : { role: "assistant", content: `They agreed to meet at the harbor. [memory:${memoryId}]` };
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message }], usage: { prompt_tokens: 24, completion_tokens: 8, total_tokens: 32 } }));
+      return;
+    }
 
     if (body.stream) {
       response.writeHead(200, {
@@ -122,7 +201,7 @@ const createFakeModelServer = () => {
     if (joinedMessages.includes("read-only drafting assistant for an original")) {
       content = JSON.stringify({ items: [{ field: "prompt", title: "Mobile core draft", suggestion: "A structured mobile character draft." }] });
     } else if (joinedMessages.includes("read-only context assistant")) {
-      content = "Mobile agent draft: [DRAFT]Ask about the blue door hinge.[/DRAFT]";
+      content = JSON.stringify({ answer: "Mobile agent draft:", candidates: [{ kind: "reply_draft", title: "Blue door hinge", content: "Ask about the blue door hinge.", keywords: [], sourceMessageIds: [], sourceMemoryIds: [] }] });
     } else if (joinedMessages.includes("Generate a concise title for this local-first")) {
       content = '"Mobile Blue Door"';
     } else if (joinedMessages.includes("concise local user profile memory")) {
@@ -152,10 +231,12 @@ const createFakeModelServer = () => {
       });
     } else if (joinedMessages.includes("Select long-term chat memories")) {
       const semanticId = joinedMessages.match(/id=([^\s]+)\ntitle=Harbor vow/)?.[1];
-      const id = joinedMessages.includes("Current conversation context:\nWhat commitment did they make")
-        ? semanticId
-        : joinedMessages.match(/id=([^\s]+)/)?.[1];
-      content = JSON.stringify({ ids: id ? [id] : [] });
+      const ids = joinedMessages.includes("Current conversation context:\nFestival promise")
+        ? [...joinedMessages.matchAll(/id=([^\s]+)/g)].map((match) => match[1]).slice(0, 5)
+        : [joinedMessages.includes("Current conversation context:\nWhat commitment did they make")
+          ? semanticId
+          : joinedMessages.match(/id=([^\s]+)/)?.[1]].filter(Boolean);
+      content = JSON.stringify({ ids });
     }
 
     response.setHeader("Content-Type", "application/json");
@@ -230,6 +311,20 @@ const querySocketRequestStatus = (requestId) =>
     });
     socket.addEventListener("error", reject);
   });
+
+const queryAgentRunEvents = (chatId, runId) => new Promise((resolve, reject) => {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+  const events = [];
+  const timeout = setTimeout(() => { socket.close(); reject(new Error("Timed out waiting for mobile Agent event replay")); }, 5_000);
+  socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "agent_subscribe", chatId, runId, afterSeq: 0 })));
+  socket.addEventListener("message", (raw) => {
+    const event = JSON.parse(String(raw.data));
+    if (event.type !== "agent_event" || event.runId !== runId) return;
+    events.push(event);
+    if (["succeeded", "failed", "cancelled"].includes(event.phase)) { clearTimeout(timeout); socket.close(); resolve(events); }
+  });
+  socket.addEventListener("error", reject);
+});
 
 const runGeneration = (chatId, content) => runSocketRequest({ type: "generate", chatId, content });
 
@@ -362,7 +457,7 @@ try {
         models: [
           {
             id: "mobile-chat", label: "Chat", model: "fake-mobile-model", contextWindow: 128000,
-            capabilities: ["text_generation", "vision_input"],
+            capabilities: ["text_generation", "vision_input", "tool_calling"],
             pricing: { inputMicrosPerMillion: 2_000_000, outputMicrosPerMillion: 6_000_000, currency: "USD", updatedAt: "2026-08-12T00:00:00.000Z", source: "user" }
           },
           { id: "mobile-embedding", label: "Embedding", model: "fake-mobile-embedding", capabilities: ["text_embedding"] },
@@ -717,6 +812,35 @@ try {
     }
   });
   assert.equal(chat.characterId, character.id);
+  const roleToolChat = await request("/api/chats", { method: "POST",
+    body: { title: "Mobile role tool smoke", characterId: character.id, autoMemoryEnabled: false } });
+  const roleToolRequestId = `mobile-role-${randomUUID()}`;
+  const roleToolEvents = await runSocketRequest({ type: "generate", requestId: roleToolRequestId,
+    chatId: roleToolChat.id, content: "mobile-role-tool-smoke", toolUse: { enabled: true, toolNames: ["search_history"] } });
+  assert.equal(roleToolEvents.some((event) => event.type === "generation_tool_event" && event.phase === "tool_complete"), true);
+  assert.match(roleToolEvents.find((event) => event.type === "assistant_message")?.message.content ?? "", /Mobile role tool found/);
+  assert.equal((await querySocketRequestStatus(roleToolRequestId)).status, "succeeded");
+  await permanentlyDeleteChat(roleToolChat.id);
+  const loreUpdateCharacter = await request("/api/characters", { method: "POST", body: {
+    name: "Mobile Lore Update", prompt: "Watch the bell.", loreEntries: [{ id: "mobile-update-entry", keys: ["bell"], content: "The bell rings once.",
+      priority: 6, scope: "prompt", triggerMode: "both", alwaysActive: true, enabled: true }]
+  } });
+  const loreUpdateChat = await request("/api/chats", { method: "POST", body: { title: "Mobile Lore Update", characterId: loreUpdateCharacter.id } });
+  const loreUpdateSession = await request(`/api/chats/${loreUpdateChat.id}/agent/tasks`, { method: "POST", body: {
+    mutationId: randomUUID(), mode: "memory_lore_candidates", content: "mobile-lore-update-smoke"
+  } });
+  const loreUpdateAction = loreUpdateSession.entries.at(-1)?.actions?.[0];
+  assert.equal(loreUpdateAction?.targetLoreEntryId, "mobile-update-entry");
+  const loreUpdateCandidate = { title: loreUpdateAction.title, content: loreUpdateAction.content, keywords: loreUpdateAction.keywords };
+  const loreUpdatePreview = await request(`/api/chats/${loreUpdateChat.id}/agent/actions/${loreUpdateAction.id}/preview`, { method: "POST", body: { candidate: loreUpdateCandidate } });
+  assert.equal(loreUpdatePreview.loreTarget?.content, "The bell rings once.");
+  await request(`/api/chats/${loreUpdateChat.id}/agent/actions/${loreUpdateAction.id}/confirm-lore`, { method: "POST", body: { confirm: "APPLY_AGENT_LORE", candidate: loreUpdateCandidate } });
+  const loreUpdateRows = (await request(`/api/characters/${loreUpdateCharacter.id}`)).loreEntries;
+  assert.equal(loreUpdateRows.length, 1);
+  assert.equal(loreUpdateRows[0]?.content, "The bell rings twice.");
+  assert.equal(loreUpdateRows[0]?.priority, 6);
+  await permanentlyDeleteChat(loreUpdateChat.id);
+  await request(`/api/characters/${loreUpdateCharacter.id}`, { method: "DELETE" });
   assert.equal(chat.folder, "Mobile smoke folder");
   assert.equal(chat.userAvatar, "data:image/png;base64,YQ==");
 
@@ -948,6 +1072,10 @@ try {
   });
   assert.equal(excludedUserMessage.contextIncluded, false);
   assert.equal(excludedUserMessage.isBookmarked, true);
+  const agentHistorySearch = await request(
+    `/api/chats/${chat.id}/agent/history-search?${new URLSearchParams({ q: "blue doors", limit: "5" }).toString()}`
+  );
+  assert.equal(agentHistorySearch.results.some((result) => result.message.id === generatedUserMessage.id), false);
   const bookmarkPage = await request(`/api/messages/page?${new URLSearchParams({
     chatId: chat.id, limit: "1", includeTotal: "true", bookmarkedOnly: "true"
   }).toString()}`);
@@ -1146,18 +1274,213 @@ try {
   assert.equal(agentDraft.actions[0]?.content, "Ask about the blue door hinge.");
   assert.equal(Array.isArray(agentDraft.matchedLoreEntries), true);
   assert.equal(Array.isArray(agentDraft.matchedMemoryEntries), true);
+  const firstAgentTaskId = randomUUID();
+  const firstAgentSession = await request(`/api/chats/${chat.id}/agent/tasks`, {
+    method: "POST", body: { mutationId: firstAgentTaskId, mode: "reply_drafts", content: "How should I answer about blue doors?" }
+  });
+  assert.deepEqual(firstAgentSession.entries.map((entry) => entry.role), ["user", "assistant"]);
+  const firstAgentStatus = await request(`/api/chats/${chat.id}/agent/runs/${firstAgentTaskId}`);
+  assert.equal(firstAgentStatus.status, "succeeded");
+  assert.ok(firstAgentStatus.lastEventSeq > 0);
+  const callsAfterFirstTask = fakeModelServer.getChatCompletionBodies().length;
+  const duplicateAgentSession = await request(`/api/chats/${chat.id}/agent/tasks`, {
+    method: "POST", body: { mutationId: firstAgentTaskId, mode: "reply_drafts", content: "How should I answer about blue doors?" }
+  });
+  assert.equal(duplicateAgentSession.entries.length, 2);
+  assert.equal(fakeModelServer.getChatCompletionBodies().length, callsAfterFirstTask);
+  assert.equal((await requestFailure(`/api/chats/${chat.id}/agent/tasks`, {
+    method: "POST", body: { mutationId: firstAgentTaskId, mode: "reply_drafts", content: "How should I answer about blue doors?", generation: { temperature: 0.2, maxTokens: 512 } }
+  })).status, 409);
+  const secondAgentSession = await request(`/api/chats/${chat.id}/agent/tasks`, {
+    method: "POST", body: { mutationId: randomUUID(), mode: "continuity_check", content: "And is that consistent?" }
+  });
+  assert.deepEqual(secondAgentSession.entries.map((entry) => entry.role), ["user", "assistant", "user", "assistant"]);
+  assert.equal((await request(`/api/chats/${chat.id}/agent/session`)).entries.length, 4);
+  const mobileToolTaskId = randomUUID();
+  const callsBeforeMobileToolTask = fakeModelServer.getChatCompletionBodies().length;
+  const mobileToolSession = await request(`/api/chats/${chat.id}/agent/tasks`, {
+    method: "POST", body: { mutationId: mobileToolTaskId, mode: "continuity_check", content: "Find the mobile-tool-smoke agreement." }
+  });
+  assert.ok(fakeModelServer.getChatCompletionBodies().length >= callsBeforeMobileToolTask + 3);
+  assert.match(mobileToolSession.entries.at(-1)?.content ?? "", /old question concerned blue doors/i);
+  assert.deepEqual(mobileToolSession.entries.at(-1)?.sourceMessageIds, [chatAfterTitleSuggestion.messages.find((message) => message.content === "What did I say about blue doors?")?.id]);
+  const mobileToolEvents = await queryAgentRunEvents(chat.id, mobileToolTaskId);
+  assert.ok(mobileToolEvents.some((event) => event.phase === "tool_start" && event.toolName === "search_history"));
+  assert.deepEqual(mobileToolEvents.map((event) => event.seq), Array.from({ length: mobileToolEvents.length }, (_, index) => index + 1));
+  assert.equal(mobileToolEvents.at(-1)?.phase, "succeeded");
+  const mobileLedger = new DatabaseSync(path.join(dataDir, "mobile-backend.sqlite"), { readOnly: true });
+  try {
+    const requestId = `agent_${mobileToolTaskId}`;
+    const taskRequest = mobileLedger.prepare("SELECT data FROM records WHERE type = 'modelRequest' AND id = ?").get(requestId);
+    assert.equal(JSON.parse(taskRequest.data).status, "succeeded");
+    const attempts = mobileLedger.prepare("SELECT data FROM records WHERE type = 'usageAttempt'").all()
+      .map((row) => JSON.parse(row.data)).filter((attempt) => attempt.requestId === requestId);
+    assert.deepEqual(attempts.map((attempt) => attempt.attemptNumber).sort(), [1, 2, 3, 4, 5]);
+    assert.deepEqual(attempts.sort((a, b) => a.attemptNumber - b.attemptNumber).map((attempt) => attempt.module), ["memory_embedding", "memory", "agent", "agent", "agent"]);
+    assert.ok(attempts.every((attempt) => attempt.status === "succeeded" && attempt.reservedCostMicros === 0));
+  } finally {
+    mobileLedger.close();
+  }
+  assert.equal((await request(`/api/chats/${chat.id}/memories/${semanticMemory.id}`)).id, semanticMemory.id);
+  const mobileMemoryToolTaskId = randomUUID();
+  const mobileMemoryToolSession = await request(`/api/chats/${chat.id}/agent/tasks`, {
+    method: "POST", body: { mutationId: mobileMemoryToolTaskId, mode: "continuity_check", content: "Find the mobile-memory-tool-smoke agreement." }
+  });
+  assert.deepEqual(mobileMemoryToolSession.entries.at(-1)?.sourceMemoryIds, [semanticMemory.id]);
+  assert.match(mobileMemoryToolSession.entries.at(-1)?.content ?? "", /harbor/i);
+  const mobileCharacterToolChat = await request("/api/chats", {
+    method: "POST", body: { title: "Mobile character tool smoke", characterId: character.id }
+  });
+  const mobileCharacterToolSession = await request(`/api/chats/${mobileCharacterToolChat.id}/agent/tasks`, {
+    method: "POST", body: { mutationId: randomUUID(), mode: "character_consistency", content: "mobile-character-tool-smoke", generation: { temperature: 0.15, maxTokens: 512 } }
+  });
+  assert.equal(mobileCharacterToolSession.entries.at(-1)?.content, "Character prompt: locked.");
+  assert.equal(fakeModelServer.getChatCompletionBodies().at(-1)?.temperature, 0.15);
+  assert.equal(fakeModelServer.getChatCompletionBodies().at(-1)?.max_tokens, 120);
+  await permanentlyDeleteChat(mobileCharacterToolChat.id);
+  const mobileMemoryToolLedger = new DatabaseSync(path.join(dataDir, "mobile-backend.sqlite"), { readOnly: true });
+  try {
+    const rows = mobileMemoryToolLedger.prepare("SELECT data FROM records WHERE type = 'usageAttempt'").all()
+      .map((row) => JSON.parse(row.data)).filter((attempt) => attempt.requestId === `agent_${mobileMemoryToolTaskId}`)
+      .sort((a, b) => a.attemptNumber - b.attemptNumber);
+    assert.deepEqual(rows.map((row) => row.attemptNumber), [1, 2, 3, 4, 5, 6]);
+    assert.deepEqual(rows.map((row) => row.module), ["memory_embedding", "memory", "agent", "memory_embedding", "memory", "agent"]);
+    assert.ok(rows.every((row) => row.status === "succeeded"));
+  } finally { mobileMemoryToolLedger.close(); }
+  const mobileCandidateSession = await request(`/api/chats/${chat.id}/agent/tasks`, {
+    method: "POST", body: { mutationId: randomUUID(), mode: "memory_lore_candidates", content: "mobile-agent-candidate-smoke" }
+  });
+  const mobileCandidate = mobileCandidateSession.entries.at(-1)?.actions[0];
+  assert.equal(mobileCandidate?.kind, "memory_candidate");
+  const editedMobileMemory = { title: "Festival promise revised", content: mobileCandidate.content, keywords: mobileCandidate.keywords };
+  const mobileMemoryPreview = await request(`/api/chats/${chat.id}/agent/actions/${mobileCandidate.id}/preview`, {
+    method: "POST", body: { candidate: editedMobileMemory }
+  });
+  assert.equal(mobileMemoryPreview.original.title, "Festival promise");
+  assert.equal(mobileMemoryPreview.proposed.title, "Festival promise revised");
+  const firstMobileConfirmation = await request(`/api/chats/${chat.id}/agent/actions/${mobileCandidate.id}/confirm-memory`, {
+    method: "POST", body: { confirm: "APPLY_AGENT_MEMORY", candidate: editedMobileMemory }
+  });
+  const repeatedMobileConfirmation = await request(`/api/chats/${chat.id}/agent/actions/${mobileCandidate.id}/confirm-memory`, {
+    method: "POST", body: { confirm: "APPLY_AGENT_MEMORY", candidate: editedMobileMemory }
+  });
+  assert.equal(firstMobileConfirmation.memory.id, repeatedMobileConfirmation.memory.id);
+  assert.equal((await requestFailure(`/api/chats/${chat.id}/agent/actions/${mobileCandidate.id}/confirm-memory`, {
+    method: "POST", body: { confirm: "APPLY_AGENT_MEMORY", candidate: { ...editedMobileMemory, title: "Different retry" } }
+  })).status, 409);
+  assert.equal(firstMobileConfirmation.session.entries.at(-1)?.actions[0]?.appliedTargetId, firstMobileConfirmation.memory.id);
+  assert.equal((await request(`/api/chats/${chat.id}/memories/${firstMobileConfirmation.memory.id}/revisions`)).length, 1);
+  await request(`/api/chats/${chat.id}/memories`, {
+    method: "POST", body: { title: "Festival promise duplicate", content: "A second copy of the festival agreement", keywords: ["festival"], importance: 3, enabled: true, sourceMessageIds: [] }
+  });
+  const mergeSession = await request(`/api/chats/${chat.id}/agent/tasks`, {
+    method: "POST", body: { mutationId: randomUUID(), mode: "memory_lore_candidates", content: "mobile-agent-merge-smoke" }
+  });
+  const mergeCandidate = mergeSession.entries.at(-1)?.actions[0];
+  assert.equal(mergeCandidate?.memoryAction, "merge");
+  assert.equal(mergeCandidate.targetMemoryIds.length, 2);
+  const mergeEdit = { title: mergeCandidate.title, content: mergeCandidate.content, keywords: mergeCandidate.keywords };
+  const mergePreview = await request(`/api/chats/${chat.id}/agent/actions/${mergeCandidate.id}/preview`, { method: "POST", body: { candidate: mergeEdit } });
+  assert.equal(mergePreview.targets.length, 2);
+  const mergeResult = await request(`/api/chats/${chat.id}/agent/actions/${mergeCandidate.id}/confirm-memory`, { method: "POST", body: { confirm: "APPLY_AGENT_MEMORY", candidate: mergeEdit } });
+  assert.ok(mergeResult.operationId);
+  const mergeUndo = await request(`/api/chats/${chat.id}/memory-operations/${mergeResult.operationId}/undo-preview`, { method: "POST" });
+  assert.equal(mergeUndo.items.length, 2);
+  const undoneMerge = await request(`/api/chats/${chat.id}/memory-operations/${mergeResult.operationId}/undo`, {
+    method: "POST", body: { confirm: "UNDO_MEMORY_OPERATION", resolutions: mergeUndo.items.map((item) => ({ memoryId: item.memoryId, expectedCurrentRevision: item.currentRevision, action: "restore" })) }
+  });
+  assert.equal(undoneMerge.restored, 2);
+  const mobileLoreCandidate = mobileCandidateSession.entries.at(-1)?.actions[1];
+  assert.equal(mobileLoreCandidate?.kind, "lore_candidate");
+  const editedMobileLore = { title: mobileLoreCandidate.title, content: "The festival lantern glows violet.", keywords: mobileLoreCandidate.keywords };
+  const mobileLorePreview = await request(`/api/chats/${chat.id}/agent/actions/${mobileLoreCandidate.id}/preview`, {
+    method: "POST", body: { candidate: editedMobileLore }
+  });
+  assert.equal(mobileLorePreview.proposed.content, editedMobileLore.content);
+  assert.equal(mobileLorePreview.privateCharacter, true);
+  assert.equal(typeof mobileLorePreview.targetVersion, "string");
+  const lockedLoreConfirmation = await requestFailure(`/api/chats/${chat.id}/agent/actions/${mobileLoreCandidate.id}/confirm-lore`, {
+    method: "POST", body: { confirm: "APPLY_AGENT_LORE", candidate: editedMobileLore }
+  });
+  assert.equal(lockedLoreConfirmation.status, 400);
+  const firstMobileLoreConfirmation = await request(`/api/chats/${chat.id}/agent/actions/${mobileLoreCandidate.id}/confirm-lore`, {
+    method: "POST", body: { confirm: "APPLY_AGENT_LORE", candidate: editedMobileLore, accessPassword: "open-sesame" }
+  });
+  const repeatedMobileLoreConfirmation = await request(`/api/chats/${chat.id}/agent/actions/${mobileLoreCandidate.id}/confirm-lore`, {
+    method: "POST", body: { confirm: "APPLY_AGENT_LORE", candidate: editedMobileLore }
+  });
+  assert.equal(firstMobileLoreConfirmation.characterId, character.id);
+  assert.equal(repeatedMobileLoreConfirmation.alreadyApplied, true);
+  assert.equal((await requestFailure(`/api/chats/${chat.id}/agent/actions/${mobileLoreCandidate.id}/confirm-lore`, {
+    method: "POST", body: { confirm: "APPLY_AGENT_LORE", candidate: { ...editedMobileLore, content: "Different retry" } }
+  })).status, 409);
+  assert.equal((await request(`/api/characters/${character.id}`)).canViewPrompt, false);
+  const savedMobileLore = (await request(`/api/characters/${character.id}/unlock`, { method: "POST", body: { password: "open-sesame" } })).loreEntries.filter((entry) => entry.id === mobileLoreCandidate.id);
+  assert.equal(savedMobileLore.length, 1);
+  assert.equal(savedMobileLore[0]?.content, editedMobileLore.content);
+  const staleMobileLoreSession = await request(`/api/chats/${chat.id}/agent/tasks`, {
+    method: "POST", body: { mutationId: randomUUID(), mode: "memory_lore_candidates", content: "mobile-agent-candidate-smoke stale version" }
+  });
+  const staleMobileLoreAction = staleMobileLoreSession.entries.at(-1)?.actions.find((action) => action.kind === "lore_candidate");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await request(`/api/characters/${character.id}`, { method: "PUT", body: { description: "Changed after mobile Agent proposal" } });
+  const staleMobileLoreResult = await requestFailure(`/api/chats/${chat.id}/agent/actions/${staleMobileLoreAction.id}/confirm-lore`, {
+    method: "POST", body: { confirm: "APPLY_AGENT_LORE", candidate: { title: staleMobileLoreAction.title, content: staleMobileLoreAction.content, keywords: staleMobileLoreAction.keywords }, accessPassword: "open-sesame" }
+  });
+  assert.equal(staleMobileLoreResult.status, 409);
   const chatAfterAgentDraft = await request(`/api/chats/${chat.id}`);
   assert.equal(chatAfterAgentDraft.messages.length, 7);
   assert.ok(chatAfterAgentDraft.memories.length >= 1);
 
+  const skillMarkdown = "---\nname: mobile-scene-skill\ndescription: Track a scene in the current chat.\n---\nUse visible messages only.";
+  const skillInput = { format: "markdown", markdown: skillMarkdown };
+  assert.equal((await request("/api/skills")).filter((skill) => skill.source === "builtin").length, 4);
+  assert.equal((await request("/api/skills/import-preview", { method: "POST", body: skillInput })).existingVersion, null);
+  const importedSkill = await request("/api/skills/import", { method: "POST", body: skillInput });
+  assert.equal(importedSkill.agentEnabled, false);
+  assert.equal((await request("/api/skills/mobile-scene-skill")).skillMd, skillMarkdown);
+  const enabledSkill = await request("/api/skills/mobile-scene-skill/enabled", {
+    method: "PUT", body: { expectedVersion: importedSkill.version, agentEnabled: true, chatId: chat.id, chatEnabled: true }
+  });
+  assert.equal(enabledSkill.agentEnabled, true);
+  assert.deepEqual(enabledSkill.enabledChatIds, [chat.id]);
+  assert.equal((await requestFailure("/api/skills/mobile-scene-skill/enabled", {
+    method: "PUT", body: { expectedVersion: importedSkill.version, agentEnabled: false }
+  })).status, 409);
+  assert.equal((await requestFailure("/api/mcp", {
+    method: "POST", body: { name: "Unsafe MCP", endpointUrl: "http://example.com/mcp", allowPrivateNetwork: false }
+  })).status, 400);
+  const mcpConnection = await request("/api/mcp", { method: "POST", body: {
+    name: "Mobile Smoke MCP", endpointUrl: "https://example.com/mcp", allowPrivateNetwork: false, bearerToken: "mobile-mcp-smoke-secret"
+  } });
+  assert.equal(mcpConnection.hasBearerToken, true);
+  assert.equal(JSON.stringify(mcpConnection).includes("mobile-mcp-smoke-secret"), false);
+  assert.equal((await request("/api/mcp")).some((item) => item.id === mcpConnection.id), true);
+  const updatedMcp = await request(`/api/mcp/${mcpConnection.id}`, { method: "PUT", body: {
+    expectedVersion: mcpConnection.version, enabled: true
+  } });
+  assert.equal(updatedMcp.enabled, true);
+  assert.equal((await requestFailure(`/api/mcp/${mcpConnection.id}`, { method: "PUT", body: {
+    expectedVersion: mcpConnection.version, enabled: false
+  } })).status, 409);
+  assert.deepEqual(await request(`/api/mcp/${mcpConnection.id}`, { method: "DELETE", body: {
+    expectedVersion: updatedMcp.version, confirm: "DELETE_MCP_CONNECTION"
+  } }), { deleted: true });
+
   const chatArchive = await request(`/api/chats/${chat.id}/archive`);
   assert.equal(chatArchive.archiveVersion, 1);
+  assert.equal(Object.hasOwn(chatArchive, "agentSession"), false);
+  assert.equal(Object.hasOwn(chatArchive, "skills"), false);
+  assert.deepEqual(await request(`/api/chats/${chat.id}/agent/session`), staleMobileLoreSession);
+  assert.deepEqual(await request(`/api/chats/${chat.id}/agent/session`, { method: "DELETE" }), { cleared: true });
+  assert.deepEqual((await request(`/api/chats/${chat.id}/agent/session`)).entries, []);
   assert.equal(chatArchive.messages.length, 7);
   assert.equal(chatArchive.media.assets.length, 1);
   assert.equal(chatArchive.media.attachments.length, 1);
   assert.equal(chatArchive.messages.find((message) => message.id === generatedUserMessage.id)?.contextIncluded, false);
   assert.equal(chatArchive.messages.find((message) => message.id === generatedUserMessage.id)?.isBookmarked, true);
   assert.equal(chatArchive.chat.userAvatar, "data:image/png;base64,YQ==");
+  assert.deepEqual(await request("/api/skills/mobile-scene-skill", { method: "DELETE", body: { expectedVersion: enabledSkill.version, confirm: "DELETE_SKILL" } }), { deleted: true });
   assert.ok(
     chatArchive.messages.find((message) => message.role === "assistant")?.promptBreakdown
       ?.promptTokens > 0

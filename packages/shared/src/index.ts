@@ -87,6 +87,7 @@ export const normalizeAppearancePreferences = (value: unknown): AppearancePrefer
 export type AiModelCapability =
   | "text_generation"
   | "vision_input"
+  | "tool_calling"
   | "text_embedding"
   | "audio_transcription"
   | "text_to_speech"
@@ -501,6 +502,7 @@ export const aiModuleCapability: Record<AiModuleId, AiModelCapability> = {
 const knownAiModelCapabilities = new Set<AiModelCapability>([
   "text_generation",
   "vision_input",
+  "tool_calling",
   "text_embedding",
   "audio_transcription",
   "text_to_speech",
@@ -617,6 +619,7 @@ export type ModelErrorCode =
   | "stream_interrupted"
   | "cancelled"
   | "budget_blocked"
+  | "mcp_outcome_unknown"
   | "unknown";
 
 export interface ModelErrorDTO {
@@ -1235,6 +1238,8 @@ export type MemoryAction =
   | "manual_disable"
   | "manual_delete"
   | "agent_confirmed_create"
+  | "agent_confirmed_update"
+  | "agent_confirmed_disable"
   | "timeline_disable"
   | "restore"
   | "undo_create"
@@ -1273,7 +1278,7 @@ export interface MemoryRevisionDTO {
 }
 
 export type MemoryOperationStatus = "running" | "succeeded" | "partial" | "failed";
-export type MemoryOperationType = "automatic_maintenance" | "operation_undo";
+export type MemoryOperationType = "automatic_maintenance" | "agent_maintenance" | "operation_undo";
 
 export interface MemoryOperationDTO {
   id: string;
@@ -1414,12 +1419,52 @@ export type ChatAgentMode =
 
 export type ChatAgentActionKind = "reply_draft" | "memory_candidate" | "lore_candidate";
 
+export const AGENT_GENERATION_DEFAULTS: Record<ChatAgentMode, { temperature: number; maxTokens: number }> = {
+  scene_summary: { temperature: 0.2, maxTokens: 1400 },
+  next_steps: { temperature: 0.6, maxTokens: 1400 },
+  reply_drafts: { temperature: 0.8, maxTokens: 1800 },
+  memory_lore_candidates: { temperature: 0.3, maxTokens: 1600 },
+  continuity_check: { temperature: 0.1, maxTokens: 1800 },
+  character_consistency: { temperature: 0.2, maxTokens: 1600 }
+};
+
 export interface ChatAgentActionDTO {
   id: string;
   kind: ChatAgentActionKind;
   title: string;
   content: string;
   keywords?: string[];
+  sourceMessageIds?: string[];
+  sourceMemoryIds?: string[];
+  memoryAction?: "create" | "update" | "merge" | "disable";
+  loreAction?: "create" | "update";
+  targetLoreEntryId?: string;
+  targetMemoryIds?: string[];
+  targetMemoryRevisions?: number[];
+  appliedAt?: string;
+  appliedTargetId?: string;
+  appliedOperationId?: string;
+  targetCharacterId?: string;
+  targetVersion?: string;
+  appliedInput?: { title: string; content: string; keywords: string[] };
+}
+
+export interface ChatAgentActionPreviewDTO {
+  kind: "memory_candidate" | "lore_candidate";
+  original: { title: string; content: string; keywords: string[] };
+  proposed: { title: string; content: string; keywords: string[] };
+  targetName: string;
+  targetVersion: string | null;
+  affectedChatCount: number;
+  sourceMessageCount: number;
+  sourceMemoryCount: number;
+  privateCharacter: boolean;
+  alreadyApplied: boolean;
+  memoryAction?: "create" | "update" | "merge" | "disable";
+  loreAction?: "create" | "update";
+  targetLoreEntryId?: string;
+  targets?: Array<{ id: string; title: string; content: string; currentRevision: number; enabled: boolean }>;
+  loreTarget?: { id: string; content: string; keywords: string[] } | null;
 }
 
 export interface ChatAgentDraftRequestDTO {
@@ -1436,6 +1481,121 @@ export interface ChatAgentDraftDTO {
   matchedLoreEntries: MatchedLoreEntryDTO[];
   matchedMemoryEntries: MatchedMemoryDTO[];
   sourceMessageIds: string[];
+  sourceMemoryIds: string[];
+}
+
+export interface AgentEntryDTO {
+  id: string;
+  role: "user" | "assistant";
+  mode: ChatAgentMode | null;
+  content: string;
+  status: "running" | "succeeded" | "failed" | "interrupted" | "cancelled";
+  sourceMessageIds: string[];
+  sourceMemoryIds: string[];
+  actions: ChatAgentActionDTO[];
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface AgentRunStatusDTO {
+  runId: string;
+  status: AgentEntryDTO["status"];
+  completedAt: string | null;
+  lastEventSeq: number;
+  pendingApproval?: PendingMcpApprovalDTO | null;
+}
+
+export interface PendingMcpApprovalDTO {
+  chatId: string;
+  runId: string;
+  callId: string;
+  connectionId: string;
+  connectionName: string;
+  endpointUrl: string;
+  toolName: string;
+  definitionDigest: string;
+  readOnlyHint: boolean;
+  arguments: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface SkillSummaryDTO {
+  name: string;
+  description: string;
+  source: "builtin" | "imported";
+  version: number;
+  digest: string;
+  compatibility: string | null;
+  unsupportedFiles: string[];
+  agentEnabled: boolean;
+  enabledChatIds: string[];
+  updatedAt: string;
+}
+
+export interface SkillDetailDTO extends SkillSummaryDTO {
+  skillMd: string;
+  referencePaths: string[];
+}
+
+export type SkillImportInputDTO =
+  | { format: "markdown"; markdown: string; replaceVersion?: number }
+  | { format: "zip"; dataBase64: string; replaceVersion?: number };
+
+export interface SkillImportPreviewDTO {
+  name: string;
+  description: string;
+  digest: string;
+  compatibility: string | null;
+  unsupportedFiles: string[];
+  referencePaths: string[];
+  existingVersion: number | null;
+  canReplace: boolean;
+}
+
+export interface McpToolDTO {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  readOnlyHint: boolean;
+  definitionDigest: string;
+  enabled: boolean;
+}
+
+export interface McpConnectionDTO {
+  id: string;
+  name: string;
+  endpointUrl: string;
+  allowPrivateNetwork: boolean;
+  hasBearerToken: boolean;
+  enabled: boolean;
+  tools: McpToolDTO[];
+  version: number;
+  lastCheckedAt: string | null;
+  updatedAt: string;
+}
+
+export interface AgentSessionDTO {
+  chatId: string;
+  activeRunId: string | null;
+  entries: AgentEntryDTO[];
+}
+
+export interface AgentRunEventDTO {
+  type: "agent_event";
+  chatId: string;
+  runId: string;
+  seq: number;
+  phase: "started" | "context_start" | "context_complete" | "model_decision" | "tool_start" | "tool_complete" | "approval_required" | "approval_resolved" | "succeeded" | "failed" | "cancelled";
+  round?: number;
+  toolName?: string;
+  isError?: boolean;
+}
+
+export interface AgentTaskRequestDTO {
+  mutationId: string;
+  mode: ChatAgentMode;
+  content: string;
+  generation?: { temperature: number; maxTokens: number };
 }
 
 export interface ChatTitleSuggestionDTO {
@@ -1803,6 +1963,7 @@ export type GenerationClientMessage =
       draftId?: string;
       handoffId?: string;
       overrideHardBudget?: boolean;
+      toolUse?: ChatToolUseDTO;
     }
   | {
       type: "regenerate";
@@ -1810,18 +1971,21 @@ export type GenerationClientMessage =
       messageId: string;
       guidance?: string;
       overrideHardBudget?: boolean;
+      toolUse?: ChatToolUseDTO;
     }
   | {
       type: "continue";
       requestId: string;
       messageId: string;
       overrideHardBudget?: boolean;
+      toolUse?: ChatToolUseDTO;
     }
   | {
       type: "resend";
       requestId: string;
       messageId: string;
       overrideHardBudget?: boolean;
+      toolUse?: ChatToolUseDTO;
     }
   | {
       type: "stop";
@@ -1832,6 +1996,11 @@ export type GenerationClientMessage =
       requestId: string;
     };
 
+export interface ChatToolUseDTO {
+  enabled: boolean;
+  toolNames: string[];
+}
+
 export type GenerationServerMessage =
   | {
       type: "ready";
@@ -1840,6 +2009,14 @@ export type GenerationServerMessage =
   | {
       type: "generation_started";
       requestId: string;
+    }
+  | {
+      type: "generation_tool_event";
+      requestId: string;
+      phase: "model_decision" | "tool_start" | "tool_complete" | "approval_required" | "approval_resolved";
+      round: number;
+      toolName?: string;
+      isError?: boolean;
     }
   | {
       type: "generation_status";

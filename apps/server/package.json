@@ -16,24 +16,36 @@
     "db:migrate:deploy": "prisma migrate deploy"
   },
   "dependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
     "@prisma/client": "^6.19.3",
+    "ajv": "^8.20.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "ipaddr.js": "^2.5.0",
     "jpeg-js": "^0.4.4",
+    "js-yaml": "^4.3.2",
     "pngjs": "^7.0.0",
+    "undici": "^8.11.0",
     "ws": "^8.21.3",
+    "yauzl": "^2.10.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.5",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.9.1",
     "@types/pngjs": "^6.0.5",
     "@types/ws": "^8.18.1",
+    "@types/yauzl": "^2.10.3",
+    "@types/yazl": "^3.3.1",
     "prisma": "^6.19.3",
     "tsx": "^4.20.6",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "yazl": "^3.3.1"
   },
   "overrides": {
     "body-parser": "2.3.0"

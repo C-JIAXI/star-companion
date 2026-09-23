@@ -428,6 +428,10 @@ select option { background: var(--surface); color: var(--foreground); }
     outline-offset: 3px !important;
   }
 
+  :root [data-pointer-focus]:focus-visible {
+    outline: none !important;
+  }
+
   @media (hover: none) and (pointer: coarse) {
     * {
       -webkit-tap-highlight-color: transparent;

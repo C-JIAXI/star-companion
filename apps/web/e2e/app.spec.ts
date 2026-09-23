@@ -474,6 +474,27 @@ test("critical navigation and settings controls pass automated accessibility che
   await expect(page.locator("#main-content")).toBeFocused();
 });
 
+test("pointer-focused buttons do not gain a blue outline after typing, while Tab focus stays visible", async ({ page }) => {
+  await page.goto("/settings");
+  await expect(page.getByTestId("workspace-loading")).toHaveCount(0);
+  const button = page.getByTestId("settings-section-appearance");
+  for (const contrast of ["normal", "high"]) {
+    await page.locator("html").evaluate((element, value) => element.setAttribute("data-contrast", value), contrast);
+    await button.click();
+    await page.keyboard.press("q");
+    await expect(button).toHaveAttribute("data-pointer-focus", "");
+    expect(await button.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe("none");
+
+    await page.keyboard.press("Tab");
+    const keyboardFocus = await page.evaluate(() => ({
+      pointerFocused: document.activeElement?.hasAttribute("data-pointer-focus"),
+      outline: document.activeElement instanceof HTMLElement ? getComputedStyle(document.activeElement).outlineStyle : "none"
+    }));
+    expect(keyboardFocus.pointerFocused).toBe(false);
+    expect(keyboardFocus.outline).toBe("solid");
+  }
+});
+
 test("invalid appearance bootstrap data falls back before the server responds", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("star-companion:appearance-v1", JSON.stringify({ themeMode: "neon", fontSize: "huge", motion: "spin", backgroundOverlay: 9, characterStyle: "unsafe" })));
   await page.route("**/api/settings", async (route) => {
@@ -2125,35 +2146,86 @@ test("chat agent panel inserts reply drafts and confirms memory candidates befor
   page,
   request
 }, testInfo) => {
-  testInfo.setTimeout(60_000);
+  testInfo.setTimeout(90_000);
   const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const skillName = `e2e-scene-${testInfo.project.name}`;
   const characterName = `Agent Character ${suffix}`;
   const chatTitle = `Agent Chat ${suffix}`;
   let characterId: string | null = null;
   let chatId: string | null = null;
   let agentRequests = 0;
+  const agentTaskBodies: Array<{ generation?: { temperature: number; maxTokens: number } }> = [];
+  let citedMemoryId: string | null = null;
+  const agentEntries: Array<Record<string, unknown>> = [];
 
-  await page.route("**/api/chats/*/agent-draft", async (route) => {
+  await page.route("**/api/chats/*/agent/session", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: { chatId, activeRunId: null, entries: agentEntries } }) });
+  });
+
+  await page.route("**/api/chats/*/agent/tasks", async (route) => {
     agentRequests += 1;
-    const body = route.request().postDataJSON() as { mode?: string };
+    const body = route.request().postDataJSON() as { mutationId: string; mode?: string; content: string };
+    agentTaskBodies.push(body);
     const memoryCandidate = body.mode === "memory_lore_candidates";
+    const now = new Date().toISOString();
+    agentEntries.push({ id: body.mutationId, role: "user", mode: body.mode, content: body.content, status: "succeeded", sourceMessageIds: [], actions: [], createdAt: now, completedAt: now });
+    agentEntries.push({
+      id: `agent-answer-${agentRequests}`, role: "assistant", mode: body.mode,
+      content: citedMemoryId ? `The blue door trust was saved. [memory:${citedMemoryId}]` : memoryCandidate ? "Suggested memory about the blue door." : "Agent draft reply for the next turn.",
+      status: "succeeded", sourceMessageIds: [], sourceMemoryIds: citedMemoryId ? [citedMemoryId] : [], createdAt: now, completedAt: now,
+      actions: citedMemoryId ? [] : memoryCandidate
+        ? [
+          { id: "agent-memory-1", kind: "memory_candidate", title: "Blue door trust", content: "The user trusts the blue door.", keywords: ["blue door", "trust"] },
+          { id: "agent-lore-1", kind: "lore_candidate", title: "Blue hinge", content: "The blue door hinge squeaks.", keywords: ["blue door", "hinge"] }
+        ]
+        : [{ id: "agent-draft-1", kind: "reply_draft", title: "Draft 1", content: "A focused reply draft." }]
+    });
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         ok: true,
-        data: {
-          mode: body.mode ?? "reply_drafts",
-          title: memoryCandidate ? "Memory and Lore Candidates" : "Reply Drafts",
-          content: memoryCandidate ? "[MEMORY Blue door trust | The user trusts the blue door. | blue door, trust]" : "Agent draft reply for the next turn.",
-          createdAt: new Date().toISOString(),
-          actions: memoryCandidate
-            ? [{ id: "agent-memory-1", kind: "memory_candidate", title: "Blue door trust", content: "The user trusts the blue door.", keywords: ["blue door", "trust"] }]
-            : [{ id: "agent-draft-1", kind: "reply_draft", title: "Draft 1", content: "A focused reply draft." }],
-          matchedLoreEntries: [],
-          matchedMemoryEntries: []
-        }
+        data: { chatId, activeRunId: null, entries: agentEntries }
       })
     });
+  });
+
+  await page.route("**/api/chats/*/agent/actions/*/confirm-memory", async (route) => {
+    const actionId = new URL(route.request().url()).pathname.split("/").at(-2);
+    const entry = agentEntries.find((item) => Array.isArray(item.actions) && item.actions.some((action: { id: string }) => action.id === actionId));
+    const action = (entry?.actions as Array<{ id: string; title: string; content: string; keywords: string[] }> | undefined)?.find((item) => item.id === actionId);
+    if (!entry || !action) { await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ ok: false, error: "Agent candidate not found" }) }); return; }
+    const body = route.request().postDataJSON() as { candidate: { title: string; content: string; keywords: string[] } };
+    const memoryResponse = await request.post(`/api/chats/${chatId}/memories`, { data: { ...body.candidate, actor: "agent_confirmed" } });
+    const memory = ((await memoryResponse.json()) as ApiDataResponse<{ id: string }>).data;
+    entry.actions = (entry.actions as Array<Record<string, unknown>>).map((item) => item.id === actionId ? { ...item, appliedAt: new Date().toISOString(), appliedTargetId: memory?.id } : item);
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: { memory, session: { chatId, activeRunId: null, entries: agentEntries } } }) });
+  });
+
+  await page.route("**/api/chats/*/agent/actions/*/preview", async (route) => {
+    const actionId = new URL(route.request().url()).pathname.split("/").at(-2);
+    const entry = agentEntries.find((item) => Array.isArray(item.actions) && item.actions.some((action: { id: string }) => action.id === actionId));
+    const action = (entry?.actions as Array<{ id: string; kind: string; title: string; content: string; keywords: string[] }> | undefined)?.find((item) => item.id === actionId);
+    if (!action) { await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ ok: false, error: "Agent candidate not found" }) }); return; }
+    const body = route.request().postDataJSON() as { candidate: { title: string; content: string; keywords: string[] } };
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: {
+      kind: action.kind, original: { title: action.title, content: action.content, keywords: action.keywords }, proposed: body.candidate,
+      targetName: action.kind === "lore_candidate" ? characterName : chatTitle,
+      targetVersion: action.kind === "lore_candidate" ? new Date().toISOString() : null,
+      affectedChatCount: 1, sourceMessageCount: 0, sourceMemoryCount: 0, privateCharacter: false, alreadyApplied: false
+    } }) });
+  });
+
+  await page.route("**/api/chats/*/agent/actions/*/confirm-lore", async (route) => {
+    const actionId = new URL(route.request().url()).pathname.split("/").at(-2);
+    const entry = agentEntries.find((item) => Array.isArray(item.actions) && item.actions.some((action: { id: string }) => action.id === actionId));
+    const action = (entry?.actions as Array<{ id: string; content: string; keywords: string[] }> | undefined)?.find((item) => item.id === actionId);
+    if (!entry || !action) { await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ ok: false, error: "Agent candidate not found" }) }); return; }
+    const body = route.request().postDataJSON() as { candidate: { title: string; content: string; keywords: string[] } };
+    const characterResponse = await request.get(`/api/characters/${characterId}`);
+    const character = ((await characterResponse.json()) as ApiDataResponse<E2ECharacter & { loreEntries: Array<Record<string, unknown>> }>).data!;
+    await request.put(`/api/characters/${characterId}`, { data: { loreEntries: [...character.loreEntries, { id: action.id, keys: body.candidate.keywords, content: body.candidate.content, priority: 0, scope: "prompt", triggerMode: "both", alwaysActive: false, enabled: true }] } });
+    entry.actions = (entry.actions as Array<Record<string, unknown>>).map((item) => item.id === actionId ? { ...item, appliedAt: new Date().toISOString(), appliedTargetId: characterId } : item);
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, data: { characterId, characterName: character.name, affectedChatCount: 1, session: { chatId, activeRunId: null, entries: agentEntries }, alreadyApplied: false } }) });
   });
 
   try {
@@ -2207,11 +2279,49 @@ test("chat agent panel inserts reply drafts and confirms memory candidates befor
     await page.getByTestId("chat-more-trigger").click();
     await page.getByTestId("chat-agent-trigger").click();
     await expect(page.getByTestId("chat-agent-panel")).toBeVisible();
+    await page.getByText(/Skill 管理|Skill management/).click();
+    const skillPanel = page.getByTestId("agent-skills-panel");
+    await expect(skillPanel).toBeVisible();
+    await skillPanel.locator('input[type="file"]').setInputFiles({
+      name: "SKILL.md", mimeType: "text/markdown",
+      buffer: Buffer.from(`---\nname: ${skillName}\ndescription: Track scene details.\n---\nRead visible messages only.`)
+    });
+    await expect(page.getByRole("dialog")).toContainText(skillName);
+    await page.getByRole("dialog").getByRole("button", { name: /确认导入|Import/ }).click();
+    await expect(skillPanel.getByRole("button", { name: skillName })).toBeVisible();
+    const importedSkillRow = skillPanel.getByRole("button", { name: skillName }).locator("..");
+    await importedSkillRow.getByLabel(/剧情助手|Story assistant/).click();
+    await expect(importedSkillRow.getByLabel(/剧情助手|Story assistant/)).toBeChecked();
+    await importedSkillRow.getByLabel(/当前聊天|Current chat/).click();
+    await expect(importedSkillRow.getByLabel(/当前聊天|Current chat/)).toBeChecked();
+    await importedSkillRow.getByRole("button", { name: /删除|Delete/ }).click();
+    await page.getByRole("dialog").getByRole("button", { name: /删除|Delete/ }).click();
+    await expect(skillPanel.getByRole("button", { name: skillName })).toHaveCount(0);
+    await page.getByText(/MCP 连接|MCP connections/).click();
+    const mcpPanel = page.getByTestId("mcp-connections-panel");
+    await expect(mcpPanel).toBeVisible();
+    await mcpPanel.getByLabel(/连接名称|Connection name/).fill(`MCP ${suffix}`);
+    await mcpPanel.getByLabel(/MCP URL/).fill("https://example.com/mcp");
+    await mcpPanel.getByLabel(/Bearer Token|Bearer token/).fill("e2e-secret");
+    await mcpPanel.getByRole("button", { name: /保存连接|Save connection/ }).click();
+    await expect(mcpPanel.getByText(`MCP ${suffix}`)).toBeVisible();
+    const mcpRow = mcpPanel.getByText(`MCP ${suffix}`).locator("..");
+    await expect(mcpRow.getByText(/密钥已配置|Token configured/)).toBeVisible();
+    await mcpRow.getByRole("button", { name: /删除|Delete/ }).click();
+    await page.getByRole("dialog").getByRole("button", { name: /删除|Delete/ }).click();
+    await expect(mcpPanel.getByText(`MCP ${suffix}`)).toHaveCount(0);
     await page.getByRole("button", { name: /回复草案|Reply Drafts/ }).click();
     await page.getByPlaceholder(/可选：告诉 Agent|Optional: tell the Agent/).fill("next turn");
+    await page.getByText(/本次生成参数|Task generation settings/).click();
+    await page.getByTestId("chat-agent-panel").getByLabel(/温度|Temperature/).fill("0.4");
+    await page.getByTestId("chat-agent-panel").getByLabel(/最大输出 token|Max output tokens/).fill("768");
     await page.getByTestId("chat-agent-run").click();
     await expect(page.getByText("Agent draft reply for the next turn.")).toBeVisible();
     await page.getByTestId("chat-tool-settings").click();
+    const roleTools = page.getByTestId("chat-role-tool-settings");
+    await roleTools.getByLabel(/允许角色使用工具|Allow character tools/).check();
+    await roleTools.getByLabel(/搜索当前聊天历史|Search chat history/).check();
+    await expect(roleTools.getByLabel(/搜索当前聊天历史|Search chat history/)).toBeChecked();
     await page.getByTestId("chat-tool-memory").click();
     await page.getByTestId("chat-tool-agent").click();
     await expect(page.getByText("Agent draft reply for the next turn.")).toBeVisible();
@@ -2220,12 +2330,18 @@ test("chat agent panel inserts reply drafts and confirms memory candidates befor
     await page.getByTestId("chat-agent-trigger").click();
     await expect(page.getByText("Agent draft reply for the next turn.")).toBeVisible();
     expect(agentRequests).toBe(1);
+    expect(agentTaskBodies[0]?.generation).toEqual({ temperature: 0.4, maxTokens: 768 });
     await page.getByRole("button", { name: /插入|Insert/ }).last().click();
     await expect(page.locator("#chat-message-input")).toHaveValue("A focused reply draft.");
     await page.getByRole("button", { name: /插入输入框|Insert into composer/ }).click();
+    await expect(page.getByText(/输入框已有内容|composer already has text/)).toBeVisible();
+    await page.getByRole("button", { name: /追加|Append/, exact: true }).click();
     await expect(page.locator("#chat-message-input")).toHaveValue(
-      "Agent draft reply for the next turn."
+      "A focused reply draft.\n\nAgent draft reply for the next turn."
     );
+    await page.getByRole("button", { name: /插入输入框|Insert into composer/ }).click();
+    await page.getByRole("button", { name: /替换|Replace/, exact: true }).click();
+    await expect(page.locator("#chat-message-input")).toHaveValue("Agent draft reply for the next turn.");
 
     await page.getByTestId("agent-mode-memory_lore_candidates").click();
     await page.getByTestId("chat-agent-run").click();
@@ -2233,11 +2349,29 @@ test("chat agent panel inserts reply drafts and confirms memory candidates befor
     await page.getByTestId("agent-action-agent-memory-1").click();
     const confirmationDialog = page.locator("[role=dialog][aria-modal=true]");
     await expect(confirmationDialog).toBeVisible();
+    await confirmationDialog.locator("input").first().fill("Blue door trust edited");
+    await confirmationDialog.getByRole("button").last().click();
+    await expect(confirmationDialog.getByText(/修改预览|Change preview/)).toBeVisible();
     await confirmationDialog.getByRole("button").last().click();
     await expect(page.getByTestId("agent-action-agent-memory-1")).toHaveCount(0);
+    await page.getByTestId("agent-action-agent-lore-1").click();
+    await expect(confirmationDialog).toBeVisible();
+    await confirmationDialog.locator("textarea").fill("The blue door hinge squeaks twice.");
+    await confirmationDialog.getByRole("button").last().click();
+    await expect(confirmationDialog.getByText(/修改预览|Change preview/)).toBeVisible();
+    await confirmationDialog.getByRole("button").last().click();
+    await expect(page.getByTestId("agent-action-agent-lore-1")).toHaveCount(0);
+    const characterAfterLore = ((await (await request.get(`/api/characters/${characterId}`)).json()) as ApiDataResponse<{ loreEntries: Array<{ id: string; content: string }> }>).data;
+    expect(characterAfterLore?.loreEntries.some((entry) => entry.id === "agent-lore-1" && entry.content === "The blue door hinge squeaks twice.")).toBeTruthy();
     const memoriesResponse = await request.get(`/api/chats/${chatId}/memories`);
-    const memories = ((await memoriesResponse.json()) as ApiDataResponse<Array<{ title: string; content: string }>>).data;
-    expect(memories?.some((memory) => memory.title === "Blue door trust" && memory.content === "The user trusts the blue door.")).toBeTruthy();
+    const memories = ((await memoriesResponse.json()) as ApiDataResponse<Array<{ id: string; title: string; content: string }>>).data;
+    expect(memories?.some((memory) => memory.title === "Blue door trust edited" && memory.content === "The user trusts the blue door.")).toBeTruthy();
+    citedMemoryId = memories?.find((memory) => memory.title === "Blue door trust edited")?.id ?? null;
+    expect(citedMemoryId).toBeTruthy();
+    await page.getByTestId("agent-mode-continuity_check").click();
+    await page.getByTestId("chat-agent-run").click();
+    await page.getByRole("button", { name: /记忆 1|Memory 1/ }).click();
+    await expect(page.locator(`#chat-memory-${citedMemoryId}`)).toBeVisible();
 
     await page.getByRole("button", { name: /关闭工具|Close tools/ }).click();
     await page.setViewportSize({ width: 390, height: 780 });

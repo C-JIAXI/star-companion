@@ -76,6 +76,32 @@ describe("stable cursor pagination", () => {
     assert.equal((await searchMessagesPage({ query: "trigram", chatId, limit: 2 })).total, 1);
   });
 
+  it("keeps agent history searches inside the active chat context", async () => {
+    const searchChatId = `perf-cursor-chat-${runId}-agent-search`;
+    const otherChatId = `perf-cursor-chat-${runId}-agent-other`;
+    await prisma.chat.createMany({ data: [
+      { id: searchChatId, title: "Agent search", characterId },
+      { id: otherChatId, title: "Other chat", characterId }
+    ] });
+    await prisma.message.createMany({ data: [
+      { id: `perf-cursor-message-${runId}-agent-visible`, chatId: searchChatId, role: "user", content: "silver promise", contextIncluded: true },
+      { id: `perf-cursor-message-${runId}-agent-excluded`, chatId: searchChatId, role: "user", content: "silver promise", contextIncluded: false },
+      { id: `perf-cursor-message-${runId}-agent-other`, chatId: otherChatId, role: "user", content: "silver promise", contextIncluded: true }
+    ] });
+
+    const ordinary = await searchMessagesPage({ query: "silver promise", chatId: searchChatId, limit: 1 });
+    const agent = await searchMessagesPage({ query: "silver promise", chatId: searchChatId, limit: 10, contextOnly: true });
+    assert.equal(ordinary.total, 2);
+    assert.deepEqual(agent.results.map((result) => result.message.id), [`perf-cursor-message-${runId}-agent-visible`]);
+    assert.equal(agent.total, 1);
+    await assert.rejects(
+      () => searchMessagesPage({ query: "silver promise", chatId: searchChatId, limit: 10, cursor: ordinary.nextCursor!, contextOnly: true }),
+      (error) => error instanceof HttpError && error.status === 400
+    );
+    await prisma.chat.update({ where: { id: searchChatId }, data: { deletedAt: new Date() } });
+    assert.equal((await searchMessagesPage({ query: "silver promise", chatId: searchChatId, limit: 10, contextOnly: true })).total, 0);
+  });
+
   it("pages same-timestamp memories without loading embedding vectors or duplicating rows", async () => {
     const timestamp = new Date("2026-08-31T02:00:00.000Z");
     const ids = ["a", "b", "c", "d", "e"].map((suffix) => `perf-cursor-memory-${runId}-${suffix}`);

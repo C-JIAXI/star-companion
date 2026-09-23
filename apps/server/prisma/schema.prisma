@@ -121,12 +121,78 @@ model Chat {
 
   draft ChatDraft?
   draftHandoffs DraftHandoff[]
+  agentSession AgentSession?
 
   @@index([characterId])
   @@index([parentChatId])
   @@index([deletedAt, isArchived, folder, isPinned, updatedAt])
   @@index([deletedAt, isArchived, isCheckpoint, isPinned, updatedAt, id])
   @@index([deletedAt, isArchived, isCheckpoint, folder, isPinned, updatedAt, id])
+}
+
+/// Device-local assistant conversation. Excluded from backup, recovery points, and LAN sync.
+model AgentSession {
+  id        String   @id @default(cuid())
+  chatId    String   @unique
+  activeRunId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  chat    Chat         @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  entries AgentEntry[]
+}
+
+model AgentEntry {
+  id               String   @id @default(cuid())
+  sessionId        String
+  role             String
+  mode             String?
+  content          String
+  status           String   @default("succeeded")
+  sourceMessageIds Json     @default("[]")
+  sourceMemoryIds  Json     @default("[]")
+  actions          Json     @default("[]")
+  /// Device-local task parameters; excluded from all export and sync protocols.
+  generation       Json     @default("{}")
+  createdAt        DateTime @default(now())
+  completedAt      DateTime?
+
+  session AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt, id])
+}
+
+/// Device-local imported or built-in task method. Excluded from backup and LAN sync.
+model SkillPackage {
+  name             String   @id
+  description      String
+  source           String
+  version          Int      @default(1)
+  digest           String
+  skillMd          String
+  references       Json     @default("{}")
+  compatibility    String?
+  unsupportedFiles Json     @default("[]")
+  agentEnabled     Boolean  @default(false)
+  enabledChatIds   Json     @default("[]")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+/// Device-local MCP connection settings and discovered tool definitions. Never exported or synchronized.
+model McpConnection {
+  id                  String   @id @default(cuid())
+  name                String   @unique
+  endpointUrl         String
+  allowPrivateNetwork Boolean  @default(false)
+  bearerEncrypted     String?
+  enabled             Boolean  @default(false)
+  toolDefinitions     Json     @default("[]")
+  enabledToolNames    Json     @default("[]")
+  version             Int      @default(1)
+  lastCheckedAt       DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 }
 
 model ChatMemory {

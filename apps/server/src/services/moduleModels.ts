@@ -38,6 +38,7 @@ type ProviderProfile = {
 type AiModelCapability =
   | "text_generation"
   | "vision_input"
+  | "tool_calling"
   | "text_embedding"
   | "audio_transcription"
   | "text_to_speech"
@@ -57,6 +58,7 @@ const moduleCapabilities: Record<AiModuleId, AiModelCapability> = {
 const validCapabilities = new Set<AiModelCapability>([
   "text_generation",
   "vision_input",
+  "tool_calling",
   "text_embedding",
   "audio_transcription",
   "text_to_speech",
@@ -188,6 +190,13 @@ export const settingsSupportVisionInput = (settings: UserSettings) => {
   const provider = providers.find((entry) => entry.id === settings.activeProviderId);
   const model = provider?.models.find((entry) => entry.id === settings.activeModelId);
   return Boolean(model && (model.capabilities ?? inferModelCapabilities(model.model)).includes("vision_input"));
+};
+
+export const settingsSupportToolCalling = (settings: UserSettings) => {
+  const providers = toProviderProfiles(settings.providers);
+  const provider = providers.find((entry) => entry.id === settings.activeProviderId);
+  const model = provider?.models.find((entry) => entry.id === settings.activeModelId);
+  return Boolean(model?.capabilities?.includes("tool_calling"));
 };
 
 export const filterVisionCapableSettings = (candidates: UserSettings[]) =>

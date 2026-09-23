@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import {
   emptyUserCustomConfig,
+  AGENT_GENERATION_DEFAULTS,
   modelSupportsAiModule,
   OrderedTextChunkBuffer,
   parseUserCustomConfig,
@@ -47,7 +48,9 @@ import { getAiModelCapabilities } from "@local-roleplay/shared";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
-import { api } from "../lib/api";
+import { AgentSkillsPanel } from "../components/AgentSkillsPanel";
+import { McpConnectionsPanel } from "../components/McpConnectionsPanel";
+import { api, ApiRequestError } from "../lib/api";
 import { useChatDraft } from "../lib/useChatDraft";
 import { ComposerToolsMenu } from "../components/ComposerToolsMenu";
 import { useChatLayoutAnchor } from "../lib/useChatLayoutAnchor";
@@ -70,7 +73,12 @@ import type {
   DraftHandoffDTO,
   ChatAgentDraftDTO,
   ChatAgentActionDTO,
+  ChatAgentActionPreviewDTO,
   ChatAgentMode,
+  AgentSessionDTO,
+  AgentRunEventDTO,
+  PendingMcpApprovalDTO,
+  McpConnectionDTO,
   ChatMemoryDTO,
   MemoryEmbeddingJobStatusDTO,
   MemoryIndexSummaryDTO,
@@ -131,6 +139,19 @@ const MAX_RENDERED_MESSAGES = 250;
 const preferredScrollBehavior = (): ScrollBehavior =>
   document.documentElement.dataset.motion === "reduced" ? "auto" : "smooth";
 const ACTIVE_REQUEST_STORAGE_KEY = "star-companion:active-model-request";
+type ChatToolUse = { enabled: boolean; toolNames: string[] };
+const chatToolStorageKey = (chatId: string) => `star-companion:chat-tools:${chatId}`;
+const readChatToolUse = (chatId: string): ChatToolUse => {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(chatToolStorageKey(chatId)) ?? "null");
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const record = value as Record<string, unknown>;
+      return { enabled: record.enabled === true, toolNames: Array.isArray(record.toolNames)
+        ? record.toolNames.filter((name): name is string => typeof name === "string" && name.length <= 160).slice(0, 25) : [] };
+    }
+  } catch { /* Device-local preference is optional. */ }
+  return { enabled: false, toolNames: [] };
+};
 const MAX_QUEUED_MESSAGES = 10;
 const GENERATION_ERROR_PREFIX = "[GENERATION_FAILED] ";
 const MAX_CHAT_BACKGROUND_FILE_SIZE = 2 * 1024 * 1024;
@@ -323,6 +344,11 @@ export function ChatPage({
     memory: number;
   } | null>(null);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [chatToolUse, setChatToolUse] = useState<ChatToolUse>(() => selectedChatId ? readChatToolUse(selectedChatId) : { enabled: false, toolNames: [] });
+  const [chatToolConnections, setChatToolConnections] = useState<McpConnectionDTO[]>([]);
+  const [chatToolEvents, setChatToolEvents] = useState<Array<{ phase: string; round: number; toolName?: string; isError?: boolean }>>([]);
+  const [chatToolEventsChatId, setChatToolEventsChatId] = useState<string | null>(null);
+  const [pendingMcpApprovalKind, setPendingMcpApprovalKind] = useState<"agent" | "generation">("agent");
   const [modelError, setModelError] = useState<ModelErrorDTO | null>(null);
   const [retryDeadline, setRetryDeadline] = useState<number | null>(null);
   const [retrySeconds, setRetrySeconds] = useState(0);
@@ -451,10 +477,40 @@ export function ChatPage({
     }
   }, [navigationOpen]);
   const [agentMode, setAgentMode] = useState<ChatAgentMode>("next_steps");
+  const [agentGeneration, setAgentGeneration] = useState({ ...AGENT_GENERATION_DEFAULTS.next_steps });
   const [agentFocus, setAgentFocus] = useState("");
   const [agentDraft, setAgentDraft] = useState<ChatAgentDraftDTO | null>(null);
+  const [agentSession, setAgentSession] = useState<AgentSessionDTO | null>(null);
+  const [agentRunId, setAgentRunId] = useState<string | null>(null);
+  const agentRunRef = useRef<{ chatId: string; runId: string } | null>(null);
+  const agentEventSeqRef = useRef(0);
+  const [agentRunEvents, setAgentRunEvents] = useState<AgentRunEventDTO[]>([]);
+  const [pendingMcpApproval, setPendingMcpApproval] = useState<PendingMcpApprovalDTO | null>(null);
+  const [mcpApprovalBusy, setMcpApprovalBusy] = useState(false);
+  useEffect(() => { setChatToolUse(selectedChatId ? readChatToolUse(selectedChatId) : { enabled: false, toolNames: [] }); }, [selectedChatId]);
+  useEffect(() => {
+    if (!chatSettingsToolOpen || !selectedChatId) return;
+    void api.mcp.list().then(setChatToolConnections).catch(() => setChatToolConnections([]));
+  }, [chatSettingsToolOpen, selectedChatId]);
+  const updateChatToolUse = (next: ChatToolUse) => {
+    if (!selectedChatId) return;
+    next = { enabled: next.enabled, toolNames: [...new Set(next.toolNames)].slice(0, 25) };
+    setChatToolUse(next);
+    try { localStorage.setItem(chatToolStorageKey(selectedChatId), JSON.stringify(next)); } catch { /* Device storage unavailable. */ }
+  };
+  const [pendingAgentClear, setPendingAgentClear] = useState(false);
+  const [pendingAgentInsert, setPendingAgentInsert] = useState<string | null>(null);
   const [agentLoading, setAgentLoading] = useState(false);
   const [pendingAgentAction, setPendingAgentAction] = useState<ChatAgentActionDTO | null>(null);
+  const [agentActionPreview, setAgentActionPreview] = useState<{ key: string; value: ChatAgentActionPreviewDTO } | null>(null);
+  const [agentPreviewLoading, setAgentPreviewLoading] = useState(false);
+  const [agentPreviewError, setAgentPreviewError] = useState("");
+  const [agentLorePassword, setAgentLorePassword] = useState("");
+  const [agentCandidateKeywordsDraft, setAgentCandidateKeywordsDraft] = useState("");
+  const agentActionPreviewKey = pendingAgentAction
+    ? JSON.stringify([pendingAgentAction.id, pendingAgentAction.title, pendingAgentAction.content, agentCandidateKeywordsDraft,
+      pendingAgentAction.kind === "lore_candidate" ? agentLorePassword : ""])
+    : "";
   const [messageSearchOpen, setMessageSearchOpen] = useState(false);
   const [messageSearchQuery, setMessageSearchQuery] = useState("");
   const [messageSearchResult, setMessageSearchResult] = useState<ChatMessageSearchDTO | null>(null);
@@ -674,9 +730,83 @@ export function ChatPage({
     isConnected,
     connectionState
   } = useWebSocket({
+    onOpen() {
+      const generating = activeRequestRef.current;
+      if (generating) void api.chats.generationPendingApproval(generating.chatId, generating.requestId).then((approval) => {
+        if (activeRequestRef.current?.requestId === generating.requestId && approval) {
+          setPendingMcpApprovalKind("generation"); setPendingMcpApproval(approval);
+        }
+      }).catch(() => undefined);
+      const active = agentRunRef.current;
+      if (active) {
+        sendWs({ type: "agent_subscribe", ...active, afterSeq: agentEventSeqRef.current });
+        void api.chats.agentRunStatus(active.chatId, active.runId).then((run) => {
+          if (agentRunRef.current?.runId === active.runId) setPendingMcpApproval(run.pendingApproval ?? null);
+          if (agentRunRef.current?.runId !== active.runId || run.status === "running") return;
+          agentRunRef.current = null;
+          setAgentRunId(null);
+          setAgentLoading(false);
+          void api.chats.agentSession(active.chatId).then((session) => {
+            if (draftChatIdRef.current !== active.chatId) return;
+            setAgentSession(session);
+            const latest = [...session.entries].reverse().find((entry) => entry.role === "assistant" && entry.status === "succeeded");
+            if (latest) setAgentDraft({
+              mode: latest.mode ?? "next_steps", title: latest.mode ?? "Agent", content: latest.content,
+              createdAt: latest.createdAt, actions: latest.actions,
+              sourceMessageIds: latest.sourceMessageIds, sourceMemoryIds: latest.sourceMemoryIds,
+              matchedLoreEntries: [], matchedMemoryEntries: []
+            });
+          }).catch(() => undefined);
+        }).catch(() => undefined);
+      }
+    },
     onMessage(message) {
+      if (message.type === "agent_event") {
+        const event = message as unknown as AgentRunEventDTO;
+        const active = agentRunRef.current;
+        if (!active || event.chatId !== active.chatId || event.runId !== active.runId || !Number.isSafeInteger(event.seq) || event.seq <= agentEventSeqRef.current) return;
+        agentEventSeqRef.current = event.seq;
+        setAgentRunEvents((current) => [...current, event].slice(-100));
+        if (event.phase === "approval_required") {
+          void api.chats.agentPendingApproval(event.chatId, event.runId).then((approval) => {
+            if (agentRunRef.current?.runId === event.runId) { setPendingMcpApprovalKind("agent"); setPendingMcpApproval(approval); }
+          }).catch(() => undefined);
+        }
+        if (event.phase === "approval_resolved") setPendingMcpApproval(null);
+        if (["succeeded", "failed", "cancelled"].includes(event.phase)) {
+          setPendingMcpApproval(null);
+          agentRunRef.current = null;
+          setAgentRunId(null);
+          setAgentLoading(false);
+          void api.chats.agentSession(event.chatId).then((session) => {
+            if (draftChatIdRef.current !== event.chatId) return;
+            setAgentSession(session);
+            const latest = [...session.entries].reverse().find((entry) => entry.role === "assistant" && entry.status === "succeeded");
+            if (latest) setAgentDraft({
+              mode: latest.mode ?? "next_steps", title: latest.mode ?? "Agent", content: latest.content,
+              createdAt: latest.createdAt, actions: latest.actions,
+              sourceMessageIds: latest.sourceMessageIds, sourceMemoryIds: latest.sourceMemoryIds,
+              matchedLoreEntries: [], matchedMemoryEntries: []
+            });
+          }).catch(() => undefined);
+        }
+        return;
+      }
       const handlers = onMessageHandlersRef.current;
       const msg = message as GenerationServerMessage;
+
+      if (msg.type === "generation_tool_event") {
+        setChatToolEventsChatId(activeRequestRef.current?.chatId ?? null);
+        setChatToolEvents((current) => [...current, { phase: msg.phase, round: msg.round, toolName: msg.toolName, isError: msg.isError }].slice(-50));
+        if (msg.phase === "approval_required") {
+          const generating = activeRequestRef.current;
+          if (generating?.requestId === msg.requestId) void api.chats.generationPendingApproval(generating.chatId, msg.requestId).then((approval) => {
+            if (activeRequestRef.current?.requestId === msg.requestId) { setPendingMcpApprovalKind("generation"); setPendingMcpApproval(approval); }
+          }).catch(() => undefined);
+        }
+        if (msg.phase === "approval_resolved") setPendingMcpApproval((current) => current?.runId === msg.requestId ? null : current);
+        return;
+      }
 
       if (msg.type === "user_message") {
         if (pendingGenerationDraftRef.current?.requestId === msg.requestId) {
@@ -729,6 +859,8 @@ export function ChatPage({
       }
 
       if (msg.type === "generation_started") {
+        setChatToolEvents([]);
+        setChatToolEventsChatId(activeRequestRef.current?.chatId ?? null);
         const resendRequest = resendRequestRef.current;
         if (resendRequest?.requestId === msg.requestId) {
           setActiveChat((current) => {
@@ -774,6 +906,9 @@ export function ChatPage({
         const request = msg.request as ModelRequestDTO;
         const terminal = ["succeeded", "failed", "cancelled", "interrupted", "blocked"].includes(request.status);
         if (!terminal) {
+          if (request.chatId) void api.chats.generationPendingApproval(request.chatId, request.requestId).then((approval) => {
+            if (approval) { setPendingMcpApprovalKind("generation"); setPendingMcpApproval(approval); }
+          }).catch(() => undefined);
           setActiveRequestId(request.requestId);
           setGenerationChatId(request.chatId);
           setLoading(true);
@@ -781,6 +916,7 @@ export function ChatPage({
           return;
         }
         saveStoredActiveRequest(null);
+        setPendingMcpApproval((current) => current?.runId === request.requestId ? null : current);
         activeRequestRef.current = null;
         if (request.status !== "blocked" || request.error?.code !== "budget_blocked") lastGenerationPayloadRef.current = null;
         setActiveRequestId(null);
@@ -1035,6 +1171,9 @@ export function ChatPage({
   }, [activeModelId, activeProviderId, runtimeSettings?.moduleModelPreferences?.chat, settingsProviders]);
   const activeChatSupportsVision = Boolean(
     activeChatModel?.model && getAiModelCapabilities(activeChatModel.model).includes("vision_input")
+  );
+  const activeChatSupportsTools = Boolean(
+    activeChatModel?.model && getAiModelCapabilities(activeChatModel.model).includes("tool_calling")
   );
 
   const contextBudget = useMemo(() => {
@@ -1571,7 +1710,9 @@ export function ChatPage({
       setStatus(t("chat.titleSuggestionReady"));
       setTimeout(() => titleInputRef.current?.focus(), 0);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t("chat.titleSuggestionFailed"));
+      setError(caught instanceof ApiRequestError && caught.status === 422
+        ? t("chat.titleSuggestionEmpty")
+        : caught instanceof Error ? caught.message : t("chat.titleSuggestionFailed"));
     } finally {
       setTitleSuggestionLoading(false);
     }
@@ -1612,6 +1753,14 @@ export function ChatPage({
       hasMessagesRef.current = false;
       setChatMemories([]);
       setAgentDraft(null);
+      setAgentSession(null);
+      agentRunRef.current = null;
+      agentEventSeqRef.current = 0;
+      setAgentRunEvents([]);
+      setPendingMcpApproval(null);
+      setAgentRunId(null);
+      setAgentLoading(false);
+      setPendingAgentInsert(null);
       setMessageCursor(null);
       setHasOlderMessages(false);
       setHasNewerMessages(false);
@@ -1674,6 +1823,14 @@ export function ChatPage({
     }
     setActiveChat({ ...chat, messages: messageWindow.items, memories });
     setAgentDraft(null);
+    setAgentSession(null);
+    agentRunRef.current = null;
+    agentEventSeqRef.current = 0;
+    setAgentRunEvents([]);
+    setPendingMcpApproval(null);
+    setAgentRunId(null);
+    setAgentLoading(false);
+    setPendingAgentInsert(null);
     setChatMemories(memories);
     setAutoMemoryEnabled(chat.autoMemoryEnabled);
     hasMessagesRef.current = chat.messageCount > 0;
@@ -2308,6 +2465,24 @@ export function ChatPage({
     void loadChatMemories();
   };
 
+  const openAgentMemorySource = async (memoryId: string) => {
+    if (!activeChat) return;
+    const chatId = activeChat.id;
+    try {
+      const memory = await api.chats.memories.get(chatId, memoryId);
+      if (activeChat.id !== chatId) return;
+      openMemoryDialog();
+      await loadChatMemories();
+      if (activeChat.id !== chatId) return;
+      setChatMemories((current) => [memory, ...current.filter((item) => item.id !== memoryId)]);
+      setSelectedMemoryHistoryId(memoryId);
+      setMemoryRevisions(await api.chats.memories.revisions(chatId, memoryId));
+      window.requestAnimationFrame(() => document.getElementById(`chat-memory-${memoryId}`)?.scrollIntoView({ block: "center" }));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedLoadMemories"));
+    }
+  };
+
   const openBackgroundDialog = () => {
     const currentBackgroundUrl = activeChat?.backgroundUrl ?? "";
     setBackgroundDraft(currentBackgroundUrl);
@@ -2406,6 +2581,38 @@ export function ChatPage({
     setMemorySettingsOpen(false);
   };
 
+  useEffect(() => {
+    if (!agentPanelOpen || !activeChat) return;
+    const chatId = activeChat.id;
+    let cancelled = false;
+    void api.chats.agentSession(chatId).then((session) => {
+      if (cancelled || draftChatIdRef.current !== chatId) return;
+      setAgentSession(session);
+      if (session.activeRunId) {
+        if (agentRunRef.current?.runId !== session.activeRunId) {
+          agentEventSeqRef.current = 0;
+          setAgentRunEvents([]);
+        }
+        agentRunRef.current = { chatId, runId: session.activeRunId };
+        setAgentRunId(session.activeRunId);
+        setAgentLoading(true);
+        sendWs({ type: "agent_subscribe", chatId, runId: session.activeRunId, afterSeq: agentEventSeqRef.current });
+        void api.chats.agentRunStatus(chatId, session.activeRunId).then((run) => {
+          if (!cancelled && agentRunRef.current?.runId === session.activeRunId) setPendingMcpApproval(run.pendingApproval ?? null);
+        }).catch(() => undefined);
+      }
+      const latest = [...session.entries].reverse().find((entry) => entry.role === "assistant" && entry.status === "succeeded");
+      setAgentDraft(latest ? {
+        mode: latest.mode ?? "next_steps", title: latest.mode ?? "Agent", content: latest.content,
+        createdAt: latest.createdAt, actions: latest.actions, sourceMessageIds: latest.sourceMessageIds, sourceMemoryIds: latest.sourceMemoryIds,
+        matchedLoreEntries: [], matchedMemoryEntries: []
+      } : null);
+    }).catch((caught: unknown) => {
+      if (!cancelled) setError(caught instanceof Error ? caught.message : t("chat.agentFailed"));
+    });
+    return () => { cancelled = true; };
+  }, [agentPanelOpen, activeChat?.id]);
+
   const getAgentModeLabel = (mode: ChatAgentMode) => {
     switch (mode) {
       case "scene_summary":
@@ -2445,66 +2652,113 @@ export function ChatPage({
       return;
     }
 
+    const chatId = activeChat.id;
+    const runId = generateId();
+    agentRunRef.current = { chatId, runId };
+    agentEventSeqRef.current = 0;
+    setAgentRunEvents([]);
+    setPendingMcpApproval(null);
+    setAgentRunId(runId);
     setAgentLoading(true);
     setError(null);
     setStatus(null);
+    sendWs({ type: "agent_subscribe", chatId, runId, afterSeq: 0 });
     try {
-      const draftResult = await api.chats.agentDraft(activeChat.id, {
+      const session = await api.chats.agentTask(chatId, {
+        mutationId: runId,
         mode: agentMode,
-        focus: agentFocus.trim() || undefined
+        content: agentFocus.trim() || getAgentModeLabel(agentMode),
+        generation: agentGeneration
       });
-      setAgentDraft({ ...draftResult, actions: draftResult.actions ?? [] });
+      if (draftChatIdRef.current !== chatId) return;
+      setAgentSession(session);
+      const latest = [...session.entries].reverse().find((entry) => entry.role === "assistant" && entry.status === "succeeded");
+      if (latest) setAgentDraft({
+        mode: latest.mode ?? agentMode, title: getAgentModeLabel(latest.mode ?? agentMode),
+        content: latest.content, createdAt: latest.createdAt, actions: latest.actions,
+        sourceMessageIds: latest.sourceMessageIds, sourceMemoryIds: latest.sourceMemoryIds, matchedLoreEntries: [], matchedMemoryEntries: []
+      });
+      setAgentFocus("");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t("chat.agentFailed"));
+      if (draftChatIdRef.current === chatId) setError(caught instanceof Error ? caught.message : t("chat.agentFailed"));
     } finally {
-      setAgentLoading(false);
+      if (draftChatIdRef.current === chatId && (!agentRunRef.current || agentRunRef.current.runId === runId)) {
+        agentRunRef.current = null;
+        setAgentRunId(null);
+        setAgentLoading(false);
+      }
     }
   };
 
-  const insertAgentDraft = () => {
-    if (!agentDraft?.content.trim()) {
+  const decidePendingMcpApproval = async (approved: boolean, sessionGrant = false) => {
+    const approval = pendingMcpApproval;
+    if (!approval || mcpApprovalBusy) return;
+    setMcpApprovalBusy(true);
+    try {
+      if (pendingMcpApprovalKind === "agent") {
+        await api.chats.decideAgentApproval(approval.chatId, approval.runId, approval.callId, { approved, sessionGrant });
+      } else {
+        await api.chats.decideGenerationApproval(approval.chatId, approval.runId, approval.callId, { approved, sessionGrant });
+      }
+      setPendingMcpApproval(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "MCP approval failed");
+    } finally {
+      setMcpApprovalBusy(false);
+    }
+  };
+
+  const describeAgentRunEvent = (event: AgentRunEventDTO) => {
+    if (event.phase === "started") return language === "zh-CN" ? "任务已开始" : "Task started";
+    if (event.phase === "context_start") return language === "zh-CN" ? "读取当前聊天上下文" : "Reading chat context";
+    if (event.phase === "context_complete") return language === "zh-CN" ? "上下文已就绪" : "Context ready";
+    if (event.phase === "model_decision") return language === "zh-CN" ? `模型决策第 ${event.round} 轮` : `Model decision ${event.round}`;
+    if (event.phase === "tool_start") return language === "zh-CN" ? `调用 ${event.toolName}` : `Calling ${event.toolName}`;
+    if (event.phase === "tool_complete") return language === "zh-CN"
+      ? `${event.toolName} ${event.isError ? "失败" : "完成"}`
+      : `${event.toolName} ${event.isError ? "failed" : "completed"}`;
+    if (event.phase === "approval_required") return language === "zh-CN" ? "等待 MCP 工具授权" : "Waiting for MCP tool approval";
+    if (event.phase === "approval_resolved") return language === "zh-CN" ? "MCP 授权已处理" : "MCP approval resolved";
+    if (event.phase === "succeeded") return language === "zh-CN" ? "任务完成" : "Task completed";
+    if (event.phase === "cancelled") return language === "zh-CN" ? "任务已停止" : "Task stopped";
+    return language === "zh-CN" ? "任务失败" : "Task failed";
+  };
+
+  const insertAgentText = (content: string) => {
+    if (!content.trim()) return;
+    if (draft.trim()) {
+      setPendingAgentInsert(content.trim());
       return;
     }
-
-    setDraft(agentDraft.content.trim());
+    setDraft(content.trim());
     requestAnimationFrame(autoResizeDraftTextArea);
   };
 
-  const applyAgentAction = async (action: ChatAgentActionDTO) => {
+  const insertAgentDraft = () => insertAgentText(agentDraft?.content ?? "");
+
+  const applyAgentAction = async (action: ChatAgentActionDTO, accessPassword?: string) => {
     if (!activeChat) return;
     if (action.kind === "reply_draft") {
-      setDraft(action.content);
-      requestAnimationFrame(autoResizeDraftTextArea);
-      setStatus(language === "zh-CN" ? "回复草案已插入输入框。" : "Reply draft inserted into the composer.");
+      insertAgentText(action.content);
       return;
     }
     setAgentLoading(true);
     setError(null);
     try {
       if (action.kind === "memory_candidate") {
-        const memory = await api.chats.memories.create(activeChat.id, {
-          title: action.title,
-          content: action.content,
-          keywords: action.keywords ?? [],
-          importance: 3,
-          sourceMessageIds: agentDraft?.sourceMessageIds ?? [],
-          actor: "agent_confirmed"
-        });
-        setChatMemories((current) => [memory, ...current]);
+        const result = await api.chats.confirmAgentMemory(activeChat.id, action.id, { title: action.title, content: action.content, keywords: action.keywords ?? [] });
+        await loadChatMemories();
+        setAgentSession(result.session);
       } else {
-        if (!activeChat.characterId) throw new Error(language === "zh-CN" ? "当前聊天没有绑定角色。" : "This chat has no character.");
-        const character = await api.characters.get(activeChat.characterId);
-        const updated = await api.characters.update(character.id, {
-          loreEntries: [...character.loreEntries, {
-            id: generateId(), keys: action.keywords ?? [], content: action.content,
-            priority: 0, scope: "prompt", triggerMode: "both", alwaysActive: false, enabled: true
-          }]
-        });
-        const sourceCount = agentDraft?.sourceMessageIds.length ?? 0;
-        setStatus(language === "zh-CN" ? `已确认新增角色 lore「${action.title}」；角色：${updated.name}；聊天：${activeChat.title}；来源消息：${sourceCount} 条。` : `Confirmed new character lore “${action.title}”; character: ${updated.name}; chat: ${activeChat.title}; source messages: ${sourceCount}.`);
+        const updated = await api.chats.confirmAgentLore(activeChat.id, action.id, { title: action.title, content: action.content, keywords: action.keywords ?? [] }, accessPassword);
+        setAgentSession(updated.session);
+        const sourceCount = action.sourceMessageIds?.length ?? 0;
+        setStatus(language === "zh-CN" ? `已确认新增角色 lore「${action.title}」；角色：${updated.characterName}；影响聊天：${updated.affectedChatCount} 个；来源消息：${sourceCount} 条。` : `Confirmed character lore “${action.title}”; character: ${updated.characterName}; affected chats: ${updated.affectedChatCount}; source messages: ${sourceCount}.`);
       }
       setAgentDraft((current) => current ? { ...current, actions: current.actions.filter((item) => item.id !== action.id) } : current);
-      if (action.kind === "memory_candidate") setStatus(language === "zh-CN" ? "长期记忆已保存。" : "Long-term memory saved.");
+      if (action.kind === "memory_candidate") setStatus(language === "zh-CN"
+        ? (action.memoryAction === "merge" ? "记忆已合并；可在记忆操作中撤销。" : action.memoryAction === "disable" ? "记忆已禁用；可在记忆操作中撤销。" : "长期记忆已保存。")
+        : (action.memoryAction === "merge" ? "Memories merged; undo is available in memory operations." : action.memoryAction === "disable" ? "Memory disabled; undo is available in memory operations." : "Long-term memory saved."));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.agentFailed"));
     } finally {
@@ -2949,7 +3203,8 @@ export function ChatPage({
         throw new Error(t("chat.websocketFailed"));
       }
       const requestId = handoff.id;
-      const payload: GenerationClientMessage = { type: "generate", requestId, chatId, content: "", handoffId: handoff.id };
+      const payload: GenerationClientMessage = { type: "generate", requestId, chatId, content: "", handoffId: handoff.id,
+        toolUse: readChatToolUse(chatId) };
       lastGenerationPayloadRef.current = payload;
       activeRequestRef.current = { requestId, chatId };
       saveStoredActiveRequest(activeRequestRef.current);
@@ -3355,7 +3610,8 @@ export function ChatPage({
         type: "regenerate",
         requestId,
         messageId: message.id,
-        ...(guidance?.trim() ? { guidance: guidance.trim() } : {})
+        ...(guidance?.trim() ? { guidance: guidance.trim() } : {}),
+        toolUse: readChatToolUse(message.chatId)
       };
       lastGenerationPayloadRef.current = payload;
       activeRequestRef.current = { requestId, chatId: message.chatId };
@@ -3449,7 +3705,8 @@ export function ChatPage({
       const payload: GenerationClientMessage = {
         type: "continue",
         requestId,
-        messageId: message.id
+        messageId: message.id,
+        toolUse: readChatToolUse(message.chatId)
       };
       lastGenerationPayloadRef.current = payload;
       activeRequestRef.current = { requestId, chatId: message.chatId };
@@ -3888,7 +4145,8 @@ export function ChatPage({
       const payload: GenerationClientMessage = {
         type: "resend",
         requestId,
-        messageId: message.id
+        messageId: message.id,
+        toolUse: readChatToolUse(message.chatId)
       };
       lastGenerationPayloadRef.current = payload;
       activeRequestRef.current = { requestId, chatId: message.chatId };
@@ -4607,6 +4865,11 @@ export function ChatPage({
                               );
                             })
                           )}
+                          {chatToolEvents.length && chatToolEventsChatId === activeChat.id ? <details className="rounded-lg border border-white/10 bg-white/[0.03] p-2 text-xs text-ink-300" data-testid="chat-tool-events">
+                            <summary className="cursor-pointer">{language === "zh-CN" ? "工具执行过程" : "Tool activity"} ({chatToolEvents.length})</summary>
+                            <ol className="mt-2 space-y-1 pl-4">{chatToolEvents.map((event, index) => <li key={index}>{event.phase === "approval_required" ? (language === "zh-CN" ? "等待外部工具授权" : "Waiting for external tool approval")
+                              : `${event.toolName ?? (language === "zh-CN" ? "模型决策" : "Model decision")} · ${event.phase}${event.isError ? " · error" : ""}`}</li>)}</ol>
+                          </details> : null}
                           {activeRequestId &&
                           generationChatId === activeChat.id &&
                           streamingCharacterId &&
@@ -5068,6 +5331,30 @@ export function ChatPage({
                       {t("chat.autoSummarizeUser")}
                       <input type="checkbox" checked={autoSummarizeUser} onChange={(event) => void updateAutoSummarizeUser(event.target.checked)} />
                     </label>
+                    <div className="rounded-lg border border-white/10 p-3 text-sm" data-testid="chat-role-tool-settings">
+                      <label className="flex min-h-11 items-center justify-between gap-2">
+                        <span>{language === "zh-CN" ? "允许角色使用工具" : "Allow character tools"}</span>
+                        <input type="checkbox" checked={chatToolUse.enabled} onChange={(event) => updateChatToolUse({ ...chatToolUse, enabled: event.target.checked })} />
+                      </label>
+                      {chatToolUse.enabled ? <div className="space-y-2 border-t border-white/10 pt-2 text-xs">
+                        <p className="text-ink-400">{language === "zh-CN" ? "角色继续使用当前聊天模型。工具仅在此聊天内可用；外部调用逐次请求授权。" : "The character uses this chat's model. Tools are scoped to this chat; external calls require approval."}</p>
+                        {!activeChatSupportsTools ? <p className="text-amber-200">{language === "zh-CN" ? "当前聊天模型未声明工具调用能力；角色回复将继续使用普通文本模式。" : "The current chat model does not declare tool calling; character replies use ordinary text mode."}</p> : null}
+                        {([
+                          ["search_history", language === "zh-CN" ? "搜索当前聊天历史" : "Search chat history"],
+                          ["read_messages", language === "zh-CN" ? "读取消息" : "Read messages"],
+                          ["search_memories", language === "zh-CN" ? "查询长期记忆" : "Search memories"],
+                          ["read_character", language === "zh-CN" ? "读取角色与 Lore" : "Read character and Lore"],
+                          ["load_skill", language === "zh-CN" ? "读取已启用 Skill" : "Load enabled Skills"]
+                        ] as const).map(([name, label]) => <label key={name} className="flex min-h-9 items-center gap-2"><input type="checkbox" checked={chatToolUse.toolNames.includes(name)} onChange={(event) => updateChatToolUse({ ...chatToolUse,
+                          toolNames: event.target.checked ? [...chatToolUse.toolNames, name] : chatToolUse.toolNames.filter((item) => item !== name) })} />{label}</label>)}
+                        {chatToolConnections.filter((connection) => connection.enabled).flatMap((connection) => connection.tools.filter((tool) => tool.enabled).map((tool) => {
+                          const name = `${connection.id}:${tool.name}`;
+                          return <label key={name} className="flex min-h-9 items-center gap-2"><input type="checkbox" checked={chatToolUse.toolNames.includes(name)} onChange={(event) => updateChatToolUse({ ...chatToolUse,
+                            toolNames: event.target.checked ? [...chatToolUse.toolNames, name] : chatToolUse.toolNames.filter((item) => item !== name) })} />{connection.name} / {tool.name}</label>;
+                        }))}
+                        {activeChat ? <details><summary className="cursor-pointer">{language === "zh-CN" ? "选择当前聊天 Skill" : "Select Skills for this chat"}</summary><AgentSkillsPanel chatId={activeChat.id} language={language} /></details> : null}
+                      </div> : null}
+                    </div>
                   </div>
                 </ChatToolContent> : null}
                 <div className={`${agentPanelOpen ? "flex" : "hidden"} min-h-0 flex-1 flex-col`} data-testid="chat-agent-panel">
@@ -5080,6 +5367,16 @@ export function ChatPage({
                 </div>
 
                 <div className="custom-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
+                  {agentSession?.entries.length ? (
+                    <div className="space-y-2 rounded-lg border border-white/10 p-3" aria-label={language === "zh-CN" ? "助手对话历史" : "Agent conversation history"}>
+                      {agentSession.entries.filter((entry, index, entries) => !(index === entries.length - 1 && entry.role === "assistant")).map((entry) => (
+                        <div key={entry.id} className="border-b border-white/10 pb-2 last:border-0 last:pb-0">
+                          <p className="text-xs font-semibold text-ink-300">{entry.role === "user" ? (language === "zh-CN" ? "你" : "You") : (language === "zh-CN" ? "剧情助手" : "Story assistant")}{entry.status !== "succeeded" ? ` · ${entry.status}` : ""}</p>
+                          <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-200">{entry.content}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="grid grid-cols-2 gap-2" role="group" aria-label={t("chat.agentMode")}>
                     {agentModes.map((mode) => {
                       const selected = mode === agentMode;
@@ -5093,7 +5390,7 @@ export function ChatPage({
                           }`}
                           data-testid={`agent-mode-${mode}`}
                           type="button"
-                          onClick={() => setAgentMode(mode)}
+                          onClick={() => { setAgentMode(mode); setAgentGeneration({ ...AGENT_GENERATION_DEFAULTS[mode] }); }}
                         >
                           <span className="block text-xs font-semibold">
                             {getAgentModeLabel(mode)}
@@ -5126,6 +5423,49 @@ export function ChatPage({
                     <Sparkles size={16} />
                     {agentLoading ? t("chat.agentRunning") : t("chat.agentRun")}
                   </Button>
+                  <div className="flex justify-end gap-2">
+                    {agentRunId && activeChat ? (
+                      <button type="button" className="rounded-md border border-white/15 px-3 py-1 text-xs text-ink-200" onClick={() => void api.chats.cancelAgentTask(activeChat.id, agentRunId).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : t("chat.agentFailed")))}>
+                        {language === "zh-CN" ? "停止" : "Stop"}
+                      </button>
+                    ) : null}
+                    {agentSession?.entries.length && !agentLoading ? (
+                      <button type="button" className="rounded-md border border-white/15 px-3 py-1 text-xs text-ink-200" onClick={() => setPendingAgentClear(true)}>
+                        {language === "zh-CN" ? "清空对话" : "Clear conversation"}
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <details className="rounded-lg border border-white/10 bg-white/[0.03] p-2 text-xs text-ink-300">
+                    <summary className="cursor-pointer select-none">{language === "zh-CN" ? "本次生成参数" : "Task generation settings"}</summary>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <label>{language === "zh-CN" ? "温度" : "Temperature"}
+                        <input type="number" min="0" max="2" step="0.1" value={agentGeneration.temperature}
+                          onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value)) setAgentGeneration((current) => ({ ...current, temperature: Math.max(0, Math.min(2, value)) })); }}
+                          className="mt-1 w-full rounded-md border border-white/15 bg-ink-950 px-2 py-1 text-sm text-ink-50" />
+                      </label>
+                      <label>{language === "zh-CN" ? "最大输出 token" : "Max output tokens"}
+                        <input type="number" min="256" max="4096" step="64" value={agentGeneration.maxTokens}
+                          onChange={(event) => { const value = Number(event.target.value); if (Number.isSafeInteger(value)) setAgentGeneration((current) => ({ ...current, maxTokens: Math.max(256, Math.min(4096, value)) })); }}
+                          className="mt-1 w-full rounded-md border border-white/15 bg-ink-950 px-2 py-1 text-sm text-ink-50" />
+                      </label>
+                    </div>
+                    <p className="mt-1">{language === "zh-CN" ? "实际输出仍受所选模型上限约束。" : "The selected model's output limit still applies."}</p>
+                  </details>
+                  {activeChat ? <details className="rounded-lg border border-white/10 bg-white/[0.03] p-2 text-xs text-ink-300">
+                    <summary className="cursor-pointer select-none">{language === "zh-CN" ? "Skill 管理" : "Skill management"}</summary>
+                    <div className="mt-3"><AgentSkillsPanel chatId={activeChat.id} language={language} /></div>
+                  </details> : null}
+                  <details className="rounded-lg border border-white/10 bg-white/[0.03] p-2 text-xs text-ink-300">
+                    <summary className="cursor-pointer select-none">{language === "zh-CN" ? "MCP 连接" : "MCP connections"}</summary>
+                    <div className="mt-3"><McpConnectionsPanel language={language} /></div>
+                  </details>
+                  {agentRunEvents.length ? <details className="rounded-lg border border-white/10 bg-white/[0.03] p-2 text-xs text-ink-300" data-testid="agent-run-events">
+                    <summary className="cursor-pointer select-none">{language === "zh-CN" ? "执行过程" : "Execution steps"} ({agentRunEvents.length})</summary>
+                    <ol className="mt-2 space-y-1 pl-4">
+                      {agentRunEvents.map((event) => <li key={`${event.runId}-${event.seq}`}>{describeAgentRunEvent(event)}</li>)}
+                    </ol>
+                  </details> : null}
 
                   <div className="min-h-[180px] rounded-lg border border-white/10 bg-ink-950/50 p-3">
                     {agentDraft ? (
@@ -5164,9 +5504,27 @@ export function ChatPage({
                         <div className="custom-scrollbar max-h-[34dvh] overflow-y-auto whitespace-pre-wrap break-words text-sm leading-6 text-slate-200 sm:max-h-none">
                           {agentDraft.content}
                         </div>
-                        {agentDraft.actions.length ? (
+                        {agentDraft.sourceMessageIds?.length ? (
+                          <div className="flex flex-wrap gap-2 border-t border-white/10 pt-2" aria-label={language === "zh-CN" ? "助手引用的消息" : "Agent message sources"}>
+                            {agentDraft.sourceMessageIds.map((messageId, index) => (
+                              <button key={messageId} type="button" className="rounded-md border border-white/15 px-2 py-1 text-xs text-ink-200 hover:bg-white/10" onClick={() => void jumpToMessage(messageId).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : t("chat.failedLoad")))}>
+                                {language === "zh-CN" ? `来源 ${index + 1}` : `Source ${index + 1}`}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                        {agentDraft.sourceMemoryIds?.length ? (
+                          <div className="flex flex-wrap gap-2 border-t border-white/10 pt-2" aria-label={language === "zh-CN" ? "助手引用的记忆" : "Agent memory sources"}>
+                            {agentDraft.sourceMemoryIds.map((memoryId, index) => (
+                              <button key={memoryId} type="button" title={memoryId} className="rounded-md border border-white/15 px-2 py-1 text-xs text-ink-200 hover:bg-white/10" onClick={() => void openAgentMemorySource(memoryId)}>
+                                {language === "zh-CN" ? `记忆 ${index + 1}` : `Memory ${index + 1}`}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                        {agentDraft.actions.some((action) => !action.appliedAt) ? (
                           <div className="space-y-2 border-t border-white/10 pt-3">
-                            {agentDraft.actions.map((action) => (
+                            {agentDraft.actions.filter((action) => !action.appliedAt).map((action) => (
                               <div key={action.id} className="flex items-start justify-between gap-2 rounded-md border border-white/10 bg-white/[0.03] p-2">
                                 <div className="min-w-0">
                                   <p className="text-xs font-semibold text-slate-200">{action.title}</p>
@@ -5177,6 +5535,9 @@ export function ChatPage({
                                     void applyAgentAction(action);
                                   } else {
                                     setPendingAgentAction(action);
+                                    setAgentCandidateKeywordsDraft(action.keywords?.join(", ") ?? "");
+                                    setAgentActionPreview(null);
+                                    setAgentPreviewError("");
                                   }
                                 }}>
                                   {action.kind === "reply_draft" ? (language === "zh-CN" ? "插入" : "Insert") : (language === "zh-CN" ? "应用" : "Apply")}
@@ -5210,6 +5571,23 @@ export function ChatPage({
             onReturnToParent={() => void returnToParentChat()}
           />
         </ChatToolContent>
+      ) : null}
+      {pendingMcpApproval && draftChatIdRef.current === pendingMcpApproval.chatId ? (
+        <Modal title={language === "zh-CN" ? "确认外部工具调用" : "Approve external tool call"} onClose={() => void decidePendingMcpApproval(false)}>
+          <div className="space-y-3 text-sm text-ink-200" data-testid="mcp-approval-dialog">
+            <p>{language === "zh-CN" ? "服务" : "Service"}: <strong>{pendingMcpApproval.connectionName}</strong></p>
+            <p className="break-all text-xs text-ink-400">{pendingMcpApproval.endpointUrl}</p>
+            <p>{language === "zh-CN" ? "工具" : "Tool"}: <strong>{pendingMcpApproval.toolName}</strong></p>
+            <p>{language === "zh-CN" ? "将发送的参数" : "Arguments to send"}:</p>
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-ink-950 p-3 text-xs">{JSON.stringify(pendingMcpApproval.arguments, null, 2)}</pre>
+            <p className="text-xs text-ink-400">{language === "zh-CN" ? "这些参数将发送给外部 MCP 服务。" : "These arguments will be sent to the external MCP service."}</p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button disabled={mcpApprovalBusy} onClick={() => void decidePendingMcpApproval(false)}>{language === "zh-CN" ? "拒绝" : "Deny"}</Button>
+              {pendingMcpApproval.readOnlyHint ? <Button disabled={mcpApprovalBusy} onClick={() => void decidePendingMcpApproval(true, true)}>{language === "zh-CN" ? "服务声明只读：本次会话允许" : "Server claims read-only: allow for this session"}</Button> : null}
+              <Button disabled={mcpApprovalBusy} onClick={() => void decidePendingMcpApproval(true)}>{language === "zh-CN" ? "仅允许本次" : "Allow once"}</Button>
+            </div>
+          </div>
+        </Modal>
       ) : null}
       {pendingChatManagement ? <ConfirmDialog
         title={language === "zh-CN" ? "确认聊天管理操作" : "Confirm chat action"}
@@ -5495,25 +5873,108 @@ export function ChatPage({
       {pendingAgentAction ? (
         <ConfirmDialog
           cancelLabel={t("common.cancel")}
-          confirmLabel={language === "zh-CN" ? "确认保存" : "Save candidate"}
-          loading={agentLoading}
-          message={
-            language === "zh-CN"
-              ? pendingAgentAction.kind === "memory_candidate"
-                ? "此候选将作为长期记忆写入当前聊天。"
-                : "此候选将添加到当前角色的内嵌 lore。"
-              : pendingAgentAction.kind === "memory_candidate"
-                ? "This candidate will be saved as long-term memory for the current chat."
-                : "This candidate will be added to the current character's embedded lore."
-          }
+          confirmLabel={agentActionPreview?.key === agentActionPreviewKey
+            ? (language === "zh-CN" ? "确认保存" : "Save candidate")
+            : (language === "zh-CN" ? "预览修改" : "Preview changes")}
+          loading={agentLoading || agentPreviewLoading}
+          message={<span className="block space-y-2">
+            <span className="block">{pendingAgentAction.kind === "memory_candidate"
+              ? (language === "zh-CN" ? `记忆操作：${({ create: "新增", update: "更新", merge: "合并并禁用重复项", disable: "禁用" } as const)[pendingAgentAction.memoryAction ?? "create"]}。仅影响当前聊天。` : `Memory action: ${pendingAgentAction.memoryAction ?? "create"}. Current chat only.`)
+              : (language === "zh-CN" ? "此候选将添加到当前角色的内嵌 lore，并影响使用该角色的聊天。角色已变化时会要求重新审阅。" : "This candidate will be added to the character's embedded lore and affect chats using that character. A changed character requires another review.")}</span>
+            <span className="block text-xs text-ink-300">{language === "zh-CN" ? "原建议" : "Original suggestion"}: {agentDraft?.actions.find((item) => item.id === pendingAgentAction.id)?.content ?? pendingAgentAction.content}</span>
+            <label className="block text-xs">{language === "zh-CN" ? "标题" : "Title"}
+              <input value={pendingAgentAction.title} maxLength={80} onChange={(event) => setPendingAgentAction((current) => current ? { ...current, title: event.target.value } : current)} className="mt-1 w-full rounded-lg border border-white/15 bg-ink-950 px-3 py-2 text-sm text-ink-50" />
+            </label>
+            <label className="block text-xs">{language === "zh-CN" ? "确认内容" : "Confirmed content"}
+              <textarea value={pendingAgentAction.content} maxLength={1200} rows={3} onChange={(event) => setPendingAgentAction((current) => current ? { ...current, content: event.target.value } : current)} className="mt-1 w-full rounded-lg border border-white/15 bg-ink-950 px-3 py-2 text-sm text-ink-50" />
+            </label>
+            <label className="block text-xs">{language === "zh-CN" ? "关键词（逗号分隔）" : "Keywords (comma separated)"}
+              <input value={agentCandidateKeywordsDraft} onChange={(event) => setAgentCandidateKeywordsDraft(event.target.value)} className="mt-1 w-full rounded-lg border border-white/15 bg-ink-950 px-3 py-2 text-sm text-ink-50" />
+            </label>
+            {pendingAgentAction.kind === "lore_candidate" ? <label className="block text-xs">
+              {language === "zh-CN" ? "私密角色密码（如需要）" : "Private character password, if needed"}
+              <input type="password" autoComplete="off" value={agentLorePassword} onChange={(event) => setAgentLorePassword(event.target.value)} className="mt-1 w-full rounded-lg border border-white/15 bg-ink-950 px-3 py-2 text-sm text-ink-50" />
+            </label> : null}
+            {agentPreviewError ? <span className="block text-xs text-rose-300" role="alert">{agentPreviewError}</span> : null}
+            {agentActionPreview?.key === agentActionPreviewKey ? <span className="block rounded-lg border border-white/15 bg-white/[0.04] p-3 text-xs text-ink-200">
+              <span className="block font-semibold">{language === "zh-CN" ? "修改预览" : "Change preview"}</span>
+              <span className="mt-1 block">{language === "zh-CN" ? "目标" : "Target"}: {agentActionPreview.value.targetName}</span>
+              <span className="block">{language === "zh-CN" ? "影响聊天" : "Affected chats"}: {agentActionPreview.value.affectedChatCount}</span>
+              <span className="block">{language === "zh-CN" ? "来源消息／记忆" : "Source messages / memories"}: {agentActionPreview.value.sourceMessageCount} / {agentActionPreview.value.sourceMemoryCount}</span>
+              {agentActionPreview.value.targetVersion ? <span className="block">{language === "zh-CN" ? "目标版本" : "Target version"}: {agentActionPreview.value.targetVersion}</span> : null}
+              {agentActionPreview.value.targets?.map((target, index) => <span key={target.id} className="mt-1 block whitespace-pre-wrap">
+                {language === "zh-CN" ? (index === 0 ? "主记忆" : "将禁用") : (index === 0 ? "Primary memory" : "Will disable")}: {target.title} (v{target.currentRevision}) — {target.content}
+              </span>)}
+              {agentActionPreview.value.loreAction === "update" ? <span className="mt-1 block whitespace-pre-wrap">{language === "zh-CN" ? "现有 Lore" : "Existing Lore"}: {agentActionPreview.value.loreTarget?.content ?? (language === "zh-CN" ? "私密内容需解锁后查看" : "Private content requires unlock")}</span> : null}
+              {agentActionPreview.value.privateCharacter ? <span className="block">{language === "zh-CN" ? "私密角色：保存时需密码" : "Private character: password required to save"}</span> : null}
+              <span className="mt-1 block whitespace-pre-wrap">{language === "zh-CN" ? "原内容" : "Before"}: {agentActionPreview.value.original.content}</span>
+              <span className="block whitespace-pre-wrap">{language === "zh-CN" ? "保存内容" : "After"}: {agentActionPreview.value.proposed.content}</span>
+            </span> : null}
+          </span>}
           title={language === "zh-CN" ? "保存 Agent 候选" : "Save Agent Candidate"}
-          onCancel={() => setPendingAgentAction(null)}
+          onCancel={() => { setPendingAgentAction(null); setAgentActionPreview(null); setAgentPreviewError(""); setAgentLorePassword(""); setAgentCandidateKeywordsDraft(""); }}
           onConfirm={() => {
-            const action = pendingAgentAction;
+            const action = { ...pendingAgentAction, keywords: [...new Set(agentCandidateKeywordsDraft.split(",").map((item) => item.trim()).filter(Boolean))].slice(0, 12) };
+            if (agentActionPreview?.key !== agentActionPreviewKey) {
+              if (!activeChat) return;
+              setAgentPreviewLoading(true);
+              setAgentPreviewError("");
+              void api.chats.previewAgentAction(activeChat.id, action.id, { title: action.title, content: action.content, keywords: action.keywords },
+                action.kind === "lore_candidate" ? agentLorePassword : undefined).then((value) => {
+                setAgentActionPreview({ key: agentActionPreviewKey, value });
+              }).catch((caught: unknown) => {
+                setAgentPreviewError(caught instanceof Error ? caught.message : t("chat.agentFailed"));
+              }).finally(() => setAgentPreviewLoading(false));
+              return;
+            }
+            const accessPassword = agentLorePassword;
             setPendingAgentAction(null);
-            void applyAgentAction(action);
+            setAgentActionPreview(null);
+            setAgentLorePassword("");
+            setAgentCandidateKeywordsDraft("");
+            void applyAgentAction(action, accessPassword);
           }}
         />
+      ) : null}
+      {pendingAgentClear ? (
+        <ConfirmDialog
+          title={language === "zh-CN" ? "清空助手对话" : "Clear assistant conversation"}
+          message={language === "zh-CN" ? "这会删除当前聊天在本机保存的助手对话和候选。" : "This deletes the locally saved assistant conversation and candidates for this chat."}
+          cancelLabel={t("common.cancel")}
+          confirmLabel={language === "zh-CN" ? "清空" : "Clear"}
+          onCancel={() => setPendingAgentClear(false)}
+          onConfirm={() => {
+            const chatId = activeChat?.id;
+            setPendingAgentClear(false);
+            if (!chatId) return;
+            void api.chats.clearAgentSession(chatId).then(() => {
+              if (draftChatIdRef.current === chatId) {
+                setAgentSession({ chatId, activeRunId: null, entries: [] });
+                setAgentDraft(null);
+              }
+            }).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : t("chat.agentFailed")));
+          }}
+        />
+      ) : null}
+      {pendingAgentInsert ? (
+        <Modal title={language === "zh-CN" ? "插入回复草案" : "Insert reply draft"} onClose={() => setPendingAgentInsert(null)}>
+          <div className="space-y-4">
+            <p className="text-sm text-slate-300">{language === "zh-CN" ? "输入框已有内容。请选择如何插入草案。" : "The composer already has text. Choose how to insert the draft."}</p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button variant="secondary" onClick={() => setPendingAgentInsert(null)}>{t("common.cancel")}</Button>
+              <Button variant="secondary" onClick={() => {
+                setDraft(`${draft.trimEnd()}\n\n${pendingAgentInsert}`);
+                setPendingAgentInsert(null);
+                requestAnimationFrame(autoResizeDraftTextArea);
+              }}>{language === "zh-CN" ? "追加" : "Append"}</Button>
+              <Button onClick={() => {
+                setDraft(pendingAgentInsert);
+                setPendingAgentInsert(null);
+                requestAnimationFrame(autoResizeDraftTextArea);
+              }}>{language === "zh-CN" ? "替换" : "Replace"}</Button>
+            </div>
+          </div>
+        </Modal>
       ) : null}
       {guidedRegenerateMessage ? (
         <Modal
@@ -6707,6 +7168,7 @@ export function ChatPage({
                   {chatMemories.map((memory) => (
                     <div
                       key={memory.id}
+                      id={`chat-memory-${memory.id}`}
                       className={`rounded-lg border p-3 ${
                         memory.deletedAt
                           ? "border-rose-500/20 bg-rose-500/[0.035]"

@@ -4,6 +4,11 @@ import { prisma } from "../db.js";
 import { asyncHandler, HttpError, parseBody, parseQuery, requireParam } from "../lib/http.js";
 import {
   chatAgentDraftSchema,
+  agentTaskSchema,
+  agentMemoryConfirmSchema,
+  agentLoreConfirmSchema,
+  agentCandidatePreviewSchema,
+  mcpApprovalDecisionSchema,
   chatArchiveImportSchema,
   chatBatchArchiveSchema,
   chatBatchFolderSchema,
@@ -26,6 +31,9 @@ import {
 } from "../schemas.js";
 import { serializeChat, serializeChatMemory, serializeMessage } from "../serializers.js";
 import { createChatAgentDraft } from "../services/chatAgent.js";
+import { appendAgentTask, cancelAgentTask, clearAgentSession, confirmAgentLoreCandidate, confirmAgentMemoryCandidate, getAgentRunStatus, getAgentSession, previewAgentCandidate } from "../services/agentSessions.js";
+import { decideMcpApproval, getPendingMcpApproval } from "../services/mcpApprovals.js";
+import { getModelRequest } from "../services/modelUsage.js";
 import { getChatDraft, saveChatDraft } from "../services/chatDrafts.js";
 import { createDraftHandoff, discardDraftHandoff, getDraftHandoff, listDraftHandoffs, restoreDraftHandoff } from "../services/draftHandoffs.js";
 import { listChatPage } from "../services/chatPaging.js";
@@ -282,6 +290,110 @@ chatsRouter.post(
   })
 );
 
+chatsRouter.get("/:id/agent/session", asyncHandler(async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: await getAgentSession(requireParam(request, "id")) });
+}));
+
+chatsRouter.post("/:id/agent/tasks", asyncHandler(async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: await appendAgentTask(requireParam(request, "id"), parseBody(agentTaskSchema, request.body)) });
+}));
+
+chatsRouter.post("/:id/agent/tasks/:runId/cancel", asyncHandler(async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: await cancelAgentTask(requireParam(request, "id"), requireParam(request, "runId")) });
+}));
+
+chatsRouter.get("/:id/agent/runs/:runId", asyncHandler(async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: await getAgentRunStatus(requireParam(request, "id"), requireParam(request, "runId")) });
+}));
+
+chatsRouter.get("/:id/agent/runs/:runId/approval", asyncHandler(async (request, response) => {
+  const chatId = requireParam(request, "id");
+  const runId = requireParam(request, "runId");
+  await getAgentRunStatus(chatId, runId);
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: getPendingMcpApproval(chatId, runId) });
+}));
+
+chatsRouter.post("/:id/agent/runs/:runId/approval/:callId", asyncHandler(async (request, response) => {
+  const chatId = requireParam(request, "id");
+  const runId = requireParam(request, "runId");
+  await getAgentRunStatus(chatId, runId);
+  const input = parseBody(mcpApprovalDecisionSchema, request.body);
+  const result = decideMcpApproval(chatId, runId, requireParam(request, "callId"), input);
+  if (!result.accepted) throw new HttpError(409, "MCP approval is no longer pending");
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: result });
+}));
+
+chatsRouter.get("/:id/generation/runs/:runId/approval", asyncHandler(async (request, response) => {
+  const chatId = requireParam(request, "id");
+  const runId = requireParam(request, "runId");
+  const run = await getModelRequest(runId);
+  const linkedMessage = run?.messageId && run.chatId !== chatId
+    ? await prisma.message.findFirst({ where: { id: run.messageId, chatId }, select: { id: true } }) : null;
+  if (!run || (run.chatId !== chatId && !linkedMessage) || run.module !== "chat") throw new HttpError(404, "Generation not found");
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: getPendingMcpApproval(chatId, runId) });
+}));
+
+chatsRouter.post("/:id/generation/runs/:runId/approval/:callId", asyncHandler(async (request, response) => {
+  const chatId = requireParam(request, "id");
+  const runId = requireParam(request, "runId");
+  const run = await getModelRequest(runId);
+  const linkedMessage = run?.messageId && run.chatId !== chatId
+    ? await prisma.message.findFirst({ where: { id: run.messageId, chatId }, select: { id: true } }) : null;
+  if (!run || (run.chatId !== chatId && !linkedMessage) || run.module !== "chat") throw new HttpError(404, "Generation not found");
+  const input = parseBody(mcpApprovalDecisionSchema, request.body);
+  const result = decideMcpApproval(chatId, runId, requireParam(request, "callId"), input);
+  if (!result.accepted) throw new HttpError(409, "MCP approval is no longer pending");
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: result });
+}));
+
+chatsRouter.post("/:id/agent/actions/:actionId/preview", asyncHandler(async (request, response) => {
+  const body = parseBody(agentCandidatePreviewSchema, request.body);
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: await previewAgentCandidate(requireParam(request, "id"), requireParam(request, "actionId"), body.candidate, body.accessPassword) });
+}));
+
+chatsRouter.post("/:id/agent/actions/:actionId/confirm-memory", asyncHandler(async (request, response) => {
+  const body = parseBody(agentMemoryConfirmSchema, request.body);
+  const result = await confirmAgentMemoryCandidate(requireParam(request, "id"), requireParam(request, "actionId"), body.candidate);
+  if (!result.alreadyApplied) {
+    try { await refreshChatMemoryEmbeddings({ chatId: requireParam(request, "id"), settings: await getOrCreateSettings() }); }
+    catch { /* The confirmed memory remains saved and can be indexed later. */ }
+  }
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: { memory: serializeChatMemory(result.memory), session: result.session, operationId: result.operationId ?? null } });
+}));
+
+chatsRouter.post("/:id/agent/actions/:actionId/confirm-lore", asyncHandler(async (request, response) => {
+  const body = parseBody(agentLoreConfirmSchema, request.body);
+  const result = await confirmAgentLoreCandidate(requireParam(request, "id"), requireParam(request, "actionId"), body.candidate, body.accessPassword);
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: result });
+}));
+
+chatsRouter.delete("/:id/agent/session", asyncHandler(async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ ok: true, data: await clearAgentSession(requireParam(request, "id")) });
+}));
+
+chatsRouter.get(
+  "/:id/agent/history-search",
+  asyncHandler(async (request, response) => {
+    const chatId = requireParam(request, "id");
+    const query = parseQuery(chatMessageSearchQuerySchema, request.query);
+    const chat = await prisma.chat.findFirst({ where: { id: chatId, deletedAt: null }, select: { id: true } });
+    if (!chat) throw new HttpError(404, "Chat not found");
+    response.json({ ok: true, data: await searchMessagesPage({ query: query.q, limit: query.limit, cursor: query.cursor, chatId, contextOnly: true }) });
+  })
+);
+
 chatsRouter.get(
   "/:id/archive",
   asyncHandler(async (request, response) => {
@@ -496,6 +608,14 @@ chatsRouter.get("/:id/memories/page", asyncHandler(async (request, response) => 
   const chat = await prisma.chat.findFirst({ where: { id: chatId, deletedAt: null }, select: { id: true } });
   if (!chat) throw new HttpError(404, "Chat not found");
   response.json({ ok: true, data: await listMemoryPage(chatId, parseQuery(memoryPageQuerySchema, request.query)) });
+}));
+
+chatsRouter.get("/:id/memories/:memoryId", asyncHandler(async (request, response) => {
+  const memory = await prisma.chatMemory.findFirst({
+    where: { id: requireParam(request, "memoryId"), chatId: requireParam(request, "id"), chat: { deletedAt: null } }
+  });
+  if (!memory) throw new HttpError(404, "Memory not found");
+  response.json({ ok: true, data: serializeChatMemory(memory) });
 }));
 
 chatsRouter.post(

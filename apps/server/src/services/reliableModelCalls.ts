@@ -105,6 +105,11 @@ export type ReliableOperationResult<T> = {
 export const executeReliableOperation = async <T>(input: {
   settings: UserSettings;
   context: ReliableCallContext;
+  attemptNumberOffset?: number;
+  requestComplete?: boolean;
+  allowFallback?: boolean;
+  candidateFilter?: (settings: UserSettings) => boolean;
+  allowRetry?: boolean;
   estimatedInputTokens?: number;
   maxOutputTokens?: number;
   specialTokensUnknown?: boolean;
@@ -131,16 +136,19 @@ export const executeReliableOperation = async <T>(input: {
   }
 
   const primarySettings = resolveModuleSettings(input.settings, input.context.module);
-  const candidates = [primarySettings, ...resolveAutomaticFallbackSettings(input.settings, input.context.module)];
+  const configuredCandidates = input.allowFallback === false
+    ? [primarySettings]
+    : [primarySettings, ...resolveAutomaticFallbackSettings(input.settings, input.context.module)];
+  const candidates = [configuredCandidates[0], ...configuredCandidates.slice(1).filter((candidate) => input.candidateFilter?.(candidate) ?? true)];
   const primaryIdentity = getModelIdentity(primarySettings);
-  let attemptNumber = 0;
+  let attemptNumber = input.attemptNumberOffset ?? 0;
   let lastError: ModelCallError | null = null;
 
   for (const [candidateIndex, settings] of candidates.entries()) {
     const identity = getModelIdentity(settings);
     if (candidateIndex > 0 && lastError) input.context.onFallback?.({ from: primaryIdentity, to: identity, error: lastError });
     const retry = reliability(settings);
-    const maxAttempts = retry.enabled ? 1 + retry.maxRetries : 1;
+    const maxAttempts = input.allowRetry !== false && retry.enabled ? 1 + retry.maxRetries : 1;
     for (let candidateAttempt = 1; candidateAttempt <= maxAttempts; candidateAttempt += 1) {
       attemptNumber += 1;
       const pricing = input.specialTokensUnknown ? null : identity.pricing;
@@ -176,7 +184,7 @@ export const executeReliableOperation = async <T>(input: {
           usageSource: usage ? (usage.estimated ? "estimated" : "provider") : undefined,
           specialTokensUnknown: input.specialTokensUnknown ?? false,
           pricing,
-          requestComplete: true,
+          requestComplete: input.requestComplete ?? true,
           messageId: input.context.messageId
         });
         return { value: result.value, usage, requestId: input.context.requestId, attemptId: attempt.id, attemptNumber, identity, usedFallback: candidateIndex > 0, specialTokensUnknown: input.specialTokensUnknown ?? false };
@@ -190,7 +198,7 @@ export const executeReliableOperation = async <T>(input: {
         const canRetry = error.safe.retryable && candidateAttempt < maxAttempts && !input.context.signal?.aborted;
         const canFallback = error.safe.retryable && candidateIndex < candidates.length - 1 && !input.context.signal?.aborted;
         const final = !canRetry && !canFallback;
-        await settleModelAttempt({ attemptId: attempt.id, requestId: input.context.requestId, status: error.safe.code === "cancelled" ? "cancelled" : "failed", pricing, error: error.safe, specialTokensUnknown: input.specialTokensUnknown ?? false, requestComplete: final });
+        await settleModelAttempt({ attemptId: attempt.id, requestId: input.context.requestId, status: error.safe.code === "cancelled" ? "cancelled" : "failed", pricing, error: error.safe, specialTokensUnknown: input.specialTokensUnknown ?? false, requestComplete: final && (input.requestComplete ?? true) });
         if (final) throw error;
         lastError = error;
         if (canRetry) {

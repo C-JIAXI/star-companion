@@ -4,6 +4,8 @@ import { ZodError, type ZodType } from "zod";
 import { ModelCallError } from "../services/modelErrors.js";
 import { DraftOwnershipError } from "../services/draftOwnership.js";
 import { CharacterRegexExecutionError } from "../services/characterRegex.js";
+import { SkillPackageError } from "../services/skillPackages.js";
+import { McpNetworkError } from "../services/mcpNetwork.js";
 
 export class HttpError extends Error {
   constructor(
@@ -63,7 +65,7 @@ export const errorMiddleware = (
   response: Response,
   _next: NextFunction
 ) => {
-  if (error instanceof HttpError || error instanceof DraftOwnershipError || error instanceof CharacterRegexExecutionError) {
+  if (error instanceof HttpError || error instanceof DraftOwnershipError || error instanceof CharacterRegexExecutionError || error instanceof SkillPackageError || error instanceof McpNetworkError) {
     response.status(error.status).json({
       ok: false,
       error: error.message,

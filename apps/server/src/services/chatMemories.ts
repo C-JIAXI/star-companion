@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Prisma, ChatMemory, Message, UserSettings } from "@prisma/client";
 import { prisma } from "../db.js";
-import { type ChatCompletionMessage } from "./completions.js";
-import { executeReliableTextCompletion } from "./reliableModelCalls.js";
+import { completeChatCompletionDetailed, estimateTokenUsage, type ChatCompletionMessage } from "./completions.js";
+import { executeReliableOperation, executeReliableTextCompletion } from "./reliableModelCalls.js";
 import { generateReliableEmbeddings as generateEmbeddings } from "./reliableEmbeddings.js";
+import { getAgentUsageScope } from "./agentUsageScope.js";
+import { estimateInputTokens } from "./modelUsage.js";
 import { resolveModuleSettings } from "./moduleModels.js";
 import { createMemoryInTransaction, pruneMemoryOperations, updateMemoryInTransaction } from "./memoryHistory.js";
 
@@ -412,18 +414,37 @@ const rerankMemories = async (
 
   try {
     const candidateIds = new Set(candidates.map((candidate) => candidate.id));
-    const raw = (await executeReliableTextCompletion({
-      settings: moduleSettings,
-      messages: buildMemoryRerankMessages(queryText, candidates),
-      maxTokens: 180,
-      temperature: 0,
-      context: { requestId: `memory_rerank_${randomUUID()}`, module: "memory", operation: "rerank" }
-    })).content;
+    const messages = buildMemoryRerankMessages(queryText, candidates);
+    const scope = getAgentUsageScope();
+    let raw: string;
+    if (scope) {
+      const result = await executeReliableOperation({
+        settings,
+        context: { requestId: scope.requestId, requestAlreadyClaimed: true, module: "memory", operation: "rerank", chatId: scope.chatId, signal: scope.signal },
+        attemptNumberOffset: scope.attemptNumber, requestComplete: false,
+        allowFallback: false, allowRetry: false,
+        estimatedInputTokens: estimateInputTokens(messages.map((message) => message.content)), maxOutputTokens: 180,
+        invoke: async (candidate, signal) => {
+          const value = await completeChatCompletionDetailed({ settings: candidate, messages, maxTokens: 180, temperature: 0, signal });
+          return { value, usage: value.usage ?? estimateTokenUsage(messages, value.content) };
+        }
+      });
+      scope.attemptNumber = result.attemptNumber;
+      raw = result.value.content;
+    } else {
+      raw = (await executeReliableTextCompletion({
+        settings: moduleSettings,
+        messages, maxTokens: 180, temperature: 0,
+        context: { requestId: `memory_rerank_${randomUUID()}`, module: "memory", operation: "rerank" }
+      })).content;
+    }
     const ids = parseRerankedIds(raw.trim(), candidateIds);
     const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
     const selected = ids.map((id) => byId.get(id)).filter((item): item is MatchedMemoryEntry => Boolean(item));
     return selected.length ? selected : candidates.slice(0, RERANKED_MEMORY_LIMIT);
-  } catch {
+  } catch (error) {
+    if (getAgentUsageScope()) getAgentUsageScope()!.attemptNumber += 1;
+    if (getAgentUsageScope() && ((error as { safe?: { code?: string } }).safe?.code === "budget_blocked" || getAgentUsageScope()?.signal?.aborted)) throw error;
     return candidates.slice(0, RERANKED_MEMORY_LIMIT);
   }
 };
@@ -515,7 +536,8 @@ export const recallChatMemories = async ({
         task: "query"
       });
       queryVector = result.vectors[0]?.length === embeddingIndex.dimensions ? result.vectors[0] : null;
-    } catch {
+    } catch (error) {
+      if (getAgentUsageScope() && ((error as { safe?: { code?: string } }).safe?.code === "budget_blocked" || getAgentUsageScope()?.signal?.aborted)) throw error;
       queryVector = null;
     }
   }

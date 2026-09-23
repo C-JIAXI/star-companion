@@ -532,6 +532,64 @@ export const chatAgentDraftSchema = z.object({
   focus: z.string().trim().max(1000).optional()
 });
 
+export const agentTaskSchema = z.object({
+  mutationId: z.string().uuid(),
+  mode: chatAgentDraftSchema.shape.mode,
+  content: z.string().trim().min(1).max(4000),
+  generation: z.object({
+    temperature: z.number().min(0).max(2),
+    maxTokens: z.number().int().min(256).max(4096)
+  }).strict().optional()
+});
+
+export const agentCandidateEditSchema = z.object({
+  title: z.string().trim().min(1).max(80),
+  content: z.string().trim().min(1).max(1200),
+  keywords: z.array(z.string().trim().min(1).max(80)).max(12)
+}).strict();
+export const agentCandidatePreviewSchema = z.object({
+  candidate: agentCandidateEditSchema,
+  accessPassword: z.string().min(1).max(128).optional()
+}).strict();
+export const agentMemoryConfirmSchema = z.object({
+  confirm: z.literal("APPLY_AGENT_MEMORY"), candidate: agentCandidateEditSchema
+}).strict();
+export const agentLoreConfirmSchema = z.object({
+  confirm: z.literal("APPLY_AGENT_LORE"),
+  candidate: agentCandidateEditSchema,
+  accessPassword: z.string().min(1).max(1000).optional()
+}).strict();
+
+export const skillNameSchema = z.string().min(1).max(64).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+export const skillImportSchema = z.discriminatedUnion("format", [
+  z.object({ format: z.literal("markdown"), markdown: z.string().min(1).max(512_000), replaceVersion: z.number().int().positive().optional() }).strict(),
+  z.object({ format: z.literal("zip"), dataBase64: z.string().min(1).max(2_800_000), replaceVersion: z.number().int().positive().optional() }).strict()
+]);
+export const skillEnableSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  agentEnabled: z.boolean().optional(),
+  chatId: idSchema.optional(),
+  chatEnabled: z.boolean().optional()
+}).strict().refine((input) => input.agentEnabled !== undefined || (input.chatId !== undefined && input.chatEnabled !== undefined), "Choose an Agent or chat setting")
+  .refine((input) => input.chatId === undefined || input.chatEnabled !== undefined, "Chat state is required");
+export const skillDeleteSchema = z.object({ expectedVersion: z.number().int().positive(), confirm: z.literal("DELETE_SKILL") }).strict();
+export const skillReferenceQuerySchema = z.object({ path: z.string().min(1).max(240) });
+
+export const mcpConnectionCreateSchema = z.object({
+  name: z.string().trim().min(1).max(80), endpointUrl: z.string().trim().min(8).max(2048),
+  allowPrivateNetwork: z.boolean().default(false), bearerToken: z.string().trim().min(1).max(4096).optional()
+}).strict();
+export const mcpConnectionUpdateSchema = z.object({
+  expectedVersion: z.number().int().positive(), name: z.string().trim().min(1).max(80).optional(),
+  endpointUrl: z.string().trim().min(8).max(2048).optional(), allowPrivateNetwork: z.boolean().optional(),
+  bearerToken: z.string().trim().min(1).max(4096).nullable().optional(), enabled: z.boolean().optional()
+}).strict();
+export const mcpConnectionCheckSchema = z.object({ expectedVersion: z.number().int().positive() }).strict();
+export const mcpToolEnableSchema = z.object({ expectedVersion: z.number().int().positive(), toolName: z.string().min(1).max(200),
+  definitionDigest: z.string().regex(/^[a-f0-9]{64}$/), enabled: z.boolean() }).strict();
+export const mcpConnectionDeleteSchema = z.object({ expectedVersion: z.number().int().positive(), confirm: z.literal("DELETE_MCP_CONNECTION") }).strict();
+export const mcpApprovalDecisionSchema = z.object({ approved: z.boolean(), sessionGrant: z.boolean().default(false) }).strict();
+
 export const chatBranchSchema = z.object({
   messageId: idSchema,
   title: z.string().trim().min(1).max(120).optional(),
@@ -621,8 +679,8 @@ const providerModelSchema = z.object({
   }).optional(),
   contextWindow: z.number().int().min(256).max(10_000_000).optional(),
   capabilities: z
-    .array(z.enum(["text_generation", "vision_input", "text_embedding", "audio_transcription", "text_to_speech", "image_generation"]))
-    .max(6)
+    .array(z.enum(["text_generation", "vision_input", "tool_calling", "text_embedding", "audio_transcription", "text_to_speech", "image_generation"]))
+    .max(7)
     .transform((capabilities) => Array.from(new Set(capabilities)))
     .optional(),
   pricing: z.object({
@@ -783,6 +841,8 @@ export const userProfileUpdateSchema = z.object({
   autoSummarizeUser: z.boolean().optional()
 });
 
+const chatToolUseSchema = z.object({ enabled: z.boolean(), toolNames: z.array(z.string().min(1).max(160)).max(25) }).strict();
+
 export const generationRequestSchema = z.object({
   type: z.literal("generate"),
   requestId: z.string().min(1),
@@ -790,7 +850,8 @@ export const generationRequestSchema = z.object({
   content: z.string().max(100000),
   draftId: attachmentDraftIdSchema.optional(),
   handoffId: z.string().uuid().optional(),
-  overrideHardBudget: z.boolean().optional()
+  overrideHardBudget: z.boolean().optional(),
+  toolUse: chatToolUseSchema.optional()
 }).refine((value) => value.content.trim().length > 0 || Boolean(value.draftId) || Boolean(value.handoffId), "Text or an image attachment is required.");
 
 export const regenerateRequestSchema = z.object({
@@ -798,21 +859,24 @@ export const regenerateRequestSchema = z.object({
   requestId: z.string().min(1),
   messageId: idSchema,
   guidance: z.string().trim().min(1).max(1000).optional(),
-  overrideHardBudget: z.boolean().optional()
+  overrideHardBudget: z.boolean().optional(),
+  toolUse: chatToolUseSchema.optional()
 });
 
 export const continueRequestSchema = z.object({
   type: z.literal("continue"),
   requestId: z.string().min(1),
   messageId: idSchema,
-  overrideHardBudget: z.boolean().optional()
+  overrideHardBudget: z.boolean().optional(),
+  toolUse: chatToolUseSchema.optional()
 });
 
 export const resendRequestSchema = z.object({
   type: z.literal("resend"),
   requestId: z.string().min(1),
   messageId: idSchema,
-  overrideHardBudget: z.boolean().optional()
+  overrideHardBudget: z.boolean().optional(),
+  toolUse: chatToolUseSchema.optional()
 });
 
 export const stopGenerationRequestSchema = z.object({
@@ -893,7 +957,7 @@ export const backupMessageSchema = messageFieldsSchema.extend({
 }).omit({ draftId: true, handoffId: true });
 
 const memoryActorSchema = z.enum(["user", "automatic_memory", "agent_confirmed", "timeline_cleanup", "restore"]);
-const memoryActionSchema = z.enum(["baseline", "automatic_create", "automatic_update", "automatic_disable", "manual_create", "manual_edit", "manual_enable", "manual_disable", "manual_delete", "agent_confirmed_create", "timeline_disable", "restore", "undo_create", "undo_update", "undo_disable"]);
+const memoryActionSchema = z.enum(["baseline", "automatic_create", "automatic_update", "automatic_disable", "manual_create", "manual_edit", "manual_enable", "manual_disable", "manual_delete", "agent_confirmed_create", "agent_confirmed_update", "agent_confirmed_disable", "timeline_disable", "restore", "undo_create", "undo_update", "undo_disable"]);
 const memorySnapshotSchema = z.object({
   title: z.string().trim().min(1).max(80),
   content: z.string().trim().min(1).max(1200),
@@ -951,7 +1015,7 @@ export const backupMemoryRevisionSchema = z.object({
 });
 
 export const backupMemoryOperationSchema = z.object({
-  id: idSchema, chatId: idSchema, type: z.enum(["automatic_maintenance", "operation_undo"]),
+  id: idSchema, chatId: idSchema, type: z.enum(["automatic_maintenance", "agent_maintenance", "operation_undo"]),
   actor: memoryActorSchema, status: z.enum(["running", "succeeded", "partial", "failed"]),
   startedAt: z.string().datetime(), completedAt: z.string().datetime().nullable(),
   created: z.number().int().min(0), updated: z.number().int().min(0), disabled: z.number().int().min(0), unchanged: z.number().int().min(0),

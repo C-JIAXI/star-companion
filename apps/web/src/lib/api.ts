@@ -10,6 +10,16 @@ import type {
   BackupPreviewDTO,
   ChatAgentDraftDTO,
   ChatAgentDraftRequestDTO,
+  ChatAgentActionPreviewDTO,
+  AgentSessionDTO,
+  AgentRunStatusDTO,
+  SkillSummaryDTO,
+  SkillDetailDTO,
+  SkillImportInputDTO,
+  SkillImportPreviewDTO,
+  McpConnectionDTO,
+  PendingMcpApprovalDTO,
+  AgentTaskRequestDTO,
   ChatBatchArchiveRequestDTO,
   ChatBatchArchiveResultDTO,
   ChatBatchFolderRequestDTO,
@@ -183,6 +193,31 @@ export const api = {
   app: {
     info: () => request<AppInfoDTO>("/api/app/info")
   },
+  skills: {
+    list: () => request<SkillSummaryDTO[]>("/api/skills"),
+    get: (name: string) => request<SkillDetailDTO>(`/api/skills/${encodeURIComponent(name)}`),
+    reference: (name: string, path: string) => request<{ name: string; path: string; content: string }>(`/api/skills/${encodeURIComponent(name)}/reference?path=${encodeURIComponent(path)}`),
+    import: (input: SkillImportInputDTO) => request<SkillSummaryDTO>("/api/skills/import", { method: "POST", body: input }),
+    previewImport: (input: SkillImportInputDTO) => request<SkillImportPreviewDTO>("/api/skills/import-preview", { method: "POST", body: input }),
+    enable: (name: string, input: { expectedVersion: number; agentEnabled?: boolean; chatId?: string; chatEnabled?: boolean }) =>
+      request<SkillSummaryDTO>(`/api/skills/${encodeURIComponent(name)}/enabled`, { method: "PUT", body: input }),
+    delete: (name: string, expectedVersion: number) => request<{ deleted: boolean }>(`/api/skills/${encodeURIComponent(name)}`, {
+      method: "DELETE", body: { expectedVersion, confirm: "DELETE_SKILL" }
+    })
+  },
+  mcp: {
+    list: () => request<McpConnectionDTO[]>("/api/mcp"),
+    create: (input: { name: string; endpointUrl: string; allowPrivateNetwork: boolean; bearerToken?: string }) =>
+      request<McpConnectionDTO>("/api/mcp", { method: "POST", body: input }),
+    update: (id: string, input: { expectedVersion: number; name?: string; endpointUrl?: string; allowPrivateNetwork?: boolean; bearerToken?: string | null; enabled?: boolean }) =>
+      request<McpConnectionDTO>(`/api/mcp/${encodeURIComponent(id)}`, { method: "PUT", body: input }),
+    check: (id: string, expectedVersion: number) =>
+      request<McpConnectionDTO & { protocolEra: "modern" | "legacy" }>(`/api/mcp/${encodeURIComponent(id)}/check`, { method: "POST", body: { expectedVersion } }),
+    enableTool: (id: string, input: { expectedVersion: number; toolName: string; definitionDigest: string; enabled: boolean }) =>
+      request<McpConnectionDTO>(`/api/mcp/${encodeURIComponent(id)}/tools`, { method: "PUT", body: input }),
+    delete: (id: string, expectedVersion: number) =>
+      request<{ deleted: boolean }>(`/api/mcp/${encodeURIComponent(id)}`, { method: "DELETE", body: { expectedVersion, confirm: "DELETE_MCP_CONNECTION" } })
+  },
   readiness: {
     get: () => request<ReadinessDTO>("/api/readiness"),
     testConnection: (
@@ -272,6 +307,20 @@ export const api = {
       })
   },
   chats: {
+    agentSession: (id: string) => request<AgentSessionDTO>(`/api/chats/${encodeURIComponent(id)}/agent/session`),
+    agentTask: (id: string, input: AgentTaskRequestDTO) => request<AgentSessionDTO>(`/api/chats/${encodeURIComponent(id)}/agent/tasks`, { method: "POST", body: input }),
+    agentRunStatus: (id: string, runId: string) => request<AgentRunStatusDTO>(`/api/chats/${encodeURIComponent(id)}/agent/runs/${encodeURIComponent(runId)}`),
+    agentPendingApproval: (id: string, runId: string) => request<PendingMcpApprovalDTO | null>(`/api/chats/${encodeURIComponent(id)}/agent/runs/${encodeURIComponent(runId)}/approval`),
+    decideAgentApproval: (id: string, runId: string, callId: string, input: { approved: boolean; sessionGrant: boolean }) =>
+      request<{ accepted: boolean }>(`/api/chats/${encodeURIComponent(id)}/agent/runs/${encodeURIComponent(runId)}/approval/${encodeURIComponent(callId)}`, { method: "POST", body: input }),
+    generationPendingApproval: (id: string, runId: string) => request<PendingMcpApprovalDTO | null>(`/api/chats/${encodeURIComponent(id)}/generation/runs/${encodeURIComponent(runId)}/approval`),
+    decideGenerationApproval: (id: string, runId: string, callId: string, input: { approved: boolean; sessionGrant: boolean }) =>
+      request<{ accepted: boolean }>(`/api/chats/${encodeURIComponent(id)}/generation/runs/${encodeURIComponent(runId)}/approval/${encodeURIComponent(callId)}`, { method: "POST", body: input }),
+    previewAgentAction: (id: string, actionId: string, candidate: { title: string; content: string; keywords: string[] }, accessPassword?: string) => request<ChatAgentActionPreviewDTO>(`/api/chats/${encodeURIComponent(id)}/agent/actions/${encodeURIComponent(actionId)}/preview`, { method: "POST", body: { candidate, ...(accessPassword ? { accessPassword } : {}) } }),
+    confirmAgentMemory: (id: string, actionId: string, candidate: { title: string; content: string; keywords: string[] }) => request<{ memory: ChatMemoryDTO; session: AgentSessionDTO; operationId: string | null }>(`/api/chats/${encodeURIComponent(id)}/agent/actions/${encodeURIComponent(actionId)}/confirm-memory`, { method: "POST", body: { confirm: "APPLY_AGENT_MEMORY", candidate } }),
+    confirmAgentLore: (id: string, actionId: string, candidate: { title: string; content: string; keywords: string[] }, accessPassword?: string) => request<{ characterId: string; characterName: string; affectedChatCount: number; session: AgentSessionDTO; alreadyApplied: boolean }>(`/api/chats/${encodeURIComponent(id)}/agent/actions/${encodeURIComponent(actionId)}/confirm-lore`, { method: "POST", body: { confirm: "APPLY_AGENT_LORE", candidate, ...(accessPassword ? { accessPassword } : {}) } }),
+    cancelAgentTask: (id: string, runId: string) => request<{ cancelled: boolean }>(`/api/chats/${encodeURIComponent(id)}/agent/tasks/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
+    clearAgentSession: (id: string) => request<{ cleared: boolean }>(`/api/chats/${encodeURIComponent(id)}/agent/session`, { method: "DELETE" }),
     listDraftHandoffs: (id: string, signal?: AbortSignal) => request<DraftHandoffDTO[]>(`/api/chats/${encodeURIComponent(id)}/draft/handoffs`, { signal }),
     getDraftHandoff: (id: string, handoffId: string) => request<DraftHandoffDTO>(`/api/chats/${encodeURIComponent(id)}/draft/handoffs/${handoffId}`),
     createDraftHandoff: (id: string, body: { id: string; expectedVersion: number; purpose: "send" | "queue" }, signal?: AbortSignal) =>
@@ -354,12 +403,19 @@ export const api = {
       request<ChatMessageSearchDTO>(
         `/api/chats/${id}/message-search?q=${encodeURIComponent(query)}&limit=${limit}`
       ),
+    agentHistorySearch: (id: string, query: string, limit = 10, cursor?: string) =>
+      request<ChatMessageSearchDTO>(withQuery(`/api/chats/${encodeURIComponent(id)}/agent/history-search`, {
+        q: query,
+        limit: String(limit),
+        cursor
+      })),
     globalMessageSearch: (query: string, limit = 20) =>
       request<GlobalChatMessageSearchDTO>(
         `/api/chats/message-search?q=${encodeURIComponent(query)}&limit=${limit}`
       ),
     memories: {
       list: (chatId: string) => request<ChatMemoryDTO[]>(`/api/chats/${chatId}/memories`),
+      get: (chatId: string, memoryId: string) => request<ChatMemoryDTO>(`/api/chats/${chatId}/memories/${memoryId}`),
       page: (chatId: string, cursor?: string, includeTotal = false) =>
         request<ChatMemoryPageDTO>(withQuery(`/api/chats/${chatId}/memories/page`, {
           limit: "100",

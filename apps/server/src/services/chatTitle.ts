@@ -8,6 +8,8 @@ import { resolveModuleSettings } from "./moduleModels.js";
 
 const MAX_TITLE_LENGTH = 80;
 const MAX_CONTEXT_MESSAGES = 16;
+const MAX_MESSAGE_CHARS = 400;
+const MAX_TITLE_OUTPUT_TOKENS = 512;
 
 export const normalizeChatTitleSuggestion = (value: string) =>
   value
@@ -36,17 +38,19 @@ export const buildChatTitleSuggestionMessages = (
     .slice(-MAX_CONTEXT_MESSAGES)
     .map((message): ChatCompletionMessage => ({
       role: message.role === "assistant" ? "assistant" : "user",
-      content: message.content
+      content: message.content.trim().slice(0, MAX_MESSAGE_CHARS)
     }))
 ];
 
 export const createChatTitleSuggestion = async (chatId: string) => {
   const chat = await prisma.chat.findFirst({
     where: { id: chatId, deletedAt: null },
-    include: {
+    select: {
       messages: {
-        where: { contextIncluded: true },
-        orderBy: { createdAt: "asc" }
+        where: { contextIncluded: true, role: { in: ["user", "assistant"] } },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: MAX_CONTEXT_MESSAGES,
+        select: { role: true, content: true }
       }
     }
   });
@@ -59,19 +63,19 @@ export const createChatTitleSuggestion = async (chatId: string) => {
   }
 
   const settings = resolveModuleSettings(await getOrCreateSettings(), "chat");
-  const messages = buildChatTitleSuggestionMessages(chat.messages);
+  const messages = buildChatTitleSuggestionMessages(chat.messages.reverse());
   const title = normalizeChatTitleSuggestion(
     (await executeReliableTextCompletion({
       settings,
       messages,
-      maxTokens: Math.min(settings.maxTokens, 80),
+      maxTokens: Math.min(settings.maxTokens, MAX_TITLE_OUTPUT_TOKENS),
       temperature: Math.min(settings.temperature, 0.25),
       context: { requestId: `title_${randomUUID()}`, module: "chat", operation: "title", chatId }
     })).content
   );
 
   if (!title) {
-    throw new Error("Model returned an empty title suggestion");
+    throw new HttpError(422, "Model returned no visible title. Increase this model's Max Tokens or choose another model.");
   }
 
   return { title, createdAt: new Date().toISOString() };

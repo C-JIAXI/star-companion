@@ -13,17 +13,19 @@ const snippet = (content: string, query: string) => {
   const start = Math.max(0, matchIndex - 60); const end = Math.min(content.length, matchIndex + query.length + 100);
   return `${start > 0 ? "..." : ""}${content.slice(start, end)}${end < content.length ? "..." : ""}`;
 };
-const queryScope = (query: string, chatId?: string) => `${chatId ?? "global"}:${createHash("sha256").update(query.toLocaleLowerCase()).digest("hex").slice(0, 24)}`;
+const queryScope = (query: string, chatId?: string, contextOnly = false) => `${chatId ?? "global"}:${contextOnly ? "context:" : ""}${createHash("sha256").update(query.toLocaleLowerCase()).digest("hex").slice(0, 24)}`;
 
 type SearchRow = { id: string; chatId: string; createdAt: Date; messageIndex: bigint };
 
-export const searchMessagesPage = async ({ query, limit, cursor, chatId }: { query: string; limit: number; cursor?: string; chatId?: string }) => {
-  const scope = queryScope(query, chatId);
+export const searchMessagesPage = async ({ query, limit, cursor, chatId, contextOnly = false }: { query: string; limit: number; cursor?: string; chatId?: string; contextOnly?: boolean }) => {
+  if (contextOnly && !chatId) throw new HttpError(400, "Context search requires a chat.");
+  const scope = queryScope(query, chatId, contextOnly);
   const decoded = decodeCursor(cursor, { kind: "message-search", scope });
   if (decoded && !decoded.createdAt) throw new HttpError(400, "The search cursor is incomplete.");
   const boundary = decoded?.createdAt ? new Date(decoded.createdAt) : null;
-  const chatPredicate = chatId ? Prisma.sql`m.chatId = ${chatId}` : Prisma.sql`c.deletedAt IS NULL`;
-  const indexedChatPredicate = chatId ? Prisma.sql`search.chatId = ${chatId}` : Prisma.sql`c.deletedAt IS NULL`;
+  const contextPredicate = contextOnly ? Prisma.sql`AND m.contextIncluded = 1` : Prisma.empty;
+  const chatPredicate = chatId ? Prisma.sql`m.chatId = ${chatId} AND c.deletedAt IS NULL ${contextPredicate}` : Prisma.sql`c.deletedAt IS NULL`;
+  const indexedChatPredicate = chatId ? Prisma.sql`search.chatId = ${chatId} AND c.deletedAt IS NULL` : Prisma.sql`c.deletedAt IS NULL`;
   const cursorPredicate = boundary
     ? Prisma.sql`AND (m.createdAt < ${boundary} OR (m.createdAt = ${boundary} AND m.id < ${decoded!.id}))`
     : Prisma.empty;
@@ -33,8 +35,8 @@ export const searchMessagesPage = async ({ query, limit, cursor, chatId }: { que
     ? await prisma.$queryRaw<Array<{ overflow: bigint }>>(Prisma.sql`
         SELECT EXISTS(
           SELECT 1 FROM MessageSearch AS search
-          JOIN Chat c ON c.id = search.chatId
-          WHERE ${indexedChatPredicate} AND search.content MATCH ${trigramQuery}
+          JOIN Message m ON m.id = search.messageId JOIN Chat c ON c.id = search.chatId
+          WHERE ${indexedChatPredicate} ${contextPredicate} AND search.content MATCH ${trigramQuery}
           LIMIT 1 OFFSET 5000
         ) AS overflow
       `)
@@ -43,8 +45,8 @@ export const searchMessagesPage = async ({ query, limit, cursor, chatId }: { que
   const totalRows = useTrigramRows
     ? await prisma.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
         SELECT COUNT(*) AS count FROM MessageSearch AS search
-        JOIN Chat c ON c.id = search.chatId
-        WHERE ${indexedChatPredicate} AND search.content MATCH ${trigramQuery}
+        JOIN Message m ON m.id = search.messageId JOIN Chat c ON c.id = search.chatId
+        WHERE ${indexedChatPredicate} ${contextPredicate} AND search.content MATCH ${trigramQuery}
       `)
     : await prisma.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
         SELECT COUNT(*) AS count FROM Message AS m NOT INDEXED JOIN Chat c ON c.id = m.chatId

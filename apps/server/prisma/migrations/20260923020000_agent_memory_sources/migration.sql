@@ -1,0 +1,1 @@
+ALTER TABLE "AgentEntry" ADD COLUMN "sourceMemoryIds" JSONB NOT NULL DEFAULT '[]';

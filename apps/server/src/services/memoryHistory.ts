@@ -18,6 +18,8 @@ export type MemoryAction =
   | "manual_disable"
   | "manual_delete"
   | "agent_confirmed_create"
+  | "agent_confirmed_update"
+  | "agent_confirmed_disable"
   | "timeline_disable"
   | "restore"
   | "undo_create"
@@ -158,12 +160,13 @@ const appendRevision = async (
 
 export const createMemoryInTransaction = async (
   tx: Prisma.TransactionClient,
-  input: MemoryInput & { chatId: string },
+  input: MemoryInput & { chatId: string; id?: string },
   audit: { actor: MemoryActor; action: MemoryAction; reasonCode: string; operationId?: string | null }
 ) => {
   const sourceMessageIds = await validateSourceMessageIds(tx, input.chatId, input.sourceMessageIds ?? []);
   const memory = await tx.chatMemory.create({
     data: {
+      ...(input.id ? { id: input.id } : {}),
       chatId: input.chatId,
       title: input.title,
       content: input.content,
@@ -402,7 +405,7 @@ export const listMemoryOperations = async (chatId: string, limit = 20) => {
 const buildUndoPreviewInTransaction = async (tx: Prisma.TransactionClient, chatId: string, operationId: string) => {
   const operation = await tx.memoryOperation.findFirst({ where: { id: operationId, chatId } });
   if (!operation) throw new HttpError(404, "Memory operation not found");
-  if (operation.type !== "automatic_maintenance" || operation.status === "running" || operation.status === "failed") throw new HttpError(409, "This operation cannot be undone.");
+  if (!["automatic_maintenance", "agent_maintenance"].includes(operation.type) || operation.status === "running" || operation.status === "failed") throw new HttpError(409, "This operation cannot be undone.");
   if (operation.undoneAt || operation.undoOperationId) throw new HttpError(409, "This operation was already undone.");
   const revisions = await tx.memoryRevision.findMany({ where: { chatId, operationId }, orderBy: { revision: "asc" } });
   const memoryIds = uniqueIds(revisions.map((revision) => revision.memoryId));
@@ -417,7 +420,7 @@ const buildUndoPreviewInTransaction = async (tx: Prisma.TransactionClient, chatI
       memoryId: memory.id,
       operationRevision: revision.revision,
       currentRevision: memory.currentRevision,
-      effect: isCreate ? "retire_created" : revision.action === "automatic_disable" ? "restore_disabled" : "restore_updated",
+      effect: isCreate ? "retire_created" : ["automatic_disable", "agent_confirmed_disable"].includes(revision.action) ? "restore_disabled" : "restore_updated",
       conflict: memory.currentRevision !== revision.revision,
       current: memory.deletedAt ? null : snapshotMemory(memory),
       restored: before

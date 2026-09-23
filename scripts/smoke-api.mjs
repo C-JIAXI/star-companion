@@ -189,6 +189,20 @@ const querySocketRequestStatus = (baseUrl, requestId) =>
     socket.addEventListener("error", reject);
   });
 
+const queryAgentRunEvents = (baseUrl, chatId, runId) => new Promise((resolve, reject) => {
+  const socket = new WebSocket(`${baseUrl.replace(/^http/, "ws")}/ws`);
+  const events = [];
+  const timeout = setTimeout(() => { socket.close(); reject(new Error("Timed out waiting for Agent event replay")); }, 5_000);
+  socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "agent_subscribe", chatId, runId, afterSeq: 0 })));
+  socket.addEventListener("message", (raw) => {
+    const event = JSON.parse(String(raw.data));
+    if (event.type !== "agent_event" || event.runId !== runId) return;
+    events.push(event);
+    if (["succeeded", "failed", "cancelled"].includes(event.phase)) { clearTimeout(timeout); socket.close(); resolve(events); }
+  });
+  socket.addEventListener("error", reject);
+});
+
 const readJsonBody = (request) =>
   new Promise((resolve, reject) => {
     let body = "";
@@ -270,10 +284,61 @@ const createFakeModelServer = (port) => {
     chatCompletionRequests += 1;
     lastChatCompletionBody = body;
     const joinedMessages = (body.messages ?? []).map((message) => message.content ?? "").join("\n\n");
+    if (body.tools && joinedMessages.includes("role-tool-smoke")) {
+      const toolMessages = (body.messages ?? []).filter((message) => message.role === "tool");
+      const message = toolMessages.length === 0
+        ? { role: "assistant", content: null, tool_calls: [{ id: "smoke_role_search", type: "function", function: { name: "search_history", arguments: JSON.stringify({ query: "role-tool-smoke", limit: 5 }) } }] }
+        : { role: "assistant", content: "Role tool found the current scene." };
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message }], usage: { prompt_tokens: 25, completion_tokens: 8, total_tokens: 33 } }));
+      return;
+    }
+    if (body.tools && joinedMessages.includes("agent-candidate-smoke")) {
+      const message = { role: "assistant", content: JSON.stringify({ answer: "Reviewable memory and Lore candidates.", candidates: [
+        { kind: "memory_candidate", title: "Harbor promise", content: "They promised to meet at the harbor after dusk.", keywords: ["harbor", "dusk"], sourceMessageIds: [], sourceMemoryIds: [] },
+        { kind: "lore_candidate", title: "Harbor bell", content: "The harbor bell rings at dusk.", keywords: ["harbor", "bell"], sourceMessageIds: [], sourceMemoryIds: [] }
+      ] }) };
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message }], usage: { prompt_tokens: 24, completion_tokens: 20, total_tokens: 44 } }));
+      return;
+    }
+    if (body.tools && joinedMessages.includes("User focus:\ncharacter-tool-smoke")) {
+      const toolMessages = (body.messages ?? []).filter((message) => message.role === "tool");
+      const character = toolMessages.length ? JSON.parse(toolMessages.at(-1).content).character : null;
+      const message = toolMessages.length === 0
+        ? { role: "assistant", content: null, tool_calls: [{ id: "smoke_character_read", type: "function", function: { name: "read_character", arguments: "{}" } }] }
+        : { role: "assistant", content: `Character prompt: ${character?.prompt ?? "locked"}; Lore: ${character?.loreEntries?.[0]?.id ?? "none"}.` };
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message }], usage: { prompt_tokens: 24, completion_tokens: 8, total_tokens: 32 } }));
+      return;
+    }
+    if (body.tools && joinedMessages.includes("Find the tool-smoke agreement")) {
+      const toolMessages = (body.messages ?? []).filter((message) => message.role === "tool");
+      const lastToolOutput = toolMessages.at(-1)?.content;
+      const searchedMessageId = toolMessages.length ? JSON.parse(lastToolOutput).messages?.[0]?.id : null;
+      const message = toolMessages.length === 0
+        ? { role: "assistant", content: null, tool_calls: [{ id: "smoke_search", type: "function", function: { name: "search_history", arguments: JSON.stringify({ query: "Nominal status", limit: 5 }) } }] }
+        : toolMessages.length === 1
+          ? { role: "assistant", content: null, tool_calls: [{ id: "smoke_read", type: "function", function: { name: "read_messages", arguments: JSON.stringify({ ids: [searchedMessageId] }) } }] }
+          : { role: "assistant", content: `The old status was nominal. [source:${searchedMessageId}]` };
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message }], usage: { prompt_tokens: 20 + toolMessages.length * 5, completion_tokens: 8, total_tokens: 28 + toolMessages.length * 5 } }));
+      return;
+    }
+    if (body.tools && joinedMessages.includes("memory-tool-smoke agreement")) {
+      const toolMessages = (body.messages ?? []).filter((message) => message.role === "tool");
+      const memoryId = toolMessages.length ? JSON.parse(toolMessages.at(-1).content).memories?.[0]?.id : null;
+      const message = toolMessages.length === 0
+        ? { role: "assistant", content: null, tool_calls: [{ id: "smoke_memory_search", type: "function", function: { name: "search_memories", arguments: JSON.stringify({ query: "harbor vow", limit: 5 }) } }] }
+        : { role: "assistant", content: `The harbor vow is recorded. [memory:${memoryId}]` };
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message }], usage: { prompt_tokens: 24, completion_tokens: 8, total_tokens: 32 } }));
+      return;
+    }
     const content = joinedMessages.includes("read-only drafting assistant for an original")
       ? JSON.stringify({ items: [{ field: "prompt", title: "Smoke core draft", suggestion: "A structured original smoke character draft." }] })
       : joinedMessages.includes("read-only context assistant")
-      ? "Agent draft: [DRAFT]Ask for the next diagnostic signal.[/DRAFT]"
+      ? JSON.stringify({ answer: "Agent draft:", candidates: [{ kind: "reply_draft", title: "Diagnostic signal", content: "Ask for the next diagnostic signal.", keywords: [], sourceMessageIds: [], sourceMemoryIds: [] }] })
       : joinedMessages.includes("Generate a concise title for this local-first")
         ? '"Smoke Title Suggestion"'
         : "Smoke model reply.";
@@ -514,6 +579,7 @@ const main = async () => {
               capabilities: [
                 "text_generation",
                 "vision_input",
+                "tool_calling",
                 "text_embedding",
                 "audio_transcription",
                 "text_to_speech",
@@ -570,6 +636,7 @@ const main = async () => {
     assert.equal("key" in updatedSettings.providers[0], false);
     assert.equal(updatedSettings.providers[0]?.hasKey, true);
     assert.equal(updatedSettings.providers[0]?.models[0]?.contextWindow, 32768);
+    assert.ok(updatedSettings.providers[0]?.models[0]?.capabilities?.includes("tool_calling"));
     assert.deepEqual(updatedSettings.moduleModelPreferences.agent, {
       providerId: "smoke-provider",
       modelId: "smoke-model"
@@ -1355,6 +1422,11 @@ const main = async () => {
     });
     assert.equal(excludedUserMessage.contextIncluded, false);
     assert.equal(excludedUserMessage.isBookmarked, true);
+    const agentHistorySearch = await requestData(
+      baseUrl,
+      `/api/chats/${createdChat.id}/agent/history-search?${new URLSearchParams({ q: userMessage.content, limit: "5" }).toString()}`
+    );
+    assert.equal(agentHistorySearch.results.some((result) => result.message.id === userMessage.id), false);
     const bookmarkPage = await requestData(baseUrl, `/api/messages/page?${new URLSearchParams({
       chatId: createdChat.id, limit: "1", includeTotal: "true", bookmarkedOnly: "true"
     }).toString()}`);
@@ -1463,6 +1535,17 @@ const main = async () => {
     assert.equal(skippedAutoTitle, null);
     assert.equal((await requestData(baseUrl, `/api/chats/${createdChat.id}`)).title, createdChat.title);
 
+    const roleToolChat = await requestData(baseUrl, "/api/chats", {
+      method: "POST", expectedStatus: 201, body: { title: "Role tool smoke", characterId: createdCharacter.id, autoMemoryEnabled: false }
+    });
+    const roleToolRequestId = `role-tool-${runId}`;
+    const roleToolEvents = await runSocketRequest(baseUrl, { type: "generate", requestId: roleToolRequestId,
+      chatId: roleToolChat.id, content: "role-tool-smoke", toolUse: { enabled: true, toolNames: ["search_history"] } });
+    assert.equal(roleToolEvents.some((event) => event.type === "generation_tool_event" && event.phase === "tool_complete"), true);
+    assert.match(roleToolEvents.find((event) => event.type === "assistant_message")?.message.content ?? "", /Role tool found/);
+    assert.equal((await querySocketRequestStatus(baseUrl, roleToolRequestId)).status, "succeeded");
+    await permanentlyDeleteChat(baseUrl, roleToolChat.id);
+
     const defaultTitleChat = await requestData(baseUrl, "/api/chats", {
       method: "POST",
       expectedStatus: 201,
@@ -1508,12 +1591,195 @@ const main = async () => {
     assert.equal(agentDraft.actions[0]?.content, "Ask for the next diagnostic signal.");
     assert.equal(Array.isArray(agentDraft.matchedLoreEntries), true);
     assert.equal(Array.isArray(agentDraft.matchedMemoryEntries), true);
+    const firstAgentTaskId = randomUUID();
+    const firstAgentSession = await requestData(baseUrl, `/api/chats/${createdChat.id}/agent/tasks`, {
+      method: "POST", body: { mutationId: firstAgentTaskId, mode: "reply_drafts", content: "How should I answer the smoke path?" }
+    });
+    assert.deepEqual(firstAgentSession.entries.map((entry) => entry.role), ["user", "assistant"]);
+    const firstAgentStatus = await requestData(baseUrl, `/api/chats/${createdChat.id}/agent/runs/${firstAgentTaskId}`);
+    assert.equal(firstAgentStatus.status, "succeeded");
+    assert.ok(firstAgentStatus.lastEventSeq > 0);
+    const callsAfterFirstTask = fakeModelServer.getChatCompletionRequests();
+    const duplicateAgentSession = await requestData(baseUrl, `/api/chats/${createdChat.id}/agent/tasks`, {
+      method: "POST", body: { mutationId: firstAgentTaskId, mode: "reply_drafts", content: "How should I answer the smoke path?" }
+    });
+    assert.equal(duplicateAgentSession.entries.length, 2);
+    assert.equal(fakeModelServer.getChatCompletionRequests(), callsAfterFirstTask);
+    assert.equal((await request(baseUrl, `/api/chats/${createdChat.id}/agent/tasks`, {
+      method: "POST", body: { mutationId: firstAgentTaskId, mode: "reply_drafts", content: "How should I answer the smoke path?", generation: { temperature: 0.2, maxTokens: 512 } }, expectedStatus: 409
+    })).ok, false);
+    const secondAgentSession = await requestData(baseUrl, `/api/chats/${createdChat.id}/agent/tasks`, {
+      method: "POST", body: { mutationId: randomUUID(), mode: "continuity_check", content: "And is that consistent?" }
+    });
+    assert.deepEqual(secondAgentSession.entries.map((entry) => entry.role), ["user", "assistant", "user", "assistant"]);
+    assert.equal((await requestData(baseUrl, `/api/chats/${createdChat.id}/agent/session`)).entries.length, 4);
+    const toolTaskId = randomUUID();
+    const callsBeforeToolTask = fakeModelServer.getChatCompletionRequests();
+    const toolAgentSession = await requestData(baseUrl, `/api/chats/${createdChat.id}/agent/tasks`, {
+      method: "POST", body: { mutationId: toolTaskId, mode: "continuity_check", content: "Find the tool-smoke agreement about status." }
+    });
+    assert.ok(fakeModelServer.getChatCompletionRequests() >= callsBeforeToolTask + 3);
+    assert.match(toolAgentSession.entries.at(-1)?.content ?? "", /old status was nominal/i);
+    assert.deepEqual(toolAgentSession.entries.at(-1)?.sourceMessageIds, [assistantMessage.id]);
+    assert.equal(toolAgentSession.activeRunId, null);
+    const toolEvents = await queryAgentRunEvents(baseUrl, createdChat.id, toolTaskId);
+    assert.ok(toolEvents.some((event) => event.phase === "tool_start" && event.toolName === "search_history"));
+    assert.deepEqual(toolEvents.map((event) => event.seq), Array.from({ length: toolEvents.length }, (_, index) => index + 1));
+    assert.equal(toolEvents.at(-1)?.phase, "succeeded");
+    const toolLedger = new DatabaseSync(tempDbPath, { readOnly: true });
+    try {
+      const requestId = `agent_${toolTaskId}`;
+      assert.equal(toolLedger.prepare('SELECT status FROM "ModelRequest" WHERE id = ?').get(requestId)?.status, "succeeded");
+      const attempts = toolLedger.prepare('SELECT attemptNumber, module, status, reservedCostMicros FROM "ModelUsageAttempt" WHERE requestId = ? ORDER BY attemptNumber').all(requestId);
+      assert.deepEqual(attempts.map((attempt) => attempt.attemptNumber), [1, 2, 3, 4, 5]);
+      assert.deepEqual(attempts.map((attempt) => attempt.module), ["memory_embedding", "memory", "agent", "agent", "agent"]);
+      assert.ok(attempts.every((attempt) => attempt.status === "succeeded" && attempt.reservedCostMicros === 0));
+    } finally {
+      toolLedger.close();
+    }
+    const memoryToolChat = await requestData(baseUrl, "/api/chats", {
+      method: "POST", expectedStatus: 201, body: { title: "Agent memory tool smoke", characterId: createdCharacter.id }
+    });
+    const memoryToolMemory = await requestData(baseUrl, `/api/chats/${memoryToolChat.id}/memories`, {
+      method: "POST", expectedStatus: 201,
+      body: { title: "Harbor vow", content: "They agreed to meet at the harbor.", keywords: ["harbor", "vow"], enabled: true }
+    });
+    assert.equal((await requestData(baseUrl, `/api/chats/${memoryToolChat.id}/memories/${memoryToolMemory.id}`)).id, memoryToolMemory.id);
+    assert.equal((await request(baseUrl, `/api/chats/${memoryToolChat.id}/memories/${createdMemory.id}`, { expectedStatus: 404 })).ok, false);
+    const memoryToolTaskId = randomUUID();
+    const memoryToolSession = await requestData(baseUrl, `/api/chats/${memoryToolChat.id}/agent/tasks`, {
+      method: "POST", body: { mutationId: memoryToolTaskId, mode: "continuity_check", content: "Find the memory-tool-smoke agreement." }
+    });
+    assert.deepEqual(memoryToolSession.entries.at(-1)?.sourceMemoryIds, [memoryToolMemory.id]);
+    assert.match(memoryToolSession.entries.at(-1)?.content ?? "", /harbor vow/i);
+    const characterToolChat = await requestData(baseUrl, "/api/chats", {
+      method: "POST", expectedStatus: 201, body: { title: "Character tool smoke", characterId: createdCharacter.id }
+    });
+    const characterToolSession = await requestData(baseUrl, `/api/chats/${characterToolChat.id}/agent/tasks`, {
+      method: "POST", body: { mutationId: randomUUID(), mode: "character_consistency", content: "character-tool-smoke", generation: { temperature: 0.15, maxTokens: 512 } }
+    });
+    assert.match(characterToolSession.entries.at(-1)?.content ?? "", /You are a smoke-test sentinel/);
+    assert.match(characterToolSession.entries.at(-1)?.content ?? "", /smoke-lore-1/);
+    assert.equal(fakeModelServer.getLastChatCompletionBody().temperature, 0.15);
+    assert.equal(fakeModelServer.getLastChatCompletionBody().max_tokens, 512);
+    await permanentlyDeleteChat(baseUrl, characterToolChat.id);
+    const memoryToolLedger = new DatabaseSync(tempDbPath, { readOnly: true });
+    try {
+      const rows = memoryToolLedger.prepare('SELECT attemptNumber, module, status FROM "ModelUsageAttempt" WHERE requestId = ? ORDER BY attemptNumber').all(`agent_${memoryToolTaskId}`);
+      assert.deepEqual(rows.map((row) => row.attemptNumber), [1, 2, 3, 4]);
+      assert.deepEqual(rows.map((row) => row.module), ["agent", "memory_embedding", "memory", "agent"]);
+      assert.ok(rows.every((row) => row.status === "succeeded"));
+    } finally { memoryToolLedger.close(); }
+    const candidateSession = await requestData(baseUrl, `/api/chats/${memoryToolChat.id}/agent/tasks`, {
+      method: "POST", body: { mutationId: randomUUID(), mode: "memory_lore_candidates", content: "agent-candidate-smoke" }
+    });
+    const candidate = candidateSession.entries.at(-1)?.actions[0];
+    assert.equal(candidate?.kind, "memory_candidate");
+    const editedMemoryCandidate = { title: "Harbor promise revised", content: candidate.content, keywords: candidate.keywords };
+    const memoryPreview = await requestData(baseUrl, `/api/chats/${memoryToolChat.id}/agent/actions/${candidate.id}/preview`, {
+      method: "POST", body: { candidate: editedMemoryCandidate }
+    });
+    assert.equal(memoryPreview.original.title, "Harbor promise");
+    assert.equal(memoryPreview.proposed.title, "Harbor promise revised");
+    assert.equal(memoryPreview.affectedChatCount, 1);
+    const firstConfirmation = await requestData(baseUrl, `/api/chats/${memoryToolChat.id}/agent/actions/${candidate.id}/confirm-memory`, {
+      method: "POST", body: { confirm: "APPLY_AGENT_MEMORY", candidate: editedMemoryCandidate }
+    });
+    const repeatedConfirmation = await requestData(baseUrl, `/api/chats/${memoryToolChat.id}/agent/actions/${candidate.id}/confirm-memory`, {
+      method: "POST", body: { confirm: "APPLY_AGENT_MEMORY", candidate: editedMemoryCandidate }
+    });
+    assert.equal(firstConfirmation.memory.id, repeatedConfirmation.memory.id);
+    assert.equal(firstConfirmation.memory.title, "Harbor promise revised");
+    assert.equal((await request(baseUrl, `/api/chats/${memoryToolChat.id}/agent/actions/${candidate.id}/confirm-memory`, {
+      method: "POST", body: { confirm: "APPLY_AGENT_MEMORY", candidate: { ...editedMemoryCandidate, title: "Different retry" } }, expectedStatus: 409
+    })).ok, false);
+    assert.equal(firstConfirmation.session.entries.at(-1)?.actions[0]?.appliedTargetId, firstConfirmation.memory.id);
+    assert.equal((await requestData(baseUrl, `/api/chats/${memoryToolChat.id}/memories/${firstConfirmation.memory.id}/revisions`)).length, 1);
+    const loreCandidate = candidateSession.entries.at(-1)?.actions[1];
+    assert.equal(loreCandidate?.kind, "lore_candidate");
+    const editedLoreCandidate = { title: loreCandidate.title, content: "The harbor bell rings twice at dusk.", keywords: loreCandidate.keywords };
+    const lorePreview = await requestData(baseUrl, `/api/chats/${memoryToolChat.id}/agent/actions/${loreCandidate.id}/preview`, {
+      method: "POST", body: { candidate: editedLoreCandidate }
+    });
+    assert.equal(lorePreview.proposed.content, editedLoreCandidate.content);
+    assert.equal(lorePreview.targetName, (await requestData(baseUrl, `/api/characters/${createdCharacter.id}`)).name);
+    assert.equal(lorePreview.privateCharacter, false);
+    assert.equal(typeof lorePreview.targetVersion, "string");
+    const firstLoreConfirmation = await requestData(baseUrl, `/api/chats/${memoryToolChat.id}/agent/actions/${loreCandidate.id}/confirm-lore`, {
+      method: "POST", body: { confirm: "APPLY_AGENT_LORE", candidate: editedLoreCandidate }
+    });
+    const repeatedLoreConfirmation = await requestData(baseUrl, `/api/chats/${memoryToolChat.id}/agent/actions/${loreCandidate.id}/confirm-lore`, {
+      method: "POST", body: { confirm: "APPLY_AGENT_LORE", candidate: editedLoreCandidate }
+    });
+    assert.equal(repeatedLoreConfirmation.alreadyApplied, true);
+    assert.equal((await request(baseUrl, `/api/chats/${memoryToolChat.id}/agent/actions/${loreCandidate.id}/confirm-lore`, {
+      method: "POST", body: { confirm: "APPLY_AGENT_LORE", candidate: { ...editedLoreCandidate, content: "Different retry" } }, expectedStatus: 409
+    })).ok, false);
+    assert.equal(firstLoreConfirmation.characterId, createdCharacter.id);
+    const savedLore = (await requestData(baseUrl, `/api/characters/${createdCharacter.id}`)).loreEntries.filter((entry) => entry.id === loreCandidate.id);
+    assert.equal(savedLore.length, 1);
+    assert.equal(savedLore[0]?.content, editedLoreCandidate.content);
+    const staleLoreSession = await requestData(baseUrl, `/api/chats/${memoryToolChat.id}/agent/tasks`, {
+      method: "POST", body: { mutationId: randomUUID(), mode: "memory_lore_candidates", content: "agent-candidate-smoke stale version" }
+    });
+    const staleLoreAction = staleLoreSession.entries.at(-1)?.actions.find((action) => action.kind === "lore_candidate");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await requestData(baseUrl, `/api/characters/${createdCharacter.id}`, { method: "PUT", body: { description: "Changed after Agent proposal" } });
+    assert.equal((await request(baseUrl, `/api/chats/${memoryToolChat.id}/agent/actions/${staleLoreAction.id}/confirm-lore`, {
+      method: "POST", body: { confirm: "APPLY_AGENT_LORE", candidate: { title: staleLoreAction.title, content: staleLoreAction.content, keywords: staleLoreAction.keywords } }, expectedStatus: 409
+    })).ok, false);
+    await permanentlyDeleteChat(baseUrl, memoryToolChat.id);
     const chatAfterAgentDraft = await requestData(baseUrl, `/api/chats/${createdChat.id}`);
     assert.equal(chatAfterAgentDraft.messages.length, 3);
     assert.equal(chatAfterAgentDraft.memories.length, 1);
 
+    const skillMarkdown = "---\nname: smoke-scene-skill\ndescription: Track a scene in the current chat.\n---\nUse visible messages only.";
+    const skillInput = { format: "markdown", markdown: skillMarkdown };
+    const builtinSkills = await requestData(baseUrl, "/api/skills");
+    assert.equal(builtinSkills.filter((skill) => skill.source === "builtin").length, 4);
+    const skillPreview = await requestData(baseUrl, "/api/skills/import-preview", { method: "POST", body: skillInput });
+    assert.equal(skillPreview.name, "smoke-scene-skill");
+    assert.equal(skillPreview.existingVersion, null);
+    const importedSkill = await requestData(baseUrl, "/api/skills/import", { method: "POST", body: skillInput });
+    assert.equal(importedSkill.agentEnabled, false);
+    assert.equal((await requestData(baseUrl, "/api/skills/smoke-scene-skill")).skillMd, skillMarkdown);
+    const enabledSkill = await requestData(baseUrl, "/api/skills/smoke-scene-skill/enabled", {
+      method: "PUT", body: { expectedVersion: importedSkill.version, agentEnabled: true, chatId: createdChat.id, chatEnabled: true }
+    });
+    assert.equal(enabledSkill.agentEnabled, true);
+    assert.deepEqual(enabledSkill.enabledChatIds, [createdChat.id]);
+    assert.equal((await request(baseUrl, "/api/skills/smoke-scene-skill/enabled", {
+      method: "PUT", body: { expectedVersion: importedSkill.version, agentEnabled: false }, expectedStatus: 409
+    })).ok, false);
+    assert.equal((await requestData(baseUrl, "/api/skills/import-preview", { method: "POST", body: skillInput })).existingVersion, enabledSkill.version);
+    assert.equal((await request(baseUrl, "/api/mcp", {
+      method: "POST", body: { name: "Unsafe MCP", endpointUrl: "http://example.com/mcp", allowPrivateNetwork: false }, expectedStatus: 400
+    })).ok, false);
+    const mcpConnection = await requestData(baseUrl, "/api/mcp", {
+      method: "POST", expectedStatus: 201,
+      body: { name: "Smoke MCP", endpointUrl: "https://example.com/mcp", allowPrivateNetwork: false, bearerToken: "mcp-smoke-secret" }
+    });
+    assert.equal(mcpConnection.hasBearerToken, true);
+    assert.equal(JSON.stringify(mcpConnection).includes("mcp-smoke-secret"), false);
+    assert.equal((await requestData(baseUrl, "/api/mcp")).some((item) => item.id === mcpConnection.id), true);
+    const updatedMcp = await requestData(baseUrl, `/api/mcp/${mcpConnection.id}`, {
+      method: "PUT", body: { expectedVersion: mcpConnection.version, enabled: true }
+    });
+    assert.equal(updatedMcp.enabled, true);
+    assert.equal((await request(baseUrl, `/api/mcp/${mcpConnection.id}`, {
+      method: "PUT", body: { expectedVersion: mcpConnection.version, enabled: false }, expectedStatus: 409
+    })).ok, false);
+    assert.deepEqual(await requestData(baseUrl, `/api/mcp/${mcpConnection.id}`, {
+      method: "DELETE", body: { expectedVersion: updatedMcp.version, confirm: "DELETE_MCP_CONNECTION" }
+    }), { deleted: true });
+
     const chatArchive = await requestData(baseUrl, `/api/chats/${createdChat.id}/archive`);
     assert.equal(chatArchive.archiveVersion, 1);
+    assert.equal(Object.hasOwn(chatArchive, "agentSession"), false);
+    assert.equal(Object.hasOwn(chatArchive, "skills"), false);
+    assert.deepEqual(await requestData(baseUrl, `/api/chats/${createdChat.id}/agent/session`), toolAgentSession);
+    assert.deepEqual(await requestData(baseUrl, `/api/chats/${createdChat.id}/agent/session`, { method: "DELETE" }), { cleared: true });
+    assert.deepEqual((await requestData(baseUrl, `/api/chats/${createdChat.id}/agent/session`)).entries, []);
     assert.equal(chatArchive.messages.length, 3);
     assert.equal(chatArchive.media.assets.length, 1);
     assert.equal(chatArchive.media.attachments.length, 1);
@@ -1525,6 +1791,7 @@ const main = async () => {
     assert.ok(Array.isArray(chatArchive.profileSummaryRevisions));
     assert.equal(chatArchive.chat.isArchived, true);
     assert.equal(chatArchive.chat.userAvatar, "data:image/png;base64,YQ==");
+    assert.deepEqual(await requestData(baseUrl, "/api/skills/smoke-scene-skill", { method: "DELETE", body: { expectedVersion: enabledSkill.version, confirm: "DELETE_SKILL" } }), { deleted: true });
     const importedArchive = await requestData(baseUrl, "/api/chats/import-archive", {
       method: "POST",
       expectedStatus: 201,

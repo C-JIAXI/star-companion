@@ -1,0 +1,1 @@
+ALTER TABLE "AgentEntry" ADD COLUMN "generation" JSONB NOT NULL DEFAULT '{}';
