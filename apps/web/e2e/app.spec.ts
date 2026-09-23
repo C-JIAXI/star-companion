@@ -6249,6 +6249,25 @@ test("long chats paginate and keep messages inside the scrollable viewport", asy
     await expect.poll(() => viewport.evaluate((element) =>
       element.scrollHeight - element.clientHeight - element.scrollTop
     )).toBeLessThanOrEqual(1);
+    const initialViewport = page.viewportSize()!;
+    await page.setViewportSize({ width: initialViewport.width, height: initialViewport.height - 160 });
+    await expect.poll(() => viewport.evaluate((element) =>
+      element.scrollHeight - element.clientHeight - element.scrollTop
+    )).toBeLessThanOrEqual(1);
+    const readingAnchor = await viewport.evaluate(async (element) => {
+      element.style.scrollBehavior = "auto";
+      element.scrollTop = element.scrollHeight / 2;
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      const message = [...element.querySelectorAll<HTMLElement>("[data-message-id]")]
+        .find((item) => item.getBoundingClientRect().bottom > element.getBoundingClientRect().top + 1)!;
+      return { id: message.dataset.messageId!, offset: message.getBoundingClientRect().top - element.getBoundingClientRect().top };
+    });
+    await page.setViewportSize({ width: initialViewport.width, height: initialViewport.height - 240 });
+    await expect.poll(() => viewport.evaluate((element, anchor) => {
+      const message = [...element.querySelectorAll<HTMLElement>("[data-message-id]")]
+        .find((item) => item.dataset.messageId === anchor.id)!;
+      return Math.abs(message.getBoundingClientRect().top - element.getBoundingClientRect().top - anchor.offset);
+    }, readingAnchor)).toBeLessThan(3);
 
     await page.getByTestId("chat-page-prev").click();
 

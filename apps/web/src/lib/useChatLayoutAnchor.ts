@@ -12,19 +12,30 @@ export function useChatLayoutAnchor(
     const viewport = viewportRef.current;
     if (!viewport) return;
     let anchor: Anchor | null = null;
+    let pinnedToBottom = false;
     let restoring = false;
     let frame = 0;
-    const geometry = () => `${viewport.clientWidth}:${viewport.clientHeight}:${getComputedStyle(document.documentElement).fontSize}:${getComputedStyle(viewport).lineHeight}`;
+    const geometry = () => `${viewport.clientWidth}:${viewport.clientHeight}:${viewport.scrollHeight}:${getComputedStyle(document.documentElement).fontSize}:${getComputedStyle(viewport).lineHeight}`;
     let previousGeometry = geometry();
     const messages = () => Array.from(viewport.querySelectorAll<HTMLElement>("[data-message-id]"));
     const capture = () => {
+      pinnedToBottom = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= 2;
       const top = viewport.getBoundingClientRect().top;
       const message = messages().find((element) => element.getBoundingClientRect().bottom > top + 1);
       anchor = message ? { id: message.dataset.messageId!, offset: message.getBoundingClientRect().top - top } : null;
       previousGeometry = geometry();
     };
     const restore = () => {
-      if (paginationAnchor.current || !anchor) { capture(); return; }
+      if (paginationAnchor.current) { capture(); return; }
+      if (pinnedToBottom) {
+        const behavior = viewport.style.scrollBehavior;
+        viewport.style.scrollBehavior = "auto";
+        viewport.scrollTop = viewport.scrollHeight;
+        viewport.style.scrollBehavior = behavior;
+        capture();
+        return;
+      }
+      if (!anchor) { capture(); return; }
       const message = messages().find((element) => element.dataset.messageId === anchor!.id);
       if (!message) { capture(); return; }
       restoring = true;
@@ -45,6 +56,8 @@ export function useChatLayoutAnchor(
     };
     const observer = new ResizeObserver(onResize);
     observer.observe(viewport);
+    const messageList = viewport.querySelector("#chat-message-list");
+    if (messageList) observer.observe(messageList);
     const appearanceObserver = new MutationObserver(() => {
       // Attribute changes can alter line spacing without changing viewport bounds.
       restore();
