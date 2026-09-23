@@ -32,6 +32,8 @@ test("quick commands expand to show choices and collapse again", async ({ page, 
     expect(lastBox.y + lastBox.height).toBeLessThanOrEqual(expandedBox.y + expandedBox.height + 1);
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(list.locator("..")).toHaveAttribute("aria-hidden", "true");
+    expect(await list.evaluate((element) => getComputedStyle(element).animationName)).toBe("quick-replies-exit");
     await expect(list).toHaveCount(0);
     await expect(page.locator("[data-chat-quick-reply]")).toHaveCount(0);
     await page.setViewportSize({ width: 320, height: 568 });
@@ -41,6 +43,8 @@ test("quick commands expand to show choices and collapse again", async ({ page, 
     await lastChoice.scrollIntoViewIfNeeded();
     await lastChoice.click();
     await expect(page.locator("#chat-message-input")).toHaveValue("Choice 12");
+    await toggle.click();
+    await expect(list).toHaveCount(0);
   } finally {
     await request.delete(`/api/chats/${chat.id}`);
     await request.delete(`/api/chats/${chat.id}/permanent`);

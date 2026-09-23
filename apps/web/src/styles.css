@@ -125,8 +125,15 @@ select option { background: var(--surface); color: var(--foreground); }
   from { opacity: 0; transform: translateX(-16px); }
   to { opacity: 1; transform: translateX(0); }
 }
+@keyframes quick-replies-exit {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(-16px); }
+}
 .quick-replies-enter {
   animation: quick-replies-enter .24s cubic-bezier(.2,.8,.2,1) both;
+}
+.quick-replies-exit {
+  animation: quick-replies-exit .24s cubic-bezier(.2,.8,.2,1) both;
 }
 
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {

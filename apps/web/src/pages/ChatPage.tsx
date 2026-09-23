@@ -470,14 +470,21 @@ export function ChatPage({
       return false;
     }
   });
+  const [quickRepliesMounted, setQuickRepliesMounted] = useState(quickRepliesOpen);
   const toggleQuickReplies = useCallback(() => {
-    setQuickRepliesOpen((prev) => {
-      try {
-        localStorage.setItem("chat.quickRepliesOpen", String(!prev));
-      } catch {}
-      return !prev;
-    });
-  }, []);
+    const next = !quickRepliesOpen;
+    if (next) setQuickRepliesMounted(true);
+    else if (document.documentElement.dataset.motion === "reduced") setQuickRepliesMounted(false);
+    setQuickRepliesOpen(next);
+    try {
+      localStorage.setItem("chat.quickRepliesOpen", String(next));
+    } catch {}
+  }, [quickRepliesOpen]);
+  useEffect(() => {
+    if (quickRepliesOpen || !quickRepliesMounted) return;
+    const timeout = window.setTimeout(() => setQuickRepliesMounted(false), 300);
+    return () => window.clearTimeout(timeout);
+  }, [quickRepliesOpen, quickRepliesMounted]);
   const [editingPersonaDraft, setEditingPersonaDraft] = useState<UserCustomConfigDTO>(() =>
     emptyUserCustomConfig()
   );
@@ -1761,13 +1768,20 @@ export function ChatPage({
     };
   }, [activeChat?.id, activeChat?.messages]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const viewport = messageViewportRef.current;
-    if (!viewport) {
-      return;
-    }
-    if (!hasNewerMessages) viewport.scrollTop = viewport.scrollHeight;
-  }, [activeChat?.id]);
+    if (!viewport || !activeChat || activeChat.id !== selectedChatId || hasNewerMessages) return;
+
+    const jumpToLatest = () => {
+      const previousScrollBehavior = viewport.style.scrollBehavior;
+      viewport.style.scrollBehavior = "auto";
+      viewport.scrollTop = viewport.scrollHeight;
+      viewport.style.scrollBehavior = previousScrollBehavior;
+    };
+    jumpToLatest();
+    const frame = window.requestAnimationFrame(jumpToLatest);
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeChat?.id, selectedChatId]);
 
   useEffect(() => {
     const viewport = messageViewportRef.current;
@@ -4551,13 +4565,16 @@ export function ChatPage({
                             />
                             {t("chat.quickReplies")}
                           </button>
-                          {quickRepliesOpen ? <div className="min-w-0 flex-1 overflow-x-auto">
+                          {quickRepliesMounted ? <div className="min-w-0 flex-1 overflow-x-auto" inert={!quickRepliesOpen} aria-hidden={!quickRepliesOpen}>
                             <div
                               data-testid="chat-quick-replies-list"
-                              className="quick-replies-enter flex max-h-[min(32dvh,16rem)] flex-wrap gap-1 overflow-y-auto overscroll-contain"
-                              tabIndex={0}
+                              className={`${quickRepliesOpen ? "quick-replies-enter" : "quick-replies-exit"} flex max-h-[min(32dvh,16rem)] flex-wrap gap-1 overflow-y-auto overscroll-contain`}
+                              tabIndex={quickRepliesOpen ? 0 : -1}
                               role="region"
                               aria-label={t("chat.quickReplies")}
+                              onAnimationEnd={(event) => {
+                                if (!quickRepliesOpen && event.animationName === "quick-replies-exit") setQuickRepliesMounted(false);
+                              }}
                             >
                               {activeQuickReplies.map((qr) => (
                                 <button

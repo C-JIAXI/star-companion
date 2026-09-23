@@ -6246,6 +6246,9 @@ test("long chats paginate and keep messages inside the scrollable viewport", asy
       scrollHeight: element.scrollHeight
     }));
     expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+    await expect.poll(() => viewport.evaluate((element) =>
+      element.scrollHeight - element.clientHeight - element.scrollTop
+    )).toBeLessThanOrEqual(1);
 
     await page.getByTestId("chat-page-prev").click();
 
