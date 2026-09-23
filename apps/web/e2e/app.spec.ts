@@ -6234,12 +6234,32 @@ test("long chats paginate and keep messages inside the scrollable viewport", asy
     }
 
     await page.goto("/");
+    await page.evaluate(() => {
+      const original = Element.prototype.scrollTo;
+      (window as typeof window & { __chatEntryScrolls: { behavior: ScrollBehavior | undefined; lastMessageReady: boolean; startedAboveBottom: boolean }[] }).__chatEntryScrolls = [];
+      Element.prototype.scrollTo = function (...args: Parameters<typeof original>) {
+        if (this.id === "chat-message-viewport" && typeof args[0] === "object") {
+          (window as typeof window & { __chatEntryScrolls: { behavior: ScrollBehavior | undefined; lastMessageReady: boolean; startedAboveBottom: boolean }[] }).__chatEntryScrolls.push({
+            behavior: args[0].behavior,
+            lastMessageReady: Boolean(this.textContent?.includes("Paging message 89")),
+            startedAboveBottom: this.scrollHeight - this.clientHeight - this.scrollTop > 2
+          });
+        }
+        return original.apply(this, args);
+      };
+    });
     await openChatHistoryAndSelect(page, chatTitle);
 
     const viewport = page.getByTestId("chat-message-viewport");
     await expect(viewport).toBeVisible();
     await expect(page.getByTestId("chat-message-pagination")).toBeVisible();
     await expect(viewport.getByText("Paging message 89")).toBeVisible();
+    await expect.poll(() => page.evaluate(() =>
+      (window as typeof window & { __chatEntryScrolls: unknown[] }).__chatEntryScrolls.length
+    )).toBeGreaterThan(0);
+    expect(await page.evaluate(() =>
+      (window as typeof window & { __chatEntryScrolls: { behavior: ScrollBehavior | undefined; lastMessageReady: boolean }[] }).__chatEntryScrolls[0]
+    )).toMatchObject({ behavior: "smooth", lastMessageReady: true, startedAboveBottom: true });
     await expect(viewport.getByText("Paging message 0")).toHaveCount(0);
     const metrics = await viewport.evaluate((element) => ({
       clientHeight: element.clientHeight,
@@ -6268,11 +6288,10 @@ test("long chats paginate and keep messages inside the scrollable viewport", asy
         .find((item) => item.dataset.messageId === anchor.id)!;
       return Math.abs(message.getBoundingClientRect().top - element.getBoundingClientRect().top - anchor.offset);
     }, readingAnchor)).toBeLessThan(3);
-
-    await page.getByTestId("chat-page-prev").click();
-
-    await expect(viewport.getByText("Paging message 30")).toBeVisible();
-    await expect(viewport.getByText("Paging message 89")).toHaveCount(1);
+    await page.locator("#chat-scroll-bottom").click();
+    await expect.poll(() => viewport.evaluate((element) =>
+      element.scrollHeight - element.clientHeight - element.scrollTop
+    )).toBeLessThanOrEqual(1);
 
     await page.getByTestId("chat-search-trigger").click();
     const searchDialog = page.getByRole("dialog");
@@ -6282,6 +6301,13 @@ test("long chats paginate and keep messages inside the scrollable viewport", asy
     await page.getByTestId("chat-search-result").click();
     await expect(viewport.getByText("Paging message 5 unique target needle", { exact: true })).toBeVisible();
     expect(await viewport.locator("[data-message-id]").count()).toBeLessThanOrEqual(250);
+    await page.getByTestId("chat-page-next").click();
+    await expect.poll(() => viewport.evaluate((element) =>
+      element.scrollHeight - element.clientHeight - element.scrollTop
+    )).toBeLessThanOrEqual(1);
+    await page.getByTestId("chat-page-prev").click();
+    await expect(viewport.getByText("Paging message 30")).toBeVisible();
+    await expect(viewport.getByText("Paging message 89")).toHaveCount(1);
   } finally {
     await permanentlyDeleteChatViaApi(request, chat.id);
     await request.delete(`/api/characters/${character.id}`);

@@ -6,7 +6,8 @@ type Anchor = { id: string; offset: number };
 export function useChatLayoutAnchor(
   viewportRef: RefObject<HTMLDivElement | null>,
   chatId: string | undefined,
-  paginationAnchor: RefObject<Anchor | null>
+  paginationAnchor: RefObject<Anchor | null>,
+  autoScrollToBottom: RefObject<boolean>
 ) {
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -26,6 +27,11 @@ export function useChatLayoutAnchor(
       previousGeometry = geometry();
     };
     const restore = () => {
+      if (autoScrollToBottom.current) {
+        viewport.scrollTo({ top: viewport.scrollHeight, behavior: document.documentElement.dataset.motion === "reduced" ? "auto" : "smooth" });
+        previousGeometry = geometry();
+        return;
+      }
       if (paginationAnchor.current) { capture(); return; }
       if (pinnedToBottom) {
         const behavior = viewport.style.scrollBehavior;
@@ -48,11 +54,18 @@ export function useChatLayoutAnchor(
     };
     const onScroll = () => {
       if (restoring) return;
+      if (autoScrollToBottom.current) {
+        if (viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= 2) {
+          autoScrollToBottom.current = false;
+          capture();
+        }
+        return;
+      }
       if (geometry() !== previousGeometry) restore();
       else capture();
     };
     const onResize = () => {
-      if (geometry() !== previousGeometry) restore();
+      if (geometry() !== previousGeometry || autoScrollToBottom.current) restore();
     };
     const observer = new ResizeObserver(onResize);
     observer.observe(viewport);
@@ -64,10 +77,15 @@ export function useChatLayoutAnchor(
     });
     appearanceObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-font-size", "data-line-height", "data-chat-width", "data-message-spacing"] });
     viewport.addEventListener("scroll", onScroll, { passive: true });
+    const cancelAutoScroll = () => { autoScrollToBottom.current = false; capture(); };
+    viewport.addEventListener("wheel", cancelAutoScroll, { passive: true });
+    viewport.addEventListener("touchstart", cancelAutoScroll, { passive: true });
     frame = requestAnimationFrame(capture);
     return () => {
       cancelAnimationFrame(frame); observer.disconnect(); appearanceObserver.disconnect();
       viewport.removeEventListener("scroll", onScroll);
+      viewport.removeEventListener("wheel", cancelAutoScroll);
+      viewport.removeEventListener("touchstart", cancelAutoScroll);
     };
-  }, [chatId, paginationAnchor, viewportRef]);
+  }, [autoScrollToBottom, chatId, paginationAnchor, viewportRef]);
 }

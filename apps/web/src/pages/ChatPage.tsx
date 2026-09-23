@@ -529,7 +529,9 @@ export function ChatPage({
   const draftTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
   const pendingTimelineAnchorRef = useRef<{ id: string; offset: number } | null>(null);
-  useChatLayoutAnchor(messageViewportRef, activeChat?.id, pendingTimelineAnchorRef);
+  const pendingLatestPageScrollRef = useRef<{ chatId: string; lastMessageId: string; messageCount: number } | null>(null);
+  const latestPageScrollInProgressRef = useRef(false);
+  useChatLayoutAnchor(messageViewportRef, activeChat?.id, pendingTimelineAnchorRef, latestPageScrollInProgressRef);
   const loadChatAbortRef = useRef<AbortController | null>(null);
   const backgroundFileInputRef = useRef<HTMLInputElement | null>(null);
   const hasMessagesRef = useRef(false);
@@ -1358,6 +1360,8 @@ export function ChatPage({
   const scrollToBottom = useCallback(() => {
     const viewport = messageViewportRef.current;
     if (viewport) {
+      if (viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= 2) return;
+      latestPageScrollInProgressRef.current = true;
       viewport.scrollTo({ top: viewport.scrollHeight, behavior: preferredScrollBehavior() });
     }
   }, []);
@@ -1579,6 +1583,8 @@ export function ChatPage({
 
   const loadChat = async (id: string | null) => {
     loadChatAbortRef.current?.abort();
+    pendingLatestPageScrollRef.current = null;
+    latestPageScrollInProgressRef.current = false;
     const loadController = new AbortController();
     loadChatAbortRef.current = loadController;
     const previousQueueChatId = queuedChatIdRef.current;
@@ -1648,6 +1654,13 @@ export function ChatPage({
       olderCursor = messageWindow.nextCursor;
       olderAvailable = messageWindow.hasMore;
       newerAvailable = false;
+    }
+    if (!newerAvailable && messageWindow.items.length > 0 && (!pendingMessageJump || !("messageId" in messageWindow))) {
+      pendingLatestPageScrollRef.current = {
+        chatId: id,
+        lastMessageId: messageWindow.items[messageWindow.items.length - 1].id,
+        messageCount: messageWindow.items.length
+      };
     }
     setActiveChat({ ...chat, messages: messageWindow.items, memories });
     setAgentDraft(null);
@@ -1768,20 +1781,26 @@ export function ChatPage({
     };
   }, [activeChat?.id, activeChat?.messages]);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     const viewport = messageViewportRef.current;
-    if (!viewport || !activeChat || activeChat.id !== selectedChatId || hasNewerMessages) return;
+    const pending = pendingLatestPageScrollRef.current;
+    if (!viewport || !pending || activeChat?.id !== pending.chatId || selectedChatId !== pending.chatId || hasNewerMessages || messageWindowLoading) return;
+    const renderedMessages = viewport.querySelectorAll("[data-message-id]");
+    if (renderedMessages.length !== pending.messageCount || renderedMessages[renderedMessages.length - 1]?.getAttribute("data-message-id") !== pending.lastMessageId) return;
 
-    const jumpToLatest = () => {
-      const previousScrollBehavior = viewport.style.scrollBehavior;
-      viewport.style.scrollBehavior = "auto";
-      viewport.scrollTop = viewport.scrollHeight;
-      viewport.style.scrollBehavior = previousScrollBehavior;
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        if (pendingLatestPageScrollRef.current !== pending) return;
+        pendingLatestPageScrollRef.current = null;
+        scrollToBottom();
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
     };
-    jumpToLatest();
-    const frame = window.requestAnimationFrame(jumpToLatest);
-    return () => window.cancelAnimationFrame(frame);
-  }, [activeChat?.id, selectedChatId]);
+  }, [activeChat?.id, activeChat?.messages, selectedChatId, hasNewerMessages, messageWindowLoading, scrollToBottom]);
 
   useEffect(() => {
     const viewport = messageViewportRef.current;
@@ -1883,6 +1902,7 @@ export function ChatPage({
 
   const loadOlderMessages = async () => {
     if (!activeChat || !hasOlderMessages || !messageCursor || messageWindowLoading) return;
+    latestPageScrollInProgressRef.current = false;
     const chatId = activeChat.id;
     const viewport = messageViewportRef.current;
     const viewportTop = viewport?.getBoundingClientRect().top ?? 0;
@@ -1930,6 +1950,13 @@ export function ChatPage({
         timelineApi.page(chatId, { limit: MESSAGE_PAGE_SIZE, includeTotal: false })
       ]);
       if (draftChatIdRef.current !== chatId) return;
+      if (page.items.length > 0) {
+        pendingLatestPageScrollRef.current = {
+          chatId,
+          lastMessageId: page.items[page.items.length - 1].id,
+          messageCount: page.items.length
+        };
+      }
       setActiveChat((current) => current && current.id === chatId
         ? { ...current, ...summary, messages: page.items }
         : current);
@@ -1937,7 +1964,6 @@ export function ChatPage({
       setMessageCursor(page.nextCursor);
       setHasOlderMessages(page.hasMore);
       setHasNewerMessages(false);
-      window.requestAnimationFrame(scrollToBottom);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("chat.failedLoadChat"));
     } finally {
@@ -2492,6 +2518,7 @@ export function ChatPage({
 
   const jumpToMessage = async (messageId: string) => {
     if (!activeChat) return;
+    latestPageScrollInProgressRef.current = false;
     const chatId = activeChat.id;
     const existingIndex = activeChat.messages.findIndex((message) => message.id === messageId);
     if (existingIndex < 0) {
