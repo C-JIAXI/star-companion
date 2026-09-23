@@ -325,6 +325,7 @@ const applyBackup = async (
         htmlCss: character.htmlCss ?? "",
         openingHtml: character.openingHtml ?? "",
         loreEntries: character.loreEntries ?? [],
+        regexScripts: character.regexScripts ?? [],
         quickReplies: character.quickReplies ?? [],
         isFavorite: character.isFavorite,
         ...importedDates(character)
@@ -505,6 +506,7 @@ const applyBackup = async (
       htmlCss: character.htmlCss ?? "",
       openingHtml: character.openingHtml ?? "",
       loreEntries: character.loreEntries ?? [],
+      regexScripts: character.regexScripts ?? [],
       quickReplies: character.quickReplies ?? [],
       isFavorite: character.isFavorite,
       ...importedDates(character)

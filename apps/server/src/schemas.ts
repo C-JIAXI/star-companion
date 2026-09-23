@@ -138,6 +138,33 @@ const quickReplySchema = z.object({
 const quickRepliesInputSchema = z.array(quickReplySchema);
 const quickRepliesSchema = quickRepliesInputSchema.default([]);
 
+const regexScriptSchema = z.object({
+  id: z.string().min(1).max(128),
+  title: z.string().trim().min(1).max(80),
+  pattern: z.string().min(1).max(512).superRefine((pattern, context) => {
+    try { new RegExp(pattern, "g"); }
+    catch { context.addIssue({ code: "custom", message: "Invalid regular expression pattern" }); }
+  }),
+  replacement: z.string().max(8000),
+  enabled: z.boolean().default(true),
+  scope: z.enum(["assistant", "user", "both"]).default("both"),
+  renderOnly: z.boolean().default(false)
+});
+const regexScriptsInputSchema = z.array(regexScriptSchema).max(40).superRefine((scripts, context) => {
+  const ids = new Set<string>();
+  scripts.forEach((script, index) => {
+    if (ids.has(script.id)) context.addIssue({ code: "custom", path: [index, "id"], message: "Script IDs must be unique" });
+    ids.add(script.id);
+  });
+});
+const regexScriptsSchema = regexScriptsInputSchema.default([]);
+export const characterRegexPreviewSchema = z.object({
+  scripts: regexScriptsInputSchema,
+  content: z.string().max(20_000),
+  role: z.enum(["assistant", "user"]),
+  stage: z.enum(["stored", "render"])
+});
+
 const isSupportedBackgroundUrl = (value: string) => {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -179,6 +206,7 @@ export const characterCreateSchema = z.object({
   htmlCss: z.string().max(CHARACTER_CSS_MAX_LENGTH).default(""),
   openingHtml: z.string().max(CHARACTER_HTML_MAX_LENGTH).default(""),
   loreEntries: loreEntriesSchema,
+  regexScripts: regexScriptsSchema,
   quickReplies: quickRepliesSchema
 });
 
@@ -193,6 +221,7 @@ const characterUpdateFieldsSchema = z.object({
   htmlCss: z.string().max(CHARACTER_CSS_MAX_LENGTH).optional(),
   openingHtml: z.string().max(CHARACTER_HTML_MAX_LENGTH).optional(),
   loreEntries: loreEntriesInputSchema.optional(),
+  regexScripts: regexScriptsInputSchema.optional(),
   quickReplies: quickRepliesInputSchema.optional(),
   isFavorite: z.boolean().optional()
 });
@@ -809,6 +838,7 @@ export const backupCharacterSchema = z
     htmlCss: z.string(),
     openingHtml: z.string(),
     loreEntries: backupLoreEntriesSchema,
+    regexScripts: regexScriptsSchema,
     quickReplies: quickRepliesSchema,
     isFavorite: z.boolean().default(false),
     createdAt: backupDateSchema,
@@ -827,6 +857,7 @@ export const backupCharacterSchema = z
     htmlCss: character.htmlCss,
     openingHtml: character.openingHtml,
     loreEntries: character.loreEntries,
+    regexScripts: character.regexScripts,
     quickReplies: character.quickReplies,
     isFavorite: character.isFavorite,
     createdAt: character.createdAt,

@@ -60,7 +60,7 @@ export function CharacterCard({
     <div
       data-character-id={character.id}
       data-character-favorite={character.isFavorite ? "true" : "false"}
-      className={`group flex flex-col overflow-hidden rounded-lg border bg-ink-900 p-0 text-sm transition-colors ${
+      className={`native-character-card group flex flex-col overflow-hidden rounded-2xl border bg-ink-900 p-0 text-sm transition-colors ${
         selectable
           ? "cursor-pointer hover:bg-ink-800"
           : "hover:bg-ink-800"
@@ -71,7 +71,7 @@ export function CharacterCard({
       }`}
       onClick={selectable ? () => onSelect?.(character.id, !selected) : undefined}
     >
-      <div className="relative aspect-[4/3] w-full overflow-hidden border-b border-white/[0.08] bg-ink-800">
+      <div className="relative aspect-[16/10] w-full overflow-hidden border-b border-white/[0.08] bg-ink-800">
         <img
           alt=""
           className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
@@ -117,7 +117,7 @@ export function CharacterCard({
           </button>
         )}
       </div>
-      <div className="min-w-0 w-full flex-1 px-4 pb-3 pt-3">
+      <div className="min-w-0 w-full flex-1 px-3 pb-2.5 pt-2.5">
         <div className="flex min-w-0 items-center gap-1.5">
           <p className="truncate text-sm font-semibold text-ink-50">{character.name}</p>
           {character.visibility === "private" ? (
@@ -142,7 +142,7 @@ export function CharacterCard({
             ))}
           </div>
         ) : null}
-        <div className="mt-3 grid gap-1 border-t border-white/[0.06] pt-2 text-[11px] leading-4 text-ink-500">
+        <div className="mt-2 grid gap-1 border-t border-white/[0.06] pt-2 text-[11px] leading-4 text-ink-500">
           <span className="inline-flex min-w-0 items-center gap-1">
             <CalendarDays size={11} />
             <span className="shrink-0">{createdAtLabel}</span>
@@ -155,9 +155,9 @@ export function CharacterCard({
           </span>
         </div>
       </div>
-      <div className="flex w-full items-center justify-center gap-2 border-t border-white/[0.06] px-3 py-3">
+      <div className="flex w-full items-center justify-center gap-2 border-t border-white/[0.06] px-2.5 py-2">
         <Button
-          className="!min-h-[32px] !h-8 flex-1 !px-2 text-xs"
+          className="!min-h-11 flex-1 !px-2 text-xs sm:!min-h-9"
           onClick={(event) => {
             event.stopPropagation();
             onPlay(character.id);
@@ -167,7 +167,7 @@ export function CharacterCard({
           {playLabel}
         </Button>
         <Button
-          className="!min-h-[32px] !h-8 flex-1 !px-2 text-xs"
+          className="!min-h-11 flex-1 !px-2 text-xs sm:!min-h-9"
           data-character-action="edit"
           variant="secondary"
           onClick={(event) => {

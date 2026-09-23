@@ -396,6 +396,8 @@ test("late send acknowledgement cannot clear newly typed text or images", async 
     const editor = page.getByRole("dialog", { name: "Edit Message", exact: true });
     await expect(editor.getByTestId("edit-message-images").getByRole("img")).toHaveCount(1);
     await editor.getByRole("button", { name: "Remove image", exact: true }).click();
+    // Removal is asynchronous and reflows the dialog; wait for its visible result before saving.
+    await expect(editor.getByTestId("edit-message-images").getByRole("img")).toHaveCount(0);
     await editor.locator("textarea").fill("Controlled historical edit");
     await editor.getByRole("button", { name: "Save Edit", exact: true }).click();
     await expect(editor).toBeHidden();

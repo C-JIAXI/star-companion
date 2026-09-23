@@ -224,6 +224,8 @@ export const api = {
     },
     create: (input: CharacterInput) =>
       request<CharacterDTO>("/api/characters", { method: "POST", body: input }),
+    previewRegex: (input: { scripts: CharacterInput["regexScripts"]; content: string; role: "assistant" | "user"; stage: "stored" | "render" }) =>
+      request<{ content: string }>("/api/characters/regex-preview", { method: "POST", body: input }),
     draft: (input: CharacterDraftRequestDTO, signal?: AbortSignal) =>
       request<CharacterDraftResponseDTO>("/api/characters/draft", {
         method: "POST",

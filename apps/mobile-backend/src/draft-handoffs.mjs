@@ -74,7 +74,7 @@ export const discardDraftHandoff = async (store, chatId, id) => {
     await store.cleanupOrphanAssets();
   }, guard);
 };
-export const consumeDraftHandoff = async (store, chatId, id) => {
+export const consumeDraftHandoff = async (store, chatId, id, processContent = async (content) => content) => {
   const guard = captureDraftPrivacyGuard(store);
   return store.atomicWrite(async () => {
     active(store, chatId); const row = find(store, chatId, id);
@@ -85,7 +85,7 @@ export const consumeDraftHandoff = async (store, chatId, id) => {
     }
     if (row.disposedAt) throw conflict();
     if (serialize(store, row).attachments.some((item) => item.status !== "ready")) throw fail(409, "Remove or replace unavailable images before sending.", "draft_attachment_unavailable");
-    const message = await store.createMessage({ chatId, role: "user", content: row.content }, false);
+    const message = await store.createMessage({ chatId, role: "user", content: await processContent(row.content) }, false);
     for (const ref of store.listDraftAttachments(`draft_handoff_${id}`)) await store.writeRecord("messageAttachment", { ...ref, handoffId: null, draftId: null, messageId: message.id });
     await store.writeRecord("draftHandoff", { ...row, messageId: message.id, committedAt: new Date().toISOString(), content: "", attachments: [] });
     return { message, replayed: false };

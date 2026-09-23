@@ -51,7 +51,7 @@ export const applyAppearancePreferences = (
   root.style.colorScheme = theme;
   root.style.setProperty("--chat-background-overlay", String(preferences.backgroundOverlay));
   document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
-    ?.setAttribute("content", theme === "dark" ? "#0a0e0d" : "#f7faf9");
+    ?.setAttribute("content", theme === "dark" ? "#121318" : "#f5f5f7");
 
   if (options.persistMirror !== false) {
     try {

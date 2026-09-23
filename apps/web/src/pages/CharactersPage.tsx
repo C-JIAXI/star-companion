@@ -27,6 +27,9 @@ import {
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { CharacterCard } from "../components/CharacterCard";
+import { CharacterRegexEditor } from "../components/CharacterRegexEditor";
+import { LoreReorderHandle } from "../components/LoreReorderHandle";
+import { useLoreOrderAnimation } from "../components/useLoreOrderAnimation";
 import { MarkdownEditor } from "../components/MarkdownEditor";
 import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
 import { useI18n } from "../i18n";
@@ -45,6 +48,7 @@ import type {
   CharacterExportMode,
   CharacterInput,
   CharacterLoreEntryDTO,
+  CharacterRegexScriptDTO,
   CharacterSortMode,
   QuickReplyDTO
 } from "../types";
@@ -96,7 +100,7 @@ const blankQuickReply = (): QuickReplyDTO & { _localId: string; _collapsed: bool
 });
 
 type QuickReplyForm = ReturnType<typeof blankQuickReply>;
-type EditorSectionId = "prompt" | "tags" | "html" | "opening" | "lore" | "quickReplies" | "review" | "assistant";
+type EditorSectionId = "prompt" | "tags" | "html" | "opening" | "lore" | "regex" | "quickReplies" | "review" | "assistant";
 type CharacterEditorMode = "basic" | "advanced";
 type PasswordDialogMode = "unlock" | "export-private" | "export-public";
 type ExpandedTextField = "htmlCss" | "openingHtml";
@@ -176,6 +180,7 @@ const blankForm = {
   htmlCss: "",
   openingHtml: "",
   loreEntries: [] as LoreEntryForm[],
+  regexScripts: [] as CharacterRegexScriptDTO[],
   quickReplies: [] as QuickReplyForm[]
 };
 
@@ -269,6 +274,7 @@ const toForm = (character: CharacterDTO): CharacterForm => ({
     _localId: Math.random().toString(36).slice(2),
     _collapsed: true
   })),
+  regexScripts: character.regexScripts ?? [],
   quickReplies: (character.quickReplies ?? []).map((qr) => ({
     id: qr.id,
     label: qr.label,
@@ -292,6 +298,7 @@ const toInput = (form: CharacterForm): CharacterInput => ({
     ...entry,
     id: entry.id || crypto.randomUUID()
   })),
+  regexScripts: form.regexScripts,
   quickReplies: form.quickReplies.map(({ _localId, ...qr }) => ({
     ...qr,
     id: qr.id || crypto.randomUUID()
@@ -316,6 +323,7 @@ const copyForm = (form: CharacterForm): CharacterForm => ({
   ...form,
   tags: [...form.tags],
   loreEntries: form.loreEntries.map((entry) => ({ ...entry, keys: [...entry.keys] })),
+  regexScripts: form.regexScripts.map((script) => ({ ...script })),
   quickReplies: form.quickReplies.map((reply) => ({ ...reply }))
 });
 
@@ -373,6 +381,20 @@ export function CharactersPage({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedCharacter, setSelectedCharacter] = useState<CharacterDTO | null>(null);
   const [form, setForm] = useState<CharacterForm>(blankForm);
+  const [loreDropTarget, setLoreDropTarget] = useState<string | null>(null);
+  const [loreDragging, setLoreDragging] = useState<string | null>(null);
+  const loreAnimation = useLoreOrderAnimation(form.loreEntries.map((entry) => entry._localId).join(","));
+  const moveLoreEntry = (id: string, targetId: string) => {
+    loreAnimation.capture();
+    setForm((current) => {
+    const entries = [...current.loreEntries];
+    const from = entries.findIndex((entry) => entry._localId === id);
+    const to = entries.findIndex((entry) => entry._localId === targetId);
+    if (from < 0 || to < 0 || from === to) return current;
+    entries.splice(to, 0, entries.splice(from, 1)[0]);
+    return { ...current, loreEntries: entries };
+    });
+  };
   const [savedForm, setSavedForm] = useState<CharacterForm>(() => copyForm(blankForm));
   const [savedFormSnapshot, setSavedFormSnapshot] = useState(() =>
     serializeCharacterForm(blankForm)
@@ -380,6 +402,7 @@ export function CharactersPage({
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTag, setSelectedTag] = useState("");
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [libraryFiltersOpen, setLibraryFiltersOpen] = useState(false);
   const [characterSort, setCharacterSort] = useState<CharacterSortMode>("favorites");
   const [favoritePendingId, setFavoritePendingId] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState("");
@@ -480,9 +503,10 @@ export function CharactersPage({
       { id: "html" as const, label: t("characters.editorSectionHtml") },
       { id: "opening" as const, label: t("characters.editorSectionOpening") },
       { id: "lore" as const, label: t("characters.editorSectionLore") },
+      { id: "regex" as const, label: language === "zh-CN" ? "正则脚本" : "Regex scripts" },
       { id: "quickReplies" as const, label: t("characters.editorSectionQuickReplies") }
     ],
-    [t]
+    [t, language]
   );
 
   const characterSortOptions = useMemo(
@@ -1486,8 +1510,8 @@ export function CharactersPage({
                   {language === "zh-CN" ? "此角色包含高级内容。基础模式会完整保留它们；切换高级模式即可查看。" : "This character contains advanced content. Basic mode preserves it unchanged; switch to Advanced to inspect it."}
                 </div>
               ) : null}
-              {showIdentityFields ? <div className="grid gap-6 lg:grid-cols-[2fr_1fr]" data-character-field="name">
-                <div className="grid gap-5">
+              {showIdentityFields ? <div className="grid items-start gap-6 md:grid-cols-[minmax(0,1fr)_240px]" data-character-field="name">
+                <div className="grid min-w-0 gap-5">
                   <div data-character-field="name"><Field label={t("common.name")}>
                     <TextInput
                       value={form.name}
@@ -1554,7 +1578,7 @@ export function CharactersPage({
                     </Field>
                   </div> : null}
                 </div>
-                <div className="group overflow-hidden rounded-lg border border-white/[0.08] bg-ink-950/35 p-0 text-sm transition-colors hover:border-white/[0.14]">
+                <div className="group w-full max-w-[240px] justify-self-center overflow-hidden rounded-lg border border-white/[0.08] bg-ink-950/35 p-0 text-sm transition-colors hover:border-white/[0.14] md:justify-self-end">
                   <div className="aspect-[4/3] w-full overflow-hidden border-b border-white/[0.08] bg-ink-800">
                     <img
                       alt=""
@@ -1912,21 +1936,27 @@ export function CharactersPage({
                         {t("characters.loreEntryCount", { count: form.loreEntries.length })}
                       </span>
                     </div>
+                    <p className="mb-3 text-xs text-ink-400">{language === "zh-CN" ? "拖动左侧手柄排序，或聚焦手柄后按上下方向键；Esc 取消拖动。保存角色后生效，不改变优先级。" : "Drag the left handle or focus it and use Up/Down arrows; Esc cancels dragging. Save the character to keep the order. Priorities stay unchanged."}</p>
                     {form.loreEntries.length === 0 ? (
                       <div className="rounded-lg border border-dashed border-white/10 px-4 py-6 text-center">
                         <p className="text-sm text-slate-400">{t("characters.loreEntryEmpty")}</p>
                       </div>
                     ) : (
-                      <div className="space-y-3">
+                      <div className="space-y-3" data-lore-list ref={loreAnimation.listRef}>
                         {form.loreEntries.map((entry, index) => (
                           <div
-                            className={`rounded-lg border transition-colors ${
+                            className={`rounded-lg border transition-colors ${loreDropTarget === entry._localId ? "ring-2 ring-ember-500" : ""} ${
                               entry.enabled
                                 ? "border-white/10 bg-ink-950/40"
                                 : "border-white/5 bg-ink-950/20 opacity-60"
                             }`}
                             data-character-field="loreEntries"
                             data-character-item-index={index}
+                            data-lore-order-id={entry._localId}
+                            data-lore-id={entry.id}
+                            data-lore-expanded={!entry._collapsed}
+                            data-lore-dragging={loreDragging === entry._localId || undefined}
+                            data-lore-drop-target={loreDropTarget === entry._localId || undefined}
                             key={entry._localId}
                           >
                             <div
@@ -1938,6 +1968,7 @@ export function CharactersPage({
                               }}
                             >
                               <div className="flex min-w-0 items-center gap-2">
+                                <LoreReorderHandle id={entry._localId} ids={form.loreEntries.map((item) => item._localId)} language={language} onMove={moveLoreEntry} onTarget={setLoreDropTarget} onDragging={setLoreDragging} />
                                 <ChevronDown
                                   className={`shrink-0 text-slate-500 transition-transform duration-200 ${
                                     entry._collapsed ? "-rotate-90" : ""
@@ -2131,18 +2162,21 @@ export function CharactersPage({
                     <Button
                       className="mt-3 w-full !min-h-[36px]"
                       variant="secondary"
-                      onClick={() =>
-                        setForm({
-                          ...form,
-                          loreEntries: [...form.loreEntries, blankLoreEntry()]
-                        })
-                      }
+                      onClick={() => setForm((current) => ({
+                        ...current,
+                        loreEntries: [...current.loreEntries.map((entry, index) => index === current.loreEntries.length - 1 ? { ...entry, _collapsed: true } : entry), blankLoreEntry()]
+                      }))}
                     >
                       <Plus size={14} />
                       {t("characters.loreEntryAdd")}
                     </Button>
                   </div>
                 )
+              ) : null}
+
+              {editorMode === "advanced" && activeEditorSection === "regex" ? (
+                isLockedPrivateCharacter ? <EmptyState>{privatePasswordCopy.lockedHelp}</EmptyState> :
+                  <CharacterRegexEditor scripts={form.regexScripts} language={language} onChange={(regexScripts) => setForm((current) => ({ ...current, regexScripts }))} />
               ) : null}
 
               {((editorMode === "advanced" && activeEditorSection === "quickReplies") || (editorMode === "basic" && (!isCreating || wizardStep === 2))) ? (
@@ -2337,6 +2371,13 @@ export function CharactersPage({
                 }}
               />
             </div>
+            <Button variant="secondary" data-testid="characters-filter-toggle" aria-expanded={libraryFiltersOpen} aria-controls={libraryFiltersOpen ? "character-library-filters" : undefined} onClick={() => setLibraryFiltersOpen((value) => !value)}>
+              <ArrowUpDown size={16} />{language === "zh-CN" ? "筛选与排序" : "Filter & sort"}
+              {(favoriteOnly || selectedTag || batchMode) ? <span className="h-2 w-2 rounded-full bg-ember-500" aria-label={language === "zh-CN" ? "有筛选或管理模式生效" : "Filters or management mode active"} /> : null}
+            </Button>
+          </div>
+          {libraryFiltersOpen ? <div id="character-library-filters" className="character-filter-panel" role="region" aria-label={language === "zh-CN" ? "角色筛选与管理" : "Character filters and management"}>
+          <div className="flex flex-wrap items-center gap-2">
             <label className="relative shrink-0">
               <span className="sr-only">{t("characters.sort")}</span>
               <ArrowUpDown
@@ -2360,10 +2401,6 @@ export function CharactersPage({
                   </option>
                 ))}
               </select>
-              <ChevronDown
-                className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500"
-                size={14}
-              />
             </label>
             <Button
               aria-pressed={favoriteOnly}
@@ -2432,6 +2469,8 @@ export function CharactersPage({
               ))}
             </div>
           ) : null}
+
+          </div> : null}
 
           {batchMode && characters.length > 0 ? (
             <div className="flex flex-col gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300 sm:flex-row sm:items-center sm:justify-between sm:px-4">
@@ -2516,7 +2555,7 @@ export function CharactersPage({
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+              <div className="grid grid-cols-[minmax(0,240px)] justify-center gap-5 sm:grid-cols-[repeat(auto-fit,minmax(200px,240px))]" data-testid="character-card-grid">
                 {characters.map((character) => (
                   <CharacterCard
                     key={character.id}

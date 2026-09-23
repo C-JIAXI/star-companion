@@ -134,4 +134,44 @@ completion audit remain required; this is not a completion declaration.
    full lint/build/E2E, README/AGENTS and in-app documentation.
 
 Current screenshots are intermediate evidence, not final acceptance. Actual mobile
-soft-keyboard behavior and desktop 200% zoom have not yet been verified.
+soft-keyboard behavior has not yet been verified. The isolated browser zoom test
+now sets and reads Chromium tab zoom at 200%, verifies the CSS viewport reflows
+from 1440px to 720px, and checks composer visibility and drawer behavior. This is
+browser zoom evidence, not a resized viewport or a real mobile keyboard test.
+
+Latest checkpoint: quick-reply fixtures now include stable IDs, and the layout test
+asserts all eight replies are rendered and the expand/collapse control works.
+The default preference is collapsed (an explicitly saved expanded preference is
+retained). Chromium layout coverage passed; lint and build passed. The clean
+172-test E2E run finished with 171 passed and one desktop zoom fixture failure in
+the mobile project. Explicit desktop context options (isMobile/hasTouch false,
+deviceScaleFactor 1) corrected that fixture; both zoom reruns passed.
+
+The new synthetic image/large-font/reduced visualViewport stress test failed in
+both projects: no horizontal overflow, but the input bottom exceeded the visible
+height by 5.5625px and Send by 54.5625px. This is an unresolved layout defect, not
+an environment blocker. Diagnosis isolated two causes: the image cap used the
+original dvh rather than the visible workspace height, and the composer could not
+shrink when its contents exceeded the remaining height. The image cap now follows
+the workspace; context and feedback regions can shrink and scroll independently,
+while text and send controls retain their space. Both regions are keyboard-focusable
+and labelled. The original assertions remain, with added whole-composer bounds and
+image-reordering checks. Stress plus five-viewport layout runs: 4 passed across both
+projects. Synthetic reduced-viewport screenshots are saved alongside other after
+captures. Temporary geometry instrumentation has been removed.
+
+Agent regression now switches an actual generated fixture draft through Settings
+and Memory, then closes and reopens Tools before applying it; the draft remains and
+the request count stays at one. Both project reruns passed (2 tests). Final full
+regression subsequently passed: `npm run lint`, `npm run build`, and
+`npm run test:e2e` (174 passed, 4.4 minutes). Added same-width, input-focus and
+tool-lock assertions then passed in both projects (4 tests). Added 320px large-font
+queue management and low-height cost expansion/budget-warning checks also passed
+in both projects (4 tests). The final rerun includes these assertions and the
+bilingual low-height operating instructions. See `chat-workspace-acceptance.md`
+for the consolidated audit and the explicitly unverified real-device limitation.
+
+Final checkpoint completed on 2026-09-15: the final `npm run lint`, `npm run build`
+and `npm run test:e2e` all passed; E2E reported 174 passed (4.4m), exit 0. The
+remaining lack of a physical phone is recorded separately and is not represented
+as successful real-keyboard validation. No backend or protocol changes were made.

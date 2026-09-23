@@ -1290,6 +1290,7 @@ test("chat image attachments preview, send, reload, view, and unmount when locke
     const editor = page.getByRole("dialog", { name: /编辑消息|Edit Message/ });
     await expect(editor.getByTestId("edit-message-images").getByRole("img")).toHaveCount(1);
     await editor.getByRole("button", { name: /移除图片|Remove image/ }).click();
+    await expect(editor.getByTestId("edit-message-images").getByRole("img")).toHaveCount(0);
     await editor.locator("textarea").fill("Edited without image");
     await editor.getByRole("button", { name: /保存修改|Save Edit/ }).click();
     await expect(editor).toBeHidden();
@@ -1674,7 +1675,11 @@ test("messages queued during generation can be managed and send after the reply"
     await page.locator('#chat-primary-action[data-chat-action="queue"]').click();
     const queue = page.getByTestId("chat-message-queue");
     await expect(queue).toContainText(queuedMessage);
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.evaluate(() => { document.documentElement.dataset.fontSize = "extra-large"; });
+    await expect(page.getByTestId("chat-queue-toggle")).toHaveAttribute("aria-expanded", "false");
     await page.getByTestId("chat-queue-toggle").click();
+    await expect.poll(() => page.locator("#chat-primary-action").evaluate((element) => element.getBoundingClientRect().bottom <= innerHeight)).toBe(true);
 
     await composer.fill("Discard this queued note.");
     await page.locator('#chat-primary-action[data-chat-action="queue"]').click();
@@ -2125,8 +2130,10 @@ test("chat agent panel inserts reply drafts and confirms memory candidates befor
   const chatTitle = `Agent Chat ${suffix}`;
   let characterId: string | null = null;
   let chatId: string | null = null;
+  let agentRequests = 0;
 
   await page.route("**/api/chats/*/agent-draft", async (route) => {
+    agentRequests += 1;
     const body = route.request().postDataJSON() as { mode?: string };
     const memoryCandidate = body.mode === "memory_lore_candidates";
     await route.fulfill({
@@ -2203,6 +2210,15 @@ test("chat agent panel inserts reply drafts and confirms memory candidates befor
     await page.getByPlaceholder(/可选：告诉 Agent|Optional: tell the Agent/).fill("next turn");
     await page.getByTestId("chat-agent-run").click();
     await expect(page.getByText("Agent draft reply for the next turn.")).toBeVisible();
+    await page.getByTestId("chat-tool-settings").click();
+    await page.getByTestId("chat-tool-memory").click();
+    await page.getByTestId("chat-tool-agent").click();
+    await expect(page.getByText("Agent draft reply for the next turn.")).toBeVisible();
+    await page.getByRole("button", { name: /关闭工具|Close tools/, exact: true }).click();
+    await page.getByTestId("chat-more-trigger").click();
+    await page.getByTestId("chat-agent-trigger").click();
+    await expect(page.getByText("Agent draft reply for the next turn.")).toBeVisible();
+    expect(agentRequests).toBe(1);
     await page.getByRole("button", { name: /插入|Insert/ }).last().click();
     await expect(page.locator("#chat-message-input")).toHaveValue("A focused reply draft.");
     await page.getByRole("button", { name: /插入输入框|Insert into composer/ }).click();
@@ -2222,7 +2238,7 @@ test("chat agent panel inserts reply drafts and confirms memory candidates befor
     const memories = ((await memoriesResponse.json()) as ApiDataResponse<Array<{ title: string; content: string }>>).data;
     expect(memories?.some((memory) => memory.title === "Blue door trust" && memory.content === "The user trusts the blue door.")).toBeTruthy();
 
-    await page.getByRole("button", { name: /关闭 Agent|Close Agent/ }).click();
+    await page.getByRole("button", { name: /关闭工具|Close tools/ }).click();
     await page.setViewportSize({ width: 390, height: 780 });
     await page.getByTestId("chat-more-trigger").click();
     await page.getByTestId("chat-agent-trigger").click();
@@ -2231,6 +2247,10 @@ test("chat agent panel inserts reply drafts and confirms memory candidates befor
     expect(mobilePanelBox?.y ?? 0).toBeGreaterThanOrEqual(0);
     await expect(page.getByTestId("chat-tools-panel")).toHaveAttribute("data-chat-tool-layout", "drawer");
     expect((mobilePanelBox?.x ?? 0) + (mobilePanelBox?.width ?? 0)).toBeLessThanOrEqual(390);
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("star-companion:privacy-locked")));
+    await expect(page.getByTestId("privacy-lock-screen")).toBeVisible();
+    await expect(page.getByTestId("chat-tools-panel")).toHaveCount(0);
+    await expect(page.getByTestId("chat-agent-panel")).toHaveCount(0);
   } finally {
     if (chatId) {
       await permanentlyDeleteChatViaApi(request, chatId);
@@ -3417,6 +3437,7 @@ test("unconfigured media tools open the matching module model setting", async ({
     await page.goto("/");
     await openChatHistoryAndSelect(page, chatTitle);
 
+    await page.getByTestId("composer-tools-trigger").click();
     const recordButton = page.locator('[data-chat-action="voice-record"]');
     const speechButton = page.locator('[data-chat-action="voice-speak"]');
     const imageButton = page.locator('[data-chat-action="image-generate"]');
@@ -3555,6 +3576,7 @@ test("image generation previews a result before inserting it into the composer",
 
     await page.goto("/");
     await openChatHistoryAndSelect(page, chatTitle);
+    await page.getByTestId("composer-tools-trigger").click();
     await page.locator('[data-chat-action="image-generate"]').click();
     await expect(page.getByTestId("chat-image-dialog")).toBeVisible();
     await page.getByPlaceholder("Enter an image prompt").fill(imagePrompt);
@@ -4718,6 +4740,7 @@ test("character favorites persist and filter the library", async ({ page, reques
     await favoriteCard.locator('[data-character-action="favorite"]').click();
     await expect(favoriteCard).toHaveAttribute("data-character-favorite", "true");
 
+    await page.getByTestId("characters-filter-toggle").click();
     await page.getByTestId("characters-favorites-filter").click();
     await expect(favoriteCard).toBeVisible();
     await expect(page.locator(`[data-character-id="${createdIds[1]}"]`)).toHaveCount(0);
@@ -4761,6 +4784,7 @@ test("character library sorts by name and duplicates a character", async ({ page
 
     await page.goto("/characters");
     await page.getByPlaceholder(/搜索角色名称或简介|Search character name or description/).fill(prefix);
+    await page.getByTestId("characters-filter-toggle").click();
     await page.getByTestId("characters-sort").selectOption("name_asc");
 
     const cards = page.locator("[data-character-id]");
@@ -4872,6 +4896,7 @@ test("character batch management adds and removes tags", async ({ page, request 
     await page.getByPlaceholder(/搜索角色名称或简介|Search character name or description/).fill(prefix);
     await expect(page.locator("[data-character-id]")).toHaveCount(2);
 
+    await page.getByTestId("characters-filter-toggle").click();
     await page.getByTestId("characters-batch-mode").click();
     for (const id of createdIds) {
       await page.locator(`[data-character-id="${id}"]`).click();
@@ -4927,6 +4952,7 @@ test("character batch management adds and removes tags", async ({ page, request 
     });
     expect(limitUpdate.ok()).toBeTruthy();
     await page.reload();
+    await page.getByTestId("characters-filter-toggle").click();
     await page.getByPlaceholder(/搜索角色名称或简介|Search character name or description/).fill(prefix);
     await expect(page.locator("[data-character-id]")).toHaveCount(2);
     await page.getByTestId("characters-batch-mode").click();
@@ -6303,6 +6329,7 @@ test("character page tag filter can narrow to a paged server result before editi
     await page.getByTestId("characters-page-next").click();
     await expect(page.getByTestId("characters-page-prev")).toBeEnabled();
 
+    await page.getByTestId("characters-filter-toggle").click();
     await page.getByRole("button", { name: targetTag }).click();
     const targetCard = page
       .locator("div.group")
@@ -6382,6 +6409,7 @@ test("character paging search can create a chat from the matching card", async (
     await page.getByTestId("characters-page-next").click();
     await expect(page.getByTestId("characters-page-prev")).toBeEnabled();
 
+    await page.getByTestId("characters-filter-toggle").click();
     await page.getByRole("button", { name: targetTag }).click();
     const targetCard = page
       .locator("div.group")

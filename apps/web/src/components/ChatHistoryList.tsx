@@ -97,7 +97,7 @@ function RecentChatItem({
       aria-current={current ? "page" : undefined}
       className={`group flex min-h-[52px] w-full min-w-0 items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors ${
         current
-          ? "bg-ember-500/[0.1] text-ember-100 shadow-[inset_2px_0_0_rgba(69,203,178,0.9)]"
+          ? "bg-ember-500/[0.1] text-ember-100 shadow-[inset_2px_0_0_rgb(var(--ember-500))]"
           : "text-ink-300 hover:bg-white/[0.045] hover:text-ink-100"
       }`}
       data-chat-id={chat.id}
@@ -956,15 +956,44 @@ export function ChatHistoryList({
         ? createPortal(
             <Modal
               title={modalTitle}
+              panelClassName="sm:max-w-[40rem]"
+              bodyClassName="!pt-3"
               onClose={() => {
                 setActionMenuChatId(null);
                 setOpen(false);
               }}
             >
               <div className="space-y-3">
-                <div className="flex justify-end">
+                <div className="flex items-center justify-between gap-2">
+                  <div
+                    aria-label={t("chat.historySearchMode")}
+                    className="flex min-w-0 items-center gap-1"
+                    role="group"
+                  >
+                    {(["chats", "messages"] as const).map((mode) => (
+                      <button
+                        aria-pressed={searchMode === mode}
+                        className={`min-h-9 rounded-lg px-3 text-sm font-medium transition-colors ${
+                          searchMode === mode
+                            ? "bg-white/[0.09] text-slate-100"
+                            : "text-slate-400 hover:bg-white/[0.05] hover:text-slate-200"
+                        }`}
+                        key={mode}
+                        type="button"
+                        onClick={() => {
+                          setSearchMode(mode);
+                          setSearchQuery("");
+                          setMessageSearchResult(null);
+                          setManageMode(false);
+                          setSelectedIds(new Set());
+                        }}
+                      >
+                        {mode === "chats" ? t("chat.historySearchChats") : t("chat.historySearchMessages")}
+                      </button>
+                    ))}
+                  </div>
                   <button
-                    className="flex min-h-[32px] items-center gap-1.5 rounded-md px-2 text-xs font-medium text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100"
+                    className="flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-slate-100"
                     disabled={loading}
                     type="button"
                     onClick={() => archiveInputRef.current?.click()}
@@ -984,47 +1013,20 @@ export function ChatHistoryList({
                     }}
                   />
                 </div>
-                <div
-                  aria-label={t("chat.historySearchMode")}
-                  className="grid grid-cols-2 rounded-md border border-white/[0.08] bg-ink-950/60 p-1"
-                  role="group"
-                >
-                  {(["chats", "messages"] as const).map((mode) => (
-                    <button
-                      aria-pressed={searchMode === mode}
-                      className={`min-h-[34px] rounded-md px-3 text-xs font-medium transition-colors ${
-                        searchMode === mode
-                          ? "bg-ember-500 text-accentForeground"
-                          : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
-                      }`}
-                      key={mode}
-                      type="button"
-                      onClick={() => {
-                        setSearchMode(mode);
-                        setSearchQuery("");
-                        setMessageSearchResult(null);
-                        setManageMode(false);
-                        setSelectedIds(new Set());
-                      }}
-                    >
-                      {mode === "chats" ? t("chat.historySearchChats") : t("chat.historySearchMessages")}
-                    </button>
-                  ))}
-                </div>
                 {searchMode === "chats" ? (
                   <>
                     <div
                       aria-label={t("chat.historyScope")}
-                      className="grid grid-cols-3 rounded-md border border-white/[0.08] bg-ink-950/45 p-1"
+                      className="grid grid-cols-3 border-b border-white/[0.08]"
                       role="group"
                     >
                     {(["active", "archived", "trash"] as const).map((scope) => (
                       <button
                         aria-pressed={chatScope === scope}
-                        className={`min-h-[32px] rounded-md px-3 text-xs font-medium transition-colors ${
+                        className={`min-h-9 border-b-2 px-2 text-xs font-medium transition-colors ${
                           chatScope === scope
-                            ? "bg-white/10 text-slate-100"
-                            : "text-slate-500 hover:bg-white/5 hover:text-slate-300"
+                            ? "border-ember-400 text-slate-100"
+                            : "border-transparent text-slate-500 hover:text-slate-300"
                         }`}
                         data-testid={`chat-history-scope-${scope}`}
                         key={scope}
@@ -1047,12 +1049,12 @@ export function ChatHistoryList({
                     ))}
                     </div>
                     <div className="flex min-w-0 items-center gap-1.5">
-                      <label className="flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-md border border-white/[0.08] bg-ink-950/35 px-2.5 text-xs text-slate-400">
+                      <label className="flex min-h-9 min-w-0 flex-1 items-center gap-2 text-xs text-slate-400">
                         <Folder size={13} className="shrink-0 text-slate-500" />
                         <span className="shrink-0">{language === "zh-CN" ? "文件夹" : "Folder"}</span>
                         <select
                           aria-label={language === "zh-CN" ? "筛选聊天文件夹" : "Filter chat folders"}
-                          className="min-w-0 flex-1 bg-transparent text-xs text-slate-200 outline-none"
+                          className="min-h-9 min-w-0 flex-1 rounded-lg border border-white/[0.08] bg-ink-950/35 pl-3 text-xs text-slate-200 outline-none"
                           data-testid="chat-history-folder-filter"
                           value={folderFilter}
                           onChange={(event) => {
@@ -1074,7 +1076,7 @@ export function ChatHistoryList({
                       {folderFilter !== "all" && folderFilter !== "unfiled" ? (
                         <button
                           aria-label={language === "zh-CN" ? "管理当前文件夹" : "Manage current folder"}
-                          className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-white/[0.08] bg-ink-950/35 text-slate-400 transition-colors hover:border-ember-400/35 hover:text-ember-200"
+                          className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-ember-200"
                           data-testid="chat-history-rename-folder"
                           title={language === "zh-CN" ? "管理当前文件夹" : "Manage current folder"}
                           type="button"
@@ -1093,7 +1095,7 @@ export function ChatHistoryList({
                   />
                   <TextInput
                     ref={searchInputRef}
-                    className={`pl-9 ${searchMode === "chats" && manageMode ? "pr-[180px]" : "pr-12"}`}
+                    className="pl-9 pr-12"
                     data-testid="chat-history-search"
                     placeholder={
                       searchMode === "chats"
@@ -1129,6 +1131,10 @@ export function ChatHistoryList({
                         <Search size={14} />
                       </button>
                     ) : null}
+                  </div>
+                </div>
+                {searchMode === "chats" && filteredChats.length > 0 ? (
+                  <div className="flex min-h-8 flex-wrap items-center justify-end gap-1">
                     {searchMode === "chats" && manageMode && filteredChats.length > 0 ? (
                       <>
                         <button
@@ -1212,7 +1218,6 @@ export function ChatHistoryList({
                             {selectedIds.size}
                           </button>
                         ) : null}
-                        <span className="mx-0.5 h-3.5 w-px bg-white/10" />
                       </>
                     ) : null}
                     {searchMode === "chats" && filteredChats.length > 0 ? (
@@ -1234,11 +1239,11 @@ export function ChatHistoryList({
                       </button>
                     ) : null}
                   </div>
-                </div>
+                ) : null}
 
                 <ErrorNotice message={error} />
 
-                <div className="custom-scrollbar max-h-[420px] space-y-2 overflow-y-auto">
+                <div className="custom-scrollbar max-h-[min(55vh,520px)] space-y-1 overflow-y-auto pr-1">
                   {searchMode === "messages" ? (
                     !searchQuery.trim() ? (
                       <div className="py-8 text-center text-sm text-slate-500">
@@ -1256,7 +1261,7 @@ export function ChatHistoryList({
                                   : t("chat.searchUser");
                             return (
                               <button
-                                className="w-full rounded-md border border-white/[0.08] bg-ink-800/70 p-3 text-left transition-colors hover:border-ember-400/45 hover:bg-ember-500/[0.08]"
+                                className="w-full rounded-lg border-b border-white/[0.06] px-3 py-3 text-left transition-colors hover:bg-white/[0.04]"
                                 data-testid="history-message-search-result"
                                 key={result.message.id}
                                 type="button"
@@ -1319,7 +1324,7 @@ export function ChatHistoryList({
                       return (
                         <div
                           key={group.characterId}
-                          className="overflow-hidden rounded-md border border-white/[0.08] bg-ink-950/35"
+                          className="border-b border-white/[0.08] pb-1 last:border-0"
                         >
                           <ChatGroupHeader
                             characterId={group.characterId}
@@ -1331,20 +1336,20 @@ export function ChatHistoryList({
                           />
 
                           {isExpanded ? (
-                            <div className="space-y-0.5 border-t border-white/[0.06] px-1 pb-1 pt-1">
+                            <div className="space-y-0.5 pl-1 pb-1">
                               {group.chats.map((chat) => {
                                 const isSelected = manageMode && selectedIds.has(chat.id);
                                 const isCurrent = chatScope !== "trash" && selectedChatId === chat.id;
 
                                 return (
                                   <div
-                                    className={`group flex min-h-[54px] flex-wrap items-center gap-x-2 gap-y-1 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors ${
+                                    className={`group flex min-h-[52px] flex-wrap items-center gap-x-2 gap-y-1 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
                                       chatScope === "trash" && !manageMode ? "cursor-default" : "cursor-pointer"
                                     } ${
                                       isSelected
                                         ? "bg-ember-500/15 text-ember-100"
                                         : isCurrent
-                                          ? "bg-ember-500/[0.08] text-ember-100 shadow-[inset_2px_0_0_rgba(69,203,178,0.9)]"
+                                          ? "bg-ember-500/[0.08] text-ember-100 shadow-[inset_2px_0_0_rgb(var(--ember-500))]"
                                           : "text-slate-400 hover:bg-white/[0.045] hover:text-slate-200 active:bg-white/[0.07]"
                                     }`}
                                     key={chat.id}
@@ -1664,13 +1669,6 @@ export function ChatHistoryList({
                   )}
                 </div>
 
-                {searchMode === "chats" && filteredChats.length > 0 ? (
-                  <p className="text-center text-xs text-slate-500">
-                    {language === "zh-CN"
-                      ? `已显示 ${filteredChats.length} / ${displayTotal} 条对话 · ${groups.length} 个角色`
-                      : `${filteredChats.length} of ${displayTotal} chat(s) shown · ${groups.length} character(s)`}
-                  </p>
-                ) : null}
               </div>
             </Modal>,
             document.body
@@ -1738,7 +1736,7 @@ export function ChatHistoryList({
                     {t("common.cancel")}
                   </button>
                   <button
-                    className="min-h-9 rounded-md bg-ember-500 px-3 text-sm font-semibold text-accentForeground transition-colors hover:bg-ember-400 disabled:opacity-50"
+                    className="min-h-9 rounded-md bg-ember-500 px-3 text-sm font-semibold text-accentForeground transition-colors hover:bg-ember-600 disabled:opacity-50"
                     disabled={loading}
                     type="button"
                     onClick={() => void saveFolder()}
@@ -1787,7 +1785,7 @@ export function ChatHistoryList({
                     {t("common.cancel")}
                   </button>
                   <button
-                    className="min-h-9 rounded-md bg-ember-500 px-3 text-sm font-semibold text-accentForeground transition-colors hover:bg-ember-400 disabled:opacity-50"
+                    className="min-h-9 rounded-md bg-ember-500 px-3 text-sm font-semibold text-accentForeground transition-colors hover:bg-ember-600 disabled:opacity-50"
                     disabled={loading}
                     type="button"
                     onClick={() => void saveBatchFolder()}
@@ -1835,7 +1833,7 @@ export function ChatHistoryList({
                     {t("common.cancel")}
                   </button>
                   <button
-                    className="min-h-9 rounded-md bg-ember-500 px-3 text-sm font-semibold text-accentForeground transition-colors hover:bg-ember-400 disabled:opacity-50"
+                    className="min-h-9 rounded-md bg-ember-500 px-3 text-sm font-semibold text-accentForeground transition-colors hover:bg-ember-600 disabled:opacity-50"
                     disabled={loading}
                     type="button"
                     onClick={() => void saveFolderRename()}

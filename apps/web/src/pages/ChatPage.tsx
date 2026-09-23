@@ -1,5 +1,6 @@
 import {
   ArrowDown,
+  ArrowUp,
   Bookmark,
   BrainCircuit,
   ChevronDown,
@@ -48,6 +49,7 @@ import { useI18n } from "../i18n";
 import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
 import { api } from "../lib/api";
 import { useChatDraft } from "../lib/useChatDraft";
+import { ComposerToolsMenu } from "../components/ComposerToolsMenu";
 import { useChatLayoutAnchor } from "../lib/useChatLayoutAnchor";
 import { timelineApi } from "../lib/timelineApi";
 import {
@@ -365,7 +367,8 @@ export function ChatPage({
       if (
         memorySettingsOpen &&
         memorySettingsRef.current &&
-        !memorySettingsRef.current.contains(event.target as Node)
+        !memorySettingsRef.current.contains(event.target as Node) &&
+        !(event.target instanceof Element && event.target.closest(".chat-actions-menu"))
       ) {
         setMemorySettingsOpen(false);
       }
@@ -462,9 +465,9 @@ export function ChatPage({
   const speechAudioRef = useRef<HTMLAudioElement | null>(null);
   const [quickRepliesOpen, setQuickRepliesOpen] = useState(() => {
     try {
-      return localStorage.getItem("chat.quickRepliesOpen") !== "false";
+      return localStorage.getItem("chat.quickRepliesOpen") === "true";
     } catch {
-      return true;
+      return false;
     }
   });
   const toggleQuickReplies = useCallback(() => {
@@ -543,6 +546,7 @@ export function ChatPage({
       el.style.height = `${maxHeight}px`;
       el.style.overflowY = "auto";
     }
+    el.closest<HTMLElement>("#chat-composer")?.style.setProperty("--composer-input-height", `${Math.max(44, parseFloat(el.style.height))}px`);
   }, []);
 
   useEffect(() => {
@@ -2329,10 +2333,6 @@ export function ChatPage({
     setMemorySettingsOpen(false);
   };
 
-  const closeAgentPanel = () => {
-    setAgentPanelOpen(false);
-  };
-
   const getAgentModeLabel = (mode: ChatAgentMode) => {
     switch (mode) {
       case "scene_summary":
@@ -4060,7 +4060,6 @@ export function ChatPage({
               <div className="flex min-w-0 items-center gap-1">
                 {navigationControl}
 <h2 className="min-w-0 flex-1 truncate" id="chat-title">
-                {activeChat?.characterId ? <div className="truncate px-1 text-[11px] font-normal text-ink-400" title={characterMap.get(activeChat.characterId)?.name}>{characterMap.get(activeChat.characterId)?.name}</div> : null}
                 {titleEditing && activeChat ? (
                   <input
                     ref={titleInputRef}
@@ -4095,7 +4094,8 @@ export function ChatPage({
                       setTimeout(() => titleInputRef.current?.focus(), 0);
                     }}
                   >
-                    {activeChat?.title ?? t("chat.messageStream")}
+                    <span className="block truncate text-sm font-semibold leading-5">{activeChat?.title ?? t("chat.messageStream")}</span>
+                    {activeChat?.characterId ? <span className="block truncate text-xs font-normal leading-4 text-ink-400" title={characterMap.get(activeChat.characterId)?.name}>{characterMap.get(activeChat.characterId)?.name}</span> : null}
                   </button>
                 )}
               </h2>
@@ -4535,9 +4535,9 @@ export function ChatPage({
                       ) : null}
                     </div>
 
-                    <div className="shrink-0">
+                    <div className="composer-dock flex min-h-0 shrink flex-col">
                       {activeQuickReplies.length > 0 ? (
-                        <div className="mx-auto mb-1 flex max-w-2xl items-start gap-1 px-1" id="chat-quick-replies">
+                        <div className="mx-auto mb-1 flex shrink-0 max-w-2xl items-start gap-1 px-1" id="chat-quick-replies">
                           <button
                             id="chat-quick-replies-toggle"
                             type="button"
@@ -4575,9 +4575,10 @@ export function ChatPage({
                         </div>
                       ) : null}
                       <div
-                        className="mx-auto max-w-3xl rounded-t-lg border-t border-white/[0.1] bg-ink-950/95 p-1.5 sm:p-2"
+                        className="mx-auto flex min-h-0 max-w-3xl flex-col rounded-3xl border border-white/[0.1] bg-ink-900/95 p-2 sm:p-3"
                         id="chat-composer"
                       >
+                        <div className="chat-composer-context" tabIndex={0} role="region" aria-label={language === "zh-CN" ? "附件与待发送队列" : "Attachments and pending queue"}>
                         {connectionState !== "connected" ? (
                           <div
                             aria-live="polite"
@@ -4681,7 +4682,8 @@ export function ChatPage({
                           </div>
                           {attachmentError ? <p className="mt-2 text-xs text-rose-300" role="alert">{attachmentError} {!activeChatSupportsVision ? <button className="font-semibold underline" type="button" onClick={() => navigateToSection("settings", "model")}>{language === "zh-CN" ? "切换模型" : "Switch model"}</button> : null}</p> : null}
                         </div> : null}
-                        <div className="min-w-0">
+                        </div>
+                        <div className="min-w-0 shrink-0">
                           <TextArea
                             ref={draftTextAreaRef}
                             className="chat-input !resize-none border-0 bg-transparent !px-2 !py-[11px] !text-sm leading-[1.4] focus:bg-transparent focus:ring-0 sm:!py-3"
@@ -4707,17 +4709,19 @@ export function ChatPage({
                             }}
                           />
                         </div>
-                        <div className="mb-1 flex flex-wrap items-center gap-1 px-1" data-testid="chat-composer-toolbar">
+                        <div className="mb-1 flex shrink-0 flex-wrap items-center gap-1 px-1" data-testid="chat-composer-toolbar">
                           <input ref={attachmentInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" multiple aria-label={language === "zh-CN" ? "选择聊天图片" : "Choose chat images"} onChange={(event) => void addChatImages(Array.from(event.target.files ?? []))} />
                           <button className={`grid h-9 w-9 place-items-center rounded-md transition-colors disabled:opacity-40 ${activeChatSupportsVision ? "text-slate-500 hover:bg-white/10 hover:text-slate-200" : "text-amber-300/80 hover:bg-amber-500/10"}`} data-chat-action="attach-image" disabled={attachmentBusy || draftAttachments.length >= 4} aria-label={language === "zh-CN" ? "添加图片" : "Add images"} title={activeChatSupportsVision ? (language === "zh-CN" ? "添加图片（也可拖放或粘贴）" : "Add images (you can also drop or paste)") : (language === "zh-CN" ? "当前模型不支持图片输入" : "Current model does not support image input")} type="button" onClick={() => attachmentInputRef.current?.click()}><Paperclip size={16} /></button>
-                          <button
-                            className={`grid h-9 w-9 place-items-center rounded-md transition-colors ${
+                          <ComposerToolsMenu key={activeChat.id} label={language === "zh-CN" ? "更多输入工具" : "More composer tools"}>
+                          {!recording ? <button
+                            className={`composer-tool-item transition-colors ${
                               recording
                                 ? "bg-rose-500/15 text-rose-300"
                                 : canTranscribe
-                                  ? "text-slate-500 hover:bg-white/10 hover:text-slate-200"
+                                  ? "text-ink-200 hover:bg-white/10"
                                   : "text-amber-300/80 hover:bg-amber-500/10 hover:text-amber-200"
                             } disabled:opacity-40`}
+                            role="menuitem"
                             data-chat-action="voice-record"
                             disabled={mediaLoading}
                             aria-label={
@@ -4737,16 +4741,17 @@ export function ChatPage({
                             type="button"
                             onClick={() => void toggleVoiceRecording()}
                           >
-                            <Mic size={16} />
-                          </button>
-                          <button
-                            className={`grid h-9 w-9 place-items-center rounded-md transition-colors disabled:opacity-40 ${
+                            <Mic size={17} /><span>{canTranscribe ? t("chat.voiceRecord") : t("chat.voiceRecordSetup")}</span>
+                          </button> : null}
+                          {!speechPlaying ? <button
+                            className={`composer-tool-item transition-colors disabled:opacity-40 ${
                               speechPlaying
                                 ? "bg-ember-500/15 text-ember-300 hover:bg-ember-500/20"
                                 : canSpeak
-                                  ? "text-slate-500 hover:bg-white/10 hover:text-slate-200"
+                                  ? "text-ink-200 hover:bg-white/10"
                                   : "text-amber-300/80 hover:bg-amber-500/10 hover:text-amber-200"
                             }`}
+                            role="menuitem"
                             data-chat-action="voice-speak"
                             disabled={mediaLoading || recording}
                             aria-label={
@@ -4772,14 +4777,15 @@ export function ChatPage({
                               }
                             }}
                           >
-                            {speechPlaying ? <VolumeX size={16} /> : <Volume2 size={16} />}
-                          </button>
+                            <Volume2 size={17} /><span>{canSpeak ? t("chat.voiceSpeak") : t("chat.voiceSpeakSetup")}</span>
+                          </button> : null}
                           <button
-                            className={`grid h-9 w-9 place-items-center rounded-md transition-colors disabled:opacity-40 ${
+                            className={`composer-tool-item transition-colors disabled:opacity-40 ${
                               canGenerateImage
-                                ? "text-ink-500 hover:bg-white/[0.06] hover:text-ink-200"
+                                ? "text-ink-200 hover:bg-white/[0.06]"
                                 : "text-amber-300/80 hover:bg-amber-500/10 hover:text-amber-200"
                             }`}
+                            role="menuitem"
                             data-chat-action="image-generate"
                             disabled={mediaLoading || recording}
                             aria-label={
@@ -4795,8 +4801,11 @@ export function ChatPage({
                             type="button"
                             onClick={openImageDialog}
                           >
-                            <Image size={16} />
+                            <Image size={17} /><span>{canGenerateImage ? t("chat.imageGenerate") : t("chat.imageGenerateSetup")}</span>
                           </button>
+                          </ComposerToolsMenu>
+                          {recording ? <button type="button" data-chat-action="voice-record" className="composer-active-control" aria-label={t("chat.voiceStop")} title={t("chat.voiceStop")} onClick={() => void toggleVoiceRecording()}><StopCircle size={17} /><span>{t("chat.voiceStop")}</span></button> : null}
+                          {speechPlaying ? <button type="button" data-chat-action="voice-speak" className="composer-active-control" aria-label={t("chat.voiceStopPlayback")} title={t("chat.voiceStopPlayback")} onClick={stopSpeechPlayback}><VolumeX size={17} /><span className="sr-only sm:not-sr-only">{t("chat.voiceStopPlayback")}</span></button> : null}
                           {mediaLoading ? (
                             <span className="ml-1 text-xs text-slate-500">{t("chat.mediaWorking")}</span>
                           ) : null}
@@ -4822,7 +4831,7 @@ export function ChatPage({
                                 onClick={queueDraftMessage}
                               >
                                 <Send size={16} />
-                                {t("chat.queue")}
+                                <span className="sr-only">{t("chat.queue")}</span>
                               </Button>
                             </div>
                           ) : (
@@ -4833,12 +4842,14 @@ export function ChatPage({
                               disabled={loading || composer.disabled || draftAttachments.some((item) => item.status !== "ready") || attachmentBusy || (!draft.trim() && draftAttachments.length === 0)}
                               onClick={() => void sendMessage()}
                             >
-                              <Send size={16} />
-                              {t("chat.send")}
+                              <ArrowUp size={20} />
+                              <span className="sr-only">{t("chat.send")}</span>
                             </Button>
                           )}
 
 </div></div>
+                      </div>
+                        <div className="chat-composer-feedback" tabIndex={0} role="region" aria-label={language === "zh-CN" ? "草稿状态、恢复与费用" : "Draft status, recovery and costs"}>
                         <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-300" data-testid="chat-draft-status" aria-live="polite">
                           <span>{composer.state === "loading" ? (language === "zh-CN" ? "正在读取草稿…" : "Loading draft…")
                             : composer.state === "saving" ? (language === "zh-CN" ? "正在保存…" : "Saving…")
@@ -4877,7 +4888,7 @@ export function ChatPage({
                           <button type="button" className="underline" onClick={() => deleteQueuedMessage(item.id)}>{language === "zh-CN" ? "删除" : "Discard"}</button>
                         </div>)}
                         {costPreview ? (
-                          <div className={`mt-1 rounded-md px-2 py-1 text-[11px] ${costPreview.hardBlocked ? "bg-rose-500/10 text-rose-200" : costPreview.softWarning || costPreview.unknownPricing ? "bg-amber-500/10 text-amber-200" : "bg-white/[0.03] text-slate-400"}`} data-testid="chat-cost-preview">
+                          <div className={`mt-1 rounded-xl px-2 py-1 text-[11px] ${costPreview.hardBlocked ? "bg-rose-500/10 text-rose-200" : costPreview.softWarning ? "bg-amber-500/10 text-amber-200" : "text-ink-400"}`} data-testid="chat-cost-preview">
                             <button className="flex min-h-8 w-full items-center justify-between gap-2 text-left" type="button" aria-expanded={costPreviewExpanded} onClick={() => setCostPreviewExpanded((value) => !value)}>
                               <span className="truncate">{costPreview.modelId} · {costPreview.unknownPricing ? (language === "zh-CN" ? "费用未知" : "Cost unknown") : `${language === "zh-CN" ? "估算" : "Estimated"} $${(costPreview.minimumCostMicros! / 1_000_000).toFixed(4)}–$${(costPreview.maximumCostMicros! / 1_000_000).toFixed(4)}`}</span>
                               <ChevronDown className={costPreviewExpanded ? "rotate-180" : ""} size={13} />
@@ -4897,7 +4908,7 @@ export function ChatPage({
                             </div> : null}
                           </div>
                         ) : null}
-                      </div>
+                        </div>
                     </div>
                   </div>
                 )}
@@ -4937,23 +4948,12 @@ export function ChatPage({
                   </div>
                 </ChatToolContent> : null}
                 <div className={`${agentPanelOpen ? "flex" : "hidden"} min-h-0 flex-1 flex-col`} data-testid="chat-agent-panel">
-                <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-3">
+                <div className="pt-3">
                   <div className="min-w-0">
-                    <h4 className="text-sm font-semibold text-slate-100">
-                      {t("chat.agentTitle")}
-                    </h4>
                     <p className="mt-1 text-xs leading-5 text-slate-400">
                       {t("chat.agentHelp")}
                     </p>
                   </div>
-                  <button
-                    className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200"
-                    type="button"
-                    aria-label={t("chat.agentClose")}
-                    onClick={closeAgentPanel}
-                  >
-                    <X size={16} />
-                  </button>
                 </div>
 
                 <div className="custom-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">

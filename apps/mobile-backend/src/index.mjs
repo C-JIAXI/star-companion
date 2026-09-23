@@ -20,6 +20,7 @@ import {
   characterExportSchema,
   characterImportSchema,
   characterPageQuerySchema,
+  characterRegexPreviewSchema,
   characterUnlockSchema,
   characterUpdateRequestSchema,
   chatAgentDraftSchema,
@@ -65,6 +66,7 @@ import {
   storageCleanupPlanRequestSchema,
   storageCleanupExecuteSchema
 } from "../server-dist/schemas.js";
+import { runCharacterRegexScripts } from "../server-dist/services/characterRegex.js";
 import { createImageThumbnail, normalizeUploadedImage, validateStoredImage } from "../server-dist/services/imageNormalization.js";
 import { buildCharacterDraftMessages, getCharacterDraftMeta, parseCharacterDraftItems } from "../server-dist/services/characterDraftProtocol.js";
 import { applyCharacterTagOperation } from "../server-dist/services/characterTags.js";
@@ -97,6 +99,7 @@ import {
   resolveCharacterRecord,
   resolveCharacterPromptFields,
   toCharacterTags,
+  toCharacterRegexScripts,
   toQuickReplies
 } from "./privateCharacters.mjs";
 import { MobileStore } from "./store.mjs";
@@ -1163,6 +1166,7 @@ const serializeCharacter = (character, password) => {
     htmlCss: resolved.htmlCss,
     openingHtml: resolved.openingHtml,
     loreEntries: resolved.loreEntries,
+    regexScripts: resolved.regexScripts,
     quickReplies: toQuickReplies(character.quickReplies),
     isFavorite: character.isFavorite === true,
     visibility: resolved.visibility,
@@ -1293,6 +1297,33 @@ const serializeMessage = (message) => ({
   createdAt: message.createdAt,
   updatedAt: message.updatedAt
 });
+
+const scriptsForChat = (chatId) => {
+  const chat = store.getChat(chatId);
+  const character = chat?.characterId ? store.getCharacter(chat.characterId) : null;
+  return character ? resolveCharacterPromptFields(character).regexScripts : [];
+};
+const processStoredContent = async (chatId, role, content) =>
+  (await runCharacterRegexScripts([{ content, role }], scriptsForChat(chatId), "stored"))[0] ?? content;
+const addDisplayContent = async (messages) => {
+  if (!messages.length) return [];
+  const groups = new Map();
+  messages.forEach((message, index) => groups.set(message.chatId, [...(groups.get(message.chatId) ?? []), { message, index }]));
+  const result = messages.map((message) => ({ ...message, displayContent: message.content }));
+  for (const [chatId, entries] of groups) {
+    try {
+      const outputs = await runCharacterRegexScripts(entries.map(({ message }) => ({
+        content: message.content, role: message.role === "assistant" ? "assistant" : "user"
+      })), scriptsForChat(chatId), "render");
+      entries.forEach(({ message, index }, position) => {
+        result[index].displayContent = message.role === "system" ? message.content : outputs[position] ?? message.content;
+      });
+    } catch {
+      // Preserve stored text if a render-only script cannot run safely.
+    }
+  }
+  return result;
+};
 
 const serializeMobileAttachment = (attachment) => {
   const asset = store.getMediaAsset(attachment.assetId);
@@ -2706,6 +2737,12 @@ app.get("/api/characters", (_request, response) => {
   response.json({ ok: true, data: store.listCharacters().map(serializeCharacter) });
 });
 
+app.post("/api/characters/regex-preview", asyncHandler(async (request, response) => {
+  const body = parseBody(characterRegexPreviewSchema, request.body);
+  const output = await runCharacterRegexScripts([{ content: body.content, role: body.role }], toCharacterRegexScripts(body.scripts), body.stage);
+  response.json({ ok: true, data: { content: output[0] ?? body.content } });
+}));
+
 app.get(
   "/api/characters/page",
   asyncHandler(async (request, response) => {
@@ -2823,6 +2860,7 @@ app.post(
       htmlCss: source.htmlCss,
       openingHtml: source.openingHtml,
       loreEntries: source.loreEntries,
+      regexScripts: source.regexScripts,
       quickReplies: source.quickReplies,
       isFavorite: false
     });
@@ -3537,15 +3575,16 @@ app.delete(
   })
 );
 
-app.get("/api/messages", (request, response) => {
+app.get("/api/messages", asyncHandler(async (request, response) => {
   const query = parseQuery(messageListQuerySchema, request.query);
+  const messages = store.listMessages(query.chatId).filter((message) => getActiveChat(message.chatId)).map(serializeMessage);
   response.json({
     ok: true,
-    data: store.listMessages(query.chatId).filter((message) => getActiveChat(message.chatId)).map(serializeMessage)
+    data: await addDisplayContent(messages)
   });
-});
+}));
 
-app.get("/api/messages/page", (request, response) => {
+app.get("/api/messages/page", asyncHandler(async (request, response) => {
   const query = parseQuery(messagePageQuerySchema, request.query);
   if (!getActiveChat(query.chatId)) throw notFound("Chat not found");
   const scope = query.bookmarkedOnly ? `${query.chatId}:bookmarks` : query.chatId;
@@ -3560,7 +3599,7 @@ app.get("/api/messages/page", (request, response) => {
     data: {
       chatId: query.chatId,
       order: "ascending",
-      items: page.items.map(serializeMessage),
+      items: await addDisplayContent(page.items.map(serializeMessage)),
       total: query.includeTotal ? store.countMessages(query.chatId, query.bookmarkedOnly) : null,
       hasMore: page.hasMore,
       nextCursor: page.hasMore && oldest
@@ -3568,9 +3607,9 @@ app.get("/api/messages/page", (request, response) => {
         : null
     }
   });
-});
+}));
 
-app.get("/api/messages/locate", (request, response) => {
+app.get("/api/messages/locate", asyncHandler(async (request, response) => {
   const query = parseQuery(messageLocateQuerySchema, request.query);
   if (!getActiveChat(query.chatId)) throw notFound("Chat not found");
   const location = store.locateMessageWindow(query.chatId, query.messageId, query.radius);
@@ -3583,7 +3622,7 @@ app.get("/api/messages/locate", (request, response) => {
       messageId: query.messageId,
       index: location.index,
       total: location.total,
-      items: location.items.map(serializeMessage),
+      items: await addDisplayContent(location.items.map(serializeMessage)),
       hasOlder: location.hasOlder,
       hasNewer: location.hasNewer,
       olderCursor: location.hasOlder && oldest
@@ -3591,7 +3630,7 @@ app.get("/api/messages/locate", (request, response) => {
         : null
     }
   });
-});
+}));
 
 app.post(
   "/api/messages",
@@ -3600,20 +3639,21 @@ app.post(
     if (!getActiveChat(body.chatId)) throw notFound("Chat not found");
     const { draftId, handoffId, ...messageBody } = body;
     if (handoffId) {
-      const result = await store.consumeDraftHandoff(body.chatId, handoffId);
-      response.status(201).json({ ok: true, data: serializeMessage(result.message) });
+      const result = await store.consumeDraftHandoff(body.chatId, handoffId, (content) => processStoredContent(body.chatId, "user", content));
+      response.status(201).json({ ok: true, data: (await addDisplayContent([serializeMessage(result.message)]))[0] });
       return;
     }
-    const message = draftId ? await store.createMessageWithDraft(messageBody, draftId) : await store.createMessage(messageBody);
-    response.status(201).json({ ok: true, data: serializeMessage(message) });
+    const storedBody = { ...messageBody, content: body.role === "system" ? body.content : await processStoredContent(body.chatId, body.role, body.content) };
+    const message = draftId ? await store.createMessageWithDraft(storedBody, draftId) : await store.createMessage(storedBody);
+    response.status(201).json({ ok: true, data: (await addDisplayContent([serializeMessage(message)]))[0] });
   })
 );
 
-app.get("/api/messages/:id", (request, response) => {
+app.get("/api/messages/:id", asyncHandler(async (request, response) => {
   const message = store.getMessage(requireParam(request, "id"));
   if (!message || !getActiveChat(message.chatId)) throw notFound("Message not found");
-  response.json({ ok: true, data: serializeMessage(message) });
-});
+  response.json({ ok: true, data: (await addDisplayContent([serializeMessage(message)]))[0] });
+}));
 
 app.put(
   "/api/messages/:id",
@@ -3623,9 +3663,17 @@ app.put(
     if (!existing || !getActiveChat(existing.chatId)) throw notFound("Message not found");
     const body = parseBody(messageUpdateSchema, request.body);
     const { draftId, replaceAttachments, ...ordinaryBody } = body;
+    if (typeof ordinaryBody.content === "string" && existing.role !== "system") {
+      const variants = Array.isArray(existing.variants) ? existing.variants : [];
+      const switchingVariant = typeof ordinaryBody.activeVariantIndex === "number" &&
+        variants[ordinaryBody.activeVariantIndex] === ordinaryBody.content;
+      if (!switchingVariant) {
+        ordinaryBody.content = await processStoredContent(existing.chatId, existing.role === "assistant" ? "assistant" : "user", ordinaryBody.content);
+      }
+    }
     const message = await store.updateMessageWithAttachments(id, ordinaryBody, { draftId, replaceAttachments });
     if (!message) throw notFound("Message not found");
-    response.json({ ok: true, data: serializeMessage(message) });
+    response.json({ ok: true, data: (await addDisplayContent([serializeMessage(message)]))[0] });
   })
 );
 
@@ -4618,10 +4666,11 @@ const createAssistantReply = async ({
     tokenUsage.promptTokens,
     tokenUsage.estimated
   );
+  const storedReply = await processStoredContent(chatId, "assistant", trimmed);
   const message = continuationTargetMessageId
     ? await appendAssistantContinuation({
         targetMessage,
-        continuation: trimmed,
+        continuation: storedReply,
         tokenUsage,
         promptBreakdown,
         loreMatches: context.matchedLoreEntries,
@@ -4630,9 +4679,9 @@ const createAssistantReply = async ({
       })
     : targetMessageId
     ? await store.updateMessage(targetMessageId, {
-        content: trimmed,
-        variants: appendVariant(targetMessage.variants, trimmed),
-        activeVariantIndex: appendVariant(targetMessage.variants, trimmed).length - 1,
+        content: storedReply,
+        variants: appendVariant(targetMessage.variants, storedReply),
+        activeVariantIndex: appendVariant(targetMessage.variants, storedReply).length - 1,
         tokenUsage,
         promptBreakdown,
         loreMatches: context.matchedLoreEntries,
@@ -4644,8 +4693,8 @@ const createAssistantReply = async ({
         chatId,
         role: "assistant",
         characterId: context.chat.characterId,
-        content: trimmed,
-        variants: [trimmed],
+        content: storedReply,
+        variants: [storedReply],
         activeVariantIndex: 0,
         tokenUsage,
         promptBreakdown,
@@ -4684,7 +4733,7 @@ const createAssistantReply = async ({
     }
   });
 
-  sendJson(socket, { type: "assistant_message", requestId, message: serializeMessage(message) });
+  sendJson(socket, { type: "assistant_message", requestId, message: (await addDisplayContent([serializeMessage(message)]))[0] });
   if (terminalStreamError) throw terminalStreamError;
   return { stopped };
 };
@@ -4708,7 +4757,7 @@ const handleGenerate = async (socket, raw) => {
           ? store.readRecords("message", "AND chatId = ?", [request.chatId], "ORDER BY createdAt DESC, id DESC LIMIT 1")[0] : null;
         resumeBlockedHandoff = !!message && original?.chatId === request.chatId && original.errorCode === "budget_blocked" && latest?.id === message.id;
         if (!resumeBlockedHandoff) {
-        if (message) sendJson(socket, { type: "user_message", requestId: request.requestId, message: serializeMessage(message) });
+        if (message) sendJson(socket, { type: "user_message", requestId: request.requestId, message: (await addDisplayContent([serializeMessage(message)]))[0] });
         const status = store.getModelRequest(request.requestId);
         if (status) sendJson(socket, { type: "generation_status", request: { ...status, requestId: status.id } });
         else sendJson(socket, { type: "generation_done", requestId: request.requestId });
@@ -4727,18 +4776,18 @@ const handleGenerate = async (socket, raw) => {
     const chat = getActiveChat(request.chatId);
     if (!chat) throw notFound("Chat not found");
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
-    const consumed = request.handoffId ? await store.consumeDraftHandoff(request.chatId, request.handoffId) : null;
+    const consumed = request.handoffId ? await store.consumeDraftHandoff(request.chatId, request.handoffId, (content) => processStoredContent(request.chatId, "user", content)) : null;
     const userMessage = consumed?.message ?? await store.createMessageWithDraft({
       chatId: request.chatId,
       role: "user",
-      content: request.content,
+      content: await processStoredContent(request.chatId, "user", request.content),
       variants: [],
       activeVariantIndex: 0
     }, request.draftId);
     sendJson(socket, {
       type: "user_message",
       requestId: request.requestId,
-      message: serializeMessage(userMessage)
+      message: (await addDisplayContent([serializeMessage(userMessage)]))[0]
     });
     if (consumed?.replayed && !resumeBlockedHandoff) {
       await store.updateModelRequest(request.requestId, { status: "succeeded", completedAt: new Date().toISOString() });
@@ -4883,7 +4932,7 @@ const handleResend = async (socket, raw) => {
   try {
     sendJson(socket, { type: "generation_started", requestId: request.requestId });
     const { userMessage } = await store.prepareUserMessageResend(target);
-    sendJson(socket, { type: "user_message", requestId: request.requestId, message: serializeMessage(userMessage) });
+    sendJson(socket, { type: "user_message", requestId: request.requestId, message: (await addDisplayContent([serializeMessage(userMessage)]))[0] });
     const result = await createAssistantReply({
       socket,
       requestId: request.requestId,

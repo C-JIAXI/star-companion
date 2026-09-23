@@ -3,6 +3,7 @@ import { HttpError } from "../lib/http.js";
 import { serializeMessage } from "../serializers.js";
 import { decodeCursor, encodeCursor } from "./cursorPagination.js";
 import { messageIncludeAttachments } from "./messageAttachments.js";
+import { addDisplayContent } from "./characterRegexMessages.js";
 
 const ascending = (left: { createdAt: Date; id: string }, right: { createdAt: Date; id: string }) =>
   left.createdAt.getTime() - right.createdAt.getTime() || left.id.localeCompare(right.id);
@@ -28,7 +29,7 @@ export const listMessagePage = async ({ chatId, limit, cursor, includeTotal, boo
   return {
     chatId,
     order: "ascending" as const,
-    items: page.reverse().map(serializeMessage),
+    items: await addDisplayContent(page.reverse().map(serializeMessage)),
     hasMore,
     nextCursor: hasMore && oldest ? encodeCursor({ version: 1, kind: "messages", scope, createdAt: oldest.createdAt.toISOString(), id: oldest.id }) : null,
     total
@@ -54,7 +55,7 @@ export const locateMessagePage = async ({ chatId, messageId, radius }: { chatId:
     messageId,
     index,
     total,
-    items: items.map(serializeMessage),
+    items: await addDisplayContent(items.map(serializeMessage)),
     olderCursor: hasOlder && oldest
       ? encodeCursor({ version: 1, kind: "messages", scope: chatId, createdAt: oldest.createdAt.toISOString(), id: oldest.id })
       : null,

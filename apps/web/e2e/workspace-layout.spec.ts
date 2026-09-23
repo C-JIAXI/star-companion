@@ -10,7 +10,7 @@ test("workspace layout capture uses synthetic data across target viewports", asy
   await mkdir(output, { recursive: true });
   const characterResponse = await request.post("/api/characters", { data: {
     name: "Observatory guide", prompt: "Synthetic layout fixture. No model calls.",
-    quickReplies: Array.from({ length: 8 }, (_, index) => ({ label: `Explore ${index + 1}`, content: `Synthetic choice ${index + 1}` }))
+    quickReplies: Array.from({ length: 8 }, (_, index) => ({ id: `layout-reply-${index}`, label: `Explore ${index + 1}`, content: `Synthetic choice ${index + 1}` }))
   } });
   expect(characterResponse.ok()).toBeTruthy();
   const character = (await characterResponse.json()).data;
@@ -45,8 +45,14 @@ test("workspace layout capture uses synthetic data across target viewports", asy
       await page.evaluate(() => document.fonts.ready);
       await page.screenshot({ path: path.join(output, `${width}x${height}.png`), scale: "css" });
       if (phase === "after") {
+        await expect(page.locator("[data-chat-quick-reply]")).toHaveCount(8);
+        await expect(page.locator("#chat-quick-replies-toggle")).toHaveAttribute("aria-expanded", "false");
+        await page.locator("#chat-quick-replies-toggle").click();
+        await expect(page.locator("#chat-quick-replies-toggle")).toHaveAttribute("aria-expanded", "true");
+        await page.locator("#chat-quick-replies-toggle").click();
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         await expect(page.getByTestId("chat-workspace-header")).toHaveCount(1);
+        await expect.poll(() => page.evaluate(() => Math.abs(document.querySelector("#chat-message-list")!.getBoundingClientRect().width - document.querySelector("#chat-composer")!.getBoundingClientRect().width))).toBeLessThan(2);
         await expect.poll(() => page.evaluate(() => {
           const input = document.querySelector("#chat-message-input")!.getBoundingClientRect();
           const toolbar = document.querySelector('[data-testid="chat-composer-toolbar"]')!.getBoundingClientRect();
@@ -100,9 +106,12 @@ test("workspace layout capture uses synthetic data across target viewports", asy
             }, anchor!)).toBeLessThan(3);
           };
           await assertAnchor();
+          await page.locator("#chat-message-input").focus();
           await page.getByTestId("chat-sidebar-collapse").click();
+          await expect(page.locator("#chat-message-input")).toBeFocused();
           await assertAnchor();
           await page.getByRole("button", { name: "Toggle navigation", exact: true }).click();
+          await expect(page.locator("#chat-message-input")).toBeFocused();
           await assertAnchor();
           await page.evaluate(() => { document.documentElement.dataset.fontSize = "large"; });
           await assertAnchor();

@@ -7,6 +7,7 @@ test("desktop browser 200 percent zoom reflows the workspace without hiding acti
   const extension = path.resolve("e2e/fixtures/zoom-extension");
   const context = await chromium.launchPersistentContext("", {
     channel: "chromium", headless: true, viewport: { width: 1440, height: 900 },
+    isMobile: false, hasTouch: false, deviceScaleFactor: 1,
     args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
   });
   const character = (await (await request.post("/api/characters", { data: { name: "Synthetic zoom guide", prompt: "Synthetic zoom fixture" } })).json()).data;

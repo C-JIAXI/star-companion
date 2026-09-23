@@ -10,6 +10,7 @@ import {
   stopGenerationRequestSchema
 } from "../schemas.js";
 import { serializeMessage } from "../serializers.js";
+import { addDisplayContent, processStoredContent } from "../services/characterRegexMessages.js";
 import { getOrCreateSettings } from "../routes/settings.js";
 import { estimateTokenUsage, type TokenUsage } from "../services/completions.js";
 import { updateChatMemoriesFromTurn, type MatchedMemoryEntry } from "../services/chatMemories.js";
@@ -274,7 +275,7 @@ const streamAssistantReply = async ({
           ? await updateAssistantVariant(targetMessageId, assistantContent, tokenUsage, promptBreakdown, context.matchedLoreEntries, context.matchedMemoryEntries, incompleteMetadata)
           : await createAssistantMessage(chatId, characterId, assistantContent, tokenUsage, promptBreakdown, context.matchedLoreEntries, context.matchedMemoryEntries, incompleteMetadata);
       await linkModelRequestMessage(requestId, message.id);
-      sendJson(socket, { type: "assistant_message", requestId, message: serializeMessage(message) });
+      sendJson(socket, { type: "assistant_message", requestId, message: (await addDisplayContent([serializeMessage(message)]))[0] });
       throw normalized;
     }
   }
@@ -341,7 +342,7 @@ const streamAssistantReply = async ({
       sendJson(socket, {
         type: "assistant_message",
         requestId,
-        message: serializeMessage(message)
+        message: (await addDisplayContent([serializeMessage(message)]))[0]
       });
       await linkModelRequestMessage(requestId, message.id);
     }
@@ -405,14 +406,14 @@ const streamAssistantReply = async ({
   sendJson(socket, {
     type: "assistant_message",
     requestId,
-    message: serializeMessage(message)
+    message: (await addDisplayContent([serializeMessage(message)]))[0]
   });
   await completeModelRequest(requestId, message.id);
 
   return stopped;
 };
 
-const createAssistantMessage = (
+const createAssistantMessage = async (
   chatId: string,
   characterId: string | null,
   content: string,
@@ -421,14 +422,15 @@ const createAssistantMessage = (
   loreMatches: MatchedLoreEntry[],
   memoryMatches: MatchedMemoryEntry[],
   metadata: Prisma.InputJsonValue | null = null
-) =>
-  prisma.message.create({
+) => {
+  const processedContent = await processStoredContent(chatId, "assistant", content);
+  return prisma.message.create({
     data: {
       chatId,
       role: "assistant",
       characterId,
-      content,
-      variants: [content],
+      content: processedContent,
+      variants: [processedContent],
       activeVariantIndex: 0,
       tokenUsage,
       promptBreakdown,
@@ -438,6 +440,7 @@ const createAssistantMessage = (
       variantMetadata: metadata ? [metadata] : []
     }
   });
+};
 
 const joinAssistantContinuation = (existing: string, continuation: string) => {
   if (!existing || !continuation || /\s$/.test(existing) || /^\s/.test(continuation)) {
@@ -464,12 +467,13 @@ const updateAssistantVariant = async (
     throw new Error("Assistant message not found");
   }
 
-  const variants = appendVariant(targetMessage.variants, content);
+  const processedContent = await processStoredContent(targetMessage.chatId, "assistant", content);
+  const variants = appendVariant(targetMessage.variants, processedContent);
   const existingMetadata = Array.isArray(targetMessage.variantMetadata) ? targetMessage.variantMetadata : [];
   return prisma.message.update({
     where: { id: messageId },
     data: {
-      content,
+      content: processedContent,
       variants,
       activeVariantIndex: variants.length - 1,
       tokenUsage,
@@ -498,7 +502,7 @@ const appendAssistantContinuation = async (
     throw new Error("Assistant message not found");
   }
 
-  const content = joinAssistantContinuation(targetMessage.content, continuation);
+  const content = joinAssistantContinuation(targetMessage.content, await processStoredContent(targetMessage.chatId, "assistant", continuation));
   const variants = Array.isArray(targetMessage.variants)
     ? targetMessage.variants.filter((value): value is string => typeof value === "string")
     : [];
@@ -554,7 +558,7 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
           ? await prisma.message.findFirst({ where: { chatId: request.chatId }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { id: true } }) : null;
         resumeBlockedHandoff = !!message && original?.chatId === request.chatId && original.errorCode === "budget_blocked" && latest?.id === message.id;
         if (!resumeBlockedHandoff) {
-        if (message) sendJson(socket, { type: "user_message", requestId: request.requestId, message: serializeMessage(message) });
+        if (message) sendJson(socket, { type: "user_message", requestId: request.requestId, message: (await addDisplayContent([serializeMessage(message)]))[0] });
         const status = await getModelRequest(request.requestId);
         if (status) sendJson(socket, { type: "generation_status", request: serializeModelRequest(status) });
         else sendJson(socket, { type: "generation_done", requestId: request.requestId });
@@ -577,9 +581,9 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
       throw new Error("Chat not found");
     }
 
-    const consumed = request.handoffId ? await consumeDraftHandoff(request.chatId, request.handoffId) : null;
+    const consumed = request.handoffId ? await consumeDraftHandoff(request.chatId, request.handoffId, (content) => processStoredContent(request.chatId, "user", content)) : null;
     const userMessage = consumed?.message ?? await prisma.$transaction(async (tx) => {
-      const created = await tx.message.create({ data: { chatId: request.chatId, role: "user", content: request.content.trim(), variants: [], activeVariantIndex: 0 } });
+      const created = await tx.message.create({ data: { chatId: request.chatId, role: "user", content: await processStoredContent(request.chatId, "user", request.content.trim()), variants: [], activeVariantIndex: 0 } });
       await attachDraftToMessage(tx, request.draftId, created.id);
       await tx.chat.update({ where: { id: request.chatId }, data: { updatedAt: new Date() } });
       return tx.message.findUniqueOrThrow({ where: { id: created.id }, include: messageIncludeAttachments });
@@ -588,7 +592,7 @@ const handleGenerate = async (socket: WebSocket, rawMessage: unknown) => {
     sendJson(socket, {
       type: "user_message",
       requestId: request.requestId,
-      message: serializeMessage(userMessage)
+      message: (await addDisplayContent([serializeMessage(userMessage)]))[0]
     });
 
     if (consumed?.replayed && !resumeBlockedHandoff) {
@@ -807,7 +811,7 @@ const handleResend = async (socket: WebSocket, rawMessage: unknown) => {
         sendJson(socket, {
           type: "user_message",
           requestId: request.requestId,
-          message: serializeMessage(userMessage)
+          message: (await addDisplayContent([serializeMessage(userMessage)]))[0]
         });
       }
     });

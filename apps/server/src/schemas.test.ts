@@ -718,6 +718,7 @@ describe("characterImportSchema", () => {
 
     assert.equal(publicCard.visibility, "public");
     assert.equal("isFavorite" in publicCard.character, false);
+    assert.deepEqual(publicCard.character.regexScripts, [], "older cards receive an empty script list");
     assert.equal(privateCard.visibility, "private");
   });
 
@@ -845,6 +846,7 @@ describe("backupImportSchema", () => {
       }
     });
     assert.equal(parsed.characters[0]?.isFavorite, true);
+    assert.deepEqual(parsed.characters[0]?.regexScripts, [], "older backups receive an empty script list");
   });
 
   it("preserves valid prompt breakdowns and rejects unknown categories", () => {

@@ -318,6 +318,7 @@ export class MobileStore {
       htmlCss: input.htmlCss ?? "",
       openingHtml: input.openingHtml ?? "",
       loreEntries: input.loreEntries ?? [],
+      regexScripts: input.regexScripts ?? [],
       quickReplies: input.quickReplies ?? [],
       isFavorite: input.isFavorite === true,
       createdAt: input.createdAt ?? timestamp,
@@ -751,7 +752,7 @@ export class MobileStore {
   createDraftHandoff(chatId, input) { return createDraftHandoff(this, chatId, input); }
   restoreDraftHandoff(chatId, id, input) { return restoreDraftHandoff(this, chatId, id, input); }
   discardDraftHandoff(chatId, id) { return discardDraftHandoff(this, chatId, id); }
-  consumeDraftHandoff(chatId, id) { return consumeDraftHandoff(this, chatId, id); }
+  consumeDraftHandoff(chatId, id, processContent) { return consumeDraftHandoff(this, chatId, id, processContent); }
 
   getMediaAsset(id) {
     return clone(this.readRecord("mediaAsset", id));

@@ -111,7 +111,7 @@ const createFakeModelServer = () => {
         "Cache-Control": "no-cache",
         Connection: "keep-alive"
       });
-      response.write('data: {"choices":[{"delta":{"content":"Mobile assistant reply."}}]}\n\n');
+      response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: joinedMessages.includes("regex-regeneration-different") ? "Mobile replacement reply." : "Mobile assistant reply." } }] })}\n\n`);
       if (failNextStream) { failNextStream = false; response.end('data: {"error":{"type":"server_error","message":"Controlled partial failure"}}\n\n'); return; }
       response.write('data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}\n\n');
       response.end("data: [DONE]\n\n");
@@ -501,6 +501,36 @@ try {
   await verifyChatDraftContract(`http://127.0.0.1:${port}`);
   await verifyDraftBudgetResume(`http://127.0.0.1:${port}`, () => fakeModelServer.getChatCompletionRequests(), () => fakeModelServer.failNextStream());
   console.log("Mobile chat draft persistence, conflicts, lock and lifecycle contract passed");
+  const regexCharacter = await request("/api/characters", { method: "POST", body: {
+    name: "Mobile regex character", prompt: "Synthetic regex test",
+    regexScripts: [
+      { id: "stored-user", title: "Store user", pattern: "hello", replacement: "saved", enabled: true, scope: "user", renderOnly: false },
+      { id: "stored-ai", title: "Store AI", pattern: "Mobile", replacement: "Stored", enabled: true, scope: "assistant", renderOnly: false },
+      { id: "render-user", title: "Show user", pattern: "saved", replacement: "shown", enabled: true, scope: "user", renderOnly: true }
+    ]
+  } });
+  const regexChat = await request("/api/chats", { method: "POST", body: { title: "Mobile regex chat", characterId: regexCharacter.id } });
+  const regexMessage = await request("/api/messages", { method: "POST", body: { chatId: regexChat.id, role: "user", content: "hello" } });
+  assert.equal(regexMessage.content, "saved");
+  assert.equal(regexMessage.displayContent, "shown");
+  const editedRegexMessage = await request(`/api/messages/${regexMessage.id}`, { method: "PUT", body: { content: "hello" } });
+  assert.equal(editedRegexMessage.content, "saved");
+  const regexEvents = await runGeneration(regexChat.id, "hello");
+  const regexAssistant = regexEvents.find((event) => event.type === "assistant_message")?.message;
+  assert.equal(regexAssistant?.content, "Stored assistant reply.");
+  assert.match(JSON.stringify(fakeModelServer.getLastChatCompletionBody().messages), /saved/);
+  const regexRegeneration = await runSocketRequest({ type: "regenerate", messageId: regexAssistant.id, guidance: "regex-regeneration-different" });
+  const regexVariant = regexRegeneration.find((event) => event.type === "assistant_message")?.message;
+  assert.equal(regexVariant?.variants.length, 2);
+  assert.deepEqual(regexVariant.variants, ["Stored assistant reply.", "Stored replacement reply."]);
+  const changedScripts = regexCharacter.regexScripts.map((script) => script.id === "render-user" ? { ...script, replacement: "changed" } : script);
+  await request(`/api/characters/${regexCharacter.id}`, { method: "PUT", body: { regexScripts: changedScripts } });
+  assert.equal((await request(`/api/messages/${regexMessage.id}`)).displayContent, "changed");
+  assert.equal((await request(`/api/messages/${regexMessage.id}`)).content, "saved");
+  const regexBackup = await request("/api/backups/export");
+  assert.deepEqual(regexBackup.characters.find((item) => item.id === regexCharacter.id)?.regexScripts, changedScripts);
+  await permanentlyDeleteChat(regexChat.id);
+  await request(`/api/characters/${regexCharacter.id}`, { method: "DELETE" });
   const character = await request("/api/characters", {
     method: "POST",
     body: {
@@ -514,6 +544,7 @@ try {
       htmlCss: "",
       openingHtml: "",
       loreEntries: [],
+      regexScripts: [{ id: "mobile-private-rule", title: "Private rule", pattern: "secret", replacement: "hidden", enabled: true, scope: "both", renderOnly: false }],
       quickReplies: []
     }
   });
@@ -530,6 +561,7 @@ try {
   assert.equal(privateCard.visibility, "private");
   assert.equal(privateCard.character.avatar, "data:image/png;base64,QUJDRA==");
   assert.equal(privateCard.protectedPayload.algorithm, "aes-256-gcm");
+  assert.equal(JSON.stringify(privateCard).includes("mobile-private-rule"), false);
 
   const importedPrivateCharacter = await request("/api/characters/import", {
     method: "POST",
@@ -540,6 +572,7 @@ try {
   assert.equal(importedPrivateCharacter.canViewPrompt, false);
   assert.equal(importedPrivateCharacter.htmlCss, "");
   assert.equal(importedPrivateCharacter.prompt, "");
+  assert.deepEqual(importedPrivateCharacter.regexScripts, []);
 
   const metadataUpdatedPrivateCharacter = await request(`/api/characters/${character.id}`, {
     method: "PUT",
@@ -618,6 +651,7 @@ try {
   });
   assert.equal(unlockedPrivateCharacter.visibility, "private");
   assert.equal(unlockedPrivateCharacter.canViewPrompt, true);
+  assert.equal(unlockedPrivateCharacter.regexScripts[0].id, "mobile-private-rule");
   assert.equal(unlockedPrivateCharacter.prompt, "Reply as a local mobile character.");
   assert.equal(unlockedPrivateCharacter.name, "Mobile Smoke Character Metadata");
 

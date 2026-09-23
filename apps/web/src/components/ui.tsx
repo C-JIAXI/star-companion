@@ -142,7 +142,7 @@ export function Panel({
 }) {
   return (
     <section
-      className={`animate-fade-in h-full min-w-0 overflow-hidden rounded-lg border border-white/[0.08] bg-ink-900 p-3 sm:p-4 transition-colors ${className}`}
+      className={`native-panel animate-fade-in h-full min-w-0 overflow-hidden rounded-2xl border border-white/[0.08] bg-ink-900 p-4 sm:p-6 transition-colors ${className}`}
     >
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2 sm:mb-3">
         <h3 className="min-w-0 text-sm font-semibold text-ink-50">{title}</h3>
@@ -162,18 +162,18 @@ export function Button({
 }) {
   const variants = {
     primary:
-      "border border-ember-400/20 bg-ember-500 text-accentForeground hover:bg-ember-400 focus:ring-ember-400/40",
+      "border border-transparent bg-ember-500 text-accentForeground hover:bg-ember-600",
     secondary:
-      "border border-white/[0.09] bg-ink-800 text-ink-100 hover:border-white/[0.14] hover:bg-ink-700 focus:ring-white/15",
+      "border border-white/[0.09] bg-ink-800 text-ink-100 hover:border-white/[0.14] hover:bg-ink-700",
     ghost:
-      "border border-transparent bg-transparent text-ink-300 hover:bg-white/[0.06] hover:text-ink-50 focus:ring-white/15",
+      "border border-transparent bg-transparent text-ink-300 hover:bg-white/[0.06] hover:text-ink-50",
     danger:
-      "border border-rose-400/20 bg-rose-600 text-white hover:bg-rose-500 focus:ring-rose-500/40"
+      "border border-rose-400/20 bg-rose-600 text-white hover:bg-rose-500"
   };
 
   return (
     <button
-      className={`inline-flex min-h-[44px] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md px-4 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-ink-950 active:translate-y-px disabled:pointer-events-none disabled:opacity-45 sm:min-h-10 ${variants[variant]} ${className}`}
+      className={`native-button inline-flex min-h-[44px] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-45 sm:min-h-10 ${variants[variant]} ${className}`}
       type="button"
       {...props}
     />
@@ -290,7 +290,7 @@ export const TextInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLIn
   ({ className = "", ...props }, ref) => (
     <input
       ref={ref}
-      className={`min-h-[44px] w-full min-w-0 rounded-md border border-white/[0.1] bg-ink-950/70 px-3 text-sm text-ink-50 outline-none transition-colors placeholder:text-ink-500 hover:border-white/[0.16] focus:border-ember-400 focus:bg-ink-950 focus:ring-1 focus:ring-ember-400/30 sm:min-h-10 ${className}`}
+      className={`native-input min-h-[44px] w-full min-w-0 rounded-xl border border-white/[0.1] bg-ink-950/70 px-3 text-sm text-ink-50 outline-none transition-colors placeholder:text-ink-500 hover:border-white/[0.16] focus:border-ember-400/60 focus:bg-ink-950 sm:min-h-10 ${className}`}
       {...props}
     />
   )
@@ -303,7 +303,7 @@ export const TextArea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
     return (
       <textarea
         ref={ref}
-        className={`custom-scrollbar h-[320px] w-full min-w-0 resize-none overflow-y-auto rounded-md border border-white/[0.1] bg-ink-950/70 px-3 py-2.5 text-sm leading-normal text-ink-50 outline-none transition-colors placeholder:text-ink-500 hover:border-white/[0.16] focus:border-ember-400 focus:bg-ink-950 focus:ring-1 focus:ring-ember-400/30 ${className}`}
+        className={`native-input custom-scrollbar h-[320px] w-full min-w-0 resize-none overflow-y-auto rounded-xl border border-white/[0.1] bg-ink-950/70 px-3 py-2.5 text-sm leading-normal text-ink-50 outline-none transition-colors placeholder:text-ink-500 hover:border-white/[0.16] focus:border-ember-400/60 focus:bg-ink-950 ${className}`}
         style={style}
         {...props}
       />
@@ -507,7 +507,7 @@ export function Modal({
         ref={surfaceRef}
         aria-labelledby={titleId}
         aria-modal="true"
-        className={`animate-modal-enter flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-white/[0.1] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)] ${panelClassName}`}
+        className={`animate-modal-enter flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/[0.1] bg-ink-900 shadow-2xl shadow-black/30 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)] ${panelClassName}`}
         data-dialog-surface="true"
         role="dialog"
         tabIndex={-1}
@@ -585,7 +585,7 @@ export function ConfirmDialog({
         ref={surfaceRef}
         aria-labelledby={titleId}
         aria-modal="true"
-        className="animate-modal-enter flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-lg border border-white/[0.1] bg-ink-900 shadow-2xl shadow-black/70 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)]"
+        className="animate-modal-enter flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-white/[0.1] bg-ink-900 shadow-2xl shadow-black/30 will-change-[transform,opacity] sm:max-h-[calc(100dvh-3rem)]"
         data-dialog-surface="true"
         role="dialog"
         tabIndex={-1}

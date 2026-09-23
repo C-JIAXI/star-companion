@@ -98,7 +98,7 @@ const defaultForm: SettingsInput = {
 };
 
 const selectClassName =
-  "min-h-[44px] w-full rounded-md border border-white/[0.1] bg-ink-950/70 px-3 text-sm text-ink-50 outline-none transition-colors hover:border-white/[0.16] focus:border-ember-400 focus:bg-ink-950 focus:ring-1 focus:ring-ember-400/30 sm:min-h-10";
+  "native-input min-h-[44px] w-full rounded-md border border-white/[0.1] bg-ink-950/70 px-3 text-sm text-ink-50 outline-none transition-colors hover:border-white/[0.16] focus:border-ember-400/60 focus:bg-ink-950 sm:min-h-10";
 
 const settingsPanelClassName =
   "border-white/[0.08] bg-ink-900";
@@ -1702,148 +1702,12 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
   };
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <div className="settings-shell mx-auto max-w-7xl">
       <ErrorNotice message={error} />
       <SuccessNotice message={status} />
 
-      <section className="border-b border-white/[0.08] pb-6">
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.75fr)_minmax(300px,0.95fr)]">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <SummaryCard
-              label={copy.providerStatus}
-              value={activeProviderName || t("common.unknown")}
-            />
-            <SummaryCard
-              label={copy.modelStatus}
-              value={activeModelName || t("common.unknown")}
-              tone={activeModelName ? "emerald" : "default"}
-            />
-            <SummaryCard
-              label={copy.apiKeyStatus}
-              value={
-                clearStoredApiKey
-                  ? copy.keyPendingRemoval
-                  : hasApiKey || Boolean(form.apiKey?.trim())
-                    ? copy.keyStored
-                    : copy.keyMissing
-              }
-              tone={hasApiKey || Boolean(form.apiKey?.trim()) ? "emerald" : "default"}
-            />
-            <SummaryCard
-              label={copy.providerCount}
-              value={copy.providerCountDisplay(form.providers.length)}
-            />
-          </div>
-
-          <div className="flex h-full flex-col gap-4 border-l border-white/[0.1] px-4 py-2 xl:px-5">
-            <div className="space-y-2">
-              <div className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
-                {copy.changesStatus}
-              </div>
-              <div
-                className={`inline-flex min-h-[30px] items-center rounded-md px-2.5 text-xs font-semibold ${
-                  hasUnsavedChanges
-                    ? "bg-amber-500/10 text-amber-200 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.16)]"
-                    : "bg-emerald-500/[0.06] text-emerald-200 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.16)]"
-                }`}
-              >
-                {hasUnsavedChanges ? copy.changesDirty : copy.changesClean}
-              </div>
-              <p className="text-sm leading-6 text-slate-400">
-                {hasUnsavedChanges ? copy.proxyNote : copy.noPendingChanges}
-              </p>
-            </div>
-
-            <div className="mt-auto flex flex-col gap-3">
-              <Button
-                className="w-full"
-                data-testid="settings-save"
-                disabled={loading || !hasUnsavedChanges}
-                onClick={() => void saveSettings()}
-              >
-                <Save size={16} />
-                {copy.saveReady}
-              </Button>
-              <Button
-                className="w-full"
-                disabled={loading || connectionTesting || hasUnsavedChanges || !readiness?.configurationValid}
-                variant="secondary"
-                onClick={() => void testBackend()}
-              >
-                {connectionTesting ? <RefreshCw className="animate-spin" size={16} /> : <ServerCog size={16} />}
-                {language === "zh-CN" ? "无推理连接检查" : "No-inference connection check"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className={`rounded-lg p-4 sm:p-5 ${settingsSurfaceClassName}`} data-testid="configuration-diagnostics">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex min-w-0 items-start gap-3">
-            <div className={`mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-full ${readiness?.configurationValid ? "bg-emerald-500/10 text-emerald-300" : "bg-amber-500/10 text-amber-200"}`}>
-              {readiness?.configurationValid ? <ShieldCheck size={18} /> : <AlertTriangle size={18} />}
-            </div>
-            <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-ink-50">{language === "zh-CN" ? "模型配置诊断" : "Model configuration diagnostics"}</h3>
-              <p className="mt-1 text-xs font-semibold text-ember-200" data-testid="readiness-overall-status">{language === "zh-CN" ? ({ ready: "可以开始聊天", ready_with_limited_capabilities: "可以聊天，但部分能力不可用", needs_configuration: "需要配置", configuration_untested: "配置可能有效但尚未测试", connection_failed: "连接失败", budget_blocked: "被本机预算阻止", locked: "应用已锁定", server_unreachable: "本地后端不可达" } as const)[readiness?.overallStatus ?? "server_unreachable"] : ({ ready: "Ready to chat", ready_with_limited_capabilities: "Ready with limited capabilities", needs_configuration: "Configuration needed", configuration_untested: "Configuration may work but is untested", connection_failed: "Connection failed", budget_blocked: "Blocked by local budget", locked: "App locked", server_unreachable: "Local backend unreachable" } as const)[readiness?.overallStatus ?? "server_unreachable"]}</p>
-              <p className="mt-1 text-sm leading-6 text-ink-400">
-                {hasUnsavedChanges
-                  ? (language === "zh-CN" ? "以下结果仅对应已保存配置。请先保存更改，再重新检查；未保存的密钥不会参与诊断。" : "These results describe the saved configuration only. Save changes before checking again; unsaved keys are not inspected.")
-                  : readinessLoading
-                    ? (language === "zh-CN" ? "正在读取后端权威状态…" : "Reading authoritative backend state…")
-                    : readiness?.configurationValid
-                      ? (language === "zh-CN" ? "静态检查已通过。连接状态仍需通过显式测试确认。" : "Static checks passed. Connection state still requires an explicit test.")
-                      : (language === "zh-CN" ? "发现需要处理的已保存配置问题。诊断不会显示 API Key、聊天内容或供应商原始响应。" : "The saved configuration has actionable issues. Diagnostics never display API keys, chat content, or raw provider responses.")}
-              </p>
-            </div>
-          </div>
-          <Button variant="ghost" data-testid="settings-open-onboarding" onClick={reopenOnboarding}>
-            {language === "zh-CN" ? "重新打开引导" : "Reopen guide"}
-          </Button>
-        </div>
-
-        {readiness?.issues.length ? (
-          <ul className="mt-4 grid gap-2 sm:grid-cols-2" data-testid="configuration-issue-list">
-            {readiness.issues.map((issue, index) => (
-              <li className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-white/[0.08] bg-ink-950/40 px-3 py-2.5 text-sm" key={`${issue.code}-${issue.module ?? "global"}-${index}`}>
-                <span className={issue.severity === "error" ? "text-rose-200" : "text-amber-100"}>{diagnosticCopy(issue)}</span>
-                <button className="shrink-0 font-semibold text-ember-200 underline-offset-2 hover:underline" type="button" onClick={() => openDiagnosticAction(issue)}>{language === "zh-CN" ? "处理" : "Fix"}</button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-
-        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/[0.08] pt-4">
-          <span className="w-full text-xs text-ink-400">{language === "zh-CN" ? `测试已保存配置：${activeProviderName || "未选择供应商"} / ${activeModelName || "未选择模型"}` : `Testing saved configuration: ${activeProviderName || "no provider"} / ${activeModelName || "no model"}`}</span>
-          <Button disabled={connectionTesting || hasUnsavedChanges || !readiness?.configurationValid} onClick={() => void testBackend("metadata")}>
-            {connectionTesting ? <RefreshCw className="animate-spin" size={16} /> : <Wifi size={16} />}
-            {language === "zh-CN" ? "测试元数据（通常无推理费）" : "Test metadata (normally no inference cost)"}
-          </Button>
-          <Button variant="secondary" disabled={connectionTesting || hasUnsavedChanges || !readiness?.configurationValid} onClick={() => setConfirmingInferenceTest(true)}>
-            <ServerCog size={16} />
-            {language === "zh-CN" ? "可选：最小推理测试" : "Optional: minimal inference test"}
-          </Button>
-          {connectionTesting && activeConnectionTestId ? <Button variant="ghost" onClick={() => void cancelConnectionTest()}><X size={16} />{language === "zh-CN" ? "取消测试" : "Cancel test"}</Button> : null}
-          <button className="min-h-10 px-2 text-sm font-semibold text-ink-300 hover:text-ink-50" type="button" onClick={() => void refreshReadiness()}>{language === "zh-CN" ? "刷新诊断" : "Refresh diagnostics"}</button>
-        </div>
-
-        {connectionResult || (readiness?.connectionStatus.status !== "untested" && readiness?.connectionStatus.status !== "checking") ? (
-          <div className={`mt-3 rounded-md border px-3 py-2.5 text-sm ${((connectionResult ?? readiness?.connectionStatus)?.status === "succeeded") ? "border-emerald-400/25 bg-emerald-500/[0.06] text-emerald-100" : "border-rose-400/25 bg-rose-500/[0.06] text-rose-100"}`} role="status" data-testid="connection-diagnostic-result">
-            {((connectionResult ?? readiness?.connectionStatus)?.status === "succeeded")
-              ? (language === "zh-CN" ? "连接检查通过。现在可以创建或继续聊天。" : "Connection check passed. You can now create or continue a chat.")
-              : (language === "zh-CN" ? `连接检查未通过：${(connectionResult ?? readiness?.connectionStatus)?.errorCode ?? "connection_failed"}。诊断标识 ${(connectionResult ?? readiness?.connectionStatus)?.diagnosticId ?? "—"}。` : `Connection check failed: ${(connectionResult ?? readiness?.connectionStatus)?.errorCode ?? "connection_failed"}. Diagnostic ${(connectionResult ?? readiness?.connectionStatus)?.diagnosticId ?? "—"}.`)}
-            <div className="mt-2 flex flex-wrap gap-3">
-              <button className="font-semibold underline-offset-2 hover:underline" type="button" onClick={() => void copyTextWithFallback(JSON.stringify({ errorCode: (connectionResult ?? readiness?.connectionStatus)?.errorCode, diagnosticId: (connectionResult ?? readiness?.connectionStatus)?.diagnosticId, providerKind: (connectionResult ?? readiness?.connectionStatus)?.providerKind, module: "chat", occurredAt: (connectionResult ?? readiness?.connectionStatus)?.checkedAt, retryable: (connectionResult ?? readiness?.connectionStatus)?.retryable, suggestedAction: (connectionResult ?? readiness?.connectionStatus)?.suggestedAction }))}>{language === "zh-CN" ? "复制安全诊断" : "Copy safe diagnostic"}</button>
-              {((connectionResult ?? readiness?.connectionStatus)?.status === "failed") ? <button className="font-semibold underline-offset-2 hover:underline" data-testid="connection-diagnostic-fix" type="button" onClick={() => openConnectionRecovery((connectionResult ?? readiness?.connectionStatus)?.suggestedAction)}>{(connectionResult ?? readiness?.connectionStatus)?.suggestedAction === "review_budget" ? (language === "zh-CN" ? "检查预算" : "Review budget") : (language === "zh-CN" ? "打开相关模型设置" : "Open relevant model settings")}</button> : null}
-              {((connectionResult ?? readiness?.connectionStatus)?.status === "succeeded") ? <button className="font-semibold underline-offset-2 hover:underline" type="button" onClick={() => { window.history.pushState({}, "", "/"); window.dispatchEvent(new PopStateEvent("popstate")); }}>{readiness?.hasChat ? (language === "zh-CN" ? "返回聊天" : "Return to chat") : (language === "zh-CN" ? "创建聊天" : "Create a chat")}</button> : null}
-            </div>
-          </div>
-        ) : null}
-      </section>
-
-      <div className="border-b border-white/[0.08]">
-        <div className="flex gap-1 overflow-x-auto">
+      <nav className="settings-navigation" aria-label={language === "zh-CN" ? "设置分类" : "Settings categories"}>
+        <div className="settings-navigation-items">
           {([
             ["runtime", copy.runtimeTitle],
             ["appearance", language === "zh-CN" ? "外观与无障碍" : "Appearance & accessibility"],
@@ -1859,11 +1723,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
               <button
                 aria-pressed={active}
                 key={section}
-                className={`min-h-[44px] min-w-[7.5rem] flex-none whitespace-nowrap border-b-2 px-2 text-xs font-medium transition-colors sm:min-w-0 sm:flex-1 sm:px-4 sm:text-sm ${
-                  active
-                    ? "border-ember-400 text-ember-200"
-                    : "border-transparent text-ink-400 hover:bg-white/[0.035] hover:text-ink-100"
-                }`}
+                className="min-h-[44px] whitespace-nowrap text-sm font-medium transition-colors hover:bg-ink-800"
                 data-testid={`settings-section-${section}`}
                 type="button"
                 onClick={() => setActiveSection(section)}
@@ -1873,6 +1733,16 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
             );
           })}
         </div>
+      </nav>
+      <div className="settings-content">
+
+      <div className="settings-command-bar">
+        <span className={hasUnsavedChanges ? "text-amber-200" : "text-ink-400"} aria-live="polite">
+          {hasUnsavedChanges ? copy.changesDirty : copy.changesClean}
+        </span>
+        <Button data-testid="settings-save" disabled={loading || !hasUnsavedChanges} onClick={() => void saveSettings()}>
+          <Save size={16} />{copy.saveReady}
+        </Button>
       </div>
 
       {activeSection === "appearance" ? (
@@ -3331,6 +3201,103 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       {activeSection === "about" ? <AboutUpdatesPanel language={language} /> : null}
       {activeSection === "storage" ? <StorageHealthPanel language={language} /> : null}
 
+      {(activeSection === "runtime" || activeSection === "providers") ? (
+        <details className="settings-model-overview">
+          <summary>{language === "zh-CN" ? "查看模型概况" : "View model overview"}</summary>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <SummaryCard
+              label={copy.providerStatus}
+              value={activeProviderName || t("common.unknown")}
+            />
+            <SummaryCard
+              label={copy.modelStatus}
+              value={activeModelName || t("common.unknown")}
+              tone={activeModelName ? "emerald" : "default"}
+            />
+            <SummaryCard
+              label={copy.apiKeyStatus}
+              value={
+                clearStoredApiKey
+                  ? copy.keyPendingRemoval
+                  : hasApiKey || Boolean(form.apiKey?.trim())
+                    ? copy.keyStored
+                    : copy.keyMissing
+              }
+              tone={hasApiKey || Boolean(form.apiKey?.trim()) ? "emerald" : "default"}
+            />
+            <SummaryCard
+              label={copy.providerCount}
+              value={copy.providerCountDisplay(form.providers.length)}
+            />
+
+          </div>
+        </details>
+      ) : null}
+      {(activeSection === "runtime" || activeSection === "providers") ? <section className={`rounded-lg p-4 sm:p-5 ${settingsSurfaceClassName}`} data-testid="configuration-diagnostics">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className={`mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-full ${readiness?.configurationValid ? "bg-emerald-500/10 text-emerald-300" : "bg-amber-500/10 text-amber-200"}`}>
+              {readiness?.configurationValid ? <ShieldCheck size={18} /> : <AlertTriangle size={18} />}
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-ink-50">{language === "zh-CN" ? "模型配置诊断" : "Model configuration diagnostics"}</h3>
+              <p className="mt-1 text-xs font-semibold text-ember-200" data-testid="readiness-overall-status">{language === "zh-CN" ? ({ ready: "可以开始聊天", ready_with_limited_capabilities: "可以聊天，但部分能力不可用", needs_configuration: "需要配置", configuration_untested: "配置可能有效但尚未测试", connection_failed: "连接失败", budget_blocked: "被本机预算阻止", locked: "应用已锁定", server_unreachable: "本地后端不可达" } as const)[readiness?.overallStatus ?? "server_unreachable"] : ({ ready: "Ready to chat", ready_with_limited_capabilities: "Ready with limited capabilities", needs_configuration: "Configuration needed", configuration_untested: "Configuration may work but is untested", connection_failed: "Connection failed", budget_blocked: "Blocked by local budget", locked: "App locked", server_unreachable: "Local backend unreachable" } as const)[readiness?.overallStatus ?? "server_unreachable"]}</p>
+              <p className="mt-1 text-sm leading-6 text-ink-400">
+                {hasUnsavedChanges
+                  ? (language === "zh-CN" ? "以下结果仅对应已保存配置。请先保存更改，再重新检查；未保存的密钥不会参与诊断。" : "These results describe the saved configuration only. Save changes before checking again; unsaved keys are not inspected.")
+                  : readinessLoading
+                    ? (language === "zh-CN" ? "正在读取后端权威状态…" : "Reading authoritative backend state…")
+                    : readiness?.configurationValid
+                      ? (language === "zh-CN" ? "静态检查已通过。连接状态仍需通过显式测试确认。" : "Static checks passed. Connection state still requires an explicit test.")
+                      : (language === "zh-CN" ? "发现需要处理的已保存配置问题。诊断不会显示 API Key、聊天内容或供应商原始响应。" : "The saved configuration has actionable issues. Diagnostics never display API keys, chat content, or raw provider responses.")}
+              </p>
+            </div>
+          </div>
+          <Button variant="ghost" data-testid="settings-open-onboarding" onClick={reopenOnboarding}>
+            {language === "zh-CN" ? "重新打开引导" : "Reopen guide"}
+          </Button>
+        </div>
+
+        {readiness?.issues.length ? (
+          <ul className="mt-4 grid gap-2 sm:grid-cols-2" data-testid="configuration-issue-list">
+            {readiness.issues.map((issue, index) => (
+              <li className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-white/[0.08] bg-ink-950/40 px-3 py-2.5 text-sm" key={`${issue.code}-${issue.module ?? "global"}-${index}`}>
+                <span className={issue.severity === "error" ? "text-rose-200" : "text-amber-100"}>{diagnosticCopy(issue)}</span>
+                <button className="shrink-0 font-semibold text-ember-200 underline-offset-2 hover:underline" type="button" onClick={() => openDiagnosticAction(issue)}>{language === "zh-CN" ? "处理" : "Fix"}</button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/[0.08] pt-4">
+          <span className="w-full text-xs text-ink-400">{language === "zh-CN" ? `测试已保存配置：${activeProviderName || "未选择供应商"} / ${activeModelName || "未选择模型"}` : `Testing saved configuration: ${activeProviderName || "no provider"} / ${activeModelName || "no model"}`}</span>
+          <Button disabled={connectionTesting || hasUnsavedChanges || !readiness?.configurationValid} onClick={() => void testBackend("metadata")}>
+            {connectionTesting ? <RefreshCw className="animate-spin" size={16} /> : <Wifi size={16} />}
+            {language === "zh-CN" ? "测试元数据（通常无推理费）" : "Test metadata (normally no inference cost)"}
+          </Button>
+          <Button variant="secondary" disabled={connectionTesting || hasUnsavedChanges || !readiness?.configurationValid} onClick={() => setConfirmingInferenceTest(true)}>
+            <ServerCog size={16} />
+            {language === "zh-CN" ? "可选：最小推理测试" : "Optional: minimal inference test"}
+          </Button>
+          {connectionTesting && activeConnectionTestId ? <Button variant="ghost" onClick={() => void cancelConnectionTest()}><X size={16} />{language === "zh-CN" ? "取消测试" : "Cancel test"}</Button> : null}
+          <button className="min-h-10 px-2 text-sm font-semibold text-ink-300 hover:text-ink-50" type="button" onClick={() => void refreshReadiness()}>{language === "zh-CN" ? "刷新诊断" : "Refresh diagnostics"}</button>
+        </div>
+
+        {connectionResult || (readiness?.connectionStatus.status !== "untested" && readiness?.connectionStatus.status !== "checking") ? (
+          <div className={`mt-3 rounded-md border px-3 py-2.5 text-sm ${((connectionResult ?? readiness?.connectionStatus)?.status === "succeeded") ? "border-emerald-400/25 bg-emerald-500/[0.06] text-emerald-100" : "border-rose-400/25 bg-rose-500/[0.06] text-rose-100"}`} role="status" data-testid="connection-diagnostic-result">
+            {((connectionResult ?? readiness?.connectionStatus)?.status === "succeeded")
+              ? (language === "zh-CN" ? "连接检查通过。现在可以创建或继续聊天。" : "Connection check passed. You can now create or continue a chat.")
+              : (language === "zh-CN" ? `连接检查未通过：${(connectionResult ?? readiness?.connectionStatus)?.errorCode ?? "connection_failed"}。诊断标识 ${(connectionResult ?? readiness?.connectionStatus)?.diagnosticId ?? "—"}。` : `Connection check failed: ${(connectionResult ?? readiness?.connectionStatus)?.errorCode ?? "connection_failed"}. Diagnostic ${(connectionResult ?? readiness?.connectionStatus)?.diagnosticId ?? "—"}.`)}
+            <div className="mt-2 flex flex-wrap gap-3">
+              <button className="font-semibold underline-offset-2 hover:underline" type="button" onClick={() => void copyTextWithFallback(JSON.stringify({ errorCode: (connectionResult ?? readiness?.connectionStatus)?.errorCode, diagnosticId: (connectionResult ?? readiness?.connectionStatus)?.diagnosticId, providerKind: (connectionResult ?? readiness?.connectionStatus)?.providerKind, module: "chat", occurredAt: (connectionResult ?? readiness?.connectionStatus)?.checkedAt, retryable: (connectionResult ?? readiness?.connectionStatus)?.retryable, suggestedAction: (connectionResult ?? readiness?.connectionStatus)?.suggestedAction }))}>{language === "zh-CN" ? "复制安全诊断" : "Copy safe diagnostic"}</button>
+              {((connectionResult ?? readiness?.connectionStatus)?.status === "failed") ? <button className="font-semibold underline-offset-2 hover:underline" data-testid="connection-diagnostic-fix" type="button" onClick={() => openConnectionRecovery((connectionResult ?? readiness?.connectionStatus)?.suggestedAction)}>{(connectionResult ?? readiness?.connectionStatus)?.suggestedAction === "review_budget" ? (language === "zh-CN" ? "检查预算" : "Review budget") : (language === "zh-CN" ? "打开相关模型设置" : "Open relevant model settings")}</button> : null}
+              {((connectionResult ?? readiness?.connectionStatus)?.status === "succeeded") ? <button className="font-semibold underline-offset-2 hover:underline" type="button" onClick={() => { window.history.pushState({}, "", "/"); window.dispatchEvent(new PopStateEvent("popstate")); }}>{readiness?.hasChat ? (language === "zh-CN" ? "返回聊天" : "Return to chat") : (language === "zh-CN" ? "创建聊天" : "Create a chat")}</button> : null}
+            </div>
+          </div>
+        ) : null}
+      </section> : null}
+
+      </div>
       {confirmingAppearanceReset ? (
         <ConfirmDialog
           cancelLabel={t("common.cancel")}

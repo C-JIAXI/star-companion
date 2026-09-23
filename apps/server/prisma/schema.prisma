@@ -65,6 +65,7 @@ model Character {
   openingHtml  String   @default("")
   tags         Json     @default("[]")
   loreEntries  Json     @default("[]")
+  regexScripts Json     @default("[]")
   quickReplies Json     @default("[]")
   /// Local user preference. Included in backups, excluded from character card exports.
   isFavorite   Boolean  @default(false)

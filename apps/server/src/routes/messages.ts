@@ -14,6 +14,7 @@ import { serializeMessage } from "../serializers.js";
 import { deleteMessageTimeline } from "../services/messageTimeline.js";
 import { attachDraftToMessage, deleteUnreferencedAssets, messageIncludeAttachments } from "../services/messageAttachments.js";
 import { listMessagePage, locateMessagePage } from "../services/messagePaging.js";
+import { addDisplayContent, processStoredContent } from "../services/characterRegexMessages.js";
 
 export const messagesRouter = Router();
 
@@ -56,7 +57,7 @@ messagesRouter.get(
       include: messageIncludeAttachments
     });
 
-    response.json({ ok: true, data: messages.map(serializeMessage) });
+    response.json({ ok: true, data: await addDisplayContent(messages.map(serializeMessage)) });
   })
 );
 
@@ -73,12 +74,13 @@ messagesRouter.post(
     }
     const { draftId, handoffId, ...messageBody } = body;
     if (handoffId) {
-      const result = await consumeDraftHandoff(body.chatId, handoffId);
-      response.status(201).json({ ok: true, data: serializeMessage(result.message) });
+      const result = await consumeDraftHandoff(body.chatId, handoffId, (content) => processStoredContent(body.chatId, "user", content));
+      response.status(201).json({ ok: true, data: (await addDisplayContent([serializeMessage(result.message)]))[0] });
       return;
     }
     const data: Prisma.MessageUncheckedCreateInput = {
       ...messageBody,
+      content: body.role === "system" ? body.content : await processStoredContent(body.chatId, body.role, body.content),
       tokenUsage: normalizeTokenUsage(body.tokenUsage),
       generationMetadata: normalizeJsonObject(body.generationMetadata),
       variantMetadata: body.variantMetadata as Prisma.InputJsonValue,
@@ -93,7 +95,7 @@ messagesRouter.post(
       return tx.message.findUniqueOrThrow({ where: { id: created.id }, include: messageIncludeAttachments });
     });
 
-    response.status(201).json({ ok: true, data: serializeMessage(message) });
+    response.status(201).json({ ok: true, data: (await addDisplayContent([serializeMessage(message)]))[0] });
   })
 );
 
@@ -110,7 +112,7 @@ messagesRouter.get(
       throw new HttpError(404, "Message not found");
     }
 
-    response.json({ ok: true, data: serializeMessage(message) });
+    response.json({ ok: true, data: (await addDisplayContent([serializeMessage(message)]))[0] });
   })
 );
 
@@ -121,12 +123,18 @@ messagesRouter.put(
     const body = parseBody(messageUpdateSchema, request.body);
     const existing = await prisma.message.findFirst({
       where: { id, chat: { deletedAt: null } },
-      select: { id: true, chatId: true, role: true }
+      select: { id: true, chatId: true, role: true, variants: true }
     });
     if (!existing) {
       throw new HttpError(404, "Message not found");
     }
     const { draftId, replaceAttachments, ...ordinaryBody } = body;
+    if (typeof ordinaryBody.content === "string" && existing.role !== "system") {
+      const variants = Array.isArray(existing.variants) ? existing.variants : [];
+      const switchingVariant = typeof ordinaryBody.activeVariantIndex === "number" &&
+        variants[ordinaryBody.activeVariantIndex] === ordinaryBody.content;
+      if (!switchingVariant) ordinaryBody.content = await processStoredContent(existing.chatId, existing.role === "assistant" ? "assistant" : "user", ordinaryBody.content);
+    }
     if (replaceAttachments && existing.role !== "user") {
       throw new HttpError(400, "Image attachments can only be edited on user messages.");
     }
@@ -156,7 +164,7 @@ messagesRouter.put(
     });
 
     const message = await prisma.message.findUniqueOrThrow({ where: { id }, include: messageIncludeAttachments });
-    response.json({ ok: true, data: serializeMessage(message) });
+    response.json({ ok: true, data: (await addDisplayContent([serializeMessage(message)]))[0] });
   })
 );
 

@@ -98,7 +98,7 @@ export const discardDraftHandoff = async (chatId: string, id: string) => {
 };
 
 /** A receipt survives ledger pruning and message deletion. Replays never create another message. */
-export const consumeDraftHandoff = async (chatId: string, id: string) => {
+export const consumeDraftHandoff = async (chatId: string, id: string, processContent: (content: string) => Promise<string> = async (content) => content) => {
   const epoch = getPrivacyEpoch(); checkDraftLock(epoch);
   return prisma.$transaction(async (tx) => {
     checkDraftLock(epoch); await ensureDraftChat(tx, chatId, true);
@@ -111,7 +111,7 @@ export const consumeDraftHandoff = async (chatId: string, id: string) => {
     if (row.disposedAt) throw conflict();
     const snapshot = await serialize(tx, row);
     if (snapshot.attachments.some((item) => item.status !== "ready")) throw new HttpError(409, "Remove or replace unavailable images before sending.", { code: "draft_attachment_unavailable" });
-    const message = await tx.message.create({ data: { chatId, role: "user", content: row.content } });
+    const message = await tx.message.create({ data: { chatId, role: "user", content: await processContent(row.content) } });
     await tx.messageAttachment.updateMany({ where: { handoffId: id }, data: { handoffId: null, draftId: null, messageId: message.id } });
     await tx.draftHandoff.update({ where: { id }, data: { messageId: message.id, committedAt: new Date(), content: "", attachments: [] } });
     await tx.chat.update({ where: { id: chatId }, data: { updatedAt: new Date() } });

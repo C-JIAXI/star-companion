@@ -313,7 +313,7 @@ export function UserMessageBubble({
         showAvatar={showAvatar}
       />
       <article
-        className={`order-1 relative ${bubbleWidthClassName} rounded-lg rounded-bl-sm border border-ember-300/20 bg-ember-500 p-3 text-sm text-accentForeground sm:p-4`}
+        className={`order-1 relative ${bubbleWidthClassName} rounded-2xl rounded-bl-md border border-ember-300/20 bg-ember-500 p-3 text-sm text-accentForeground sm:p-4`}
         data-chat-bubble=""
       >
         {userName ? (
@@ -322,7 +322,7 @@ export function UserMessageBubble({
           </p>
         ) : null}
         <ChatImageGallery attachments={message.attachments ?? []} language={language} />
-        {message.content.trim() ? <MessageBody align="left" content={message.content} renderHtml={false} /> : <span className="sr-only">{language === "zh-CN" ? "图片消息" : "Image message"}</span>}
+        {(message.displayContent ?? message.content).trim() ? <MessageBody align="left" content={message.displayContent ?? message.content} renderHtml={false} /> : <span className="sr-only">{language === "zh-CN" ? "图片消息" : "Image message"}</span>}
         {message.contextIncluded === false ? (
           <div
             className="mt-3 inline-flex items-center gap-1.5 rounded border border-accentForeground/20 px-2 py-1 text-xs font-medium text-accentForeground/80"
@@ -334,7 +334,7 @@ export function UserMessageBubble({
         ) : null}
         <div className="mt-3 flex flex-wrap items-center justify-start gap-0.5 text-xs" data-chat-actions="">
           <button
-            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-accentForeground active:opacity-70"
             data-chat-action="resend"
             type="button"
             onClick={onResend}
@@ -343,7 +343,7 @@ export function UserMessageBubble({
             <RotateCcw size={14} />
           </button>
           <button
-            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-accentForeground active:opacity-70"
             data-chat-action="copy"
             type="button"
             onClick={onCopy}
@@ -364,7 +364,7 @@ export function UserMessageBubble({
             <Bookmark fill={message.isBookmarked ? "currentColor" : "none"} size={14} />
           </button>
           <button
-            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-accentForeground active:opacity-70"
             data-chat-action="context-toggle"
             type="button"
             onClick={onToggleContext}
@@ -373,7 +373,7 @@ export function UserMessageBubble({
             {message.contextIncluded ? <Eye size={14} /> : <EyeOff size={14} />}
           </button>
           <button
-            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-accentForeground active:opacity-70"
             data-chat-action="branch"
             type="button"
             onClick={onBranch}
@@ -383,7 +383,7 @@ export function UserMessageBubble({
             <GitBranch size={14} />
           </button>
           <button
-            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-accentForeground active:opacity-70"
             data-chat-action="checkpoint"
             type="button"
             onClick={onCheckpoint}
@@ -392,7 +392,7 @@ export function UserMessageBubble({
             <Save size={14} />
           </button>
           <button
-            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-accentForeground active:opacity-70"
             data-chat-action="edit"
             type="button"
             onClick={onEdit}
@@ -401,7 +401,7 @@ export function UserMessageBubble({
             <Pencil size={14} />
           </button>
           <button
-            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-ink-900/70 active:opacity-70"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap font-medium text-accentForeground active:opacity-70"
             data-chat-action="delete"
             type="button"
             onClick={onDelete}
@@ -487,10 +487,10 @@ export const AssistantMessageBubble = memo(function AssistantMessageBubble({
       data-chat-message="assistant"
     >
       <article
-        className={`order-1 relative self-start ${bubbleWidthClassName} overflow-hidden rounded-lg rounded-br-sm border border-white/[0.08] bg-ink-800 p-3 text-sm text-ink-50 sm:p-4`}
+        className={`order-1 relative self-start ${bubbleWidthClassName} overflow-hidden rounded-2xl rounded-br-md border border-white/[0.08] bg-ink-800 p-3 text-sm text-ink-50 sm:p-4`}
         data-chat-bubble=""
       >
-        <MessageBody content={message.content} htmlCss={htmlCss} />
+        <MessageBody content={message.displayContent ?? message.content} htmlCss={htmlCss} />
         <div className="mt-3 border-t border-white/5 pt-2">
           <div className="flex min-w-0 flex-col gap-2 text-xs">
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
@@ -697,7 +697,7 @@ export function StreamingBubble({
       data-chat-message="streaming"
     >
       <article
-        className={`order-1 self-start ${bubbleWidthClassName} animate-fade-in overflow-hidden rounded-lg rounded-br-sm border border-ember-400/25 bg-ink-800 p-3 text-sm text-ink-50 sm:p-4`}
+        className={`order-1 self-start ${bubbleWidthClassName} animate-fade-in overflow-hidden rounded-2xl rounded-br-md border border-ember-400/25 bg-ink-800 p-3 text-sm text-ink-50 sm:p-4`}
         data-chat-bubble=""
       >
         {content ? (
@@ -747,7 +747,7 @@ export function ErrorBubble({
       data-chat-message="error"
     >
       <article
-        className={`order-1 self-start ${bubbleWidthClassName} animate-fade-in overflow-hidden rounded-lg rounded-br-sm border border-rose-500/30 bg-rose-950/30 p-3 text-sm text-rose-200 sm:p-4`}
+        className={`order-1 self-start ${bubbleWidthClassName} animate-fade-in overflow-hidden rounded-2xl rounded-br-md border border-rose-500/30 bg-rose-950/30 p-3 text-sm text-rose-200 sm:p-4`}
         data-chat-bubble=""
       >
         <div className="flex items-start gap-2">

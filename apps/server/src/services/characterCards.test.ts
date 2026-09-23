@@ -22,6 +22,7 @@ const baseCharacter = {
   suffix: "Keep replies concise.",
   htmlCss: ".card { color: #fff; }",
   openingHtml: "<section>Hidden opening.</section>",
+  regexScripts: [{ id: "private-rule", title: "Secret", pattern: "hidden", replacement: "visible", enabled: true, scope: "both" as const, renderOnly: false }],
   loreEntries: [
     {
       id: "entry-1",
@@ -63,6 +64,8 @@ describe("character private cards", () => {
     assert.equal(hidden.htmlCss, "");
     assert.equal(hidden.openingHtml, baseCharacter.openingHtml, "openingHtml remains a public card-protocol field");
     assert.deepEqual(hidden.loreEntries, []);
+    assert.deepEqual(hidden.regexScripts, []);
+    assert.equal(JSON.stringify(imported).includes("private-rule"), false);
 
     const wrongPassword = resolveCharacterRecord(
       { ...baseCharacter, ...imported },
@@ -79,6 +82,7 @@ describe("character private cards", () => {
     assert.equal(unlocked.htmlCss, baseCharacter.htmlCss);
     assert.equal(unlocked.openingHtml, baseCharacter.openingHtml);
     assert.deepEqual(unlocked.loreEntries, baseCharacter.loreEntries);
+    assert.deepEqual(unlocked.regexScripts, baseCharacter.regexScripts);
 
     const promptFields = resolveCharacterPromptFields(
       { ...baseCharacter, ...imported },
@@ -87,6 +91,7 @@ describe("character private cards", () => {
     assert.equal(promptFields.prompt, baseCharacter.prompt);
     assert.equal(promptFields.suffix, baseCharacter.suffix);
     assert.deepEqual(promptFields.loreEntries, baseCharacter.loreEntries);
+    assert.deepEqual(promptFields.regexScripts, baseCharacter.regexScripts);
   });
 
   it("validates the password before unlocking or publicly exporting private cards", () => {

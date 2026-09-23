@@ -11,6 +11,7 @@ import {
   characterExportSchema,
   characterImportSchema,
   characterPageQuerySchema,
+  characterRegexPreviewSchema,
   characterUnlockSchema,
   characterUpdateRequestSchema
 } from "../schemas.js";
@@ -27,8 +28,16 @@ import {
 } from "../services/characterCards.js";
 import { applyCharacterTagOperation } from "../services/characterTags.js";
 import { createCharacterDraft } from "../services/characterDraft.js";
+import { runCharacterRegexScripts } from "../services/characterRegex.js";
+import { toCharacterRegexScripts } from "../services/characterCards.js";
 
 export const charactersRouter = Router();
+
+charactersRouter.post("/regex-preview", asyncHandler(async (request, response) => {
+  const body = parseBody(characterRegexPreviewSchema, request.body);
+  const output = await runCharacterRegexScripts([{ content: body.content, role: body.role }], toCharacterRegexScripts(body.scripts), body.stage);
+  response.json({ ok: true, data: { content: output[0] ?? body.content } });
+}));
 
 charactersRouter.get(
   "/",

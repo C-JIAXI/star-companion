@@ -26,6 +26,10 @@ display, positioning, sizing or transforms. Restricted/off modes remain availabl
 - Images precede the growing text input; media/send controls and draft status
   follow it. Quick replies use one expandable row; queue and cost details can be
   expanded. Budget warnings and draft errors remain visible.
+  At low visible heights, attachment/queue and status/recovery/cost regions scroll
+  independently; the text input and send controls keep their space. These regions
+  are labelled and keyboard-focusable. Real mobile keyboard behavior still needs
+  a device check; emulation is not a substitute.
 - Closing or switching tools does not apply Agent candidates or send drafts.
   Sidebar/tool presentation state is session-only, not user-content storage.
 
@@ -36,7 +40,7 @@ Current scope:
 
 - Single-user, single-character chat with backend-proxied model requests.
 - A unified New Chat flow is available from the desktop sidebar, mobile header, and empty chat workspace, with paginated character search ordered by recent use plus an inline quick-create path that can create a minimal character and enter chat without leaving the dialog.
-- Character Studio with a guided Basic mode and a lossless Advanced mode over the same Character fields. Basic creation covers identity, the existing `prompt` field as the core definition, opening presentation, quick replies, and pre-save review; Advanced keeps `prefix`, `prompt`, `suffix`, scoped HTML/CSS, embedded `loreEntries`, quick replies, and private-card operations.
+- Character Studio with a guided Basic mode and a lossless Advanced mode over the same Character fields. Basic creation covers identity, the existing `prompt` field as the core definition, opening presentation, quick replies, and pre-save review; Advanced keeps `prefix`, `prompt`, `suffix`, scoped HTML/CSS, embedded `loreEntries`, ordered regex scripts, quick replies, and private-card operations. Stored regex scripts process new or edited messages before persistence; render-only scripts change chat display without changing saved text, search, exports, or model context.
 - Deterministic local character quality checks and character/token budget estimates run without a model. The optional drafting assistant uses the configured Agent module through the normal request ledger, retry/fallback, and budget lifecycle; it sends task-minimal draft fields, returns reviewable structured suggestions, never saves automatically, and supports apply/discard/undo.
 - Character cards retain local or remote cover images, local favorites, multi-mode library sorting, batch tag organization, safe duplication that preserves private-card encryption, and unsaved-change protection. Editor mode, wizard position, checks, AI suggestions, and undo snapshots never enter character-card, backup, recovery, or sync protocols.
 - Chat-scoped long-term memory with automatic maintenance, hybrid semantic-vector and keyword retrieval, source- and dimension-validated index status, keyword fallback while an index is stale or unavailable, and a dedicated index rebuild action with ready/stale/failed progress. Every memory content/status change has immutable, source-ID-only history; automatic maintenance is grouped into bounded operations with conflict-aware preflight and transactional undo. Memory and chat-profile revisions can be diffed, source-jumped across pagination, restored as new revisions, tombstoned, and explicitly purged. Reusable local persona presets, user profile summaries, preflighted local backup import/export, bounded recovery points, and conflict-safe manual LAN sync are also included. A persona preset can retain the visible user name and an optional local avatar for that chat; a stable placeholder is generated when no avatar is uploaded, while model-facing identity remains explicit in the preset prompt fields.
@@ -114,6 +118,14 @@ Chat image attachments use app-private, content-addressed storage and are never 
 Settings includes a responsive **Storage & health** center backed by the same desktop/mobile contract. It reports exact, estimated, or unavailable measurements for the SQLite database, core records, memory/history, sent/draft/recovery media references, local data-URL images, embeddings, recovery and upgrade copies, trash/tombstones, usage ledger, and app-private temporary files. Fast checks and cancellable deep checks are read-only. Cleanup is always per action: the backend creates a five-minute, one-use plan, revalidates targets immediately before execution, skips active/referenced data, and reports partial results. `VACUUM` is separate and mobile reports it unsupported when it cannot guarantee the operation safely. Low disk space blocks imports and image uploads while leaving safe diagnostic export available. See [the storage inventory](docs/storage-data-inventory.md).
 
 ## Global appearance and accessibility
+
+The application uses an original Apple-inspired visual language: neutral mist/graphite surfaces, a readable blue accent, platform system fonts, rounded groups, and restrained translucent navigation. Settings use a desktop category sidebar and horizontally scrollable mobile categories; model diagnostics stay in the runtime/provider sections. Character galleries use more spacious cards and Docs use grouped reading surfaces. No Apple assets or downloadable Apple fonts are bundled. See [visual design verification](docs/native-design.md).
+
+The floating composer keeps only image attachment, More tools and Send visible; voice and generation tools expand on demand. Draft status and costs remain separate, with explicit errors and budget warnings. Settings prioritize editable fields over collapsed model summaries, and character filters/sorting share one expandable panel. Selective glass and subtle motion respect high-contrast and reduced-motion preferences.
+
+Embedded character Lore supports mouse/touch handle dragging and Up/Down keyboard reordering; Escape cancels dragging. The order stays in the editor draft until the character is saved. Entry priorities and existing prompt selection rules are unchanged.
+
+Lore sorting uses a lifted drag surface, highlighted drop target and a 220ms position transition for moved entries. Reduced motion skips these position animations and cancels any already running; ordinary editing and scrolling do not trigger sorting animations.
 
 Settings → Appearance & accessibility controls system/light/dark theme, four font sizes, reading line height, chat width, message spacing, standard/high contrast, system/reduced/full motion, chat-background overlay and limited blur, plus full/restricted/off character CSS. The same semantic tokens apply to Chat, Characters, Settings, Docs, dialogs, forms, media, and status surfaces. Changes preview live and are saved in ordinary non-key settings, so schemaVersion 1 backups, recovery points, and LAN sync retain them without changing the backup protocol.
 

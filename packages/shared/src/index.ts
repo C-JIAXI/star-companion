@@ -298,6 +298,16 @@ export interface QuickReplyDTO {
   content: string;
 }
 
+export interface CharacterRegexScriptDTO {
+  id: string;
+  title: string;
+  pattern: string;
+  replacement: string;
+  enabled: boolean;
+  scope: "assistant" | "user" | "both";
+  renderOnly: boolean;
+}
+
 export interface CharacterCardContentDTO {
   name: string;
   avatar: string | null;
@@ -309,6 +319,7 @@ export interface CharacterCardContentDTO {
   htmlCss: string;
   openingHtml: string;
   loreEntries: CharacterLoreEntryDTO[];
+  regexScripts: CharacterRegexScriptDTO[];
   quickReplies: QuickReplyDTO[];
 }
 
@@ -325,6 +336,7 @@ export interface CharacterDTO {
   htmlCss: string;
   openingHtml: string;
   loreEntries: CharacterLoreEntryDTO[];
+  regexScripts: CharacterRegexScriptDTO[];
   quickReplies: QuickReplyDTO[];
   isFavorite: boolean;
   visibility: CharacterVisibility;
@@ -362,6 +374,7 @@ export interface BackupCharacterDTO {
   htmlCss: string;
   openingHtml: string;
   loreEntries: CharacterLoreEntryDTO[] | StoredPrivateCharacterBackupDTO;
+  regexScripts: CharacterRegexScriptDTO[];
   quickReplies: QuickReplyDTO[];
   isFavorite: boolean;
   createdAt?: string;
@@ -1060,6 +1073,7 @@ export interface MessageDTO {
   role: MessageRole;
   characterId: string | null;
   content: string;
+  displayContent?: string;
   attachments: MessageAttachmentDTO[];
   contextIncluded: boolean;
   isBookmarked: boolean;

@@ -14,6 +14,7 @@ import type {
   CharacterSortMode,
   CharacterExportMode,
   CharacterLoreEntryDTO,
+  CharacterRegexScriptDTO,
   CharacterVisibility,
   ChatAgentDraftDTO,
   ChatAgentActionDTO,
@@ -143,6 +144,7 @@ export type CharacterInput = {
   htmlCss?: string;
   openingHtml?: string;
   loreEntries?: (Omit<CharacterLoreEntryDTO, "id"> & { id?: string })[];
+  regexScripts?: CharacterRegexScriptDTO[];
   quickReplies?: (Omit<QuickReplyDTO, "id"> & { id?: string })[];
   isFavorite?: boolean;
 };
@@ -221,6 +223,7 @@ export type {
   CharacterSortMode,
   CharacterExportMode,
   CharacterLoreEntryDTO,
+  CharacterRegexScriptDTO,
   CharacterVisibility,
   ChatAgentDraftDTO,
   ChatAgentActionDTO,

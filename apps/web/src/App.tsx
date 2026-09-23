@@ -385,7 +385,7 @@ export function App() {
   }
 
   return (
-    <div className={`h-dvh bg-ink-950 text-ink-50 selection:bg-ember-400/25 safe-area-top safe-area-bottom ${activeSection === "chat" ? "chat-app-shell" : "transition-[height] duration-200"}`}>
+    <div className={`native-app h-dvh bg-ink-950 text-ink-50 selection:bg-ember-400/25 safe-area-top safe-area-bottom ${activeSection === "chat" ? "chat-app-shell" : "transition-[height] duration-200"}`}>
       <a className="skip-link" href="#main-content">
         {language === "zh-CN" ? "跳到主要内容" : "Skip to main content"}
       </a>
@@ -428,7 +428,7 @@ export function App() {
                     aria-current={selected ? "page" : undefined}
                     className={`group flex min-h-[44px] items-center gap-3 rounded-md border px-3 text-sm font-medium transition-colors ${
                       selected
-                        ? "border-ember-400/20 bg-ember-500/10 text-ember-100"
+                        ? "border-transparent bg-ember-500 text-white"
                         : "border-transparent text-ink-300 hover:bg-white/[0.045] hover:text-ink-50"
                     }`}
                     key={item.id}
@@ -472,27 +472,18 @@ export function App() {
 
       <div className="flex h-full min-w-0 flex-col lg:flex-row">
         <aside
-          className={`hidden lg:sticky lg:top-0 ${activeSection === "chat" && chatSidebarCollapsed ? "" : "lg:flex"} lg:h-full lg:w-60 lg:shrink-0 lg:flex-col lg:border-r lg:border-white/[0.08] lg:bg-ink-900`}
+          className={`hidden lg:sticky lg:top-0 ${chatSidebarCollapsed ? "" : "lg:flex"} lg:h-full lg:w-60 lg:shrink-0 lg:flex-col lg:border-r lg:border-white/[0.08] lg:bg-ink-900`}
           data-testid="desktop-sidebar"
         >
-          {activeSection === "chat" ? <button
-            type="button"
-            aria-label={language === "zh-CN" ? "折叠侧栏" : "Collapse sidebar"}
-            data-testid="chat-sidebar-collapse"
-            className="ml-auto grid h-11 w-11 place-items-center text-ink-300"
-            onPointerDown={(event) => { if (document.activeElement?.id === "chat-message-input") event.preventDefault(); }}
-            onClick={() => setChatSidebarCollapsed(true)}
-          ><PanelLeftClose size={20} /></button> : null}
-          <div className="flex shrink-0 items-center justify-between gap-3 px-4 py-5">
-            <div className="flex items-center gap-3 min-w-0">
+          <div className="flex min-h-16 shrink-0 items-center justify-between gap-1 px-3 py-2">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
               <img
-                className="h-10 w-10 shrink-0 rounded-md object-cover ring-1 ring-white/10"
+                className="h-8 w-8 shrink-0 rounded-lg object-cover ring-1 ring-white/10"
                 src="/app-logo-v2.png"
                 alt=""
               />
               <div className="min-w-0">
                 <h1 className="truncate text-sm font-semibold text-ink-50">{appName}</h1>
-                <p className="truncate text-xs text-ink-400">{t("app.tagline")}</p>
               </div>
             </div>
             <button
@@ -506,6 +497,14 @@ export function App() {
             >
               <Search size={17} />
             </button>
+            <button
+              type="button"
+              aria-label={language === "zh-CN" ? "折叠侧栏" : "Collapse sidebar"}
+              data-testid="chat-sidebar-collapse"
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-ink-300 hover:bg-white/[0.06]"
+              onPointerDown={(event) => { if (document.activeElement?.id === "chat-message-input") event.preventDefault(); }}
+              onClick={() => setChatSidebarCollapsed(true)}
+            ><PanelLeftClose size={20} /></button>
           </div>
 
           <nav className="flex shrink-0 flex-col gap-1 px-3">
@@ -518,7 +517,7 @@ export function App() {
                   aria-current={selected ? "page" : undefined}
                   className={`group flex min-h-10 items-center gap-2.5 rounded-md border px-3 text-sm font-medium transition-colors ${
                     selected
-                      ? "border-ember-400/20 bg-ember-500/10 text-ember-100"
+                      ? "border-transparent bg-ember-500 text-white"
                       : "border-transparent bg-transparent text-ink-300 hover:bg-white/[0.045] hover:text-ink-50"
                   }`}
                   key={item.id}
@@ -565,7 +564,7 @@ export function App() {
         </aside>
 
         <main id="main-content" tabIndex={-1} className="flex min-w-0 flex-1 flex-col min-h-0 overflow-hidden">
-          {activeSection !== "chat" ? <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-white/[0.08] bg-ink-950/95 px-3 py-2.5 backdrop-blur-md safe-area-top sm:px-4 lg:hidden">
+          {activeSection !== "chat" ? <header className="sticky top-0 z-30 flex min-h-16 items-center justify-between gap-2 border-b border-white/[0.08] bg-ink-950/95 px-3 py-2 backdrop-blur-md sm:px-4 lg:hidden">
             <button
               className="grid h-11 w-11 shrink-0 place-items-center rounded-md text-ink-300 transition-colors hover:bg-white/[0.06] hover:text-ink-50"
               type="button"
@@ -602,8 +601,9 @@ export function App() {
               </button>
             </div>
           </header> : null}
-          {activeSection !== "chat" ? <header className="sticky top-0 z-20 hidden shrink-0 border-b border-white/[0.08] bg-ink-950/90 px-6 py-4 backdrop-blur-md lg:block lg:px-8">
-            <div>
+          {activeSection !== "chat" ? <header className="native-page-header sticky top-0 z-20 hidden min-h-16 shrink-0 items-center gap-3 border-b border-white/[0.08] bg-ink-950/90 px-4 py-2 backdrop-blur-md lg:flex">
+            {chatSidebarCollapsed ? <button type="button" aria-label="Toggle navigation" className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-ink-300" onClick={() => setChatSidebarCollapsed(false)}><Menu size={20} /></button> : null}
+            <div className="min-w-0">
               <h2 className="text-lg font-semibold text-ink-50">
                 {t(active.titleKey)}
               </h2>

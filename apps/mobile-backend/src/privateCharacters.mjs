@@ -126,6 +126,13 @@ export const toQuickReplies = (value) => {
     .filter(Boolean);
 };
 
+export const toCharacterRegexScripts = (value) => Array.isArray(value)
+  ? value.filter((item) => item && typeof item === "object" && typeof item.id === "string" &&
+    typeof item.title === "string" && typeof item.pattern === "string" &&
+    typeof item.replacement === "string" && typeof item.enabled === "boolean" &&
+    ["assistant", "user", "both"].includes(item.scope) && typeof item.renderOnly === "boolean")
+  : [];
+
 export const toCharacterTags = (value) => {
   if (!Array.isArray(value)) {
     return [];
@@ -209,7 +216,8 @@ const toEncryptedPromptPayload = (fields, access) => ({
   prompt: fields.prompt,
   suffix: fields.suffix,
   htmlCss: fields.htmlCss,
-  loreEntries: fields.loreEntries
+  loreEntries: fields.loreEntries,
+  regexScripts: fields.regexScripts
 });
 
 const normalizePromptFields = (value) => ({
@@ -217,7 +225,8 @@ const normalizePromptFields = (value) => ({
   prompt: value.prompt ?? "",
   suffix: value.suffix ?? "",
   htmlCss: value.htmlCss ?? "",
-  loreEntries: toCharacterLoreEntries(value.loreEntries)
+  loreEntries: toCharacterLoreEntries(value.loreEntries),
+  regexScripts: toCharacterRegexScripts(value.regexScripts)
 });
 
 const decryptStoredPromptFields = (record, password) => {
@@ -310,6 +319,7 @@ export const resolveCharacterRecord = (character, password) => {
       suffix: "",
       htmlCss: "",
       loreEntries: [],
+      regexScripts: [],
       visibility: "private",
       canViewPrompt: false
     };
@@ -329,6 +339,7 @@ export const resolveCharacterRecord = (character, password) => {
       suffix: canViewPrompt ? fields.suffix : "",
       htmlCss: canViewPrompt ? fields.htmlCss : "",
       loreEntries: canViewPrompt ? fields.loreEntries : [],
+      regexScripts: canViewPrompt ? fields.regexScripts : [],
       visibility: "private",
       canViewPrompt
     };
@@ -343,6 +354,7 @@ export const resolveCharacterRecord = (character, password) => {
       suffix: "",
       htmlCss: "",
       loreEntries: [],
+      regexScripts: [],
       visibility: "private",
       canViewPrompt: false
     };
@@ -355,7 +367,7 @@ export const resolveCharacterPromptFields = (character, password) => {
   }
 
   if (character.loreEntries.__privateCharacter.exportSalt && !password) {
-    return { prefix: "", prompt: "", suffix: "", htmlCss: "", loreEntries: [] };
+    return { prefix: "", prompt: "", suffix: "", htmlCss: "", loreEntries: [], regexScripts: [] };
   }
 
   return decryptStoredPromptFields(character.loreEntries, password).fields;
@@ -470,6 +482,7 @@ export const importCharacterCard = (source) => {
       htmlCss: source.character.htmlCss,
       openingHtml: source.character.openingHtml ?? "",
       loreEntries: source.character.loreEntries,
+      regexScripts: source.character.regexScripts ?? [],
       quickReplies: source.character.quickReplies ?? []
     };
   }
@@ -496,6 +509,7 @@ export const importCharacterCard = (source) => {
         exportSalt: source.protectedPayload.salt
       }
     },
+    regexScripts: [],
     quickReplies: source.character.quickReplies ?? []
   };
 };
@@ -504,7 +518,8 @@ export const buildCharacterUpdateData = (character, updates, password) => {
   if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
     return {
       ...updates,
-      loreEntries: updates.loreEntries
+      loreEntries: updates.loreEntries,
+      regexScripts: updates.regexScripts
     };
   }
 
@@ -513,7 +528,8 @@ export const buildCharacterUpdateData = (character, updates, password) => {
     updates.prompt !== undefined ||
     updates.suffix !== undefined ||
     updates.htmlCss !== undefined ||
-    updates.loreEntries !== undefined;
+    updates.loreEntries !== undefined ||
+    updates.regexScripts !== undefined;
 
   if (!hasPrivateUpdates) {
     return {
@@ -538,7 +554,8 @@ export const buildCharacterUpdateData = (character, updates, password) => {
     prompt: updates.prompt ?? fields.prompt,
     suffix: updates.suffix ?? fields.suffix,
     htmlCss: updates.htmlCss ?? fields.htmlCss,
-    loreEntries: updates.loreEntries !== undefined ? toCharacterLoreEntries(updates.loreEntries) : fields.loreEntries
+    loreEntries: updates.loreEntries !== undefined ? toCharacterLoreEntries(updates.loreEntries) : fields.loreEntries,
+    regexScripts: updates.regexScripts !== undefined ? toCharacterRegexScripts(updates.regexScripts) : fields.regexScripts
   };
 
   return {
@@ -553,6 +570,7 @@ export const buildCharacterUpdateData = (character, updates, password) => {
     suffix: "",
     htmlCss: "",
     loreEntries: buildStoredPrivateCharacterJson(nextFields, access),
+    regexScripts: [],
     quickReplies: updates.quickReplies
   };
 };

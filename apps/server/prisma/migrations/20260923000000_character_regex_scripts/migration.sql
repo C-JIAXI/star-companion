@@ -1,0 +1,1 @@
+ALTER TABLE "Character" ADD COLUMN "regexScripts" JSONB NOT NULL DEFAULT '[]';

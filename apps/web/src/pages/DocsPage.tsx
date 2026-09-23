@@ -153,7 +153,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "创建原创角色",
-              body: "想立即开始时，可在“新建聊天”中使用快速创建。角色工坊的基础模式按身份、核心设定、开场体验、检查与创建四步引导；核心设定直接使用现有 prompt。高级模式显示 prefix、prompt、suffix、内嵌 lore、快捷回复和样式。两种模式共享同一草稿，切换或基础保存不会清空高级字段。编辑器会标记未保存状态并在离开前提醒。"
+              body: "想立即开始时，可在“新建聊天”中使用快速创建。角色工坊的基础模式按身份、核心设定、开场体验、检查与创建四步引导；核心设定直接使用现有 prompt。高级模式显示 prefix、prompt、suffix、内嵌 lore、快捷回复和样式。两种模式共享同一草稿，切换或基础保存不会清空高级字段。编辑器会标记未保存状态并在离开前提醒。内嵌 Lore 可拖动左侧手柄或用上下方向键排序，Esc 取消拖动；顺序在保存角色后生效，不改变条目优先级。"
             },
             {
               title: "开始聊天",
@@ -178,7 +178,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "阅读与输入",
-              body: "快捷回复默认单行，可展开。图片在输入框上方；输入框自动增高至当前视口上限，之后内部滚动。附件、语音与发送在其下方，随后显示草稿状态和可展开的费用。队列默认显示数量，展开后可编辑、删除或立即发送；草稿错误和预算警告不会随费用详情隐藏。"
+              body: "快捷回复默认单行，可展开。图片在输入框上方；输入框自动增高至当前视口上限，之后内部滚动。圆角输入卡片下方保留图片、更多工具和发送按钮；语音与生图收在更多工具中，草稿状态和可展开费用位于卡片外。队列默认显示数量，展开后可编辑、删除或立即发送；草稿错误和预算警告不会随费用详情隐藏。可见高度不足时，附件／队列区和状态／恢复／费用区可分别滚动，也可用键盘聚焦，保留输入和发送空间。"
             },
             {
               title: "发送与停止",
@@ -218,7 +218,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "语音与图片",
-              body: "输入框工具可录音转写、朗读最近回复和生成图片；每条助手回复也可单独朗读或停止。尚未配置兼容模型时，这些入口会直接定位到设置页对应的模块模型下拉框。设置页可指定文字朗读的声音 ID、0.5–2 倍播放速度，并选择是否自动朗读当前聊天中新收到的助手回复。图片会先在预览中展示，确认后才插入输入框。"
+              body: "输入框的“更多工具”可录音转写、朗读最近回复和生成图片；每条助手回复也可单独朗读或停止。尚未配置兼容模型时，这些入口会直接定位到设置页对应的模块模型下拉框。设置页可指定文字朗读的声音 ID、0.5–2 倍播放速度，并选择是否自动朗读当前聊天中新收到的助手回复。图片会先在预览中展示，确认后才插入输入框。"
             },
             {
               title: "草稿保存与恢复",
@@ -276,7 +276,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           items: [
             {
               title: "外观与无障碍",
-              body: "全局外观设置统一作用于聊天、角色、设置与文档页，包含系统/浅色/深色主题、字号、行距、聊天宽度、消息间距、高对比度、动态效果和聊天背景遮罩。系统模式会实时跟随设备；减少动态效果会关闭非必要动画和平滑滚动。角色 CSS 可选择完整、受限或关闭；受限模式不会改写已保存的 CSS，但会阻止隐藏控件、过小文字、极端层级和无限动画。隐私锁会保留这些非敏感外观，但不会显示聊天背景或工作区内容。"
+              body: "应用采用雾白／石墨灰底色、蓝色强调、系统字体与圆角分组。设置在桌面使用分类侧栏，在移动端使用可横向滚动的分类；模型诊断位于运行配置和供应商分类。全局外观设置统一作用于聊天、角色、设置与文档页，包含系统/浅色/深色主题、字号、行距、聊天宽度、消息间距、高对比度、动态效果和聊天背景遮罩。系统模式会实时跟随设备；减少动态效果会关闭非必要动画和平滑滚动。角色 CSS 可选择完整、受限或关闭；受限模式不会改写已保存的 CSS，但会阻止隐藏控件、过小文字、极端层级和无限动画。隐私锁会保留这些非敏感外观，但不会显示聊天背景或工作区内容。"
             },
             {
               title: "API Key",
@@ -472,7 +472,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Create an original character",
-            body: "For the fastest start, use Quick Create in New Chat. Character Studio Basic mode guides Identity, Core, Opening, and Review using the existing prompt as the core definition. Advanced mode exposes prefix, prompt, suffix, embedded lore, quick replies, and styling. Both modes share one draft, so switching or saving in Basic never clears Advanced fields. Unsaved work is protected before leaving."
+            body: "For the fastest start, use Quick Create in New Chat. Character Studio Basic mode guides Identity, Core, Opening, and Review using the existing prompt as the core definition. Advanced mode exposes prefix, prompt, suffix, embedded lore, quick replies, and styling. Both modes share one draft, so switching or saving in Basic never clears Advanced fields. Unsaved work is protected before leaving. Drag embedded lore by its left handle or use Up/Down arrows; Esc cancels dragging. Save the character to persist the order; entry priorities stay unchanged."
           },
           {
             title: "Start chatting",
@@ -554,7 +554,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Reading and composing",
-            body: "Quick replies use one expandable row. Images sit above the growing input; media and send controls follow it, then draft status and expandable cost details. The input scrolls internally at its viewport limit. Expand the queue count to edit, discard or send pending snapshots. Draft errors and budget warnings remain visible when cost details are collapsed."
+            body: "Quick replies use one expandable row. Images sit above the growing input; image, More tools and send controls sit inside the rounded input card, with draft status and expandable costs below the card. The input scrolls internally at its viewport limit. Expand the queue count to edit, discard or send pending snapshots. Draft errors and budget warnings remain visible when cost details are collapsed. At low visible heights, attachment/queue and status/recovery/cost regions scroll independently and can receive keyboard focus, keeping space for input and sending."
           },
           {
             title: "Story paths",
@@ -566,7 +566,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Voice and images",
-            body: "Composer tools transcribe recordings, read the latest reply, and generate images; each assistant reply can also be narrated or stopped individually. When no compatible model is configured, these controls jump directly to the matching module-model selector in Settings. Settings let you choose a speech voice ID, a 0.5–2x playback rate, and automatic playback for new assistant replies in the current chat. Images are previewed before you insert one into the composer."
+            body: "The composer's More tools menu transcribes recordings, read the latest reply, and generate images; each assistant reply can also be narrated or stopped individually. When no compatible model is configured, these controls jump directly to the matching module-model selector in Settings. Settings let you choose a speech voice ID, a 0.5–2x playback rate, and automatic playback for new assistant replies in the current chat. Images are previewed before you insert one into the composer."
           },
           {
             title: "Send images to a vision model",
@@ -622,7 +622,7 @@ const getDocsCopy = (language: string): DocsCopy => {
         items: [
           {
             title: "Appearance and accessibility",
-            body: "Global appearance preferences apply to Chat, Characters, Settings, and Docs: system/light/dark theme, type size, line height, chat width, message spacing, high contrast, motion, and chat-background masking. System modes follow the device live; reduced motion removes non-essential animation and smooth scrolling. Character CSS can be full, restricted, or off. Restricted mode leaves stored CSS unchanged but blocks hidden controls, tiny text, extreme stacking, and endless animation. Privacy lock keeps this non-sensitive appearance without showing chat backgrounds or workspace content."
+            body: "Neutral mist/graphite surfaces, a blue accent, system fonts, and rounded groups form the visual system. Settings use a desktop category sidebar and scrollable mobile categories; model diagnostics live in Runtime and Providers. Global appearance preferences apply to Chat, Characters, Settings, and Docs: system/light/dark theme, type size, line height, chat width, message spacing, high contrast, motion, and chat-background masking. System modes follow the device live; reduced motion removes non-essential animation and smooth scrolling. Character CSS can be full, restricted, or off. Restricted mode leaves stored CSS unchanged but blocks hidden controls, tiny text, extreme stacking, and endless animation. Privacy lock keeps this non-sensitive appearance without showing chat backgrounds or workspace content."
           },
           {
             title: "API keys",
@@ -801,7 +801,7 @@ function SectionHeading({ section }: { section: DocsSection }) {
 function GuideSectionView({ section }: { section: GuideSection }) {
   return (
     <>
-      <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-5 grid gap-5 md:grid-cols-2">
         {section.items.map((item, index) => (
           <article
             key={item.title}
@@ -969,7 +969,7 @@ export function DocsPage() {
             <section
               key={section.id}
               id={section.id}
-              className="scroll-mt-28 border-b border-white/5 pb-7 last:border-b-0"
+              className="docs-reading-section scroll-mt-28"
             >
               <SectionHeading section={section} />
 

@@ -240,7 +240,7 @@ export function DebugPromptDrawer({
             {t("debug.title")}
           </h3>
           <button
-            className="grid h-[48px] w-[48px] shrink-0 place-items-center rounded-lg text-slate-500 transition-all duration-200 hover:bg-white/10 hover:text-slate-200 active:scale-90"
+            className="grid h-[48px] w-[48px] shrink-0 place-items-center rounded-lg text-slate-500 transition-colors duration-200 hover:bg-white/10 hover:text-slate-200"
             type="button"
             onClick={onClose}
           >

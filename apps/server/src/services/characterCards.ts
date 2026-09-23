@@ -29,12 +29,31 @@ export type QuickReplyRecord = {
   content: string;
 };
 
+export type CharacterRegexScriptRecord = {
+  id: string;
+  title: string;
+  pattern: string;
+  replacement: string;
+  enabled: boolean;
+  scope: "assistant" | "user" | "both";
+  renderOnly: boolean;
+};
+
+export const toCharacterRegexScripts = (value: unknown): CharacterRegexScriptRecord[] =>
+  Array.isArray(value) ? value.filter((item): item is CharacterRegexScriptRecord =>
+    Boolean(item && typeof item === "object" && typeof item.id === "string" &&
+      typeof item.title === "string" && typeof item.pattern === "string" &&
+      typeof item.replacement === "string" && typeof item.enabled === "boolean" &&
+      (item.scope === "assistant" || item.scope === "user" || item.scope === "both") &&
+      typeof item.renderOnly === "boolean")) : [];
+
 export type CharacterPromptFields = {
   prefix: string;
   prompt: string;
   suffix: string;
   htmlCss: string;
   loreEntries: CharacterLoreEntryRecord[];
+  regexScripts: CharacterRegexScriptRecord[];
 };
 
 export type ResolvedCharacterRecord = CharacterPromptFields & {
@@ -72,6 +91,7 @@ export type CharacterExportCard =
         htmlCss: string;
         openingHtml: string;
         loreEntries: ImportedCharacterLoreEntryInput[];
+        regexScripts: CharacterRegexScriptRecord[];
         quickReplies: ImportedQuickReplyInput[];
       };
     }
@@ -113,6 +133,7 @@ type EncryptedPromptPayload = {
   suffix: string;
   htmlCss: string;
   loreEntries: CharacterLoreEntryRecord[];
+  regexScripts: CharacterRegexScriptRecord[];
 };
 
 type StoredPrivateCharacterRecord = {
@@ -351,7 +372,8 @@ const toEncryptedPromptPayload = (
   prompt: fields.prompt,
   suffix: fields.suffix,
   htmlCss: fields.htmlCss,
-  loreEntries: fields.loreEntries
+  loreEntries: fields.loreEntries,
+  regexScripts: fields.regexScripts
 });
 
 const normalizePromptFields = (value: {
@@ -360,12 +382,14 @@ const normalizePromptFields = (value: {
   suffix?: string | null;
   htmlCss?: string | null;
   loreEntries?: unknown;
+  regexScripts?: unknown;
 }): CharacterPromptFields => ({
   prefix: value.prefix ?? "",
   prompt: value.prompt ?? "",
   suffix: value.suffix ?? "",
   htmlCss: value.htmlCss ?? "",
-  loreEntries: toCharacterLoreEntries(value.loreEntries)
+  loreEntries: toCharacterLoreEntries(value.loreEntries),
+  regexScripts: toCharacterRegexScripts(value.regexScripts)
 });
 
 const decryptStoredPromptFields = (record: StoredPrivateCharacterRecord, password?: string): {
@@ -456,7 +480,7 @@ const assertPrivateCharacterPassword = (
 };
 
 export const resolveCharacterRecord = (
-  character: Pick<Character, "name" | "avatar" | "description" | "prefix" | "prompt" | "suffix" | "htmlCss" | "openingHtml" | "loreEntries">,
+  character: Pick<Character, "name" | "avatar" | "description" | "prefix" | "prompt" | "suffix" | "htmlCss" | "openingHtml" | "loreEntries" | "regexScripts">,
   password?: string
 ): ResolvedCharacterRecord => {
   if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
@@ -484,6 +508,7 @@ export const resolveCharacterRecord = (
       suffix: "",
       htmlCss: "",
       loreEntries: [],
+      regexScripts: [],
       visibility: "private",
       canViewPrompt: false
     };
@@ -503,6 +528,7 @@ export const resolveCharacterRecord = (
       suffix: canViewPrompt ? fields.suffix : "",
       htmlCss: canViewPrompt ? fields.htmlCss : "",
       loreEntries: canViewPrompt ? fields.loreEntries : [],
+      regexScripts: canViewPrompt ? fields.regexScripts : [],
       visibility: "private",
       canViewPrompt
     };
@@ -517,6 +543,7 @@ export const resolveCharacterRecord = (
       suffix: "",
       htmlCss: "",
       loreEntries: [],
+      regexScripts: [],
       visibility: "private",
       canViewPrompt: false
     };
@@ -524,7 +551,7 @@ export const resolveCharacterRecord = (
 };
 
 export const resolveCharacterPromptFields = (
-  character: Pick<Character, "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries">,
+  character: Pick<Character, "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries" | "regexScripts">,
   password?: string
 ): CharacterPromptFields => {
   if (!isStoredPrivateCharacterRecord(character.loreEntries)) {
@@ -533,14 +560,14 @@ export const resolveCharacterPromptFields = (
 
   const record = character.loreEntries as StoredPrivateCharacterRecord;
   if (record.__privateCharacter.exportSalt && !password) {
-    return { prefix: "", prompt: "", suffix: "", htmlCss: "", loreEntries: [] };
+    return { prefix: "", prompt: "", suffix: "", htmlCss: "", loreEntries: [], regexScripts: [] };
   }
 
   return decryptStoredPromptFields(character.loreEntries, password).fields;
 };
 
 export const createCharacterExportCard = (
-  character: Pick<Character, "name" | "avatar" | "description" | "tags" | "prefix" | "prompt" | "suffix" | "htmlCss" | "openingHtml" | "loreEntries" | "quickReplies" | "cardId">,
+  character: Pick<Character, "name" | "avatar" | "description" | "tags" | "prefix" | "prompt" | "suffix" | "htmlCss" | "openingHtml" | "loreEntries" | "regexScripts" | "quickReplies" | "cardId">,
   visibility: "public" | "private",
   password?: string
 ): CharacterExportCard => {
@@ -661,6 +688,7 @@ export const importCharacterCard = (
   openingHtml: string;
   cardId: string;
   loreEntries: Prisma.InputJsonValue;
+  regexScripts: Prisma.InputJsonValue;
   quickReplies: Prisma.InputJsonValue;
   tags: Prisma.InputJsonValue;
 } => {
@@ -677,6 +705,7 @@ export const importCharacterCard = (
       htmlCss: source.character.htmlCss,
       openingHtml: source.character.openingHtml ?? "",
       loreEntries: source.character.loreEntries,
+      regexScripts: source.character.regexScripts ?? [],
       quickReplies: source.character.quickReplies ?? []
     };
   }
@@ -705,12 +734,13 @@ export const importCharacterCard = (
         exportSalt: protectedPayload.salt
       }
     } satisfies StoredPrivateCharacterRecord,
+    regexScripts: [],
     quickReplies: source.character.quickReplies ?? []
   };
 };
 
 export const buildCharacterUpdateData = (
-  character: Pick<Character, "name" | "avatar" | "description" | "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries">,
+  character: Pick<Character, "name" | "avatar" | "description" | "prefix" | "prompt" | "suffix" | "htmlCss" | "loreEntries" | "regexScripts">,
   updates: {
     name?: string;
     avatar?: string | null;
@@ -722,6 +752,7 @@ export const buildCharacterUpdateData = (
     openingHtml?: string;
     tags?: Prisma.InputJsonValue;
     loreEntries?: Prisma.InputJsonValue;
+    regexScripts?: Prisma.InputJsonValue;
     quickReplies?: Prisma.InputJsonValue;
     isFavorite?: boolean;
   },
@@ -739,7 +770,8 @@ export const buildCharacterUpdateData = (
     updates.prompt !== undefined ||
     updates.suffix !== undefined ||
     updates.htmlCss !== undefined ||
-    updates.loreEntries !== undefined;
+    updates.loreEntries !== undefined ||
+    updates.regexScripts !== undefined;
 
   if (!hasPrivateUpdates) {
     return {
@@ -765,7 +797,9 @@ export const buildCharacterUpdateData = (
     suffix: updates.suffix ?? fields.suffix,
     htmlCss: updates.htmlCss ?? fields.htmlCss,
     loreEntries:
-      updates.loreEntries !== undefined ? toCharacterLoreEntries(updates.loreEntries) : fields.loreEntries
+      updates.loreEntries !== undefined ? toCharacterLoreEntries(updates.loreEntries) : fields.loreEntries,
+    regexScripts:
+      updates.regexScripts !== undefined ? toCharacterRegexScripts(updates.regexScripts) : fields.regexScripts
   };
 
   return {
@@ -780,6 +814,7 @@ export const buildCharacterUpdateData = (
     suffix: "",
     htmlCss: "",
     loreEntries: buildStoredPrivateCharacterJson(nextFields, access),
+    regexScripts: [],
     quickReplies: updates.quickReplies
   };
 };
@@ -798,6 +833,7 @@ export const buildCharacterDuplicateData = (
   openingHtml: character.openingHtml,
   tags: character.tags as Prisma.InputJsonValue,
   loreEntries: character.loreEntries as Prisma.InputJsonValue,
+  regexScripts: character.regexScripts as Prisma.InputJsonValue,
   quickReplies: character.quickReplies as Prisma.InputJsonValue,
   isFavorite: false
 });
