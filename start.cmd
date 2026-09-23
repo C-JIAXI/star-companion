@@ -28,10 +28,14 @@ if errorlevel 1 (
   exit /b 1
 )
 
+set BACKEND_RUNNING=0
+set WEB_RUNNING=0
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:4000/api/health' -TimeoutSec 2 | Out-Null; exit 0 } catch { exit 1 }" >nul 2>nul
-if not errorlevel 1 (
-  echo [Star Companion] Server already appears to be running.
-  echo [Star Companion] Close the original dev console window to stop that service.
+if not errorlevel 1 set BACKEND_RUNNING=1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:5173' -TimeoutSec 2 | Out-Null; exit 0 } catch { exit 1 }" >nul 2>nul
+if not errorlevel 1 set WEB_RUNNING=1
+if "%BACKEND_RUNNING%"=="1" if "%WEB_RUNNING%"=="1" (
+  echo [Star Companion] Both local services are already running.
   start "" "http://localhost:5173"
   echo.
   echo This launcher did not start a new service because one is already running.
@@ -39,10 +43,21 @@ if not errorlevel 1 (
   pause >nul
   exit /b 0
 )
+if "%BACKEND_RUNNING%"=="1" (
+  echo [ERROR] The backend responds on port 4000, but the web app is not running on port 5173.
+  echo Close the existing backend process, then run this file again.
+  pause
+  exit /b 1
+)
+if "%WEB_RUNNING%"=="1" (
+  echo [ERROR] The web app responds on port 5173, but the backend is not running on port 4000.
+  echo Close the existing web process, then run this file again.
+  pause
+  exit /b 1
+)
 
 set NEED_INSTALL=0
 if not exist "node_modules" set NEED_INSTALL=1
-if not exist "packages\shared\node_modules" set NEED_INSTALL=1
 if not exist "apps\server\node_modules" set NEED_INSTALL=1
 if not exist "apps\web\node_modules" set NEED_INSTALL=1
 
@@ -66,33 +81,6 @@ if errorlevel 1 (
   exit /b 1
 )
 echo.
-
-if not exist "apps\server\prisma\dev.db" (
-  echo [Star Companion] Initializing local database...
-  call npm run db:migrate:deploy
-  if errorlevel 1 (
-    echo [Star Companion] Prisma migrate failed; replaying migration SQL instead...
-    if exist "apps\server\prisma\dev.db" del /q "apps\server\prisma\dev.db"
-    if exist "apps\server\prisma\dev.db-journal" del /q "apps\server\prisma\dev.db-journal"
-    if exist "apps\server\prisma\dev.db-wal" del /q "apps\server\prisma\dev.db-wal"
-    if exist "apps\server\prisma\dev.db-shm" del /q "apps\server\prisma\dev.db-shm"
-    node --disable-warning=ExperimentalWarning scripts\dev\init-dev-db.mjs
-    if errorlevel 1 (
-      echo [ERROR] Local database initialization failed.
-      pause
-      exit /b 1
-    )
-  )
-  echo.
-) else (
-  echo [Star Companion] Applying pending database migrations...
-  call npm run db:migrate:deploy
-  if errorlevel 1 (
-    echo [WARN] Prisma migrate failed. Continuing because the local database already exists.
-    echo If startup later fails with missing columns, reset apps\server\prisma\dev.db and run this file again.
-    echo.
-  )
-)
 
 echo [Star Companion] Launching app...
 echo Web:    http://localhost:5173

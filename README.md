@@ -87,6 +87,8 @@ npm run db:generate
 npm run dev
 ```
 
+On Windows, `start.cmd` runs the same protected development database startup and opens the web app after both services are ready. If only port 4000 or 5173 is responding, close the remaining process and run the launcher again; it reports this partial-start state instead of claiming the app is already running.
+
 `npm run dev` creates the default local SQLite database from the checked-in SQL migrations only when it does not already exist. It never overwrites an existing database. Open `http://localhost:5173` after the server is ready.
 
 For a manual first-time database initialization, run `npm run db:init`. This avoids relying on Prisma's SQLite migration engine in Windows development environments.
