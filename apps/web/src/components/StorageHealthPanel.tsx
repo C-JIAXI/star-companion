@@ -76,7 +76,7 @@ export function StorageHealthPanel({ language }: { language: AppLanguage }) {
   const executeCleanup = async () => { if (!plan) return; setBusy(true); setError(""); try { setResult(await storageHealthApi.executeCleanupPlan(plan.id)); setPlan(null); setSelected([]); await refresh(); } catch (value) { setError(value instanceof Error ? value.message : "Cleanup failed"); setPlan(null); } finally { setBusy(false); } };
   const openIssue = (entry: StorageHealthIssueDTO) => { if (!entry.chatId || !entry.messageId) return; queueChatMessageJump({ chatId: entry.chatId, messageId: entry.messageId, index: entry.messageIndex ?? 0 }); try { window.localStorage.setItem("star-companion:selected-chat", entry.chatId); } catch { /* navigation still opens chat */ } window.location.assign("/"); };
 
-  return <div className="space-y-4" data-testid="storage-health-center">
+  return <div className="storage-health-center space-y-4" data-testid="storage-health-center">
     <Panel title={copy.title} action={<span className={`rounded-full border px-2 py-1 text-xs font-semibold ${snapshot?.overall === "error" ? "border-rose-400/30 text-rose-300" : snapshot?.overall === "attention" ? "border-amber-400/30 text-amber-200" : "border-emerald-400/30 text-emerald-200"}`}>{snapshot?.overall === "healthy" ? (zh ? "健康" : "Healthy") : snapshot?.overall === "error" ? (zh ? "需处理" : "Needs action") : (zh ? "请留意" : "Attention")}</span>}>
       <p className="text-sm leading-6 text-ink-300">{copy.description}</p>
       <div className="mt-4 flex flex-wrap gap-2">

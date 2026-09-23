@@ -4554,7 +4554,13 @@ export function ChatPage({
                           <div
                             className="min-w-0 flex-1 overflow-x-auto"
                           >
-                            <div className={`flex gap-1 ${quickRepliesOpen ? "max-h-32 flex-wrap overflow-y-auto" : "flex-nowrap"}`}>
+                            <div
+                              data-testid="chat-quick-replies-list"
+                              className={`flex gap-1 ${quickRepliesOpen ? "max-h-[min(32dvh,16rem)] flex-wrap overflow-y-auto overscroll-contain" : "flex-nowrap"}`}
+                              tabIndex={quickRepliesOpen ? 0 : undefined}
+                              role={quickRepliesOpen ? "region" : undefined}
+                              aria-label={quickRepliesOpen ? t("chat.quickReplies") : undefined}
+                            >
                               {activeQuickReplies.map((qr) => (
                                 <button
                                   data-chat-quick-reply=""

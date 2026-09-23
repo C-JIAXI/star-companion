@@ -85,6 +85,7 @@ select option { background: var(--surface); color: var(--foreground); }
   .settings-shell { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
   .settings-content { min-width: 0; display: flex; flex-direction: column; gap: 1.5rem; }
   .settings-content > .native-panel { height: auto; }
+  .storage-health-center > .native-panel { height: auto; }
   .settings-command-bar { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: .75rem; font-size: .8125rem; }
   .settings-model-overview { padding: 1rem 1.25rem; border: 1px solid var(--border-muted); border-radius: 1rem; background: var(--surface); }
   .settings-model-overview > summary { cursor: pointer; font-size: .875rem; font-weight: 600; }
