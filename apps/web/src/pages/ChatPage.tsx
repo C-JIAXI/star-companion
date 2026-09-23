@@ -4551,15 +4551,13 @@ export function ChatPage({
                             />
                             {t("chat.quickReplies")}
                           </button>
-                          <div
-                            className="min-w-0 flex-1 overflow-x-auto"
-                          >
+                          {quickRepliesOpen ? <div className="min-w-0 flex-1 overflow-x-auto">
                             <div
                               data-testid="chat-quick-replies-list"
-                              className={`flex gap-1 ${quickRepliesOpen ? "max-h-[min(32dvh,16rem)] flex-wrap overflow-y-auto overscroll-contain" : "flex-nowrap"}`}
-                              tabIndex={quickRepliesOpen ? 0 : undefined}
-                              role={quickRepliesOpen ? "region" : undefined}
-                              aria-label={quickRepliesOpen ? t("chat.quickReplies") : undefined}
+                              className="quick-replies-enter flex max-h-[min(32dvh,16rem)] flex-wrap gap-1 overflow-y-auto overscroll-contain"
+                              tabIndex={0}
+                              role="region"
+                              aria-label={t("chat.quickReplies")}
                             >
                               {activeQuickReplies.map((qr) => (
                                 <button
@@ -4577,7 +4575,7 @@ export function ChatPage({
                                 </button>
                               ))}
                             </div>
-                          </div>
+                          </div> : null}
                         </div>
                       ) : null}
                       <div

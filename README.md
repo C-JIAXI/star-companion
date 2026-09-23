@@ -24,7 +24,7 @@ display, positioning, sizing or transforms. Restricted/off modes remain availabl
 - More contains rename, title suggestions, bookmarks, export, background, archive
   and move-to-trash; destructive actions still require confirmation.
 - Images precede the growing text input; media/send controls and draft status
-  follow it. Quick replies use one expandable row; queue and cost details can be
+  follow it. Quick commands hide their options until expanded; queue and cost details can be
   expanded. Budget warnings and draft errors remain visible.
   At low visible heights, attachment/queue and status/recovery/cost regions scroll
   independently; the text input and send controls keep their space. These regions

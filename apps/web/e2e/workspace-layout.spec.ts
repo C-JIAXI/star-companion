@@ -45,11 +45,13 @@ test("workspace layout capture uses synthetic data across target viewports", asy
       await page.evaluate(() => document.fonts.ready);
       await page.screenshot({ path: path.join(output, `${width}x${height}.png`), scale: "css" });
       if (phase === "after") {
-        await expect(page.locator("[data-chat-quick-reply]")).toHaveCount(8);
+        await expect(page.locator("[data-chat-quick-reply]")).toHaveCount(0);
         await expect(page.locator("#chat-quick-replies-toggle")).toHaveAttribute("aria-expanded", "false");
         await page.locator("#chat-quick-replies-toggle").click();
         await expect(page.locator("#chat-quick-replies-toggle")).toHaveAttribute("aria-expanded", "true");
+        await expect(page.locator("[data-chat-quick-reply]")).toHaveCount(8);
         await page.locator("#chat-quick-replies-toggle").click();
+        await expect(page.locator("[data-chat-quick-reply]")).toHaveCount(0);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         await expect(page.getByTestId("chat-workspace-header")).toHaveCount(1);
         await expect.poll(() => page.evaluate(() => Math.abs(document.querySelector("#chat-message-list")!.getBoundingClientRect().width - document.querySelector("#chat-composer")!.getBoundingClientRect().width))).toBeLessThan(2);

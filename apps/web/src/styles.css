@@ -121,6 +121,13 @@ select option { background: var(--surface); color: var(--foreground); }
   from { opacity: 0; }
   to { opacity: 1; }
 }
+@keyframes quick-replies-enter {
+  from { opacity: 0; transform: translateX(-16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.quick-replies-enter {
+  animation: quick-replies-enter .24s cubic-bezier(.2,.8,.2,1) both;
+}
 
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .native-app [data-testid="desktop-sidebar"], .native-app .native-page-header,

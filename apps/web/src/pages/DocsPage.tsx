@@ -178,7 +178,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "阅读与输入",
-              body: "快捷回复默认单行，可展开。图片在输入框上方；输入框自动增高至当前视口上限，之后内部滚动。圆角输入卡片下方保留图片、更多工具和发送按钮；语音与生图收在更多工具中，草稿状态和可展开费用位于卡片外。队列默认显示数量，展开后可编辑、删除或立即发送；草稿错误和预算警告不会随费用详情隐藏。可见高度不足时，附件／队列区和状态／恢复／费用区可分别滚动，也可用键盘聚焦，保留输入和发送空间。"
+              body: "快捷指令默认折叠，不显示选项；点击标题后展开。图片在输入框上方；输入框自动增高至当前视口上限，之后内部滚动。圆角输入卡片下方保留图片、更多工具和发送按钮；语音与生图收在更多工具中，草稿状态和可展开费用位于卡片外。队列默认显示数量，展开后可编辑、删除或立即发送；草稿错误和预算警告不会随费用详情隐藏。可见高度不足时，附件／队列区和状态／恢复／费用区可分别滚动，也可用键盘聚焦，保留输入和发送空间。"
             },
             {
               title: "发送与停止",
@@ -554,7 +554,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Reading and composing",
-            body: "Quick replies use one expandable row. Images sit above the growing input; image, More tools and send controls sit inside the rounded input card, with draft status and expandable costs below the card. The input scrolls internally at its viewport limit. Expand the queue count to edit, discard or send pending snapshots. Draft errors and budget warnings remain visible when cost details are collapsed. At low visible heights, attachment/queue and status/recovery/cost regions scroll independently and can receive keyboard focus, keeping space for input and sending."
+            body: "Quick commands start collapsed with no options shown; open the heading to see them. Images sit above the growing input; image, More tools and send controls sit inside the rounded input card, with draft status and expandable costs below the card. The input scrolls internally at its viewport limit. Expand the queue count to edit, discard or send pending snapshots. Draft errors and budget warnings remain visible when cost details are collapsed. At low visible heights, attachment/queue and status/recovery/cost regions scroll independently and can receive keyboard focus, keeping space for input and sending."
           },
           {
             title: "Story paths",
