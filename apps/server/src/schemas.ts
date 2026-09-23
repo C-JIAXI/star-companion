@@ -614,6 +614,11 @@ const providerModelSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
   model: z.string().min(1),
+  generationParameters: z.object({
+    temperature: z.number().min(0).max(2),
+    maxTokens: z.number().int().min(1).max(200000),
+    topP: z.number().min(0).max(1)
+  }).optional(),
   contextWindow: z.number().int().min(256).max(10_000_000).optional(),
   capabilities: z
     .array(z.enum(["text_generation", "vision_input", "text_embedding", "audio_transcription", "text_to_speech", "image_generation"]))

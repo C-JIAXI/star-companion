@@ -1529,7 +1529,9 @@ const resolveModuleSettings = (settings, moduleId) => {
         `No compatible model is configured for ${moduleId}. Choose a model with the required capability in Settings.`
       );
     }
-    return settings;
+    return activeModel.generationParameters
+      ? { ...settings, ...activeModel.generationParameters }
+      : settings;
   }
   const provider = (settings.providers ?? []).find((entry) => entry.id === preference.providerId);
   const model = provider?.models?.find((entry) => entry.id === preference.modelId);
@@ -1545,6 +1547,7 @@ const resolveModuleSettings = (settings, moduleId) => {
     apiBaseUrl: provider.apiBaseUrl,
     apiKey: provider.key?.trim() ? provider.key : settings.apiKey,
     model: model.model,
+    ...(model.generationParameters ?? {}),
     activeProviderId: provider.id,
     activeModelId: model.id
   };
@@ -1555,7 +1558,7 @@ const resolveModelReferenceSettings = (settings, moduleId, reference) => {
   const model = provider?.models?.find((entry) => entry.id === reference.modelId);
   if (!provider || !model) throw new Error(`The configured ${moduleId} fallback model no longer exists.`);
   if (!supportsModule(provider, model, moduleId)) throw new Error(`The configured ${moduleId} fallback model does not support this feature.`);
-  return { ...settings, activeProvider: provider.provider, apiBaseUrl: provider.apiBaseUrl, apiKey: provider.key?.trim() ? provider.key : settings.apiKey, model: model.model, activeProviderId: provider.id, activeModelId: model.id };
+  return { ...settings, activeProvider: provider.provider, apiBaseUrl: provider.apiBaseUrl, apiKey: provider.key?.trim() ? provider.key : settings.apiKey, model: model.model, ...(model.generationParameters ?? {}), activeProviderId: provider.id, activeModelId: model.id };
 };
 
 const resolveAutomaticFallbackSettings = (settings, moduleId) => {

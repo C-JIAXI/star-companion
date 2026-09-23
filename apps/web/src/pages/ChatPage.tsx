@@ -391,6 +391,16 @@ export function ChatPage({
   const [showUserProfileDialog, setShowUserProfileDialog] = useState(false);
   const [showModelDialog, setShowModelDialog] = useState(false);
   const [modelSwitching, setModelSwitching] = useState(false);
+  const [editingModelParameters, setEditingModelParameters] = useState<{
+    providerId: string;
+    modelId: string;
+    label: string;
+    temperature: number;
+    maxTokens: number;
+    topP: number;
+  } | null>(null);
+  const [modelParametersClosing, setModelParametersClosing] = useState(false);
+  const modelParametersTimerRef = useRef<number | null>(null);
   const [showMemoryDialog, setShowMemoryDialog] = useState(false);
   const [showBackgroundDialog, setShowBackgroundDialog] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
@@ -1081,7 +1091,7 @@ export function ChatPage({
     }
 
     promptEstimate += estimateLocalTokens(draft);
-    const responseReserve = runtimeSettings?.maxTokens ?? 800;
+    const responseReserve = activeChatModel?.model.generationParameters?.maxTokens ?? runtimeSettings?.maxTokens ?? 800;
     const totalEstimate = promptEstimate + responseReserve;
     const contextWindow = activeChatModel?.model.contextWindow ?? null;
     const utilization = contextWindow ? totalEstimate / contextWindow : null;
@@ -1986,10 +1996,14 @@ export function ChatPage({
     activeProviderId: settings.activeProviderId ?? "",
     activeModelId: settings.activeModelId ?? "",
     moduleModelPreferences: settings.moduleModelPreferences ?? {},
+    modelReliability: settings.modelReliability,
+    usageBudgets: settings.usageBudgets,
+    usageTimezone: settings.usageTimezone,
     userPersonaPresets: presets,
     autoSummarizeUser: settings.autoSummarizeUser,
     showMessageAvatars: settings.showMessageAvatars,
     showMessageTimestamps: settings.showMessageTimestamps,
+    appearancePreferences: settings.appearancePreferences,
     ttsVoice: settings.ttsVoice,
     ttsPlaybackRate: settings.ttsPlaybackRate,
     ttsAutoPlay: settings.ttsAutoPlay,
@@ -2230,8 +2244,27 @@ export function ChatPage({
   };
 
   const closeModelDialog = () => {
+    if (modelParametersTimerRef.current !== null) window.clearTimeout(modelParametersTimerRef.current);
+    modelParametersTimerRef.current = null;
     setShowModelDialog(false);
+    setEditingModelParameters(null);
+    setModelParametersClosing(false);
   };
+
+  const hideModelParameters = () => {
+    if (!editingModelParameters || modelParametersClosing) return;
+    setModelParametersClosing(true);
+    if (modelParametersTimerRef.current !== null) window.clearTimeout(modelParametersTimerRef.current);
+    modelParametersTimerRef.current = window.setTimeout(() => {
+      setEditingModelParameters(null);
+      setModelParametersClosing(false);
+      modelParametersTimerRef.current = null;
+    }, 300);
+  };
+
+  useEffect(() => () => {
+    if (modelParametersTimerRef.current !== null) window.clearTimeout(modelParametersTimerRef.current);
+  }, []);
 
   const loadChatMemories = async (append = false) => {
     if (!activeChat) {
@@ -2952,6 +2985,48 @@ export function ChatPage({
       setStreamingContextCounts(null);
     } finally {
       // Loading ends when the WebSocket sends generation_done, generation_stopped, or error.
+    }
+  };
+
+  const editModelParameters = (providerId: string, modelId: string) => {
+    const model = settingsProviders.find((provider) => provider.id === providerId)
+      ?.models.find((entry) => entry.id === modelId);
+    if (!model || !runtimeSettings) return;
+    if (modelParametersTimerRef.current !== null) window.clearTimeout(modelParametersTimerRef.current);
+    modelParametersTimerRef.current = null;
+    setModelParametersClosing(false);
+    setEditingModelParameters({
+      providerId,
+      modelId,
+      label: model.label || model.model,
+      temperature: model.generationParameters?.temperature ?? runtimeSettings.temperature,
+      maxTokens: model.generationParameters?.maxTokens ?? runtimeSettings.maxTokens,
+      topP: model.generationParameters?.topP ?? runtimeSettings.topP
+    });
+  };
+
+  const saveModelParameters = async () => {
+    if (!runtimeSettings || !editingModelParameters) return;
+    const { providerId, modelId, temperature, maxTokens, topP } = editingModelParameters;
+    const providers = settingsProviders.map((provider) => provider.id !== providerId ? provider : {
+      ...provider,
+      models: provider.models.map((model) => model.id !== modelId ? model : {
+        ...model,
+        generationParameters: { temperature, maxTokens, topP }
+      })
+    });
+    setModelSwitching(true);
+    setError(null);
+    try {
+      const updated = await api.settings.update({ ...settingsToInput(runtimeSettings), providers });
+      setSettingsProviders(updated.providers ?? []);
+      setRuntimeSettings(updated);
+      hideModelParameters();
+      setStatus(language === "zh-CN" ? "模型参数已保存。" : "Model parameters saved.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("chat.failedUpdate"));
+    } finally {
+      setModelSwitching(false);
     }
   };
 
@@ -5909,8 +5984,11 @@ export function ChatPage({
         </Modal>
       ) : null}
       {showModelDialog ? (
-        <Modal title={t("chat.modelSwitchTitle")} onClose={closeModelDialog}>
-          <div className="space-y-1">
+        <Modal panelClassName="max-w-xl" title={t("chat.modelSwitchTitle")} onClose={closeModelDialog}>
+          <p className="mb-3 text-sm leading-5 text-slate-400">
+            {language === "zh-CN" ? "选择聊天模型，或打开模型参数设置。每个模型的参数单独保存。" : "Choose a chat model or edit its parameters. Each model keeps its own values."}
+          </p>
+          <div className="custom-scrollbar max-h-[32dvh] space-y-1 overflow-y-auto rounded-xl border border-white/10 bg-ink-950/40 p-2" data-testid="chat-model-list">
             {settingsProviders.length === 0 ? (
               <p className="px-3 py-6 text-center text-sm text-slate-500">
                 {t("chat.noProviders")}
@@ -5923,6 +6001,7 @@ export function ChatPage({
                 return (
                   <div key={provider.id} className="rounded-lg">
                     <button
+                      aria-expanded={isExpanded}
                       className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
                         hasActiveModel
                           ? "bg-ember-500/10 text-ember-200"
@@ -5930,14 +6009,11 @@ export function ChatPage({
                       }`}
                       type="button"
                       onClick={() => {
+                        if (isExpanded && editingModelParameters?.providerId === provider.id) hideModelParameters();
                         setExpandedDialogProviderId(isExpanded ? null : provider.id);
                       }}
                     >
-                      {isExpanded ? (
-                        <ChevronDown size={14} className="shrink-0 text-slate-500" />
-                      ) : (
-                        <ChevronRight size={14} className="shrink-0 text-slate-500" />
-                      )}
+                      <ChevronDown size={14} className={`shrink-0 text-slate-500 transition-transform duration-300 ${isExpanded ? "" : "-rotate-90"}`} />
                       <span className="min-w-0 flex-1 truncate font-medium">
                         {provider.label || provider.provider}
                       </span>
@@ -5946,8 +6022,9 @@ export function ChatPage({
                       </span>
                     </button>
 
-                    {isExpanded ? (
-                      <div className="ml-4 mt-1 space-y-0.5 border-l border-white/5 pl-3">
+                    <div aria-hidden={!isExpanded} className="model-provider-disclosure" data-expanded={isExpanded} data-testid={`chat-model-provider-${provider.id}`} inert={!isExpanded}>
+                      <div className="min-h-0 overflow-hidden">
+                      <div className="ml-3 space-y-0.5 border-l border-white/10 pl-3 pt-1">
                         {provider.models.length === 0 ? (
                           <p className="px-2 py-3 text-xs text-slate-600">
                             {language === "zh-CN" ? "该供应商下还没有模型" : "No models configured"}
@@ -5955,40 +6032,99 @@ export function ChatPage({
                         ) : (
                           provider.models.map((model) => {
                             const isActive = provider.id === activeProviderId && model.id === activeModelId;
+                            const editing = editingModelParameters?.providerId === provider.id && editingModelParameters.modelId === model.id;
                             return (
-                              <button
-                                className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
-                                  isActive
-                                    ? "bg-ember-500/15 text-ember-200 ring-1 ring-ember-500/30"
-                                    : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
-                                }`}
-                                disabled={modelSwitching}
-                                key={model.id}
-                                type="button"
-                                onClick={() => {
-                                  void switchModel(provider.id, model.id);
-                                  closeModelDialog();
-                                }}
-                              >
-                                {isActive ? (
-                                  <Check size={14} className="shrink-0 text-ember-300" />
-                                ) : (
-                                  <Sparkles size={14} className="shrink-0 text-slate-600" />
-                                )}
-                                <span className="min-w-0 flex-1 truncate font-medium">
-                                  {model.label || model.model}
-                                </span>
-                              </button>
+                              <div key={model.id} className="flex items-center gap-1 rounded-lg">
+                                <button
+                                  className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+                                    isActive
+                                      ? "bg-ember-500/15 text-ember-200 ring-1 ring-ember-500/30"
+                                      : "text-slate-300 hover:bg-white/5 hover:text-slate-100"
+                                  }`}
+                                  disabled={modelSwitching}
+                                  type="button"
+                                  onClick={() => {
+                                    void switchModel(provider.id, model.id);
+                                    closeModelDialog();
+                                  }}
+                                >
+                                  {isActive ? (
+                                    <Check size={14} className="shrink-0 text-ember-300" />
+                                  ) : (
+                                    <Sparkles size={14} className="shrink-0 text-slate-600" />
+                                  )}
+                                  <span className="min-w-0 flex-1 truncate font-medium">
+                                    {model.label || model.model}
+                                  </span>
+                                </button>
+                                <button
+                                  aria-label={`${language === "zh-CN" ? "设置模型参数" : "Edit model parameters"}: ${model.label || model.model}`}
+                                  aria-expanded={editing && !modelParametersClosing}
+                                  className={`flex min-h-10 min-w-10 shrink-0 items-center justify-center rounded-lg transition-colors ${editing && !modelParametersClosing ? "bg-ember-500/15 text-ember-200" : "text-slate-400 hover:bg-white/5 hover:text-slate-100"}`}
+                                  data-testid={`chat-model-parameters-${model.id}`}
+                                  disabled={modelSwitching}
+                                  title={language === "zh-CN" ? "模型参数" : "Model parameters"}
+                                  type="button"
+                                  onClick={() => editing ? hideModelParameters() : editModelParameters(provider.id, model.id)}
+                                >
+                                  <Settings size={16} />
+                                </button>
+                              </div>
                             );
                           })
                         )}
                       </div>
-                    ) : null}
+                      </div>
+                    </div>
                   </div>
                 );
               })
             )}
           </div>
+          {editingModelParameters ? (
+            <section aria-hidden={modelParametersClosing} className={`model-parameters-disclosure ${modelParametersClosing ? "model-parameters-exit pointer-events-none" : "model-parameters-enter"}`} data-testid="chat-model-parameters-editor">
+              <div className="min-h-0 overflow-hidden rounded-xl border border-white/10 bg-white/[0.025]">
+                <div className="border-b border-white/[0.07] px-4 py-2.5">
+                  <p className="text-xs font-medium text-ink-400">{language === "zh-CN" ? "模型参数" : "Model parameters"}</p>
+                  <h4 className="mt-1 truncate text-sm font-semibold text-slate-100">{editingModelParameters.label}</h4>
+                </div>
+                <div className="divide-y divide-white/[0.06] px-3 py-1.5 sm:px-4">
+                  {(["temperature", "maxTokens", "topP"] as const).map((field) => (
+                    <label className="grid min-h-14 grid-cols-[minmax(0,1fr)_7rem] items-center gap-3 px-2 py-2 sm:grid-cols-[minmax(0,1fr)_9rem]" key={field} title={t(`help.${field}`)}>
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium text-slate-200">{t(`settings.${field}`)}</span>
+                        <span className="mt-0.5 block text-xs text-slate-500">
+                          {field === "temperature" ? "0–2" : field === "topP" ? "0–1" : "1–200000"}
+                        </span>
+                      </span>
+                      <TextInput
+                        aria-label={t(`settings.${field}`)}
+                        max={field === "temperature" ? 2 : field === "topP" ? 1 : 200000}
+                        min={field === "maxTokens" ? 1 : 0}
+                        step={field === "maxTokens" ? 1 : field === "topP" ? 0.05 : 0.1}
+                        type="number"
+                        value={editingModelParameters[field]}
+                        onChange={(event) => {
+                          const value = Number(event.target.value);
+                          if (!Number.isFinite(value)) return;
+                          setEditingModelParameters((current) => current ? {
+                            ...current,
+                            [field]: field === "maxTokens"
+                              ? Math.min(200000, Math.max(1, Math.trunc(value)))
+                              : Math.min(field === "temperature" ? 2 : 1, Math.max(0, value))
+                          } : current);
+                        }}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="flex justify-end gap-2 border-t border-white/10 px-4 py-2.5">
+                  <Button className="!min-h-9" variant="ghost" onClick={hideModelParameters}>{t("common.cancel")}</Button>
+                  <Button className="!min-h-9" disabled={modelSwitching} onClick={() => void saveModelParameters()}>{t("common.save")}</Button>
+                </div>
+              </div>
+            </section>
+          ) : null}
         </Modal>
       ) : null}
       {showContextBudgetDialog && contextBudget ? (

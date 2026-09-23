@@ -353,6 +353,19 @@ describe("characterBatchTagsSchema", () => {
 });
 
 describe("settingsUpdateSchema", () => {
+  it("accepts bounded generation parameters per provider model", () => {
+    const base = {
+      apiBaseUrl: "https://example.com/v1", model: "chat", temperature: 0.8, maxTokens: 800, topP: 1,
+      providers: [{ id: "provider", label: "Provider", provider: "openai-compatible", apiBaseUrl: "https://example.com/v1",
+        models: [{ id: "chat", label: "Chat", model: "chat", generationParameters: { temperature: 0.4, maxTokens: 2048, topP: 0.7 } }] }]
+    };
+    assert.deepEqual(parseBody(settingsUpdateSchema, base).providers[0].models[0].generationParameters,
+      { temperature: 0.4, maxTokens: 2048, topP: 0.7 });
+    assert.throws(() => parseBody(settingsUpdateSchema, {
+      ...base, providers: [{ ...base.providers[0], models: [{ ...base.providers[0].models[0],
+        generationParameters: { temperature: 0.4, maxTokens: 200001, topP: 0.7 } }] }]
+    }));
+  });
   it("applies stable appearance defaults and validates explicit preferences", () => {
     const base = { apiBaseUrl: "https://example.com/v1", model: "model", temperature: 0.8, maxTokens: 800, topP: 1 };
     const defaults = parseBody(settingsUpdateSchema, { ...base, appearancePreferences: {} }).appearancePreferences!;

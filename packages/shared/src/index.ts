@@ -102,6 +102,8 @@ export interface ProviderModel {
   capabilities?: AiModelCapability[];
   /** Optional user/template supplied USD prices in integer micro-dollars per million tokens. */
   pricing?: ModelPricingDTO;
+  /** Per-model generation settings; older models inherit the legacy defaults. */
+  generationParameters?: { temperature: number; maxTokens: number; topP: number };
 }
 
 export interface ModelPricingDTO {

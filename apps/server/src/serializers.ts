@@ -6,6 +6,7 @@ interface ProviderModel {
   id: string;
   label: string;
   model: string;
+  generationParameters?: { temperature: number; maxTokens: number; topP: number };
   contextWindow?: number;
   capabilities?: AiModelCapability[];
   pricing?: {
@@ -129,6 +130,13 @@ const toProviderModels = (value: unknown): ProviderModel[] => {
       id: String(item.id ?? ""),
       label: String(item.label ?? ""),
       model: String(item.model ?? ""),
+      generationParameters:
+        item.generationParameters && typeof item.generationParameters === "object" && !Array.isArray(item.generationParameters) &&
+        typeof (item.generationParameters as Record<string, unknown>).temperature === "number" &&
+        typeof (item.generationParameters as Record<string, unknown>).maxTokens === "number" &&
+        typeof (item.generationParameters as Record<string, unknown>).topP === "number"
+          ? item.generationParameters as ProviderModel["generationParameters"]
+          : undefined,
       contextWindow:
         typeof item.contextWindow === "number" && Number.isInteger(item.contextWindow)
           ? item.contextWindow

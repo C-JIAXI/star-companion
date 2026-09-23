@@ -36,6 +36,7 @@ type E2EProviderModel = {
   id: string;
   label: string;
   model: string;
+  generationParameters?: { temperature: number; maxTokens: number; topP: number };
   contextWindow?: number;
   capabilities?: Array<
     "text_generation" |
@@ -5721,13 +5722,47 @@ test("chat model switch preserves stored key and runtime settings when provider 
     await expect(page.locator("#chat-title")).toContainText(chatTitle);
     await page.locator("#chat-settings-trigger").click();
     await page.getByRole("menuitem", { name: /模型切换|Switch Model/ }).click();
-    await page.getByRole("button", { name: /Target Model/ }).click();
+    const providerHeader = page.getByTestId("chat-model-list").getByRole("button", { name: /OpenAI/ });
+    const providerDisclosure = page.getByTestId("chat-model-provider-provider-active");
+    await providerHeader.click();
+    await expect(providerDisclosure).toHaveAttribute("data-expanded", "false");
+    await expect.poll(async () => (await providerDisclosure.boundingBox())?.height ?? 0).toBeLessThan(2);
+    await providerHeader.click();
+    await expect(providerDisclosure).toHaveAttribute("data-expanded", "true");
+    await expect.poll(async () => (await providerDisclosure.boundingBox())?.height ?? 0).toBeGreaterThan(50);
+    await page.getByTestId("chat-model-parameters-model-target").click();
+    const parameterEditor = page.getByTestId("chat-model-parameters-editor");
+    await expect(parameterEditor).toHaveClass(/model-parameters-enter/);
+    const revealHeights = await parameterEditor.evaluate((element) => {
+      const animation = element.getAnimations().find((entry) => (entry as CSSAnimation).animationName === "model-parameters-enter");
+      if (!animation) throw new Error("Model parameter reveal animation was not started");
+      animation.pause();
+      const heightAt = (time: number) => {
+        animation.currentTime = time;
+        return element.getBoundingClientRect().height;
+      };
+      const heights = [heightAt(0), heightAt(150), heightAt(300)];
+      animation.finish();
+      return heights;
+    });
+    expect(revealHeights[0]).toBeLessThan(revealHeights[1]);
+    expect(revealHeights[1]).toBeLessThan(revealHeights[2]);
+    await expect(parameterEditor.getByLabel("Temperature")).toHaveValue("1.1");
+    await parameterEditor.getByLabel("Temperature").fill("0.4");
+    await parameterEditor.getByLabel("Max Tokens").fill("2048");
+    await parameterEditor.getByLabel("Top P").fill("0.7");
+    await parameterEditor.getByRole("button", { name: "Save" }).click();
+    await expect(parameterEditor).toHaveClass(/model-parameters-exit/);
+    await expect(parameterEditor).toHaveCount(0);
+    expect(latestSettingsPut.value?.providers?.[0].models[1].generationParameters).toEqual({ temperature: 0.4, maxTokens: 2048, topP: 0.7 });
+    await page.getByRole("button", { name: "Target Model", exact: true }).click();
 
     await expect.poll(() => latestSettingsPut.value).not.toBeNull();
     expect(latestSettingsPut.value?.language).toBe("en");
     expect(latestSettingsPut.value?.temperature).toBe(1.1);
     expect(latestSettingsPut.value?.maxTokens).toBe(1200);
     expect(latestSettingsPut.value?.topP).toBe(0.9);
+    expect(latestSettingsPut.value?.providers?.[0].models[1].generationParameters).toEqual({ temperature: 0.4, maxTokens: 2048, topP: 0.7 });
     expect(latestSettingsPut.value).not.toHaveProperty("apiKey");
     expect(latestSettingsPut.value?.moduleModelPreferences).toEqual(moduleModelPreferences);
     expect(latestSettingsPut.value?.userPersonaPresets).toEqual(userPersonaPresets);

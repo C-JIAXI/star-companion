@@ -14,6 +14,7 @@ type ProviderModel = {
   id: string;
   label: string;
   model: string;
+  generationParameters?: { temperature: number; maxTokens: number; topP: number };
   contextWindow?: number;
   capabilities?: AiModelCapability[];
   pricing?: {
@@ -85,6 +86,12 @@ const toProviderProfiles = (value: Prisma.JsonValue): ProviderProfile[] => {
             id: String(model.id ?? ""),
             label: String(model.label ?? ""),
             model: String(model.model ?? ""),
+            generationParameters: isRecord(model.generationParameters) &&
+              typeof model.generationParameters.temperature === "number" &&
+              typeof model.generationParameters.maxTokens === "number" &&
+              typeof model.generationParameters.topP === "number"
+                ? model.generationParameters as ProviderModel["generationParameters"]
+                : undefined,
             contextWindow:
               typeof model.contextWindow === "number" && Number.isInteger(model.contextWindow)
                 ? model.contextWindow
@@ -141,14 +148,16 @@ export const resolveModuleSettings = (
     const activeModel =
       providers
         .find((entry) => entry.id === settings.activeProviderId)
-        ?.models.find((entry) => entry.id === settings.activeModelId) ?? { model: settings.model };
+        ?.models.find((entry) => entry.id === settings.activeModelId) ?? { model: settings.model } as ProviderModel;
 
     if (!supportsModule(activeProvider, activeModel, moduleId)) {
       throw new Error(
         `No compatible model is configured for ${moduleId}. Choose a model with the required capability in Settings.`
       );
     }
-    return settings;
+    return activeModel.generationParameters
+      ? { ...settings, ...activeModel.generationParameters }
+      : settings;
   }
 
   const provider = providers.find((entry) => entry.id === preference.providerId);
@@ -168,6 +177,7 @@ export const resolveModuleSettings = (
     apiBaseUrl: provider.apiBaseUrl,
     apiKey: provider.key?.trim() ? provider.key : settings.apiKey,
     model: model.model,
+    ...(model.generationParameters ?? {}),
     activeProviderId: provider.id,
     activeModelId: model.id
   };
@@ -203,6 +213,7 @@ export const resolveModelReferenceSettings = (
     apiBaseUrl: provider.apiBaseUrl,
     apiKey: provider.key?.trim() ? provider.key : settings.apiKey,
     model: model.model,
+    ...(model.generationParameters ?? {}),
     activeProviderId: provider.id,
     activeModelId: model.id
   };

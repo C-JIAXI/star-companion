@@ -135,6 +135,34 @@ select option { background: var(--surface); color: var(--foreground); }
 .quick-replies-exit {
   animation: quick-replies-exit .24s cubic-bezier(.2,.8,.2,1) both;
 }
+@keyframes model-parameters-enter {
+  from { grid-template-rows: 0fr; margin-top: 0; opacity: 0; transform: translateY(-6px); }
+  to { grid-template-rows: 1fr; margin-top: .75rem; opacity: 1; transform: translateY(0); }
+}
+@keyframes model-parameters-exit {
+  from { grid-template-rows: 1fr; margin-top: .75rem; opacity: 1; transform: translateY(0); }
+  to { grid-template-rows: 0fr; margin-top: 0; opacity: 0; transform: translateY(-6px); }
+}
+.model-parameters-disclosure {
+  display: grid;
+  will-change: grid-template-rows, opacity, transform;
+}
+.model-parameters-enter {
+  animation: model-parameters-enter .3s cubic-bezier(.22,1,.36,1) both;
+}
+.model-parameters-exit {
+  animation: model-parameters-exit .3s cubic-bezier(.4,0,.6,1) both;
+}
+.model-provider-disclosure {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows .3s cubic-bezier(.22,1,.36,1), opacity .24s ease;
+}
+.model-provider-disclosure[data-expanded="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
 
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .native-app [data-testid="desktop-sidebar"], .native-app .native-page-header,

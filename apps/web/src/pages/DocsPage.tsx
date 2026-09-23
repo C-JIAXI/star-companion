@@ -292,7 +292,7 @@ const getDocsCopy = (language: string): DocsCopy => {
             },
             {
               title: "模型切换",
-              body: "在设置页选择模型即可切换聊天使用的模型，聊天页也支持快速切换。"
+              body: "在聊天页的模型切换弹窗中选择模型；点击模型旁的参数按钮，可分别设置该模型的 Temperature、最大 Tokens 和 Top P。旧模型未单独设置时沿用原有默认值。设置页继续管理供应商和模型列表。"
             },
             {
               title: "可靠性与备用模型",
@@ -638,7 +638,7 @@ const getDocsCopy = (language: string): DocsCopy => {
           },
           {
             title: "Model switching",
-            body: "Choose a model in Settings to switch what chat uses. The chat page also supports quick model switching."
+            body: "Choose a model from the chat page's model picker. Use the parameters button beside a model to set its Temperature, Max Tokens, and Top P independently. Existing models inherit the previous defaults until configured. Settings continues to manage providers and model lists."
           },
           {
             title: "Reliability and fallbacks",

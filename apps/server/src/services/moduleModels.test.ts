@@ -97,4 +97,29 @@ describe("moduleModels", () => {
       /No compatible model is configured for image_generation/
     );
   });
+
+  it("uses each selected model's generation parameters and retains legacy defaults for older models", () => {
+    const provider = {
+      ...openAiProvider,
+      models: [
+        { ...openAiProvider.models[0]!, generationParameters: { temperature: 0.3, maxTokens: 2048, topP: 0.7 } },
+        { id: "second", label: "Second", model: "second-model", capabilities: ["text_generation"] }
+      ]
+    };
+    const settings = {
+      providers: [provider], activeProvider: provider.provider, activeProviderId: provider.id,
+      activeModelId: "chat", model: "gpt-4o-mini", temperature: 0.8, maxTokens: 800, topP: 1,
+      moduleModelPreferences: {}
+    } as unknown as UserSettings;
+    const selected = resolveModuleSettings(settings, "chat");
+    assert.equal(selected.temperature, 0.3);
+    assert.equal(selected.maxTokens, 2048);
+    assert.equal(selected.topP, 0.7);
+    const olderModel = resolveModuleSettings({ ...settings, activeModelId: "second", model: "second-model" }, "chat");
+    assert.equal(olderModel.temperature, 0.8);
+    assert.equal(olderModel.maxTokens, 800);
+    assert.equal(olderModel.topP, 1);
+    const moduleSelected = resolveModuleSettings({ ...settings, moduleModelPreferences: { agent: { providerId: provider.id, modelId: "chat" } } }, "agent");
+    assert.equal(moduleSelected.maxTokens, 2048);
+  });
 });

@@ -64,7 +64,6 @@ import {
   ConfirmDialog,
   ErrorNotice,
   Field,
-  HelpLabel,
   Panel,
   SuccessNotice,
   TextInput
@@ -369,7 +368,6 @@ const getPageCopy = (language: AppLanguage) =>
         changesClean: "已同步",
         providerCountDisplay: (count: number) => `${count} 个`,
         proxyNote: "所有模型请求都通过后端代理发出，前端不会直连模型供应商。",
-        samplingBlockTitle: "采样参数",
         providersTitle: "供应商管理",
         providersHelp: "配置供应商连接信息和模型列表。选择一个模型即可切换当前聊天使用的模型。",
         addProvider: "添加供应商",
@@ -484,7 +482,6 @@ const getPageCopy = (language: AppLanguage) =>
         changesClean: "Synced",
         providerCountDisplay: (count: number) => `${count}`,
         proxyNote: "All model requests go through the backend proxy. The frontend never calls providers directly.",
-        samplingBlockTitle: "Sampling",
         providersTitle: "Provider Management",
         providersHelp: "Configure provider connection info and model lists. Select a model to switch the active model used by chat.",
         addProvider: "Add Provider",
@@ -2033,77 +2030,6 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
                     </label>
                   </Field>
                 </div>
-              </div>
-              <SettingsSectionHeading
-                title={copy.samplingBlockTitle}
-                description={
-                  language === "zh-CN"
-                    ? "把响应风格和输出长度放在一起，调整时更容易整体判断。"
-                    : "Keep response style and output length together so the runtime stays easy to tune."
-                }
-              />
-
-              <div className="mt-5 grid gap-5 md:grid-cols-3">
-                <Field
-                  label={
-                    <HelpLabel
-                      label={t("settings.temperature")}
-                      description={t("help.temperature")}
-                    />
-                  }
-                >
-                  <TextInput
-                    step="0.1"
-                    min="0"
-                    max="2"
-                    type="number"
-                    value={form.temperature}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        temperature: Math.min(2, Math.max(0, Number(event.target.value) || 0))
-                      }))
-                    }
-                  />
-                </Field>
-                <Field
-                  label={
-                    <HelpLabel
-                      label={t("settings.maxTokens")}
-                      description={t("help.maxTokens")}
-                    />
-                  }
-                >
-                  <TextInput
-                    min="1"
-                    max="200000"
-                    type="number"
-                    value={form.maxTokens}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        maxTokens: Math.min(200000, Math.max(1, Number(event.target.value) || 1))
-                      }))
-                    }
-                  />
-                </Field>
-                <Field
-                  label={<HelpLabel label={t("settings.topP")} description={t("help.topP")} />}
-                >
-                  <TextInput
-                    step="0.05"
-                    min="0"
-                    max="1"
-                    type="number"
-                    value={form.topP}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        topP: Math.min(1, Math.max(0, Number(event.target.value) || 0))
-                      }))
-                    }
-                  />
-                </Field>
               </div>
             </div>
           </div>
