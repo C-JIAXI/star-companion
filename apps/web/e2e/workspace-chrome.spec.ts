@@ -39,6 +39,14 @@ test("sidebar and title share one header row and tools have one close action", a
     await page.getByTestId("chat-tool-agent").click();
     await expect(page.getByTestId("chat-tools-panel").getByRole("button", { name: /Close|关闭/ })).toHaveCount(1);
     await page.screenshot({ path: `../../docs/native-design/${testInfo.project.name}/workspace-chrome-1142.png`, scale: "css", animations: "disabled" });
+    await page.setViewportSize({ width: 1142, height: 560 });
+    const indicator = page.getByTestId("chat-tool-scroll-indicator");
+    await expect(indicator).toBeVisible();
+    const initialTop = (await indicator.boundingBox())!.y;
+    expect((await indicator.boundingBox())!.width).toBe(2);
+    expect(await page.locator(".chat-tool-scroll:visible").evaluate((element) => parseFloat(getComputedStyle(element).paddingRight))).toBeGreaterThanOrEqual(12);
+    await page.locator(".chat-tool-scroll:visible").evaluate((element) => { element.scrollTop = 200; });
+    await expect.poll(async () => (await indicator.boundingBox())!.y).toBeGreaterThan(initialTop);
   } finally {
     await request.delete(`/api/chats/${chat.id}`);
     await request.delete(`/api/chats/${chat.id}/permanent`);

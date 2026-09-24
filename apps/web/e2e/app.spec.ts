@@ -251,6 +251,23 @@ test.beforeEach(async ({ page }, testInfo) => {
   });
 });
 
+test("web, Skill and MCP settings panels fit their content", async ({ page }) => {
+  await page.goto("/settings?section=extensions");
+  const panels = page.getByTestId("settings-extensions").locator(":scope > .native-panel");
+  await expect(panels).toHaveCount(3);
+
+  const layout = await panels.evaluateAll((elements) => elements.map((panel) => {
+    const bounds = panel.getBoundingClientRect();
+    const contentBottom = panel.lastElementChild?.getBoundingClientRect().bottom ?? bounds.bottom;
+    return { top: bounds.top, bottom: bounds.bottom, emptySpace: bounds.bottom - contentBottom };
+  }));
+
+  for (const panel of layout) expect(panel.emptySpace).toBeLessThan(96);
+  for (let index = 1; index < layout.length; index += 1) {
+    expect(layout[index].top).toBeGreaterThan(layout[index - 1].bottom);
+  }
+});
+
 test("changing language does not immediately reload stale server settings", async ({ page }) => {
   let settingsGetCount = 0;
   const now = new Date().toISOString();

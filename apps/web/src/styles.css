@@ -85,6 +85,7 @@ select option { background: var(--surface); color: var(--foreground); }
   .settings-shell { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
   .settings-content { min-width: 0; display: flex; flex-direction: column; gap: 1.5rem; }
   .settings-content > .native-panel { height: auto; }
+  .settings-content > [data-testid="settings-extensions"] > .native-panel { height: auto; }
   .storage-health-center > .native-panel { height: auto; }
   .settings-command-bar { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: .75rem; font-size: .8125rem; }
   .settings-model-overview { padding: 1rem 1.25rem; border: 1px solid var(--border-muted); border-radius: 1rem; background: var(--surface); }
@@ -617,6 +618,32 @@ select option { background: var(--surface); color: var(--foreground); }
 
 .custom-scrollbar::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+.chat-tool-scroll {
+  scrollbar-width: none;
+}
+
+.chat-tool-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.chat-tool-scroll-indicator {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 2px;
+  background: rgb(var(--ink-500) / .48);
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.chat-tool-scroll-frame:hover .chat-tool-scroll-indicator {
+  background: rgb(var(--ink-500) / .78);
+}
+
+:root[data-contrast="high"] .chat-tool-scroll-indicator {
+  background: currentColor;
 }
 
 .safe-area-top {

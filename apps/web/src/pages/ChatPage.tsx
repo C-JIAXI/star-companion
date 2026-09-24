@@ -126,6 +126,7 @@ import { ChatStoryNavigator } from "../components/ChatStoryNavigator";
 import { MemoryAuditPanel } from "../components/MemoryAuditPanel";
 import { ChatWorkspacePanel as Panel } from "../components/ChatWorkspacePanel";
 import { ChatToolSurface } from "../components/ChatToolSurface";
+import { ChatToolScrollArea } from "../components/ChatToolScrollArea";
 import { ChatToolContent } from "../components/ChatToolContent";
 import { ChatActionsMenu } from "../components/ChatActionsMenu";
 import type { ReactNode } from "react";
@@ -5324,7 +5325,7 @@ export function ChatPage({
                   ].map((tool) => <button key={tool.id} type="button" data-testid={`chat-tool-${tool.id}`} aria-pressed={tool.selected}
                     className={`min-h-11 rounded-md px-2 text-sm ${tool.selected ? "bg-ember-500/15 text-ember-100" : "text-ink-300 hover:bg-white/5"}`} onClick={tool.open}>{tool.label}</button>)}
                 </nav>
-                <div ref={setToolHost} className={`${agentPanelOpen ? "hidden" : ""} min-h-0 flex-1 overflow-y-auto py-3`} />
+                <ChatToolScrollArea contentRef={setToolHost} hidden={agentPanelOpen} className="py-3" />
                 {chatSettingsToolOpen ? <ChatToolContent host={toolHost}>
                   <div className="flex flex-col gap-2">
                     <Button variant="secondary" onClick={startEditingUserConfig}>{t("chat.userConfigTitle")}</Button>
@@ -5390,7 +5391,7 @@ export function ChatPage({
                   </div>
                 </div>
 
-                <div className="custom-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
+                <ChatToolScrollArea className="space-y-4 py-4">
                   {agentSession?.entries.length ? (
                     <div className="space-y-2 rounded-lg border border-white/10 p-3" aria-label={language === "zh-CN" ? "助手对话历史" : "Agent conversation history"}>
                       {agentSession.entries.filter((entry, index, entries) => !(index === entries.length - 1 && entry.role === "assistant")).map((entry) => (
@@ -5572,7 +5573,7 @@ export function ChatPage({
                       </div>
                     )}
                   </div>
-                </div>
+                </ChatToolScrollArea>
                 </div>
               </ChatToolSurface>
           ) : null}
