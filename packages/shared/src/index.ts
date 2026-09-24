@@ -1574,6 +1574,10 @@ export interface McpConnectionDTO {
   updatedAt: string;
 }
 
+export interface WebSearchStatusDTO {
+  hasApiKey: boolean;
+}
+
 export interface AgentSessionDTO {
   chatId: string;
   activeRunId: string | null;

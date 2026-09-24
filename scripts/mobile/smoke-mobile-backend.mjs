@@ -1448,6 +1448,12 @@ try {
   assert.equal((await requestFailure("/api/skills/mobile-scene-skill/enabled", {
     method: "PUT", body: { expectedVersion: importedSkill.version, agentEnabled: false }
   })).status, 409);
+  assert.deepEqual(await request("/api/web-search"), { hasApiKey: false });
+  assert.deepEqual(await request("/api/web-search", { method: "PUT", body: { apiKey: "mobile-brave-smoke-secret" } }), { hasApiKey: true });
+  assert.equal(JSON.stringify(await request("/api/web-search")).includes("mobile-brave-smoke-secret"), false);
+  assert.equal(JSON.stringify(await request("/api/backups/export")).includes("mobile-brave-smoke-secret"), false);
+  assert.equal(JSON.stringify(await request("/api/backups/export")).includes("webSearchConfig"), false);
+  assert.deepEqual(await request("/api/web-search", { method: "PUT", body: { apiKey: null } }), { hasApiKey: false });
   assert.equal((await requestFailure("/api/mcp", {
     method: "POST", body: { name: "Unsafe MCP", endpointUrl: "http://example.com/mcp", allowPrivateNetwork: false }
   })).status, 400);

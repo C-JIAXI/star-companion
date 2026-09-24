@@ -108,7 +108,7 @@ test("the bundled Prisma SQL catalog initializes a fresh desktop database determ
     appVersion: "1.0.2"
   });
   assert.equal(report.appliedMigrations.length > 20, true);
-  assert.equal(report.schemaVersion, "20260923050000_mcp_connections");
+  assert.equal(report.schemaVersion, "20260924010000_web_search_config");
   assert.ok(report.appliedMigrations.includes("20260909000000_chat_drafts"));
   assert.ok(report.appliedMigrations.includes("20260909010000_draft_handoffs"));
   assert.ok(report.appliedMigrations.includes("20260923010000_agent_sessions"));
@@ -116,7 +116,9 @@ test("the bundled Prisma SQL catalog initializes a fresh desktop database determ
   assert.ok(report.appliedMigrations.includes("20260923030000_agent_generation"));
   assert.ok(report.appliedMigrations.includes("20260923040000_skill_packages"));
   assert.ok(report.appliedMigrations.includes("20260923050000_mcp_connections"));
+  assert.ok(report.appliedMigrations.includes("20260924010000_web_search_config"));
   const db = open(databasePath);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='WebSearchConfig'").get().count, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='RecoveryPoint'").get().count, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='ModelRequest'").get().count, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='ModelUsageAttempt'").get().count, 1);

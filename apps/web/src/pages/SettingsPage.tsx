@@ -32,6 +32,7 @@ import { AboutUpdatesPanel } from "../components/AboutUpdatesPanel";
 import { StorageHealthPanel } from "../components/StorageHealthPanel";
 import { AgentSkillsPanel } from "../components/AgentSkillsPanel";
 import { McpConnectionsPanel } from "../components/McpConnectionsPanel";
+import { WebSearchPanel } from "../components/WebSearchPanel";
 import { reopenOnboarding } from "../components/OnboardingDialog";
 import { languageOptions, useI18n } from "../i18n";
 import { api } from "../lib/api";
@@ -1712,7 +1713,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
             ["runtime", copy.runtimeTitle],
             ["appearance", language === "zh-CN" ? "外观与无障碍" : "Appearance & accessibility"],
             ["providers", copy.providersTitle],
-            ["extensions", language === "zh-CN" ? "Skill 与 MCP" : "Skills & MCP"],
+            ["extensions", language === "zh-CN" ? "联网、Skill 与 MCP" : "Web, Skills & MCP"],
             ["usage", language === "zh-CN" ? "使用量与预算" : "Usage & budgets"],
             ["backup", copy.backupTitle],
             ["storage", language === "zh-CN" ? "存储与健康" : "Storage & health"],
@@ -1747,6 +1748,9 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       </div> : null}
 
       {activeSection === "extensions" ? <div className="space-y-4" data-testid="settings-extensions">
+        <Panel className={settingsPanelClassName} title={language === "zh-CN" ? "联网搜索" : "Web access"}>
+          <WebSearchPanel language={language} />
+        </Panel>
         <Panel className={settingsPanelClassName} title={language === "zh-CN" ? "Skill 管理" : "Manage Skills"}>
           <AgentSkillsPanel language={language} />
         </Panel>

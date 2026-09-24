@@ -18,6 +18,7 @@ import type {
   SkillImportInputDTO,
   SkillImportPreviewDTO,
   McpConnectionDTO,
+  WebSearchStatusDTO,
   PendingMcpApprovalDTO,
   AgentTaskRequestDTO,
   ChatBatchArchiveRequestDTO,
@@ -217,6 +218,10 @@ export const api = {
       request<McpConnectionDTO>(`/api/mcp/${encodeURIComponent(id)}/tools`, { method: "PUT", body: input }),
     delete: (id: string, expectedVersion: number) =>
       request<{ deleted: boolean }>(`/api/mcp/${encodeURIComponent(id)}`, { method: "DELETE", body: { expectedVersion, confirm: "DELETE_MCP_CONNECTION" } })
+  },
+  webSearch: {
+    status: () => request<WebSearchStatusDTO>("/api/web-search"),
+    saveKey: (apiKey: string | null) => request<WebSearchStatusDTO>("/api/web-search", { method: "PUT", body: { apiKey } })
   },
   readiness: {
     get: () => request<ReadinessDTO>("/api/readiness"),

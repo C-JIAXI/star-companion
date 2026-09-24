@@ -345,6 +345,7 @@ export function ChatPage({
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [chatToolUse, setChatToolUse] = useState<ChatToolUse>(() => selectedChatId ? readChatToolUse(selectedChatId) : { enabled: false, toolNames: [] });
   const [chatToolConnections, setChatToolConnections] = useState<McpConnectionDTO[]>([]);
+  const [webSearchConfigured, setWebSearchConfigured] = useState(false);
   const [chatToolEvents, setChatToolEvents] = useState<Array<{ phase: string; round: number; toolName?: string; isError?: boolean }>>([]);
   const [chatToolEventsChatId, setChatToolEventsChatId] = useState<string | null>(null);
   const [pendingMcpApprovalKind, setPendingMcpApprovalKind] = useState<"agent" | "generation">("agent");
@@ -490,6 +491,7 @@ export function ChatPage({
   useEffect(() => {
     if (!chatSettingsToolOpen || !selectedChatId) return;
     void api.mcp.list().then(setChatToolConnections).catch(() => setChatToolConnections([]));
+    void api.webSearch.status().then((status) => setWebSearchConfigured(status.hasApiKey)).catch(() => setWebSearchConfigured(false));
   }, [chatSettingsToolOpen, selectedChatId]);
   const updateChatToolUse = (next: ChatToolUse) => {
     if (!selectedChatId) return;
@@ -2719,8 +2721,8 @@ export function ChatPage({
     if (event.phase === "tool_complete") return language === "zh-CN"
       ? `${event.toolName} ${event.isError ? "失败" : "完成"}`
       : `${event.toolName} ${event.isError ? "failed" : "completed"}`;
-    if (event.phase === "approval_required") return language === "zh-CN" ? "等待 MCP 工具授权" : "Waiting for MCP tool approval";
-    if (event.phase === "approval_resolved") return language === "zh-CN" ? "MCP 授权已处理" : "MCP approval resolved";
+    if (event.phase === "approval_required") return language === "zh-CN" ? "等待外部工具授权" : "Waiting for external tool approval";
+    if (event.phase === "approval_resolved") return language === "zh-CN" ? "外部工具授权已处理" : "External tool approval resolved";
     if (event.phase === "succeeded") return language === "zh-CN" ? "任务完成" : "Task completed";
     if (event.phase === "cancelled") return language === "zh-CN" ? "任务已停止" : "Task stopped";
     return language === "zh-CN" ? "任务失败" : "Task failed";
@@ -5351,6 +5353,17 @@ export function ChatPage({
                           ] as const).map(([name, label]) => <label key={name} className="flex min-h-11 items-center gap-2 rounded-lg border border-white/10 px-3 py-2 leading-5"><input type="checkbox" checked={chatToolUse.toolNames.includes(name)} onChange={(event) => updateChatToolUse({ ...chatToolUse,
                             toolNames: event.target.checked ? [...chatToolUse.toolNames, name] : chatToolUse.toolNames.filter((item) => item !== name) })} />{label}</label>)}</div>
                         </div>
+                        <div><h5 className="mb-2 font-semibold text-ink-100">{language === "zh-CN" ? "联网" : "Web access"}</h5>
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            {([[
+                              "web_search", language === "zh-CN" ? "搜索网页" : "Search the web", !webSearchConfigured
+                            ], ["read_web_page", language === "zh-CN" ? "读取公开网页" : "Read public pages", false]] as const).map(([name, label, disabled]) =>
+                              <label key={name} className={`flex min-h-11 items-center gap-2 rounded-lg border border-white/10 px-3 py-2 ${disabled ? "opacity-50" : ""}`}>
+                                <input type="checkbox" disabled={disabled} checked={chatToolUse.toolNames.includes(name) && !disabled} onChange={(event) => updateChatToolUse({ ...chatToolUse,
+                                  toolNames: event.target.checked ? [...chatToolUse.toolNames, name] : chatToolUse.toolNames.filter((item) => item !== name) })} />{label}
+                              </label>)}</div>
+                          {!webSearchConfigured ? <p className="mt-2 text-ink-300">{language === "zh-CN" ? "搜索网页需先在设置中配置 Brave Search API Key。" : "Configure a Brave Search API key in Settings to enable search."}</p> : null}
+                        </div>
                         <details className="rounded-lg border border-white/10 p-3"><summary className="cursor-pointer font-semibold text-ink-100">Skill</summary>
                           <div className="mt-3 space-y-3"><label className="flex min-h-11 items-center gap-2"><input type="checkbox" checked={chatToolUse.toolNames.includes("load_skill")} onChange={(event) => updateChatToolUse({ ...chatToolUse,
                             toolNames: event.target.checked ? [...chatToolUse.toolNames, "load_skill"] : chatToolUse.toolNames.filter((item) => item !== "load_skill") })} />{language === "zh-CN" ? "读取已启用 Skill" : "Load enabled Skills"}</label>
@@ -5363,7 +5376,7 @@ export function ChatPage({
                               toolNames: event.target.checked ? [...chatToolUse.toolNames, name] : chatToolUse.toolNames.filter((item) => item !== name) })} /><span className="break-all">{connection.name} / {tool.name}</span></label>;
                           }))}{chatToolConnections.every((connection) => !connection.enabled || connection.tools.every((tool) => !tool.enabled)) ? <p className="text-ink-300">{language === "zh-CN" ? "尚无已启用的 MCP 工具。" : "No enabled MCP tools yet."}</p> : null}</div>
                         </details>
-                        <button type="button" className="min-h-11 text-left font-medium text-blue-300 hover:underline" onClick={() => navigateToSection("settings", "extensions")}>{language === "zh-CN" ? "管理 Skill 与 MCP →" : "Manage Skills & MCP →"}</button>
+                        <button type="button" className="min-h-11 text-left font-medium text-blue-300 hover:underline" onClick={() => navigateToSection("settings", "extensions")}>{language === "zh-CN" ? "管理联网、Skill 与 MCP →" : "Manage web, Skills & MCP →"}</button>
                       </div> : null}
                     </section>
                   </div>
@@ -5464,7 +5477,7 @@ export function ChatPage({
                     <p className="mt-1">{language === "zh-CN" ? "实际输出仍受所选模型上限约束。" : "The selected model's output limit still applies."}</p>
                   </details>
                   <button type="button" className="w-full rounded-lg border border-white/10 bg-white/[0.03] p-3 text-left text-xs text-blue-300 hover:bg-white/[0.06]" onClick={() => navigateToSection("settings", "extensions")}>
-                    {language === "zh-CN" ? "管理 Skill 与 MCP →" : "Manage Skills & MCP →"}
+                    {language === "zh-CN" ? "管理联网、Skill 与 MCP →" : "Manage web, Skills & MCP →"}
                   </button>
                   {agentRunEvents.length ? <details className="rounded-lg border border-white/10 bg-white/[0.03] p-2 text-xs text-ink-300" data-testid="agent-run-events">
                     <summary className="cursor-pointer select-none">{language === "zh-CN" ? "执行过程" : "Execution steps"} ({agentRunEvents.length})</summary>
@@ -5581,12 +5594,14 @@ export function ChatPage({
       {pendingMcpApproval && draftChatIdRef.current === pendingMcpApproval.chatId ? (
         <Modal title={language === "zh-CN" ? "确认外部工具调用" : "Approve external tool call"} onClose={() => void decidePendingMcpApproval(false)}>
           <div className="space-y-3 text-sm text-ink-200" data-testid="mcp-approval-dialog">
-            <p>{language === "zh-CN" ? "服务" : "Service"}: <strong>{pendingMcpApproval.connectionName}</strong></p>
+            <p>{language === "zh-CN" ? "服务" : "Service"}: <strong>{pendingMcpApproval.connectionId === "web-access" && language === "zh-CN" ? "联网" : pendingMcpApproval.connectionName}</strong></p>
             <p className="break-all text-xs text-ink-400">{pendingMcpApproval.endpointUrl}</p>
-            <p>{language === "zh-CN" ? "工具" : "Tool"}: <strong>{pendingMcpApproval.toolName}</strong></p>
+            <p>{language === "zh-CN" ? "工具" : "Tool"}: <strong>{language === "zh-CN" && pendingMcpApproval.toolName === "web_search" ? "搜索网页" : language === "zh-CN" && pendingMcpApproval.toolName === "read_web_page" ? "读取网页" : pendingMcpApproval.toolName}</strong></p>
             <p>{language === "zh-CN" ? "将发送的参数" : "Arguments to send"}:</p>
             <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-ink-950 p-3 text-xs">{JSON.stringify(pendingMcpApproval.arguments, null, 2)}</pre>
-            <p className="text-xs text-ink-400">{language === "zh-CN" ? "这些参数将发送给外部 MCP 服务。" : "These arguments will be sent to the external MCP service."}</p>
+            <p className="text-xs text-ink-400">{pendingMcpApproval.connectionId === "web-access"
+              ? (language === "zh-CN" ? "搜索词或网页地址将发送到外部网站；网页内容会作为不可信资料交给模型。" : "The query or page URL will be sent externally. Page content is untrusted reference material for the model.")
+              : (language === "zh-CN" ? "这些参数将发送给外部 MCP 服务。" : "These arguments will be sent to the external MCP service.")}</p>
             <div className="flex flex-wrap justify-end gap-2">
               <Button disabled={mcpApprovalBusy} onClick={() => void decidePendingMcpApproval(false)}>{language === "zh-CN" ? "拒绝" : "Deny"}</Button>
               {pendingMcpApproval.readOnlyHint ? <Button disabled={mcpApprovalBusy} onClick={() => void decidePendingMcpApproval(true, true)}>{language === "zh-CN" ? "服务声明只读：本次会话允许" : "Server claims read-only: allow for this session"}</Button> : null}

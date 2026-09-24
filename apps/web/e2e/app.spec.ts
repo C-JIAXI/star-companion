@@ -2279,8 +2279,9 @@ test("chat agent panel inserts reply drafts and confirms memory candidates befor
     await page.getByTestId("chat-more-trigger").click();
     await page.getByTestId("chat-agent-trigger").click();
     await expect(page.getByTestId("chat-agent-panel")).toBeVisible();
-    await page.getByTestId("chat-agent-panel").getByRole("button", { name: /管理 Skill 与 MCP|Manage Skills & MCP/ }).click();
+    await page.getByTestId("chat-agent-panel").getByRole("button", { name: /管理联网、Skill 与 MCP|Manage web, Skills & MCP/ }).click();
     await expect(page.getByTestId("settings-extensions")).toBeVisible();
+    await expect(page.getByTestId("web-search-panel")).toBeVisible();
     const skillPanel = page.getByTestId("agent-skills-panel");
     await expect(skillPanel).toBeVisible();
     await skillPanel.locator('input[type="file"]').setInputFiles({
@@ -2331,6 +2332,8 @@ test("chat agent panel inserts reply drafts and confirms memory candidates befor
     await roleTools.getByLabel(/允许角色使用工具|Allow character tools/).check();
     await roleTools.getByLabel(/搜索当前聊天历史|Search chat history/).check();
     await expect(roleTools.getByLabel(/搜索当前聊天历史|Search chat history/)).toBeChecked();
+    await roleTools.getByLabel(/读取公开网页|Read public pages/).check();
+    await expect(roleTools.getByLabel(/读取公开网页|Read public pages/)).toBeChecked();
     await page.getByTestId("chat-tool-memory").click();
     await page.getByTestId("chat-tool-agent").click();
     await expect(page.getByText("Agent draft reply for the next turn.")).toBeVisible();
@@ -2402,6 +2405,26 @@ test("chat agent panel inserts reply drafts and confirms memory candidates befor
     if (characterId) {
       await request.delete(`/api/characters/${characterId}`);
     }
+  }
+});
+
+test("web search key can be saved and removed without returning it to the browser", async ({ page, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "The desktop and mobile projects share one local settings database.");
+  try {
+    await page.goto("/settings?section=extensions");
+    const panel = page.getByTestId("web-search-panel");
+    await expect(panel).toBeVisible();
+    await panel.getByLabel(/Brave Search API Key/i).fill("e2e-web-secret");
+    await panel.getByRole("button", { name: /保存密钥|Save key/ }).click();
+    await expect(panel.getByText(/搜索密钥已配置|Search key configured/)).toBeVisible();
+    await page.reload();
+    await expect(panel.getByText(/搜索密钥已配置|Search key configured/)).toBeVisible();
+    await expect(panel.getByLabel(/Brave Search API Key/i)).toHaveValue("");
+    await panel.getByRole("button", { name: /移除密钥|Remove key/ }).click();
+    await page.getByRole("dialog").getByRole("button", { name: /移除|Remove/, exact: true }).click();
+    await expect(panel.getByText(/搜索密钥未配置|Search key not configured/)).toBeVisible();
+  } finally {
+    await request.put("/api/web-search", { data: { apiKey: null } });
   }
 });
 

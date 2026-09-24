@@ -1755,6 +1755,12 @@ const main = async () => {
       method: "PUT", body: { expectedVersion: importedSkill.version, agentEnabled: false }, expectedStatus: 409
     })).ok, false);
     assert.equal((await requestData(baseUrl, "/api/skills/import-preview", { method: "POST", body: skillInput })).existingVersion, enabledSkill.version);
+    assert.deepEqual(await requestData(baseUrl, "/api/web-search"), { hasApiKey: false });
+    assert.deepEqual(await requestData(baseUrl, "/api/web-search", { method: "PUT", body: { apiKey: "brave-smoke-secret" } }), { hasApiKey: true });
+    assert.equal(JSON.stringify(await requestData(baseUrl, "/api/web-search")).includes("brave-smoke-secret"), false);
+    assert.equal(JSON.stringify(await requestData(baseUrl, "/api/backups/export")).includes("brave-smoke-secret"), false);
+    assert.equal(JSON.stringify(await requestData(baseUrl, "/api/backups/export")).includes("webSearchConfig"), false);
+    assert.deepEqual(await requestData(baseUrl, "/api/web-search", { method: "PUT", body: { apiKey: null } }), { hasApiKey: false });
     assert.equal((await request(baseUrl, "/api/mcp", {
       method: "POST", body: { name: "Unsafe MCP", endpointUrl: "http://example.com/mcp", allowPrivateNetwork: false }, expectedStatus: 400
     })).ok, false);

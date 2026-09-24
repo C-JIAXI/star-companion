@@ -13,4 +13,7 @@ it("keeps ordinary chat tools disabled by default and exposes only chat-selected
   assert.deepEqual(selectChatTools({ enabled: false, toolNames: ["search_history", "connection-1:read-scene"] }, [external]).definitions, []);
   const selected = selectChatTools({ enabled: true, toolNames: ["search_history", "connection-1:read-scene", "another-chat:tool"] }, [external]);
   assert.deepEqual(selected.definitions.map((tool) => tool.name), ["search_history", "mcp_scene"]);
+  const web = selectChatTools({ enabled: true, toolNames: ["web_search", "read_web_page"] }, [], true);
+  assert.deepEqual(web.definitions.map((tool) => tool.name), ["web_search", "read_web_page"]);
+  assert.deepEqual(selectChatTools({ enabled: true, toolNames: ["web_search", "read_web_page"] }, []).definitions.map((tool) => tool.name), ["read_web_page"]);
 });

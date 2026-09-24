@@ -195,6 +195,12 @@ model McpConnection {
   updatedAt           DateTime @updatedAt
 }
 
+model WebSearchConfig {
+  id              String   @id @default("default")
+  apiKeyEncrypted String?
+  updatedAt       DateTime @updatedAt
+}
+
 model ChatMemory {
   id                 String    @id @default(cuid())
   chatId             String

@@ -589,6 +589,7 @@ export const mcpToolEnableSchema = z.object({ expectedVersion: z.number().int().
   definitionDigest: z.string().regex(/^[a-f0-9]{64}$/), enabled: z.boolean() }).strict();
 export const mcpConnectionDeleteSchema = z.object({ expectedVersion: z.number().int().positive(), confirm: z.literal("DELETE_MCP_CONNECTION") }).strict();
 export const mcpApprovalDecisionSchema = z.object({ approved: z.boolean(), sessionGrant: z.boolean().default(false) }).strict();
+export const webSearchConfigSchema = z.object({ apiKey: z.string().trim().max(4096).nullable() }).strict();
 
 export const chatBranchSchema = z.object({
   messageId: idSchema,

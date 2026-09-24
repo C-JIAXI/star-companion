@@ -18,6 +18,7 @@ import { readinessRouter } from "./routes/readiness.js";
 import { storageHealthRouter } from "./routes/storageHealth.js";
 import { skillsRouter } from "./routes/skills.js";
 import { mcpRouter } from "./routes/mcp.js";
+import { webSearchRouter } from "./routes/webSearch.js";
 import { clearMcpApprovals } from "./services/mcpApprovals.js";
 import { attachChatSocket } from "./realtime/chatSocket.js";
 import { clearAgentRunEvents } from "./services/agentRunEvents.js";
@@ -126,6 +127,7 @@ app.use("/api", (request, _response, next) => {
 });
 app.use("/api/skills", skillsRouter);
 app.use("/api/mcp", mcpRouter);
+app.use("/api/web-search", webSearchRouter);
 
 if (process.env.STAR_COMPANION_PERF_METRICS === "1") {
   app.get("/api/perf/prompt/:chatId", async (request, response, next) => {
