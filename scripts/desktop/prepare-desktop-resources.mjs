@@ -55,7 +55,6 @@ await cp(path.join(serverDir, "package-lock.json"), path.join(desktopServerDir, 
 await runCommand("npm", [
   "ci",
   "--omit=dev",
-  "--omit=peer",
   "--omit=optional",
   "--ignore-scripts",
   "--no-audit",
