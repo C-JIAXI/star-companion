@@ -1,5 +1,6 @@
 import { Client, StreamableHTTPClientTransport, type Tool } from "@modelcontextprotocol/client";
 import { createHash } from "node:crypto";
+import { generatedBuildInfo } from "../generated/buildInfo.js";
 import { createMcpFetch, validateMcpUrl } from "./mcpNetwork.js";
 
 export type McpToolSummary = {
@@ -19,7 +20,7 @@ const boundedJson = (value: unknown, maxBytes: number) => {
 export const connectMcp = async (input: { url: string; bearerToken?: string | null; allowPrivateNetwork: boolean }) => {
   const endpoint = validateMcpUrl(input.url, input.allowPrivateNetwork);
   const network = createMcpFetch(endpoint, input.allowPrivateNetwork);
-  const client = new Client({ name: "star-companion", version: "1.0.3" }, {
+  const client = new Client({ name: "star-companion", version: generatedBuildInfo.appVersion }, {
     versionNegotiation: { mode: "auto" },
     supportedProtocolVersions: ["2026-07-28", "2025-11-25"]
   });
