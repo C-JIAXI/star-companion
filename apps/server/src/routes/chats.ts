@@ -610,6 +610,21 @@ chatsRouter.get("/:id/memories/page", asyncHandler(async (request, response) => 
   response.json({ ok: true, data: await listMemoryPage(chatId, parseQuery(memoryPageQuerySchema, request.query)) });
 }));
 
+chatsRouter.get("/:id/memories/index-summary", asyncHandler(async (request, response) => {
+  const chatId = requireParam(request, "id");
+  const chat = await prisma.chat.findFirst({ where: { id: chatId, deletedAt: null }, select: { id: true } });
+  if (!chat) throw new HttpError(404, "Chat not found");
+  const rows = await prisma.chatMemory.groupBy({
+    by: ["embeddingStatus"],
+    where: { chatId, enabled: true, deletedAt: null },
+    _count: { _all: true }
+  });
+  const total = rows.reduce((sum, row) => sum + row._count._all, 0);
+  const ready = rows.find((row) => row.embeddingStatus === "ready")?._count._all ?? 0;
+  const failed = rows.find((row) => row.embeddingStatus === "failed")?._count._all ?? 0;
+  response.json({ ok: true, data: { total, ready, failed, stale: total - ready - failed } });
+}));
+
 chatsRouter.get("/:id/memories/:memoryId", asyncHandler(async (request, response) => {
   const memory = await prisma.chatMemory.findFirst({
     where: { id: requireParam(request, "memoryId"), chatId: requireParam(request, "id"), chat: { deletedAt: null } }
@@ -836,19 +851,6 @@ chatsRouter.delete("/:id/memories/reindex-jobs/:jobId", asyncHandler(async (requ
   const job = cancelMemoryEmbeddingJob(requireParam(request, "id"), requireParam(request, "jobId"));
   if (!job) throw new HttpError(404, "Memory index rebuild job not found");
   response.json({ ok: true, data: job });
-}));
-
-chatsRouter.get("/:id/memories/index-summary", asyncHandler(async (request, response) => {
-  const chatId = requireParam(request, "id");
-  const rows = await prisma.chatMemory.groupBy({
-    by: ["embeddingStatus"],
-    where: { chatId, enabled: true, deletedAt: null },
-    _count: { _all: true }
-  });
-  const total = rows.reduce((sum, row) => sum + row._count._all, 0);
-  const ready = rows.find((row) => row.embeddingStatus === "ready")?._count._all ?? 0;
-  const failed = rows.find((row) => row.embeddingStatus === "failed")?._count._all ?? 0;
-  response.json({ ok: true, data: { total, ready, failed, stale: total - ready - failed } });
 }));
 
 chatsRouter.get("/:id/summary", asyncHandler(async (request, response) => {

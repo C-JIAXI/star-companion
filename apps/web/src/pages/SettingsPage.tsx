@@ -30,6 +30,8 @@ import {
 } from "@local-roleplay/shared";
 import { AboutUpdatesPanel } from "../components/AboutUpdatesPanel";
 import { StorageHealthPanel } from "../components/StorageHealthPanel";
+import { AgentSkillsPanel } from "../components/AgentSkillsPanel";
+import { McpConnectionsPanel } from "../components/McpConnectionsPanel";
 import { reopenOnboarding } from "../components/OnboardingDialog";
 import { languageOptions, useI18n } from "../i18n";
 import { api } from "../lib/api";
@@ -583,7 +585,7 @@ const getPageCopy = (language: AppLanguage) =>
         noPendingChanges: "No pending changes"
       };
 
-type SettingsSection = "appearance" | "runtime" | "providers" | "usage" | "backup" | "storage" | "about";
+type SettingsSection = "appearance" | "runtime" | "providers" | "extensions" | "usage" | "backup" | "storage" | "about";
 type SettingsSetupFocus = "provider" | "api-key" | "model";
 type SettingsModuleFocus = `module-${AiModuleId}`;
 type SettingsFocus = SettingsSetupFocus | SettingsModuleFocus;
@@ -611,7 +613,7 @@ const readSettingsLocation = () => {
     .find((value) => value === focus);
 
   return {
-    section: section === "appearance" || section === "providers" || section === "usage" || section === "backup" || section === "storage" || section === "about" ? section : "runtime",
+    section: section === "appearance" || section === "providers" || section === "extensions" || section === "usage" || section === "backup" || section === "storage" || section === "about" ? section : "runtime",
     focus:
       focus === "provider" || focus === "api-key" || focus === "model"
         ? focus
@@ -1710,6 +1712,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
             ["runtime", copy.runtimeTitle],
             ["appearance", language === "zh-CN" ? "外观与无障碍" : "Appearance & accessibility"],
             ["providers", copy.providersTitle],
+            ["extensions", language === "zh-CN" ? "Skill 与 MCP" : "Skills & MCP"],
             ["usage", language === "zh-CN" ? "使用量与预算" : "Usage & budgets"],
             ["backup", copy.backupTitle],
             ["storage", language === "zh-CN" ? "存储与健康" : "Storage & health"],
@@ -1734,14 +1737,23 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
       </nav>
       <div className="settings-content">
 
-      <div className="settings-command-bar">
+      {activeSection !== "extensions" ? <div className="settings-command-bar">
         <span className={hasUnsavedChanges ? "text-amber-200" : "text-ink-400"} aria-live="polite">
           {hasUnsavedChanges ? copy.changesDirty : copy.changesClean}
         </span>
         <Button data-testid="settings-save" disabled={loading || !hasUnsavedChanges} onClick={() => void saveSettings()}>
           <Save size={16} />{copy.saveReady}
         </Button>
-      </div>
+      </div> : null}
+
+      {activeSection === "extensions" ? <div className="space-y-4" data-testid="settings-extensions">
+        <Panel className={settingsPanelClassName} title={language === "zh-CN" ? "Skill 管理" : "Manage Skills"}>
+          <AgentSkillsPanel language={language} />
+        </Panel>
+        <Panel className={settingsPanelClassName} title={language === "zh-CN" ? "MCP 连接" : "MCP connections"}>
+          <McpConnectionsPanel language={language} />
+        </Panel>
+      </div> : null}
 
       {activeSection === "appearance" ? (
         <Panel

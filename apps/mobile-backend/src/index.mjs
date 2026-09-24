@@ -3577,6 +3577,12 @@ app.get("/api/chats/:id/memories/page", (request, response) => {
   });
 });
 
+app.get("/api/chats/:id/memories/index-summary", (request, response) => {
+  const chatId = requireParam(request, "id");
+  if (!getActiveChat(chatId)) throw notFound("Chat not found");
+  response.json({ ok: true, data: store.getMemoryIndexSummary(chatId) });
+});
+
 app.get("/api/chats/:id/memories/:memoryId", (request, response) => {
   const chatId = requireParam(request, "id");
   if (!getActiveChat(chatId)) throw notFound("Chat not found");
@@ -3767,12 +3773,6 @@ app.delete("/api/chats/:id/memories/reindex-jobs/:jobId", (request, response) =>
   const job = cancelMemoryEmbeddingJob(requireParam(request, "id"), requireParam(request, "jobId"));
   if (!job) throw notFound("Memory index rebuild job not found");
   response.json({ ok: true, data: job });
-});
-
-app.get("/api/chats/:id/memories/index-summary", (request, response) => {
-  const chatId = requireParam(request, "id");
-  if (!getActiveChat(chatId)) throw notFound("Chat not found");
-  response.json({ ok: true, data: store.getMemoryIndexSummary(chatId) });
 });
 
 app.post(

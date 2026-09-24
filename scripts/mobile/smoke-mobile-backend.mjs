@@ -812,6 +812,7 @@ try {
     }
   });
   assert.equal(chat.characterId, character.id);
+  assert.deepEqual(await request(`/api/chats/${chat.id}/memories/index-summary`), { total: 0, ready: 0, failed: 0, stale: 0 });
   const roleToolChat = await request("/api/chats", { method: "POST",
     body: { title: "Mobile role tool smoke", characterId: character.id, autoMemoryEnabled: false } });
   const roleToolRequestId = `mobile-role-${randomUUID()}`;

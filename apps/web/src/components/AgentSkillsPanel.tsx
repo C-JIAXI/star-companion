@@ -3,7 +3,7 @@ import type { SkillDetailDTO, SkillImportInputDTO, SkillImportPreviewDTO, SkillS
 import { api } from "../lib/api";
 import { ConfirmDialog } from "./ui";
 
-export function AgentSkillsPanel({ chatId, language }: { chatId: string; language: string }) {
+export function AgentSkillsPanel({ chatId, language, mode = "manage" }: { chatId?: string; language: string; mode?: "manage" | "chat" }) {
   const zh = language === "zh-CN";
   const fileRef = useRef<HTMLInputElement>(null);
   const [skills, setSkills] = useState<SkillSummaryDTO[]>([]);
@@ -83,29 +83,29 @@ export function AgentSkillsPanel({ chatId, language }: { chatId: string; languag
     finally { setBusy(false); }
   };
 
-  return <div className="space-y-3 text-xs text-ink-200" data-testid="agent-skills-panel">
+  return <div className="space-y-4 text-sm text-ink-200" data-testid="agent-skills-panel">
     <div className="flex items-center justify-between gap-2">
-      <span className="font-semibold">{zh ? "Skill 任务方法" : "Skill methods"}</span>
-      <label className="cursor-pointer rounded-md border border-white/15 px-2 py-1 hover:bg-white/[0.06]">
+      <div><h3 className="font-semibold text-ink-50">{mode === "chat" ? (zh ? "此聊天可用的 Skill" : "Skills for this chat") : (zh ? "Skill 任务方法" : "Skill methods")}</h3>
+        <p className="mt-1 text-xs leading-5 text-ink-300">{mode === "chat" ? (zh ? "为当前角色聊天选择方法；角色工具还需启用“读取 Skill”。" : "Choose methods for this chat; also enable the Load Skills tool.") : (zh ? "导入后默认关闭。脚本与依赖不会运行。" : "Imports start disabled. Scripts and dependencies never run.")}</p></div>
+      {mode === "manage" ? <label className="shrink-0 cursor-pointer rounded-lg border border-white/15 px-3 py-2 text-xs font-medium hover:bg-white/[0.06]">
         {busy ? (zh ? "处理中…" : "Working…") : (zh ? "导入 Skill" : "Import Skill")}
         <input ref={fileRef} className="sr-only" type="file" accept=".md,.zip,text/markdown,application/zip" disabled={busy} onChange={(event) => void chooseFile(event.target.files?.[0])} />
-      </label>
+      </label> : null}
     </div>
-    <p className="leading-5 text-ink-300">{zh ? "只读取已启用的方法；脚本与依赖不会运行。" : "Only enabled methods can be read. Scripts and dependencies are never run."}</p>
     {error ? <p className="rounded-md bg-rose-500/10 p-2 text-rose-300" role="alert">{error}</p> : null}
-    <div className="max-h-64 space-y-2 overflow-y-auto">
-      {skills.map((skill) => <div key={skill.name} className="rounded-lg border border-white/10 p-2">
-        <button type="button" className="text-left font-medium text-ink-50 underline-offset-2 hover:underline" onClick={() => void api.skills.get(skill.name).then((detail) => { setSelected(detail); setReference(null); }).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)))}>{skill.name}</button>
-        <p className="mt-1 leading-5">{skill.description}</p>
+    <div className="space-y-2">
+      {skills.map((skill) => <div key={skill.name} className="rounded-xl border border-white/10 bg-white/[0.025] p-3" data-testid={`skill-row-${skill.name}`}>
+        <div className="flex items-start justify-between gap-3"><div className="min-w-0"><button type="button" className="text-left font-medium text-ink-50 underline-offset-2 hover:underline" onClick={() => void api.skills.get(skill.name).then((detail) => { setSelected(detail); setReference(null); }).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)))}>{skill.name}</button>
+          <p className="mt-1 text-xs leading-5 text-ink-300">{skill.description}</p></div><span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-ink-300">{skill.source === "builtin" ? (zh ? "内置" : "Built in") : (zh ? "已导入" : "Imported")}</span></div>
         {skill.compatibility || skill.unsupportedFiles.length ? <p className="mt-1 text-amber-200">{zh ? "兼容性限制" : "Compatibility limit"}: {[skill.compatibility, ...skill.unsupportedFiles].filter(Boolean).join(", ")}</p> : null}
-        <div className="mt-2 flex flex-wrap gap-3">
-          <label className="flex items-center gap-1"><input type="checkbox" checked={skill.agentEnabled} disabled={busy} onChange={() => void toggle(skill, { agentEnabled: !skill.agentEnabled })} />{zh ? "剧情助手" : "Story assistant"}</label>
-          <label className="flex items-center gap-1"><input type="checkbox" checked={skill.enabledChatIds.includes(chatId)} disabled={busy} onChange={() => void toggle(skill, { chatId, chatEnabled: !skill.enabledChatIds.includes(chatId) })} />{zh ? "当前聊天" : "Current chat"}</label>
-          {skill.source === "imported" ? <button type="button" className="text-rose-300 hover:underline" disabled={busy} onClick={() => setPendingDelete(skill)}>{zh ? "删除" : "Delete"}</button> : null}
+        <div className="mt-3 flex flex-wrap items-center gap-4 border-t border-white/10 pt-3 text-xs">
+          {mode === "manage" ? <label className="flex min-h-9 items-center gap-2"><input type="checkbox" checked={skill.agentEnabled} disabled={busy} onChange={() => void toggle(skill, { agentEnabled: !skill.agentEnabled })} />{zh ? "剧情助手" : "Story assistant"}</label> : null}
+          {chatId ? <label className="flex min-h-9 items-center gap-2"><input type="checkbox" checked={skill.enabledChatIds.includes(chatId)} disabled={busy} onChange={() => void toggle(skill, { chatId, chatEnabled: !skill.enabledChatIds.includes(chatId) })} />{zh ? "当前聊天" : "Current chat"}</label> : null}
+          {mode === "manage" && skill.source === "imported" ? <button type="button" className="ml-auto text-rose-300 hover:underline" disabled={busy} onClick={() => setPendingDelete(skill)}>{zh ? "删除" : "Delete"}</button> : null}
         </div>
       </div>)}
     </div>
-    {selected ? <div className="rounded-lg border border-white/10 p-2">
+    {selected ? <div className="rounded-lg border border-white/10 p-3">
       <p className="font-semibold">{selected.name}</p>
       <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-ink-300">{selected.skillMd}</pre>
       {selected.referencePaths.map((path) => <button key={path} type="button" className="mt-2 block text-left text-blue-300 hover:underline" onClick={() => void api.skills.reference(selected.name, path).then((item) => setReference({ path, content: item.content })).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)))}>{path}</button>)}

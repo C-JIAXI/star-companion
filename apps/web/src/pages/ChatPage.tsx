@@ -49,7 +49,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useI18n } from "../i18n";
 import { ScopedHtmlRenderer } from "../components/ScopedHtmlRenderer";
 import { AgentSkillsPanel } from "../components/AgentSkillsPanel";
-import { McpConnectionsPanel } from "../components/McpConnectionsPanel";
 import { api, ApiRequestError } from "../lib/api";
 import { useChatDraft } from "../lib/useChatDraft";
 import { ComposerToolsMenu } from "../components/ComposerToolsMenu";
@@ -1351,6 +1350,7 @@ export function ChatPage({
         | "api-key"
         | "model"
         | "usage"
+        | "extensions"
         | `module-${AiModuleId}`
     ) => {
       const path =
@@ -1358,6 +1358,8 @@ export function ChatPage({
           ? "/"
           : section === "settings" && settingsFocus === "usage"
             ? "/settings?section=usage"
+          : section === "settings" && settingsFocus === "extensions"
+            ? "/settings?section=extensions"
           : section === "settings" && settingsFocus
             ? `/settings?section=providers&focus=${settingsFocus}`
             : `/${section}`;
@@ -5331,30 +5333,39 @@ export function ChatPage({
                       {t("chat.autoSummarizeUser")}
                       <input type="checkbox" checked={autoSummarizeUser} onChange={(event) => void updateAutoSummarizeUser(event.target.checked)} />
                     </label>
-                    <div className="rounded-lg border border-white/10 p-3 text-sm" data-testid="chat-role-tool-settings">
-                      <label className="flex min-h-11 items-center justify-between gap-2">
-                        <span>{language === "zh-CN" ? "允许角色使用工具" : "Allow character tools"}</span>
-                        <input type="checkbox" checked={chatToolUse.enabled} onChange={(event) => updateChatToolUse({ ...chatToolUse, enabled: event.target.checked })} />
-                      </label>
-                      {chatToolUse.enabled ? <div className="space-y-2 border-t border-white/10 pt-2 text-xs">
-                        <p className="text-ink-400">{language === "zh-CN" ? "角色继续使用当前聊天模型。工具仅在此聊天内可用；外部调用逐次请求授权。" : "The character uses this chat's model. Tools are scoped to this chat; external calls require approval."}</p>
-                        {!activeChatSupportsTools ? <p className="text-amber-200">{language === "zh-CN" ? "当前聊天模型未声明工具调用能力；角色回复将继续使用普通文本模式。" : "The current chat model does not declare tool calling; character replies use ordinary text mode."}</p> : null}
-                        {([
-                          ["search_history", language === "zh-CN" ? "搜索当前聊天历史" : "Search chat history"],
-                          ["read_messages", language === "zh-CN" ? "读取消息" : "Read messages"],
-                          ["search_memories", language === "zh-CN" ? "查询长期记忆" : "Search memories"],
-                          ["read_character", language === "zh-CN" ? "读取角色与 Lore" : "Read character and Lore"],
-                          ["load_skill", language === "zh-CN" ? "读取已启用 Skill" : "Load enabled Skills"]
-                        ] as const).map(([name, label]) => <label key={name} className="flex min-h-9 items-center gap-2"><input type="checkbox" checked={chatToolUse.toolNames.includes(name)} onChange={(event) => updateChatToolUse({ ...chatToolUse,
-                          toolNames: event.target.checked ? [...chatToolUse.toolNames, name] : chatToolUse.toolNames.filter((item) => item !== name) })} />{label}</label>)}
-                        {chatToolConnections.filter((connection) => connection.enabled).flatMap((connection) => connection.tools.filter((tool) => tool.enabled).map((tool) => {
-                          const name = `${connection.id}:${tool.name}`;
-                          return <label key={name} className="flex min-h-9 items-center gap-2"><input type="checkbox" checked={chatToolUse.toolNames.includes(name)} onChange={(event) => updateChatToolUse({ ...chatToolUse,
-                            toolNames: event.target.checked ? [...chatToolUse.toolNames, name] : chatToolUse.toolNames.filter((item) => item !== name) })} />{connection.name} / {tool.name}</label>;
-                        }))}
-                        {activeChat ? <details><summary className="cursor-pointer">{language === "zh-CN" ? "选择当前聊天 Skill" : "Select Skills for this chat"}</summary><AgentSkillsPanel chatId={activeChat.id} language={language} /></details> : null}
+                    <section className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.025] text-sm" data-testid="chat-role-tool-settings">
+                      <div className="flex items-center justify-between gap-3 p-4">
+                        <div className="min-w-0"><h4 className="font-semibold text-ink-50">{language === "zh-CN" ? "角色工具" : "Character tools"}</h4>
+                          <p className="mt-1 text-xs leading-5 text-ink-300">{language === "zh-CN" ? "只对当前聊天生效，外部调用需授权。" : "Only for this chat. External calls require approval."}</p></div>
+                        <label className="flex min-h-11 shrink-0 items-center gap-2 text-xs font-medium"><span>{language === "zh-CN" ? "允许角色使用工具" : "Allow character tools"}</span>
+                          <input type="checkbox" checked={chatToolUse.enabled} onChange={(event) => updateChatToolUse({ ...chatToolUse, enabled: event.target.checked })} /></label>
+                      </div>
+                      {chatToolUse.enabled ? <div className="space-y-4 border-t border-white/10 p-4 text-xs">
+                        {!activeChatSupportsTools ? <p className="rounded-lg border border-amber-400/20 bg-amber-400/10 p-3 leading-5 text-amber-200">{language === "zh-CN" ? "当前聊天模型未声明工具调用能力；角色回复将继续使用普通文本模式。" : "The current chat model does not declare tool calling; character replies use ordinary text mode."}</p> : null}
+                        <div><h5 className="mb-2 font-semibold text-ink-100">{language === "zh-CN" ? "本机读取" : "Local reading"}</h5>
+                          <div className="grid gap-2 sm:grid-cols-2">{([
+                            ["search_history", language === "zh-CN" ? "搜索当前聊天历史" : "Search chat history"],
+                            ["read_messages", language === "zh-CN" ? "读取消息" : "Read messages"],
+                            ["search_memories", language === "zh-CN" ? "查询长期记忆" : "Search memories"],
+                            ["read_character", language === "zh-CN" ? "读取角色与 Lore" : "Read character and Lore"]
+                          ] as const).map(([name, label]) => <label key={name} className="flex min-h-11 items-center gap-2 rounded-lg border border-white/10 px-3 py-2 leading-5"><input type="checkbox" checked={chatToolUse.toolNames.includes(name)} onChange={(event) => updateChatToolUse({ ...chatToolUse,
+                            toolNames: event.target.checked ? [...chatToolUse.toolNames, name] : chatToolUse.toolNames.filter((item) => item !== name) })} />{label}</label>)}</div>
+                        </div>
+                        <details className="rounded-lg border border-white/10 p-3"><summary className="cursor-pointer font-semibold text-ink-100">Skill</summary>
+                          <div className="mt-3 space-y-3"><label className="flex min-h-11 items-center gap-2"><input type="checkbox" checked={chatToolUse.toolNames.includes("load_skill")} onChange={(event) => updateChatToolUse({ ...chatToolUse,
+                            toolNames: event.target.checked ? [...chatToolUse.toolNames, "load_skill"] : chatToolUse.toolNames.filter((item) => item !== "load_skill") })} />{language === "zh-CN" ? "读取已启用 Skill" : "Load enabled Skills"}</label>
+                            {activeChat ? <AgentSkillsPanel chatId={activeChat.id} language={language} mode="chat" /> : null}</div>
+                        </details>
+                        <details className="rounded-lg border border-white/10 p-3"><summary className="cursor-pointer font-semibold text-ink-100">MCP · {chatToolConnections.filter((connection) => connection.enabled).flatMap((connection) => connection.tools.filter((tool) => tool.enabled)).length} {language === "zh-CN" ? "个可用工具" : "available tools"}</summary>
+                          <div className="mt-3 space-y-2">{chatToolConnections.filter((connection) => connection.enabled).flatMap((connection) => connection.tools.filter((tool) => tool.enabled).map((tool) => {
+                            const name = `${connection.id}:${tool.name}`;
+                            return <label key={name} className="flex min-h-11 items-center gap-2 rounded-lg border border-white/10 px-3 py-2"><input type="checkbox" checked={chatToolUse.toolNames.includes(name)} onChange={(event) => updateChatToolUse({ ...chatToolUse,
+                              toolNames: event.target.checked ? [...chatToolUse.toolNames, name] : chatToolUse.toolNames.filter((item) => item !== name) })} /><span className="break-all">{connection.name} / {tool.name}</span></label>;
+                          }))}{chatToolConnections.every((connection) => !connection.enabled || connection.tools.every((tool) => !tool.enabled)) ? <p className="text-ink-300">{language === "zh-CN" ? "尚无已启用的 MCP 工具。" : "No enabled MCP tools yet."}</p> : null}</div>
+                        </details>
+                        <button type="button" className="min-h-11 text-left font-medium text-blue-300 hover:underline" onClick={() => navigateToSection("settings", "extensions")}>{language === "zh-CN" ? "管理 Skill 与 MCP →" : "Manage Skills & MCP →"}</button>
                       </div> : null}
-                    </div>
+                    </section>
                   </div>
                 </ChatToolContent> : null}
                 <div className={`${agentPanelOpen ? "flex" : "hidden"} min-h-0 flex-1 flex-col`} data-testid="chat-agent-panel">
@@ -5452,14 +5463,9 @@ export function ChatPage({
                     </div>
                     <p className="mt-1">{language === "zh-CN" ? "实际输出仍受所选模型上限约束。" : "The selected model's output limit still applies."}</p>
                   </details>
-                  {activeChat ? <details className="rounded-lg border border-white/10 bg-white/[0.03] p-2 text-xs text-ink-300">
-                    <summary className="cursor-pointer select-none">{language === "zh-CN" ? "Skill 管理" : "Skill management"}</summary>
-                    <div className="mt-3"><AgentSkillsPanel chatId={activeChat.id} language={language} /></div>
-                  </details> : null}
-                  <details className="rounded-lg border border-white/10 bg-white/[0.03] p-2 text-xs text-ink-300">
-                    <summary className="cursor-pointer select-none">{language === "zh-CN" ? "MCP 连接" : "MCP connections"}</summary>
-                    <div className="mt-3"><McpConnectionsPanel language={language} /></div>
-                  </details>
+                  <button type="button" className="w-full rounded-lg border border-white/10 bg-white/[0.03] p-3 text-left text-xs text-blue-300 hover:bg-white/[0.06]" onClick={() => navigateToSection("settings", "extensions")}>
+                    {language === "zh-CN" ? "管理 Skill 与 MCP →" : "Manage Skills & MCP →"}
+                  </button>
                   {agentRunEvents.length ? <details className="rounded-lg border border-white/10 bg-white/[0.03] p-2 text-xs text-ink-300" data-testid="agent-run-events">
                     <summary className="cursor-pointer select-none">{language === "zh-CN" ? "执行过程" : "Execution steps"} ({agentRunEvents.length})</summary>
                     <ol className="mt-2 space-y-1 pl-4">

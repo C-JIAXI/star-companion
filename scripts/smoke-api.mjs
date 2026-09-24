@@ -1270,6 +1270,9 @@ const main = async () => {
 
     const listedMemories = await requestData(baseUrl, `/api/chats/${createdChat.id}/memories`);
     assert.equal(listedMemories.length, 1);
+    const memoryIndexSummary = await requestData(baseUrl, `/api/chats/${createdChat.id}/memories/index-summary`);
+    assert.equal(memoryIndexSummary.total, 1);
+    assert.equal(memoryIndexSummary.ready + memoryIndexSummary.failed + memoryIndexSummary.stale, 1);
 
     const reindexedMemories = await requestData(
       baseUrl,
