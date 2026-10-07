@@ -1,3 +1,4 @@
+import "./runtime-shim.mjs";
 import cors from "cors";
 import express from "express";
 import { mkdir, writeFile } from "node:fs/promises";

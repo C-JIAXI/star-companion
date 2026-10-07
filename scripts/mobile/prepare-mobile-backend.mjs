@@ -1,4 +1,4 @@
-import { cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -43,6 +43,19 @@ await cp(path.join(mobileBackendDir, "node_modules"), path.join(webNodeDir, "nod
   recursive: true
 });
 await cp(path.join(mobileBackendDir, "package.json"), path.join(webNodeDir, "package.json"));
+
+// The Android runtime bundled by capacitor-nodejs is Node.js 18, whose V8 predates the
+// `\P{ASCII}` regex property that fast-uri >= 3.1.6 uses for its SSRF host checks. Loading
+// fast-uri (through ajv) throws a SyntaxError that crashes the embedded backend. Rewrite that
+// one check to its Node 18-compatible equivalent so the patched (>= 3.1.6) fast-uri fixes stay intact.
+const fastUriEntry = path.join(webNodeDir, "node_modules", "fast-uri", "index.js");
+const fastUriSource = await readFile(fastUriEntry, "utf8");
+if (!fastUriSource.includes("\\P{ASCII}")) {
+  throw new Error(
+    `Expected a \\P{ASCII} check in ${path.relative(rootDir, fastUriEntry)} to patch for the Android Node.js runtime.`
+  );
+}
+await writeFile(fastUriEntry, fastUriSource.replaceAll("\\P{ASCII}", "[^\\x00-\\x7F]"), "utf8");
 
 await writeFile(
   path.join(webNodeDir, ".prepared"),
